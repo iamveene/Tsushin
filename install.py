@@ -517,6 +517,7 @@ class TsushinInstaller:
 # Application
 TSN_APP_HOST=0.0.0.0
 TSN_APP_PORT={self.config['TSN_APP_PORT']}
+FRONTEND_PORT={self.config['FRONTEND_PORT']}
 TSN_BACKEND_URL={backend_url}
 TSN_FRONTEND_URL={frontend_url}
 TSN_LOG_LEVEL=INFO
