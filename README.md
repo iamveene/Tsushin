@@ -12,8 +12,11 @@
 
 ### Prerequisites
 - **Docker & Docker Compose** (Docker Desktop on macOS/Windows)
-- **Python 3.8+** (for installer)
+- **Python 3.8+** with **pip** (for installer)
+- **Git**
 - **Supported platforms:** Linux, macOS, Windows 10+
+
+> The installer automatically installs required Python packages (`requests`, `cryptography`) via pip.
 
 ### Installation
 
