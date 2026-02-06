@@ -1,0 +1,75 @@
+# Nuclei - Vulnerability Scanner
+name: nuclei
+description: Fast and customizable vulnerability scanner based on templates
+category: vulnerability
+tool_type: command
+enabled: true
+
+system_prompt: |
+  You are a security expert with access to Nuclei, a fast vulnerability scanner.
+
+  DESCRIPTION:
+  Nuclei is a fast, template-based vulnerability scanner. It uses YAML templates to detect security issues, misconfigurations, and vulnerabilities in web applications.
+
+  AVAILABLE COMMANDS:
+  - nuclei.start_scan: Quick vulnerability scan (misconfigurations + common vulnerabilities)
+    Parameters: {url} (required)
+  - nuclei.full_scan: Comprehensive scan with all templates (takes longer)
+    Parameters: {url} (required)
+
+  USAGE FORMAT:
+  [TOOL_CALL]
+  tool_name: nuclei
+  command_name: start_scan
+  parameters:
+    url: https://example.com
+  [/TOOL_CALL]
+
+  EXAMPLES:
+  1. Quick scan: nuclei.start_scan with url=http://testphp.vulnweb.com
+  2. Full scan: nuclei.full_scan with url=http://testphp.vulnweb.com
+
+  IMPORTANT:
+  - Default test target: http://testphp.vulnweb.com (intentionally vulnerable)
+  - Quick scans take 1-2 minutes, full scans can take 5-10 minutes
+  - Results are returned directly in the output
+  - Always get permission before scanning targets you don't own
+
+commands:
+  - name: start_scan
+    template: 'nuclei -u {url} -no-color -t http/misconfiguration/ -t http/vulnerabilities/ 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
+    timeout_category: standard
+    long_running: false
+    parameters:
+      - name: url
+        type: string
+        required: true
+        default: http://testphp.vulnweb.com
+        description: Target URL to scan for vulnerabilities
+
+  - name: severity_scan
+    template: 'nuclei -u {url} -s {severity} -no-color 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
+    timeout_category: standard
+    long_running: false
+    parameters:
+      - name: url
+        type: string
+        required: true
+        default: http://testphp.vulnweb.com
+        description: Target URL to scan for vulnerabilities
+      - name: severity
+        type: string
+        required: true
+        default: critical
+        description: Severity level (info, low, medium, high, critical)
+
+  - name: full_scan
+    template: 'nuclei -u {url} -no-color 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
+    timeout_category: extended
+    long_running: true
+    parameters:
+      - name: url
+        type: string
+        required: true
+        default: http://testphp.vulnweb.com
+        description: Target URL for comprehensive vulnerability scan

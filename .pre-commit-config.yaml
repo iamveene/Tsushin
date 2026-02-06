@@ -1,0 +1,41 @@
+# .pre-commit-config.yaml
+# Pre-commit hooks for Tsushin
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+# Update hooks: pre-commit autoupdate
+
+repos:
+  # Gitleaks - Secret Detection (Primary)
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        name: gitleaks (detect secrets)
+        description: Detect hardcoded secrets in git repo
+        entry: gitleaks protect --verbose --redact --staged
+        language: golang
+        pass_filenames: false
+
+  # Basic file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+        name: check for large files
+      - id: check-merge-conflict
+        name: check for merge conflicts
+      - id: check-yaml
+        name: check yaml syntax
+        exclude: ^(frontend/node_modules/|backend/venv/)
+      - id: detect-private-key
+        name: detect private keys
+      - id: end-of-file-fixer
+        name: fix end of files
+        exclude: ^(frontend/node_modules/|backend/venv/|\.private/)
+      - id: trailing-whitespace
+        name: trim trailing whitespace
+        exclude: ^(frontend/node_modules/|backend/venv/|\.private/)
+      - id: check-json
+        name: check json syntax
+        exclude: ^(frontend/node_modules/)

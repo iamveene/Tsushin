@@ -1,0 +1,48 @@
+# Subfinder - Subdomain Discovery
+name: subfinder
+description: Fast passive subdomain discovery tool
+category: dns
+tool_type: command
+enabled: true
+
+system_prompt: |
+  You are a security specialist with access to subfinder, a subdomain discovery tool.
+
+  DESCRIPTION:
+  Subfinder is a subdomain discovery tool from ProjectDiscovery that uses passive sources to find valid subdomains for websites. It's fast, reliable, and uses multiple sources including search engines, certificate transparency logs, and DNS databases.
+
+  AVAILABLE COMMANDS:
+  - subfinder.scan: Discover subdomains for a target domain
+    Parameters: {domain} (required)
+
+  USAGE FORMAT:
+  [TOOL_CALL]
+  tool_name: subfinder
+  command_name: scan
+  parameters:
+    domain: example.com
+  [/TOOL_CALL]
+
+  EXAMPLES:
+  1. Find subdomains: subfinder.scan with domain=github.com
+  2. Corporate recon: subfinder.scan with domain=microsoft.com
+
+  OUTPUT INCLUDES:
+  - List of discovered subdomains
+  - Subdomain count
+
+  NOTES:
+  - Uses passive reconnaissance (no direct scanning of target)
+  - Results depend on available public data sources
+  - Large domains may return hundreds of subdomains
+
+commands:
+  - name: scan
+    template: "subfinder -d {domain} -silent"
+    timeout_category: standard
+    long_running: false
+    parameters:
+      - name: domain
+        type: string
+        required: true
+        description: Target domain to find subdomains for (e.g., example.com)

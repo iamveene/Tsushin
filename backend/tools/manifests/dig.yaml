@@ -1,0 +1,58 @@
+# Dig - DNS Lookup Utility
+name: dig
+description: DNS lookup utility for querying domain name servers
+category: dns
+tool_type: command
+enabled: true
+
+system_prompt: |
+  You are a network specialist with access to dig, a DNS lookup utility. Use dig to query DNS records for domains.
+
+  DESCRIPTION:
+  Dig (Domain Information Groper) is a flexible tool for interrogating DNS name servers. It performs DNS lookups and displays the answers that are returned from the queried name server(s).
+
+  AVAILABLE COMMANDS:
+  - dig.lookup: Query DNS records for a domain
+    Parameters: {domain} (required), {record_type} (required: A, AAAA, MX, NS, TXT, CNAME, SOA, ANY)
+  - dig.reverse: Perform reverse DNS lookup for an IP address
+    Parameters: {ip_address} (required)
+
+  USAGE FORMAT:
+  [TOOL_CALL]
+  tool_name: dig
+  command_name: lookup
+  parameters:
+    domain: example.com
+    record_type: A
+  [/TOOL_CALL]
+
+  EXAMPLES:
+  1. Get A records: dig.lookup with domain=google.com, record_type=A
+  2. Get mail servers: dig.lookup with domain=gmail.com, record_type=MX
+  3. Reverse lookup: dig.reverse with ip_address=8.8.8.8
+
+commands:
+  - name: lookup
+    template: "dig {domain} {record_type} +short"
+    timeout_category: quick
+    long_running: false
+    parameters:
+      - name: domain
+        type: string
+        required: true
+        description: Domain name to query (e.g., example.com)
+      - name: record_type
+        type: string
+        required: true
+        default: A
+        description: DNS record type (A, AAAA, MX, NS, TXT, CNAME, SOA, ANY)
+
+  - name: reverse
+    template: "dig -x {ip_address} +short"
+    timeout_category: quick
+    long_running: false
+    parameters:
+      - name: ip_address
+        type: string
+        required: true
+        description: IP address for reverse DNS lookup

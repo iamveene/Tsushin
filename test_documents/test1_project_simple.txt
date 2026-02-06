@@ -1,0 +1,15 @@
+TEST1 PROJECT KNOWLEDGE BASE
+
+This document contains knowledge about the Test1 project for testing KB badges.
+
+TEAM MEMBERS
+The Test1 project team includes Sarah Chen as Project Lead, Michael Rodriguez as Backend Developer, Emma Watson as Frontend Developer, and David Kim as QA Engineer.
+
+PROJECT GOALS
+The main goals are to validate semantic search functionality, test KB badge displays with proper source attribution, verify combined Agent and Project KB searches, and ensure color-coded visual indicators work correctly with blue dots for project KB and cyan dots for agent KB.
+
+TECHNICAL DETAILS
+Test1 uses the all-MiniLM-L6-v2 embedding model with ChromaDB as the vector database. The collection name is project_5 and documents are chunked at 500 characters with 50 character overlap.
+
+TEST SCENARIOS
+Scenario A tests Agent KB only with ACME agent outside project context. Scenario B tests combined KB with ACME agent inside Test1 project. Scenario C tests Project KB only with Tsushin agent inside Test1 project.

@@ -1,0 +1,61 @@
+# Interesting Facts About Brazilian Law
+
+## Historical Context
+
+1. **First Constitution**: Brazil's first constitution was enacted in 1824, making it one of the oldest constitutions in the Americas.
+
+2. **Current Constitution**: The current constitution (1988) is known as the "Citizen Constitution" because it was created after the military dictatorship ended, emphasizing human rights and democratic values.
+
+3. **Length**: The Brazilian Constitution is one of the longest in the world, with over 250 articles and numerous amendments.
+
+## Unique Legal Provisions
+
+### Habeas Data
+Brazil was one of the first countries to constitutionally guarantee the right to access personal data held by government databases (Article 5, LXXII).
+
+### Environmental Protection
+The Amazon rainforest and other biomes are considered national heritage, with strict environmental protection laws.
+
+### Indigenous Rights
+The constitution recognizes indigenous peoples' rights to their traditional lands and cultural practices.
+
+## Legal System Structure
+
+### Civil Law System
+Brazil follows the civil law tradition, similar to most of Continental Europe and Latin America.
+
+### Code-Based Law
+- Civil Code (2002)
+- Criminal Code (1940, with amendments)
+- Labor Code (CLT, 1943)
+- Consumer Protection Code (1990)
+
+### Court Hierarchy
+1. Municipal Courts (first instance)
+2. State Courts of Appeal
+3. Superior Courts (STJ, TST, TSE, STM)
+4. Supreme Federal Court (STF) - Constitutional matters
+
+## Famous Legal Principles
+
+### "In Dubio Pro Reo"
+When in doubt, rule in favor of the defendant.
+
+### Presumption of Innocence
+No one shall be considered guilty until final conviction (Article 5, LVII).
+
+### Due Process
+No one shall be deprived of liberty or property without due process of law.
+
+## Recent Constitutional Amendments
+
+- Amendment 45 (2004): Judicial Reform
+- Amendment 95 (2016): Spending Cap
+- Amendment 103 (2019): Pension Reform
+- Amendment 115 (2022): Data Protection as fundamental right
+
+## Brasília - The Capital
+
+Brasília became the capital in 1960, replacing Rio de Janeiro. It was designed by architect Oscar Niemeyer and urban planner Lúcio Costa. The city was built to stimulate development in Brazil's interior.
+
+The Supreme Federal Court and National Congress are located in Brasília's famous Esplanada dos Ministérios.

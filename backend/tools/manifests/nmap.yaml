@@ -1,0 +1,118 @@
+# Nmap - Network Scanner
+name: nmap
+description: Network exploration and security auditing tool
+category: network
+tool_type: command
+enabled: true
+
+system_prompt: |
+  You are a network security specialist with access to nmap, a powerful network scanning tool.
+
+  DESCRIPTION:
+  Nmap (Network Mapper) is a free and open-source utility for network discovery and security auditing. It can discover hosts, services, and vulnerabilities on a network.
+
+  AVAILABLE COMMANDS:
+  - nmap.quick_scan: Fast port scan using -T4 (aggressive timing) and -F (fast mode, top 100 ports)
+    Parameters: {target} (required), {output_file} (optional, default: nmap_quick_scan.txt)
+  - nmap.service_scan: Detect service versions on open ports
+    Parameters: {target} (required), {intensity} (optional, 0-9, default: 5), {output_file} (optional)
+  - nmap.ping_scan: Host discovery only, no port scan
+    Parameters: {target} (required), {output_file} (optional)
+  - nmap.aggressive_scan: Aggressive scan with OS detection, version detection, script scanning, and traceroute (-A flag)
+    Parameters: {target} (required), {ports} (optional, default: 1-1000), {output_file} (optional)
+
+  USAGE FORMAT:
+  [TOOL_CALL]
+  tool_name: nmap
+  command_name: quick_scan
+  parameters:
+    target: scanme.nmap.org
+    output_file: scan_results.txt
+  [/TOOL_CALL]
+
+  EXAMPLES:
+  1. Quick scan of a host: nmap.quick_scan with target=scanme.nmap.org
+  2. Service detection: nmap.service_scan with target=192.168.1.1, intensity=7
+  3. Network discovery: nmap.ping_scan with target=192.168.1.0/24
+  4. Aggressive scan with banner grabbing: nmap.aggressive_scan with target=scanme.nmap.org, ports=80,443
+
+  IMPORTANT:
+  - Default test target: scanme.nmap.org (permission granted for scanning)
+  - For internal testing: use localhost or host.docker.internal
+  - Always get permission before scanning targets you don't own
+  - When user asks to analyze previous scan results, reference the tool output context
+
+commands:
+  - name: quick_scan
+    template: "nmap -T4 -F {target} -oN {output_file}"
+    timeout_category: standard
+    long_running: false
+    parameters:
+      - name: target
+        type: string
+        required: true
+        default: scanme.nmap.org
+        description: Target IP, hostname, or CIDR range to scan
+      - name: output_file
+        type: string
+        required: false
+        default: nmap_quick_scan.txt
+        description: Output file for scan results
+
+  - name: service_scan
+    template: "nmap -sV --version-intensity {intensity} {target} -oN {output_file}"
+    timeout_category: long
+    long_running: false
+    parameters:
+      - name: target
+        type: string
+        required: true
+        default: scanme.nmap.org
+        description: Target IP, hostname, or CIDR range to scan
+      - name: intensity
+        type: integer
+        required: false
+        default: "5"
+        description: Version detection intensity (0-9, higher = more probes)
+      - name: output_file
+        type: string
+        required: false
+        default: nmap_service_scan.txt
+        description: Output file for scan results
+
+  - name: ping_scan
+    template: "nmap -sn {target} -oN {output_file}"
+    timeout_category: quick
+    long_running: false
+    parameters:
+      - name: target
+        type: string
+        required: true
+        default: 192.168.1.0/24
+        description: Target IP, hostname, or CIDR range for host discovery
+      - name: output_file
+        type: string
+        required: false
+        default: nmap_ping_scan.txt
+        description: Output file for scan results
+
+  - name: aggressive_scan
+    template: "nmap -A -p {ports} {target} -oN {output_file}"
+    timeout_category: extended
+    long_running: false
+    parameters:
+      - name: target
+        type: string
+        required: true
+        default: scanme.nmap.org
+        description: Target IP, hostname, or CIDR range to scan
+      - name: ports
+        type: string
+        required: false
+        default: "1-1000"
+        description: Port range or specific ports to scan (e.g., "80,443" or "1-1000")
+      - name: output_file
+        type: string
+        required: false
+        default: nmap_aggressive_scan.txt
+        description: Output file for scan results

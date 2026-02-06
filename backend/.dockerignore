@@ -1,0 +1,72 @@
+# Docker ignore file for Tsushin Backend
+# Phase 9: Application Containerization
+
+# Virtual environment
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Data directories (will be mounted as volumes)
+data/
+logs/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Testing files
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files (prevent recursive builds)
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Temporary files
+*.tmp
+*.temp
+nul
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Ops scripts (not needed in container)
+ops/
+# Note: tests/ included in image for integration testing
+# test_*.py and *_test.py patterns removed to allow tests
+
+# Backup files
+*.bak
+*.backup
+
+# Kokoro TTS (separate service)
+kokoro-tts/
+
+# WhatsApp MCP source (separate container)
+whatsapp-mcp/
+
+# MCP data (mounted separately)
+data/mcp/
+
+# Environment files (NEVER include in images)
+.env*
+*.env

@@ -1,0 +1,540 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   Tsushin Premium UI - Global Styles
+   ============================================ */
+
+@layer base {
+  /* Custom scrollbar for premium feel */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(139, 146, 158, 0.3);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(139, 146, 158, 0.5);
+  }
+
+  /* Better text rendering */
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Root background with subtle gradient */
+  body {
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(60, 90, 254, 0.08) 0%, transparent 50%),
+      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(0, 217, 255, 0.05) 0%, transparent 40%),
+      linear-gradient(180deg, #0D1117 0%, #0B0F14 100%);
+    min-height: 100vh;
+  }
+
+  /* Focus styles for accessibility */
+  *:focus-visible {
+    outline: 2px solid rgba(20, 184, 166, 0.5);
+    outline-offset: 2px;
+  }
+
+  /* Selection color */
+  ::selection {
+    background: rgba(20, 184, 166, 0.3);
+    color: white;
+  }
+}
+
+@layer components {
+  /* ============================================
+     Glass Card Effects
+     ============================================ */
+  .glass-card {
+    background: rgba(22, 27, 34, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow:
+      0 4px 6px -1px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+  }
+
+  .glass-card-elevated {
+    background: rgba(28, 33, 40, 0.9);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow:
+      0 20px 25px -5px rgba(0, 0, 0, 0.4),
+      0 8px 10px -6px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+  }
+
+  /* ============================================
+     Button Variants
+     ============================================ */
+
+  /* Primary gradient button - Teal/Cyan theme */
+  .btn-primary {
+    @apply relative px-4 py-2 font-medium text-white rounded-lg transition-all duration-300;
+    background: linear-gradient(135deg, #14B8A6 0%, #06B6D4 50%, #0EA5E9 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 4px 15px rgba(20, 184, 166, 0.3), inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+  }
+
+  .btn-primary:hover {
+    background-position: 100% 100%;
+    box-shadow: 0 6px 20px rgba(6, 182, 212, 0.45), inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 10px rgba(20, 184, 166, 0.3);
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  /* Secondary ghost button - Teal/Cyan theme */
+  .btn-secondary {
+    @apply px-4 py-2 font-medium rounded-lg transition-all duration-300;
+    @apply bg-transparent text-teal-400 border border-teal-500/30;
+  }
+
+  .btn-secondary:hover {
+    @apply bg-teal-500/10 border-teal-500/50 text-teal-300;
+    box-shadow: 0 0 20px rgba(20, 184, 166, 0.15);
+  }
+
+  .btn-secondary:active {
+    @apply bg-teal-500/20;
+  }
+
+  /* Danger button */
+  .btn-danger {
+    @apply relative px-4 py-2 font-medium text-white rounded-lg transition-all duration-300;
+    background: linear-gradient(135deg, #EE3E2D 0%, #FF6B5B 100%);
+    box-shadow: 0 4px 15px rgba(238, 62, 45, 0.3);
+  }
+
+  .btn-danger:hover {
+    box-shadow: 0 6px 20px rgba(238, 62, 45, 0.45);
+    transform: translateY(-1px);
+  }
+
+  /* Ghost button */
+  .btn-ghost {
+    @apply px-4 py-2 font-medium rounded-lg transition-all duration-300;
+    @apply bg-transparent text-gray-300 border border-gray-700;
+  }
+
+  .btn-ghost:hover {
+    @apply bg-gray-800/50 border-gray-600 text-white;
+  }
+
+  /* Icon button */
+  .btn-icon {
+    @apply p-2 rounded-lg transition-all duration-200;
+    @apply bg-transparent text-gray-400 hover:text-white hover:bg-gray-800/50;
+  }
+
+  /* ============================================
+     Card Styles
+     ============================================ */
+
+  .card {
+    @apply bg-tsushin-surface border border-tsushin-border rounded-xl;
+    @apply transition-all duration-300;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+  }
+
+  .card:hover {
+    @apply border-tsushin-muted;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+  }
+
+  .card-elevated {
+    @apply bg-tsushin-elevated border border-tsushin-border rounded-xl;
+    box-shadow:
+      0 20px 25px -5px rgba(0, 0, 0, 0.4),
+      0 8px 10px -6px rgba(0, 0, 0, 0.3);
+  }
+
+  /* Stat card with accent border */
+  .stat-card {
+    @apply relative bg-tsushin-surface border border-tsushin-border rounded-xl p-5;
+    @apply transition-all duration-300 overflow-hidden;
+  }
+
+  .stat-card::before {
+    content: '';
+    @apply absolute top-0 left-0 w-1 h-full rounded-l-xl;
+  }
+
+  .stat-card:hover {
+    @apply border-tsushin-muted;
+    transform: translateY(-2px);
+    box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.3);
+  }
+
+  .stat-card-indigo::before {
+    @apply bg-tsushin-indigo;
+  }
+
+  .stat-card-success::before {
+    @apply bg-tsushin-success;
+  }
+
+  .stat-card-warning::before {
+    @apply bg-tsushin-warning;
+  }
+
+  .stat-card-accent::before {
+    @apply bg-tsushin-accent;
+  }
+
+  /* ============================================
+     Input Styles
+     ============================================ */
+
+  .input {
+    @apply w-full px-4 py-2.5 rounded-lg transition-all duration-200;
+    @apply bg-tsushin-deep border border-tsushin-border text-white;
+    @apply placeholder:text-tsushin-muted;
+  }
+
+  .input:focus {
+    @apply border-teal-500 ring-2 ring-teal-500/20 outline-none;
+  }
+
+  .input:hover:not(:focus) {
+    @apply border-tsushin-muted;
+  }
+
+  /* Select dropdown */
+  .select {
+    @apply w-full px-4 py-2.5 rounded-lg transition-all duration-200;
+    @apply bg-tsushin-deep border border-tsushin-border text-white;
+    @apply cursor-pointer appearance-none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%238B929E'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    background-size: 1.25rem;
+    padding-right: 2.5rem;
+  }
+
+  .select:focus {
+    @apply border-teal-500 ring-2 ring-teal-500/20 outline-none;
+  }
+
+  /* ============================================
+     Badge Styles
+     ============================================ */
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium;
+    @apply transition-all duration-200;
+  }
+
+  .badge-success {
+    @apply bg-tsushin-success/15 text-tsushin-success border border-tsushin-success/25;
+  }
+
+  .badge-warning {
+    @apply bg-tsushin-warning/15 text-tsushin-warning border border-tsushin-warning/25;
+  }
+
+  .badge-danger {
+    @apply bg-tsushin-vermilion/15 text-tsushin-vermilion border border-tsushin-vermilion/25;
+  }
+
+  .badge-indigo {
+    @apply bg-tsushin-indigo/15 text-tsushin-indigo-glow border border-tsushin-indigo/25;
+  }
+
+  .badge-accent {
+    @apply bg-tsushin-accent/15 text-tsushin-accent border border-tsushin-accent/25;
+  }
+
+  .badge-neutral {
+    @apply bg-gray-500/15 text-gray-400 border border-gray-500/25;
+  }
+
+  .badge-teal {
+    @apply bg-teal-500/15 text-teal-400 border border-teal-500/25;
+  }
+
+  .badge-amber {
+    @apply bg-amber-500/15 text-amber-400 border border-amber-500/25;
+  }
+
+  /* ============================================
+     Tab Navigation
+     ============================================ */
+
+  .tab-nav {
+    @apply flex space-x-1 p-1 rounded-xl bg-tsushin-deep/50;
+  }
+
+  .tab-item {
+    @apply relative px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200;
+    @apply text-tsushin-slate hover:text-white;
+  }
+
+  .tab-item-active {
+    @apply text-white bg-tsushin-surface;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  }
+
+  /* Underline tab style */
+  .tab-underline {
+    @apply relative px-4 py-3 text-sm font-medium transition-all duration-200;
+    @apply text-tsushin-slate hover:text-white border-b-2 border-transparent;
+  }
+
+  .tab-underline-active {
+    @apply text-teal-400 border-teal-500;
+  }
+
+  /* ============================================
+     Modal/Dialog Styles
+     ============================================ */
+
+  .modal-backdrop {
+    @apply fixed inset-0 bg-black/60 backdrop-blur-sm;
+    @apply flex items-center justify-center p-4 z-50;
+  }
+
+  .modal-content {
+    @apply relative w-full max-w-lg;
+    @apply bg-tsushin-elevated border border-tsushin-border rounded-2xl;
+    @apply shadow-elevated overflow-hidden;
+    animation: scale-in 0.2s ease-out;
+  }
+
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* ============================================
+     Table Styles
+     ============================================ */
+
+  .table-header {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider;
+    @apply text-tsushin-slate bg-tsushin-deep/50;
+  }
+
+  .table-row {
+    @apply transition-colors duration-150;
+    @apply border-b border-tsushin-border/50;
+  }
+
+  .table-row:hover {
+    @apply bg-tsushin-surface/50;
+  }
+
+  .table-cell {
+    @apply px-4 py-4 text-sm;
+  }
+
+  /* ============================================
+     Loading States
+     ============================================ */
+
+  .skeleton {
+    @apply relative overflow-hidden bg-tsushin-surface rounded;
+  }
+
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.05),
+      transparent
+    );
+    animation: shimmer 2s infinite;
+  }
+
+  @keyframes shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  /* ============================================
+     Tooltips
+     ============================================ */
+
+  .tooltip {
+    @apply absolute z-50 px-2 py-1 text-xs font-medium;
+    @apply bg-tsushin-elevated text-white rounded-md;
+    @apply opacity-0 pointer-events-none transition-opacity duration-200;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .tooltip-visible {
+    @apply opacity-100;
+  }
+
+  /* ============================================
+     Status Indicators
+     ============================================ */
+
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+
+  .status-dot-online {
+    @apply bg-tsushin-success;
+    animation: pulse-soft 2s ease-in-out infinite;
+  }
+
+  .status-dot-offline {
+    @apply bg-gray-500;
+  }
+
+  .status-dot-warning {
+    @apply bg-tsushin-warning;
+    animation: pulse-soft 1.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse-soft {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  /* ============================================
+     Empty State
+     ============================================ */
+
+  .empty-state {
+    @apply flex flex-col items-center justify-center py-16 px-4 text-center;
+  }
+
+  .empty-state-icon {
+    @apply w-20 h-20 mb-6 text-tsushin-muted;
+    animation: float 3s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  /* ============================================
+     Utility Animations
+     ============================================ */
+
+  .animate-stagger > * {
+    animation: fade-in-up 0.4s ease-out backwards;
+  }
+
+  .animate-stagger > *:nth-child(1) { animation-delay: 0ms; }
+  .animate-stagger > *:nth-child(2) { animation-delay: 50ms; }
+  .animate-stagger > *:nth-child(3) { animation-delay: 100ms; }
+  .animate-stagger > *:nth-child(4) { animation-delay: 150ms; }
+  .animate-stagger > *:nth-child(5) { animation-delay: 200ms; }
+  .animate-stagger > *:nth-child(6) { animation-delay: 250ms; }
+  .animate-stagger > *:nth-child(7) { animation-delay: 300ms; }
+  .animate-stagger > *:nth-child(8) { animation-delay: 350ms; }
+  .animate-stagger > *:nth-child(9) { animation-delay: 400ms; }
+  .animate-stagger > *:nth-child(10) { animation-delay: 450ms; }
+
+  @keyframes fade-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Glow effect on hover */
+  .hover-glow {
+    @apply transition-all duration-300;
+  }
+
+  .hover-glow:hover {
+    box-shadow: 0 0 30px rgba(20, 184, 166, 0.2);
+  }
+
+  /* Gradient text */
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #14B8A6 0%, #06B6D4 100%);
+  }
+
+  /* Divider with gradient */
+  .divider-gradient {
+    @apply h-px w-full;
+    background: linear-gradient(90deg, transparent, rgba(20, 184, 166, 0.3), transparent);
+  }
+}
+
+@layer utilities {
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Smooth scroll behavior */
+  .scroll-smooth {
+    scroll-behavior: smooth;
+  }
+
+  /* Text balance for headings */
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Backdrop blur fallback */
+  @supports not (backdrop-filter: blur(12px)) {
+    .glass-card,
+    .glass-card-elevated {
+      background: rgba(22, 27, 34, 0.95);
+    }
+  }
+}

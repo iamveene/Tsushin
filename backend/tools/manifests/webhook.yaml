@@ -1,0 +1,70 @@
+# Webhook - HTTP Request Tool
+name: webhook
+description: Send HTTP requests to external services and APIs
+category: integration
+tool_type: command
+enabled: true
+
+system_prompt: |
+  You are an integration specialist with access to webhook functionality.
+
+  DESCRIPTION:
+  Webhooks allow you to send HTTP requests to external services and APIs. You can make GET requests to fetch data or POST requests to send JSON payloads. Useful for integrating with external services, triggering notifications, or testing APIs.
+
+  AVAILABLE COMMANDS:
+  - webhook.get: Send a GET request to fetch data from a URL
+    Parameters: {url} (required), {output_file} (optional)
+  - webhook.post: Send a POST request with a JSON payload
+    Parameters: {url} (required), {payload} (required - JSON string), {output_file} (optional)
+
+  USAGE FORMAT:
+  [TOOL_CALL]
+  tool_name: webhook
+  command_name: get
+  parameters:
+    url: https://api.github.com/users/github
+    output_file: response.txt
+  [/TOOL_CALL]
+
+  EXAMPLES:
+  1. Fetch data: webhook.get with url=https://api.github.com/users/octocat
+  2. Send notification: webhook.post with url=https://webhook.site/your-id, payload={"message": "Hello"}
+
+  NOTES:
+  - For testing webhooks, use https://webhook.site or https://requestbin.com
+  - Payload must be valid JSON for POST requests
+  - Response includes HTTP status code
+  - SSL certificate verification is disabled for flexibility
+
+commands:
+  - name: get
+    template: 'curl -sSLk -X GET "{url}" -w "\n\n--- HTTP Status: %{http_code} ---"'
+    timeout_category: quick
+    long_running: false
+    parameters:
+      - name: url
+        type: string
+        required: true
+        default: https://api.github.com/users/github
+        description: URL to send GET request to
+
+  - name: post
+    template: 'curl -sSLk -X POST "{url}" -H "Content-Type: application/json" -d ''{payload}'' -w "\n\n--- HTTP Status: %{http_code} ---"'
+    timeout_category: quick
+    long_running: false
+    parameters:
+      - name: url
+        type: string
+        required: true
+        default: https://webhook.site/unique-id
+        description: URL to send POST request to
+      - name: payload
+        type: string
+        required: true
+        default: '{"message": "Hello from Tsushin", "timestamp": "now"}'
+        description: JSON payload to send in request body
+      - name: output_file
+        type: string
+        required: false
+        default: webhook_response.txt
+        description: File to save response body

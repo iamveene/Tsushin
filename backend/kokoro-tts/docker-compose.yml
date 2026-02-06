@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  kokoro-tts:
+    # Using pre-built Kokoro-FastAPI image (OpenAI-compatible)
+    # Repository: https://github.com/remsky/Kokoro-FastAPI
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: kokoro-tts
+
+    ports:
+      - "8880:8880"
+
+    environment:
+      # Logging level (DEBUG, INFO, WARNING, ERROR)
+      - API_LOG_LEVEL=INFO
+
+      # Token chunking configuration (optional, defaults are good)
+      # - TARGET_MIN_TOKENS=175
+      # - TARGET_MAX_TOKENS=250
+      # - ABSOLUTE_MAX_TOKENS=450
+
+    # Models are auto-downloaded on first run (~100MB)
+    # Optional: Mount volume to persist models between container restarts
+    # volumes:
+    #   - ./models:/app/models
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8880/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # First run downloads models, needs more time
+
+    networks:
+      - tsushin-network
+
+networks:
+  tsushin-network:
+    name: tsushin-network
+    driver: bridge
+
+# For GPU acceleration (requires NVIDIA Docker):
+# Uncomment the service below and comment out the CPU service above
+#
+# services:
+#   kokoro-tts:
+#     image: ghcr.io/remsky/kokoro-fastapi-gpu:latest
+#     container_name: kokoro-tts
+#     ports:
+#       - "8880:8880"
+#     environment:
+#       - API_LOG_LEVEL=INFO
+#     deploy:
+#       resources:
+#         reservations:
+#           devices:
+#             - driver: nvidia
+#               count: 1
+#               capabilities: [gpu]
+#     restart: unless-stopped
+#     healthcheck:
+#       test: ["CMD", "curl", "-f", "http://localhost:8880/docs"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 60s
+#     networks:
+#       - tsushin-network

@@ -1,0 +1,26 @@
+You have access to an Asana task management tool that can manage tasks via the Asana MCP Server.
+
+When the user asks about Asana tasks, to-dos, or task management, use this tool.
+
+Available operations:
+1. List tasks: Show tasks from workspace/projects
+   - Can filter by project, assignee, due date
+   - Use assignee="me" for current user tasks
+
+2. Create task: Create new tasks
+   - Requires task name
+   - Optional: project, assignee, due date, notes
+
+3. Update task: Modify existing tasks
+   - Find by task name
+   - Can mark complete, change assignee, update due date
+
+4. Get task details: View detailed information about a specific task
+
+Examples:
+- "listar minhas tarefas" → list_tasks with assignee="me"
+- "criar tarefa comprar leite" → create_task with name="comprar leite"
+- "marcar tarefa relatório como completa" → update_task with completed=true
+- "mostrar detalhes da tarefa reunião" → get_task
+
+The tool will format results in Portuguese for WhatsApp.

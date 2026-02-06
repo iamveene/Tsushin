@@ -1,0 +1,192 @@
+# ============================================================================
+# Tsushin Docker Compose Configuration
+# Phase 9: Application Containerization
+#
+# Usage:
+#   Development:  docker compose up --build
+#   Production:   docker compose -f docker-compose.yml up -d
+#   With Tester:  docker compose --profile testing up --build
+#   With TTS:     docker compose --profile tts up --build
+#   Full Stack:   docker compose --profile tts --profile testing up --build
+#
+# Custom Tools Toolbox (per-tenant containers):
+#   Build base image: docker build -f backend/containers/Dockerfile.toolbox -t tsushin-toolbox:base ./backend/containers
+#   Note: Tenant containers are managed dynamically by ToolboxContainerService
+#
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # Backend Service - FastAPI Application
+  # ==========================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tsushin-backend
+    # Run as root for Docker socket access (required on macOS Docker Desktop)
+    user: root
+    ports:
+      - "8081:8081"
+    volumes:
+      # Persistent data storage
+      - ./backend/data:/app/data
+      # Logs (optional - for debugging)
+      - ./logs/backend:/app/logs
+      # Docker socket for MCP container management
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Shared audio directory for TTS (shared with MCP containers)
+      - tsushin-audio:/tmp/tsushin_audio
+      # Shared screenshots directory for browser automation (shared with MCP containers)
+      - tsushin-screenshots:/tmp/tsushin_screenshots
+      # Shared images directory for ImageSkill (shared with MCP containers)
+      - tsushin-images:/tmp/tsushin_images
+    environment:
+      # Application
+      - TSN_APP_HOST=0.0.0.0
+      - TSN_APP_PORT=8081
+      - TSN_LOG_LEVEL=${TSN_LOG_LEVEL:-INFO}
+      - TSN_POLL_INTERVAL_MS=${TSN_POLL_INTERVAL_MS:-3000}
+
+      # URL Configuration (for OAuth callbacks, redirects)
+      - TSN_BACKEND_URL=${TSN_BACKEND_URL:-http://localhost:8081}
+      - TSN_FRONTEND_URL=${TSN_FRONTEND_URL:-http://localhost:3030}
+      - TSN_GOOGLE_OAUTH_REDIRECT_URI=${TSN_GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8081/api/hub/google/oauth/callback}
+
+      # Database paths (inside container)
+      - INTERNAL_DB_PATH=/app/data/agent.db
+      - TSN_CHROMA_DIR=/app/data/chroma
+      - TSN_WORKSPACE_DIR=/app/data/workspace
+      - TSN_BACKUPS_DIR=/app/data/backups
+      - TSN_LOG_FILE=/app/logs/tsushin.log
+
+      # Host path for MCP container volume mounts (CRITICAL for Docker-in-Docker)
+      # This MUST be set in .env to the absolute host path of backend/data
+      # The installer (install.py) sets this automatically
+      - "HOST_BACKEND_DATA_PATH=${HOST_BACKEND_DATA_PATH:?ERROR: HOST_BACKEND_DATA_PATH must be set in .env - run python3 install.py}"
+
+      # AI Provider Keys (from host .env or environment)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-${GEMINI_API_KEY:-}}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+
+      # Tool API Keys
+      - BRAVE_API=${BRAVE_API:-}
+      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY:-}
+      - AMADEUS_API_KEY=${AMADEUS_API_KEY:-}
+      - AMADEUS_API_SECRET=${AMADEUS_API_SECRET:-}
+
+      # Security
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
+
+      # Integrations
+      - ASANA_ENCRYPTION_KEY=${ASANA_ENCRYPTION_KEY:-}
+      - ASANA_REDIRECT_URI=${ASANA_REDIRECT_URI:-http://localhost:3030/hub/asana/callback}
+
+      # External services (use host.docker.internal for host access)
+      - KOKORO_SERVICE_URL=${KOKORO_SERVICE_URL:-http://kokoro-tts:8880}
+    extra_hosts:
+      # Enable host.docker.internal on Linux
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - tsushin-network
+
+  # ==========================================================================
+  # Frontend Service - Next.js Application
+  # ==========================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8081}
+    container_name: tsushin-frontend
+    ports:
+      - "3030:3030"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3030"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - tsushin-network
+
+  # ==========================================================================
+  # Kokoro TTS Service - Free Text-to-Speech (Optional Profile)
+  # ==========================================================================
+  kokoro-tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4
+    container_name: kokoro-tts
+    profiles:
+      - tts
+    ports:
+      - "8880:8880"
+    volumes:
+      # Model cache to avoid re-downloading
+      - kokoro-models:/app/models
+      # Audio output cache
+      - kokoro-audio:/tmp/kokoro-audio
+    environment:
+      - KOKORO_MODEL=kokoro-v0_19.onnx
+      - KOKORO_DEFAULT_VOICE=af_bella
+      - KOKORO_DEFAULT_SPEED=1.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - tsushin-network
+
+# ==========================================================================
+# Networks
+# ==========================================================================
+networks:
+  tsushin-network:
+    name: tsushin-network
+    driver: bridge
+
+# ==========================================================================
+# Volumes
+# ==========================================================================
+volumes:
+  # Shared audio directory for TTS between backend and MCP containers
+  tsushin-audio:
+    name: tsushin-audio
+  # Shared screenshots directory for browser automation between backend and MCP containers
+  tsushin-screenshots:
+    name: tsushin-screenshots
+  # Shared images directory for ImageSkill between backend and MCP containers
+  tsushin-images:
+    name: tsushin-images
+  # Kokoro TTS volumes (used with --profile tts)
+  kokoro-models:
+    name: kokoro-models
+  kokoro-audio:
+    name: kokoro-audio
+
+# ==========================================================================
+# Optional: Additional volumes if you prefer Docker-managed volumes
+# ==========================================================================
+# volumes:
+#   tsushin-data:
+#   tsushin-chroma:
+#   tsushin-logs:

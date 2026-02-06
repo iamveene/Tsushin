@@ -1,0 +1,31 @@
+TEST1 PROJECT KNOWLEDGE BASE
+
+PROJECT OVERVIEW
+The Test1 project is a comprehensive testing initiative for validating the Knowledge Base Badge functionality in Tsushin.
+
+TEAM MEMBERS
+The Test1 team consists of:
+- Sarah Chen: Project Lead responsible for overall coordination
+- Michael Rodriguez: Backend Developer working on ChromaDB integration
+- Emma Watson: Frontend Developer implementing badge UI
+- David Kim: QA Engineer creating test scenarios
+
+PROJECT GOALS
+Goal 1: Validate semantic search across project documents
+Goal 2: Test KB badge display with source attribution
+Goal 3: Verify combined Agent and Project KB search
+Goal 4: Ensure color-coded visual indicators work correctly
+
+TECHNICAL STACK
+- Embedding Model: all-MiniLM-L6-v2
+- Vector Database: ChromaDB
+- Collection Name: project_5
+- Chunk Size: 500 characters
+- Similarity Threshold: 0.3
+
+TEST SCENARIOS
+Scenario A: Agent KB only (outside project context)
+Scenario B: Combined KB (agent with KB in project)
+Scenario C: Project KB only (agent without KB in project)
+
+This document serves as the primary knowledge source for Test1 project validation.

@@ -1,0 +1,231 @@
+/**
+ * React Flow Tsushin Theme Overrides
+ * Phase 1: Basic control styling
+ * Phase 2: Drag cursor styles
+ */
+
+/* Controls panel */
+.react-flow__controls {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3) !important;
+}
+
+.react-flow__controls-button {
+  background: rgba(22, 27, 34, 0.9) !important;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.5) !important;
+  fill: #8B929E !important;
+}
+
+.react-flow__controls-button:hover {
+  background: rgba(28, 33, 40, 1) !important;
+  fill: white !important;
+}
+
+.react-flow__controls-button:first-child {
+  border-top-left-radius: 8px !important;
+  border-top-right-radius: 8px !important;
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom-left-radius: 8px !important;
+  border-bottom-right-radius: 8px !important;
+  border-bottom: none !important;
+}
+
+/* MiniMap */
+.react-flow__minimap {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* Edges */
+.react-flow__edge-path {
+  stroke: #484F58 !important;
+  stroke-width: 2 !important;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #3C5AFE !important;
+}
+
+/* Selection box */
+.react-flow__selection {
+  background: rgba(60, 90, 254, 0.1) !important;
+  border: 1px solid rgba(60, 90, 254, 0.5) !important;
+}
+
+/* Panel positioning */
+.react-flow__panel {
+  margin: 10px !important;
+}
+
+/* Phase 2: Drag cursor styles */
+.react-flow__node {
+  cursor: grab;
+}
+
+.react-flow__node:active {
+  cursor: grabbing;
+}
+
+.react-flow__node.dragging {
+  z-index: 1000 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* Smooth edge transitions during drag */
+.react-flow__edge {
+  transition: stroke 0.15s ease;
+}
+
+/* ============================================
+   Phase 8: Real-time Activity Animations
+   ============================================ */
+
+/* Agent processing pulse animation */
+@keyframes agent-processing-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px 2px rgba(60, 90, 254, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 20px 8px rgba(60, 90, 254, 0.3);
+  }
+}
+
+.agent-node-processing {
+  animation: agent-processing-pulse 1.5s ease-in-out infinite;
+  border-color: #3C5AFE !important;
+}
+
+/* Skill active pulse animation (teal) - continuous during processing */
+@keyframes skill-active-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px 2px rgba(20, 184, 166, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 20px 8px rgba(20, 184, 166, 0.3);
+  }
+}
+
+.skill-node-active {
+  animation: skill-active-pulse 1.5s ease-in-out infinite;
+  border-color: #14B8A6 !important;
+}
+
+/* Skill fade-out (teal) - post-processing coordinated fade */
+@keyframes skill-fade-glow {
+  0% {
+    box-shadow: 0 0 12px 4px rgba(20, 184, 166, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 20px 8px rgba(20, 184, 166, 0);
+  }
+}
+
+.skill-node-fading {
+  animation: skill-fade-glow 3s ease-out forwards;
+  border-color: #14B8A6 !important;
+}
+
+/* Skill Provider active pulse animation (blue) - continuous during processing */
+@keyframes skill-provider-active-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px 2px rgba(96, 165, 250, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 20px 8px rgba(96, 165, 250, 0.3);
+  }
+}
+
+.skill-provider-node-active {
+  animation: skill-provider-active-pulse 1.5s ease-in-out infinite;
+  border-color: #60A5FA !important;
+}
+
+/* Skill Provider fade-out (blue) - post-processing coordinated fade */
+@keyframes skill-provider-fade-glow {
+  0% {
+    box-shadow: 0 0 12px 4px rgba(96, 165, 250, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 20px 8px rgba(96, 165, 250, 0);
+  }
+}
+
+.skill-provider-node-fading {
+  animation: skill-provider-fade-glow 3s ease-out forwards;
+  border-color: #60A5FA !important;
+}
+
+/* KB active pulse animation (violet) - continuous during processing */
+@keyframes kb-active-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px 2px rgba(168, 85, 247, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 20px 8px rgba(168, 85, 247, 0.3);
+  }
+}
+
+.kb-node-active {
+  animation: kb-active-pulse 1.5s ease-in-out infinite;
+  border-color: #A855F7 !important;
+}
+
+/* KB fade-out (violet) - post-processing coordinated fade */
+@keyframes kb-fade-glow {
+  0% {
+    box-shadow: 0 0 12px 4px rgba(168, 85, 247, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 20px 8px rgba(168, 85, 247, 0);
+  }
+}
+
+.kb-node-fading {
+  animation: kb-fade-glow 3s ease-out forwards;
+  border-color: #A855F7 !important;
+}
+
+/* Channel active pulse animation (cyan) - continuous during processing */
+@keyframes channel-active-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px 2px rgba(0, 217, 255, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 20px 8px rgba(0, 217, 255, 0.3);
+  }
+}
+
+.channel-node-active {
+  animation: channel-active-pulse 1.5s ease-in-out infinite;
+  border-color: #00D9FF !important;
+}
+
+/* Channel fade-out (cyan) - post-processing coordinated fade */
+@keyframes channel-fade-glow {
+  0% {
+    box-shadow: 0 0 12px 4px rgba(0, 217, 255, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 20px 8px rgba(0, 217, 255, 0);
+  }
+}
+
+.channel-node-fading {
+  animation: channel-fade-glow 3s ease-out forwards;
+  border-color: #00D9FF !important;
+}
+
+/* Agent fade-out (blue) - post-processing coordinated fade */
+@keyframes agent-fade-glow {
+  0% {
+    box-shadow: 0 0 12px 4px rgba(60, 90, 254, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 20px 8px rgba(60, 90, 254, 0);
+  }
+}
+
+.agent-node-fading {
+  animation: agent-fade-glow 3s ease-out forwards;
+  border-color: #3C5AFE !important;
+}

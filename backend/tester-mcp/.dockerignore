@@ -1,0 +1,27 @@
+# Docker ignore file for Tester WhatsApp MCP
+# Phase 9: Application Containerization
+
+# Store directory (will be mounted as volume)
+store/
+
+# Logs
+*.log
+logs/
+
+# Binary (will be built fresh)
+whatsapp-bridge
+main
+main_linux
+main.exe
+
+# Documentation
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/

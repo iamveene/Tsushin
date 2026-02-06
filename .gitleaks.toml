@@ -1,0 +1,158 @@
+# .gitleaks.toml
+# Custom gitleaks configuration for Tsushin
+# Extends default rules with project-specific patterns
+
+title = "Tsushin Secret Detection Rules"
+
+[extend]
+# Use default gitleaks rules as base
+useDefault = true
+
+# ============================================
+# Tsushin-specific rules
+# ============================================
+
+[[rules]]
+id = "tsushin-jwt-secret"
+description = "Tsushin JWT Secret Key"
+regex = '''JWT_SECRET_KEY\s*=\s*['"]?([a-zA-Z0-9_-]{32,})['"]?'''
+secretGroup = 1
+keywords = ["jwt_secret"]
+
+[[rules]]
+id = "tsushin-asana-encryption"
+description = "Asana Fernet Encryption Key"
+regex = '''ASANA_ENCRYPTION_KEY\s*=\s*['"]?([A-Za-z0-9+/=]{44})['"]?'''
+secretGroup = 1
+keywords = ["asana_encryption", "fernet"]
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API Key"
+regex = '''sk-ant-[a-zA-Z0-9_-]{95,}'''
+keywords = ["anthropic", "claude"]
+
+[[rules]]
+id = "openai-api-key-custom"
+description = "OpenAI API Key"
+regex = '''sk-[a-zA-Z0-9]{48,}'''
+keywords = ["openai"]
+
+[[rules]]
+id = "google-gemini-api-key"
+description = "Google/Gemini API Key"
+regex = '''AIza[a-zA-Z0-9_-]{35}'''
+keywords = ["google", "gemini"]
+
+[[rules]]
+id = "brave-search-api-key"
+description = "Brave Search API Key"
+regex = '''BSA[a-zA-Z0-9]{32,}'''
+keywords = ["brave"]
+
+[[rules]]
+id = "amadeus-credentials"
+description = "Amadeus API Credentials"
+regex = '''AMADEUS_API_(KEY|SECRET)\s*=\s*['"]?([a-zA-Z0-9]{20,})['"]?'''
+secretGroup = 2
+keywords = ["amadeus"]
+
+[[rules]]
+id = "openrouter-api-key"
+description = "OpenRouter API Key"
+regex = '''sk-or-[a-zA-Z0-9_-]{40,}'''
+keywords = ["openrouter"]
+
+# ============================================
+# Allowlist - files/patterns that should be ignored
+# ============================================
+
+[allowlist]
+description = "Allowlisted files and patterns"
+
+paths = [
+    # Example/template files with placeholders
+    '''\.env\.example$''',
+    '''env\.example$''',
+    '''\.env\.template$''',
+
+    # Documentation
+    '''README\.md$''',
+    '''CLAUDE\.md$''',
+    '''ARCHITECTURE\.md$''',
+    '''docs/.*\.md$''',
+
+    # Node modules and virtual environments
+    '''frontend/node_modules/.*''',
+    '''backend/venv/.*''',
+    '''node_modules/.*''',
+    '''\.venv/.*''',
+
+    # Test files (may contain mock keys)
+    '''.*test.*\.py$''',
+    '''.*_test\.py$''',
+    '''.*\.test\.(ts|tsx|js|jsx)$''',
+    '''.*\.spec\.(ts|tsx|js|jsx)$''',
+    '''backend/tests/.*''',
+    '''frontend/__tests__/.*''',
+
+    # Lock files
+    '''.*-lock\.json$''',
+    '''.*\.lock$''',
+    '''poetry\.lock$''',
+
+    # Private folder (already gitignored, but extra safety)
+    '''\.private/.*''',
+
+    # Build outputs
+    '''\.next/.*''',
+    '''dist/.*''',
+    '''build/.*''',
+    '''__pycache__/.*''',
+]
+
+# Patterns that are allowed (placeholders, examples)
+regexes = [
+    # Common placeholder patterns
+    '''your[-_].*[-_]key.*''',
+    '''change[-_]this[-_]in[-_]production''',
+    '''test[-_]?key''',
+    '''fake[-_]?key''',
+    '''example[-_]?key''',
+    '''dummy[-_]?key''',
+    '''sample[-_]?key''',
+    '''xxx+''',
+    '''placeholder''',
+    '''CHANGEME''',
+    '''INSERT[-_]?YOUR[-_]?.*[-_]?HERE''',
+
+    # Environment variable references (not actual values)
+    '''\$\{[A-Z_]+\}''',
+    '''\$[A-Z_]+''',
+    '''process\.env\.[A-Z_]+''',
+    '''os\.environ\.get\(['"][A-Z_]+['"]\)''',
+    '''os\.getenv\(['"][A-Z_]+['"]\)''',
+
+    # Empty values after = (allowed in .env.example)
+    '''=\s*$''',
+    '''=\s*#.*$''',
+
+    # Common test/mock patterns
+    '''test[-_]?123''',
+    '''mock[-_]?.*[-_]?key''',
+    '''12345+''',
+]
+
+# Specific commits to allow (add commit hashes here if needed)
+# commits = []
+
+# Specific stopwords to ignore
+stopwords = [
+    "example",
+    "sample",
+    "test",
+    "fake",
+    "mock",
+    "dummy",
+    "placeholder",
+]

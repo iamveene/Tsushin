@@ -1,0 +1,17 @@
+# Ignore test files and documentation
+*.md
+*.txt
+example-use.png
+
+# Ignore store data (will be mounted as volume)
+store/
+logs/
+
+# Ignore git
+.git
+.gitignore
+
+# Ignore binaries (we build from source)
+main
+main.exe
+*.exe

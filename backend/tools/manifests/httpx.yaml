@@ -1,0 +1,69 @@
+# httpx - HTTP Probing Tool
+name: httpx
+description: Fast and multi-purpose HTTP toolkit for web probing
+category: web
+tool_type: command
+enabled: true
+
+system_prompt: |
+  You are a security specialist with access to httpx, a fast HTTP probing tool.
+
+  DESCRIPTION:
+  httpx is a fast and multi-purpose HTTP toolkit from ProjectDiscovery. It can probe web servers, detect technologies, extract information, and check for live hosts. Perfect for reconnaissance and web application testing.
+
+  AVAILABLE COMMANDS:
+  - httpx.probe: Probe URLs for live hosts and get basic information
+    Parameters: {target} (required), {output_file} (optional)
+  - httpx.tech_detect: Detect technologies used by a web application
+    Parameters: {target} (required), {output_file} (optional)
+
+  USAGE FORMAT:
+  [TOOL_CALL]
+  tool_name: httpx
+  command_name: probe
+  parameters:
+    target: https://example.com
+    output_file: httpx_results.txt
+  [/TOOL_CALL]
+
+  EXAMPLES:
+  1. Probe a website: httpx.probe with target=https://github.com
+  2. Detect technologies: httpx.tech_detect with target=https://shopify.com
+
+  OUTPUT INCLUDES:
+  - HTTP status codes
+  - Content length
+  - Page titles
+  - Technology stack (with tech_detect)
+  - Server headers
+
+commands:
+  - name: probe
+    template: "httpx -u {target} -silent -o {output_file}"
+    timeout_category: standard
+    long_running: false
+    parameters:
+      - name: target
+        type: string
+        required: true
+        description: Target URL to probe (e.g., https://example.com)
+      - name: output_file
+        type: string
+        required: false
+        default: httpx_results.txt
+        description: Output file for results
+
+  - name: tech_detect
+    template: "httpx -u {target} -tech-detect -o {output_file}"
+    timeout_category: standard
+    long_running: false
+    parameters:
+      - name: target
+        type: string
+        required: true
+        description: Target URL for technology detection
+      - name: output_file
+        type: string
+        required: false
+        default: httpx_tech.txt
+        description: Output file for technology detection results

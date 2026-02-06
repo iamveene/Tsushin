@@ -1,0 +1,16 @@
+Project Knowledge Base Test Document
+
+This is a test document for validating the dual KB feature in the Tsushin playground.
+
+Key Points:
+- This document is uploaded to a project's knowledge base
+- It should appear in the "Project Knowledge Base" section
+- Agent KB documents should appear in the "Agent Knowledge Base" section
+- Both sections should be collapsible and independent
+
+Test Scenarios:
+1. ACME agent + Project KB: Both sections should be visible
+2. Tsushin agent + Project KB: Only project section should be visible
+
+Created: January 5, 2026
+Purpose: Validation testing for Phase 16 dual KB implementation

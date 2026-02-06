@@ -1,0 +1,51 @@
+# Katana - Web Crawler
+name: katana
+description: Next-generation crawling and spidering framework
+category: web
+tool_type: command
+enabled: true
+
+system_prompt: |
+  You are a security specialist with access to Katana, a next-generation crawling and spidering framework. Use Katana to discover URLs and endpoints on web applications.
+
+  AVAILABLE COMMANDS:
+  - katana.crawl: Crawl a target URL. Parameters: target (required), depth (optional, default: 1)
+
+  USAGE FORMAT:
+  [TOOL_CALL]
+  tool_name: katana
+  command_name: crawl
+  parameters:
+    target: https://example.com
+    depth: 1
+  [/TOOL_CALL]
+
+  EXAMPLES:
+  1. Basic crawl: katana.crawl with target=https://github.com
+  2. Deep crawl: katana.crawl with target=https://example.com, depth=2
+
+  OUTPUT INCLUDES:
+  - Discovered URLs and JavaScript files
+  - API endpoints and form actions
+  - External links
+
+  IMPORTANT:
+  - Use depth=1 for most scans (fast, low memory)
+  - Use depth=2 only for thorough scans of small sites
+  - Depth 3+ is not recommended (high memory usage, may timeout)
+
+commands:
+  - name: crawl
+    template: "katana -u {target} -d {depth} -jc -silent -ct 60 -rl 10 -c 5 -ef css,png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,eot,mp4,mp3,pdf"
+    timeout_category: long
+    long_running: false
+    parameters:
+      - name: target
+        type: string
+        required: true
+        description: Target URL to crawl (e.g., https://example.com)
+      - name: depth
+        type: integer
+        required: false
+        default: "1"
+        description: Crawl depth (1=shallow/recommended, 2=standard, 3+=deep/risky)

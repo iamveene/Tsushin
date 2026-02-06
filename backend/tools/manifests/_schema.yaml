@@ -1,0 +1,48 @@
+# Tool Manifest Schema Documentation
+# ==================================
+# This file documents the YAML schema for tool manifests.
+# Place individual tool manifests as <tool_name>.yaml in this directory.
+#
+# The ToolDiscoveryService will scan this directory and sync tools to the database.
+
+# Example manifest structure:
+# ---------------------------
+#
+# name: tool_name                    # Required: Unique tool identifier
+# description: Short description     # Required: Brief tool description
+# category: network|web|dns|vuln|utility|integration  # Required: Tool category
+# tool_type: command|python_internal # Required: Execution type
+# enabled: true                      # Optional: Default true
+#
+# system_prompt: |                   # Required: Multi-line prompt for AI
+#   You are a specialist with access to...
+#
+#   AVAILABLE COMMANDS:
+#   - tool.command1: Description
+#
+#   USAGE FORMAT:
+#   [TOOL_CALL]
+#   tool_name: tool
+#   command_name: command1
+#   parameters:
+#     param1: value
+#   [/TOOL_CALL]
+#
+# commands:                          # Required: List of commands
+#   - name: command_name             # Required: Command identifier
+#     template: "cmd {param}"        # Required: Command template with {placeholders}
+#     timeout_category: quick|standard|long|extended  # Required
+#     long_running: false            # Optional: Default false
+#     parameters:                    # Optional: List of parameters
+#       - name: param                # Required: Parameter name (matches {param} in template)
+#         type: string               # Required: string|integer|boolean
+#         required: true             # Required: Is parameter mandatory
+#         default: "value"           # Optional: Default value if not required
+#         description: "Help text"   # Optional: Parameter description
+
+# Timeout Categories:
+# -------------------
+# quick:    30 seconds  - DNS lookups, simple HTTP requests, whois
+# standard: 120 seconds - Port scans, basic crawls
+# long:     300 seconds - Deep crawls, comprehensive scans
+# extended: 600 seconds - Vulnerability scanning, full audits

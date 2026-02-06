@@ -1,0 +1,69 @@
+Test1 Project Knowledge Base Document
+
+PROJECT OVERVIEW
+================
+Test1 is a comprehensive testing project created to validate the Knowledge Base Badge functionality in the Tsushin messaging framework. This project was established on January 6, 2026, as part of the Phase 16 implementation.
+
+KEY FEATURES BEING TESTED
+=========================
+1. Project-based Knowledge Base System
+   - Document upload and chunking
+   - Semantic search across project documents
+   - ChromaDB embeddings storage in project_{id} collections
+
+2. KB Usage Badge Display
+   - Visual indicators showing which knowledge sources were used
+   - Color-coded dots: Blue for Project KB, Cyan/Orange for Agent KB
+   - Similarity scores displayed for each chunk used
+   - Source attribution (Project vs Agent vs Combined)
+
+3. Combined Knowledge Search
+   - When agent operates within project context
+   - Searches both Agent KB and Project KB simultaneously
+   - Merges and deduplicates results intelligently
+   - Maintains proper source attribution
+
+PROJECT DOCUMENTS
+=================
+The Test1 project contains several test documents:
+- test_kb_badge.txt: Simple test content for badge validation
+- test_upload.txt: Additional test content
+- test1_project_knowledge.txt: This comprehensive knowledge document
+
+TECHNICAL IMPLEMENTATION
+========================
+Collection Naming Convention:
+- Agent KB: knowledge_agent_{agent_id} (stored in /data/chroma/knowledge/)
+- Project KB: project_{project_id} (stored in /data/chroma/)
+
+Embedding Model:
+- Default: all-MiniLM-L6-v2
+- Configurable per project via kb_embedding_model field
+
+Similarity Thresholds:
+- Default minimum: 0.3 (30% similarity)
+- Configurable per project
+- Higher scores indicate better relevance
+
+EXPECTED BEHAVIOR
+=================
+Outside Project Context:
+- Questions about ACME Corporation should trigger Agent KB
+- Only Agent KB badge displayed with cyan dots
+- Example: "Who started ACME?" → Agent KB response
+
+Inside Project Context:
+- Questions about project-specific content trigger Project KB
+- Questions about general topics may trigger Combined search
+- Badge shows appropriate label: (Project), (Agent), or (Agent + Project)
+- Example: "What is Test1 project?" → Project KB response
+
+TESTING QUESTIONS
+=================
+To test this document, ask:
+- "What is Test1 project about?"
+- "What features are being tested in Test1?"
+- "What collection naming convention does Test1 use?"
+- "What is the default embedding model for Test1?"
+
+These questions should trigger the Project KB badge with blue dots, showing this document as the source with high similarity scores.

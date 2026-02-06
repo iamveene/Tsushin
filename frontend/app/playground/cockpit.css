@@ -1,0 +1,513 @@
+/* Tsushin Playground Styles */
+
+:root {
+  /* Base colors - Dark theme */
+  --tsushin-deep: #0a0a0f;
+  --tsushin-surface: #14141f;
+  --tsushin-elevated: #1a1a2e;
+
+  /* Borders */
+  --tsushin-border: rgba(255, 255, 255, 0.08);
+  --tsushin-border-active: rgba(255, 255, 255, 0.15);
+
+  /* Primary - Teal/Cyan gradient */
+  --tsushin-primary: #14b8a6;
+  --tsushin-primary-glow: rgba(20, 184, 166, 0.3);
+
+  /* Accent - Purple/Indigo */
+  --tsushin-accent: #8b5cf6;
+  --tsushin-accent-glow: rgba(139, 92, 246, 0.3);
+
+  /* Mode indicators */
+  --mode-agent: #14b8a6;
+  --mode-project: #f59e0b;
+
+  /* Glass effect */
+  --glass-bg: rgba(20, 20, 31, 0.7);
+  --glass-blur: 12px;
+}
+
+/* Glass morphism card effect */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--tsushin-border);
+  border-radius: 16px;
+}
+
+/* Floating elements shadow */
+.floating {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Mode indicator glow */
+.project-mode {
+  border-color: var(--mode-project);
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.15);
+}
+
+.agent-mode {
+  border-color: var(--mode-agent);
+  box-shadow: 0 0 20px rgba(20, 184, 166, 0.15);
+}
+
+/* Input focus glow */
+.cockpit-input:focus {
+  box-shadow:
+    0 0 0 2px var(--tsushin-primary-glow),
+    inset 0 0 20px rgba(20, 184, 166, 0.05);
+}
+
+/* Command palette overlay */
+.command-palette-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+}
+
+.command-palette {
+  width: 100%;
+  max-width: 600px;
+  background: var(--tsushin-surface);
+  border: 1px solid var(--tsushin-border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow:
+    0 16px 64px rgba(0, 0, 0, 0.5),
+    0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.command-palette-input {
+  width: 100%;
+  padding: 16px 20px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--tsushin-border);
+  color: white;
+  font-size: 16px;
+  outline: none;
+}
+
+.command-palette-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.command-palette-results {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.command-palette-category {
+  padding: 8px 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.command-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.command-palette-item:hover,
+.command-palette-item.selected {
+  background: var(--tsushin-elevated);
+}
+
+.command-palette-item-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tsushin-primary);
+}
+
+.command-palette-item-content {
+  flex: 1;
+}
+
+.command-palette-item-title {
+  color: white;
+  font-size: 14px;
+}
+
+.command-palette-item-description {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+
+.command-palette-item-shortcut {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.3);
+  background: var(--tsushin-deep);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Inline command suggestions */
+.inline-commands {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 8px;
+  background: var(--tsushin-surface);
+  border: 1px solid var(--tsushin-border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.inline-command-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-bottom: 1px solid var(--tsushin-border);
+}
+
+.inline-command-item:last-child {
+  border-bottom: none;
+}
+
+.inline-command-item:hover,
+.inline-command-item.selected {
+  background: var(--tsushin-elevated);
+}
+
+.inline-command-icon {
+  font-size: 18px;
+}
+
+.inline-command-name {
+  flex: 1;
+  color: white;
+  font-size: 14px;
+  font-family: monospace;
+}
+
+.inline-command-desc {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+
+/* Cockpit layout */
+.cockpit-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  grid-template-rows: 48px 1fr;
+  height: 100vh;
+  background: var(--tsushin-deep);
+}
+
+.cockpit-topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  background: var(--tsushin-surface);
+  border-bottom: 1px solid var(--tsushin-border);
+}
+
+.cockpit-left-panel {
+  background: var(--tsushin-surface);
+  border-right: 1px solid var(--tsushin-border);
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.cockpit-main {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cockpit-right-panel {
+  background: var(--tsushin-surface);
+  border-left: 1px solid var(--tsushin-border);
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* Mode indicator */
+.mode-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.mode-indicator.agent {
+  background: rgba(20, 184, 166, 0.1);
+  color: var(--mode-agent);
+}
+
+.mode-indicator.project {
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--mode-project);
+}
+
+/* Collapsible sections */
+.cockpit-section {
+  margin-bottom: 24px;
+}
+
+.cockpit-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.cockpit-section-content {
+  margin-top: 8px;
+}
+
+/* List items */
+.cockpit-list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 14px;
+}
+
+.cockpit-list-item:hover {
+  background: var(--tsushin-elevated);
+}
+
+.cockpit-list-item.active {
+  background: var(--tsushin-primary);
+  color: white;
+}
+
+.cockpit-list-item-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cockpit-list-item-badge {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  background: var(--tsushin-deep);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Status indicator */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.online {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+}
+
+.status-dot.offline {
+  background: #6b7280;
+}
+
+/* Context inspector */
+.context-card {
+  background: var(--tsushin-elevated);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.context-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.context-card-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--tsushin-border);
+  font-size: 13px;
+}
+
+.context-card-stat:last-child {
+  border-bottom: none;
+}
+
+.context-card-stat-label {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.context-card-stat-value {
+  color: white;
+  font-weight: 500;
+}
+
+/* Keyboard shortcuts */
+.shortcut-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  background: var(--tsushin-deep);
+  border: 1px solid var(--tsushin-border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Animations */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.2s ease-out;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.15s ease-out;
+}
+
+/* Accordion Section Styles */
+.cockpit-nav-section-accordion {
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cockpit-nav-section-accordion.expanded {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cockpit-nav-section-accordion.collapsed {
+  background: transparent;
+}
+
+.cockpit-nav-title-accordion {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.7);
+  border: none;
+  background: none;
+  width: 100%;
+  user-select: none;
+}
+
+.cockpit-nav-title-accordion:hover {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.cockpit-nav-section-accordion.expanded .cockpit-nav-title-accordion {
+  color: var(--tsushin-primary);
+}
+
+.cockpit-nav-preview {
+  animation: fadeIn 0.2s ease-out;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  margin: 0 8px 4px 8px;
+}
+
+/* Smooth height transitions for accordion */
+.cockpit-nav-section-accordion > div:last-child {
+  animation: slideDown 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 1000px;
+  }
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+  .cockpit-layout {
+    grid-template-columns: 240px 1fr 280px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .cockpit-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .cockpit-left-panel,
+  .cockpit-right-panel {
+    display: none;
+  }
+}

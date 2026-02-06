@@ -1,0 +1,16 @@
+# Phase 4: Enhanced Memory & Context - Additional Dependencies
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# Semantic Search (Feature 4.1)
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# Already installed (verify):
+# fastapi>=0.104.0
+# sqlalchemy>=2.0.0
+# anthropic>=0.7.0
+# openai>=1.0.0

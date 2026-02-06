@@ -1,0 +1,54 @@
+# Docker ignore file for Tsushin Frontend
+# Phase 9: Application Containerization
+
+# Dependencies (will be installed fresh)
+node_modules/
+.pnpm-store/
+
+# Build outputs (will be generated)
+.next/
+out/
+
+# Development files
+*.log
+logs/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files
+Dockerfile
+.dockerignore
+
+# Documentation
+*.md
+!README.md
+
+# Temporary files
+*.tmp
+*.temp
+nul
+
+# Test files
+__tests__/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+coverage/
+
+# Environment files (NEVER include in images)
+.env*
+*.env

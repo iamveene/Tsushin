@@ -1,0 +1,138 @@
+TEST1 PROJECT COMPREHENSIVE KNOWLEDGE BASE
+
+PROJECT INFORMATION
+===================
+Project Name: Test1
+Project ID: 5
+Created: January 2026
+Purpose: Testing and validating the Knowledge Base Badge functionality in Tsushin
+Owner: Test User (tenant_20251202232822)
+
+TEAM MEMBERS
+=============
+The Test1 project has the following team members:
+- Sarah Chen - Project Lead, responsible for KB feature validation
+- Michael Rodriguez - Backend Developer, working on ChromaDB integration
+- Emma Watson - Frontend Developer, implementing badge UI components
+- David Kim - QA Engineer, creating test scenarios
+
+PROJECT GOALS
+=============
+The primary goals of the Test1 project are:
+1. Validate semantic search across project-specific documents
+2. Test KB badge display with proper source attribution
+3. Verify combined knowledge search (Agent + Project KB)
+4. Ensure color-coded visual indicators work correctly
+5. Test similarity score calculations and threshold filtering
+
+TECHNICAL STACK
+===============
+Embedding Model: all-MiniLM-L6-v2
+Vector Database: ChromaDB
+Collection Name: project_5
+Storage Path: /app/data/chroma/project_5
+Chunk Size: 500 characters
+Chunk Overlap: 50 characters
+Similarity Threshold: 0.3 (30%)
+
+PROJECT MILESTONES
+==================
+Phase 1 (Completed): Initial project setup and configuration
+Phase 2 (Completed): Document upload and chunking system
+Phase 3 (Completed): Semantic search implementation
+Phase 4 (In Progress): KB badge visual indicators
+Phase 5 (Planned): Advanced filtering and relevance tuning
+
+KEY FEATURES TESTED
+===================
+Feature 1: Document Upload
+- Users can upload TXT, CSV, JSON, PDF, and DOCX files
+- Files are automatically chunked for semantic search
+- Embeddings generated using SentenceTransformer model
+- Status tracking: processing → completed → indexed
+
+Feature 2: Semantic Search
+- Natural language queries matched against document chunks
+- Results ranked by cosine similarity
+- Minimum threshold filtering to avoid irrelevant results
+- Maximum 5 results returned per query
+
+Feature 3: KB Badge Display
+- Visual badges showing which documents were used in response
+- Color coding: Blue dots for Project KB, Cyan dots for Agent KB
+- Expandable to show individual chunks and similarity scores
+- Source attribution: (Project), (Agent), or (Agent + Project)
+
+Feature 4: Combined Knowledge
+- When agent operates in project context, both KBs searched
+- Results intelligently merged and deduplicated
+- Sorted by similarity score across all sources
+- Maintains separate attribution for each result
+
+PROJECT CHALLENGES
+==================
+Challenge 1: Collection Naming Consistency
+- Solution: Standardized to project_{id} format
+- Fixed: Corrected CHROMA_PERSIST_DIR to CHROMA_DIR
+
+Challenge 2: Agent KB Path Resolution
+- Solution: Agent KB stored in /data/chroma/knowledge subfolder
+- Fixed: Updated combined service to use correct path
+
+Challenge 3: Source Attribution
+- Solution: Added source_type field to all KB results
+- Fixed: Proper color coding in frontend badge component
+
+TESTING SCENARIOS
+=================
+Scenario A: Agent KB Only (Outside Project)
+- Agent: ACME (has KB configured)
+- Context: NOT in any project
+- Question: "Who founded ACME Corporation?"
+- Expected: Agent KB badge with cyan dots
+- Expected Source: acme_company_info.txt
+
+Scenario B: Combined KB (Agent + Project)
+- Agent: ACME (has KB configured)
+- Context: INSIDE Test1 project
+- Question: "Who are the ACME founders?"
+- Expected: Combined badge "(Agent + Project)"
+- Expected Sources: acme_company_info.txt (cyan) + test files (blue)
+
+Scenario C: Project KB Only
+- Agent: Tsushin or other agent WITHOUT KB
+- Context: INSIDE Test1 project
+- Question: "What is Test1 project about?"
+- Expected: Project KB badge with blue dots only
+- Expected Source: test1_comprehensive_kb.txt
+
+VALIDATION CHECKLIST
+====================
+✓ chunk_index included in all search results
+✓ Similarity scores calculated correctly
+✓ Color coding works (blue vs cyan dots)
+✓ Badge labels show correct context
+✓ Source attribution maintained
+✓ Deduplication prevents duplicate chunks
+✓ Results sorted by relevance
+
+PROJECT SUCCESS METRICS
+=======================
+- All KB badge scenarios tested and working
+- Source attribution accuracy: 100%
+- Semantic search relevance: >0.3 similarity threshold
+- UI responsiveness: Badge loads with message
+- No false positives: Only used KBs shown in badge
+
+KNOWN LIMITATIONS
+=================
+- Maximum 5 results returned per query (configurable)
+- Similarity threshold may need tuning per use case
+- Very short queries may return low similarity scores
+- Document processing time depends on file size
+
+TEST1 SPECIFIC INFORMATION
+==========================
+This document (test1_comprehensive_kb.txt) is specifically designed to test Project KB functionality. Questions about "Test1 project goals", "Test1 team members", "Test1 technical stack", or "Test1 milestones" should retrieve chunks from this document with high similarity scores.
+
+The document contains structured information across multiple topics to validate semantic search quality and ensure different query types can find relevant knowledge.

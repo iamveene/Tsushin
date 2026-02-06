@@ -1,0 +1,170 @@
+2025-12-07 04:24:16,473 - [__main__] - INFO - Starting tsn-core v1.0.0
+2025-12-07 04:24:33,473 - [agent.memory.vector_store_manager] - INFO - VectorStoreManager initialized
+INFO:     Started server process [1811014]
+INFO:     Waiting for application startup.
+2025-12-07 04:24:35,798 - [root] - INFO - Database initialized
+2025-12-07 04:24:35,808 - [root] - INFO - Watcher initialized with group filters: ['.*', 'Archive', 'Churras Montanhas', 'Cythelligence Quotes', 'Playground', 'Travels 2026']
+2025-12-07 04:24:35,809 - [agent.router] - INFO - TokenTracker initialized for analytics
+2025-12-07 04:24:35,809 - [agent.router] - INFO - Initializing Multi-Agent Memory Manager...
+2025-12-07 04:24:35,809 - [agent.memory.multi_agent_memory] - INFO - MultiAgentMemoryManager initialized with contact-based memory support
+2025-12-07 04:24:35,809 - [agent.router] - INFO - Multi-Agent Memory Manager initialized
+2025-12-07 04:24:35,809 - [agent.tools.workspace_manager] - INFO - WorkspaceManager initialized with base_dir: /opt/tsushin/backend/data/workspace
+2025-12-07 04:24:35,815 - [services.api_key_service] - WARNING - No API key found for openweather
+2025-12-07 04:24:35,815 - [agent.tools.weather_tool] - WARNING - OpenWeatherMap API key not configured
+2025-12-07 04:24:35,925 - [agent.skills.skill_manager] - INFO - Registered skill: asana (AsanaSkill)
+2025-12-07 04:24:35,926 - [agent.skills.skill_manager] - INFO - Registered skill: audio_transcript (AudioTranscriptSkill)
+2025-12-07 04:24:35,928 - [agent.skills.skill_manager] - INFO - Registered skill: audio_tts (AudioTTSSkill)
+2025-12-07 04:24:35,930 - [agent.skills.skill_manager] - INFO - Registered skill: flows (FlowsSkill)
+2025-12-07 04:24:35,932 - [agent.skills.skill_manager] - INFO - Registered skill: adaptive_personality (AdaptivePersonalitySkill)
+2025-12-07 04:24:35,933 - [agent.skills.skill_manager] - INFO - Registered skill: knowledge_sharing (KnowledgeSharingSkill)
+2025-12-07 04:24:35,935 - [agent.skills.skill_manager] - INFO - Registered skill: agent_switcher (AgentSwitcherSkill)
+2025-12-07 04:24:35,936 - [agent.skills.skill_manager] - INFO - Built-in skills registered: asana, audio_transcript, audio_tts, flows, adaptive_personality, knowledge_sharing, agent_switcher
+2025-12-07 04:24:35,936 - [agent.skills.skill_manager] - INFO - SkillManager initialized with 7 registered skills
+2025-12-07 04:24:35,936 - [agent.router] - INFO - SkillManager initialized with 7 skills
+2025-12-07 04:24:35,936 - [agent.router] - INFO - MediaDownloader initialized
+2025-12-07 04:24:35,936 - [agent.router] - INFO - SchedulerService initialized for conversation routing with memory integration
+2025-12-07 04:24:35,936 - [root] - INFO - Legacy single watcher disabled - using Phase 8 multi-watcher
+2025-12-07 04:24:35,948 - [root] - INFO - Found 1 active MCP instances
+2025-12-07 04:24:35,958 - [agent.router] - INFO - TokenTracker initialized for analytics
+2025-12-07 04:24:35,958 - [agent.router] - INFO - Initializing Multi-Agent Memory Manager...
+2025-12-07 04:24:35,958 - [agent.memory.multi_agent_memory] - INFO - MultiAgentMemoryManager initialized with contact-based memory support
+2025-12-07 04:24:35,958 - [agent.router] - INFO - Multi-Agent Memory Manager initialized
+2025-12-07 04:24:35,960 - [agent.tools.workspace_manager] - INFO - WorkspaceManager initialized with base_dir: /opt/tsushin/backend/data/workspace
+2025-12-07 04:24:35,963 - [services.api_key_service] - WARNING - No API key found for openweather
+2025-12-07 04:24:35,963 - [agent.tools.weather_tool] - WARNING - OpenWeatherMap API key not configured
+2025-12-07 04:24:36,015 - [agent.router] - INFO - SkillManager initialized with 7 skills
+2025-12-07 04:24:36,015 - [agent.router] - INFO - MediaDownloader initialized
+2025-12-07 04:24:36,015 - [agent.router] - INFO - SchedulerService initialized for conversation routing with memory integration
+2025-12-07 04:24:36,016 - [root] - INFO - MCP Watcher started for instance 19 (tenant: tenant_20251202232822, port: 8082)
+2025-12-07 04:24:36,016 - [root] - INFO - Total watchers started: 1
+2025-12-07 04:24:36,017 - [root] - INFO - WatcherManager initialized for dynamic instance management
+2025-12-07 04:24:36,018 - [scheduler.worker] - INFO - SchedulerWorker loop started
+2025-12-07 04:24:36,018 - [scheduler.worker] - INFO - SchedulerWorker started (poll interval: 10s)
+2025-12-07 04:24:36,020 - [scheduler.worker] - INFO - SchedulerWorker iteration 1 - polling...
+2025-12-07 04:24:36,025 - [root] - INFO - Scheduler Worker started (polling every 10s)
+2025-12-07 04:24:36,028 - [scheduler.worker] - INFO - _poll_and_execute started
+2025-12-07 04:24:36,050 - [scheduler.worker] - INFO - Getting database session...
+2025-12-07 04:24:36,051 - [scheduler.worker] - INFO - Creating SchedulerService...
+2025-12-07 04:24:36,051 - [scheduler.worker] - INFO - Querying for due events...
+2025-12-07 04:24:36,087 - [scheduler.worker] - INFO - Query returned 0 events
+2025-12-07 04:24:36,088 - [scheduler.worker] - INFO - No events due for execution
+2025-12-07 04:24:36,088 - [scheduler.worker] - INFO - SchedulerWorker iteration 1 - poll completed
+2025-12-07 04:24:36,088 - [scheduler.worker] - INFO - SchedulerWorker sleeping for 10s...
+2025-12-07 04:24:36,196 - [agent.tools.workspace_manager] - INFO - WorkspaceManager initialized with base_dir: /opt/tsushin/backend/data/workspace
+2025-12-07 04:24:36,197 - [root] - INFO - Scheduled Flow Executor started (polling every 10s)
+2025-12-07 04:24:36,198 - [mcp_reader.watcher] - INFO - Starting MCP watcher from timestamp 2025-12-07 01:04:50+00:00
+2025-12-07 04:24:36,199 - [flows.scheduled_flow_executor] - INFO - ScheduledFlowExecutor started (polling every 10s)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8081 (Press CTRL+C to quit)
+INFO:     127.0.0.1:33722 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49026 - "WebSocket /ws" [accepted]
+2025-12-07 04:24:45,283 - [websocket_manager] - INFO - New WebSocket connection. Total: 1
+INFO:     connection open
+2025-12-07 04:24:46,157 - [scheduler.worker] - INFO - SchedulerWorker iteration 2 - polling...
+2025-12-07 04:24:46,158 - [scheduler.worker] - INFO - _poll_and_execute started
+2025-12-07 04:24:46,158 - [scheduler.worker] - INFO - Getting database session...
+2025-12-07 04:24:46,158 - [scheduler.worker] - INFO - Creating SchedulerService...
+2025-12-07 04:24:46,158 - [scheduler.worker] - INFO - Querying for due events...
+2025-12-07 04:24:46,179 - [scheduler.worker] - INFO - Query returned 0 events
+2025-12-07 04:24:46,180 - [scheduler.worker] - INFO - No events due for execution
+2025-12-07 04:24:46,181 - [scheduler.worker] - INFO - SchedulerWorker iteration 2 - poll completed
+2025-12-07 04:24:46,189 - [scheduler.worker] - INFO - SchedulerWorker sleeping for 10s...
+INFO:     127.0.0.1:49036 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49040 - "GET /api/playground/agents HTTP/1.1" 200 OK
+2025-12-07 04:24:56,079 - [agent.memory.vector_store_manager] - INFO - Creating new VectorStore for /opt/tsushin/backend/data/chroma/agent_3
+2025-12-07 04:24:56,080 - [agent.memory.embedding_service] - INFO - Loading embedding model: all-MiniLM-L6-v2
+2025-12-07 04:24:56,082 - [sentence_transformers.SentenceTransformer] - INFO - Use pytorch device_name: cpu
+2025-12-07 04:24:56,082 - [sentence_transformers.SentenceTransformer] - INFO - Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2025-12-07 04:24:56,239 - [scheduler.worker] - INFO - SchedulerWorker iteration 3 - polling...
+2025-12-07 04:24:56,260 - [scheduler.worker] - INFO - _poll_and_execute started
+2025-12-07 04:24:56,260 - [scheduler.worker] - INFO - Getting database session...
+2025-12-07 04:24:56,260 - [scheduler.worker] - INFO - Creating SchedulerService...
+2025-12-07 04:24:56,260 - [scheduler.worker] - INFO - Querying for due events...
+2025-12-07 04:24:56,317 - [scheduler.worker] - INFO - Query returned 0 events
+2025-12-07 04:24:56,361 - [scheduler.worker] - INFO - No events due for execution
+2025-12-07 04:24:56,381 - [scheduler.worker] - INFO - SchedulerWorker iteration 3 - poll completed
+2025-12-07 04:24:56,386 - [scheduler.worker] - INFO - SchedulerWorker sleeping for 10s...
+2025-12-07 04:24:57,465 - [agent.memory.embedding_service] - INFO - Model loaded successfully. Embedding dimension: 384
+2025-12-07 04:24:57,465 - [agent.memory.vector_store] - INFO - Initializing ChromaDB at ./data/chroma/agent_3
+2025-12-07 04:24:57,842 - [agent.memory.vector_store] - INFO - VectorStore initialized. Collection size: 19
+2025-12-07 04:24:57,844 - [agent.memory.vector_store_manager] - INFO - Creating new VectorStore for /opt/tsushin/backend/data/chroma/agent_7
+2025-12-07 04:24:57,845 - [agent.memory.vector_store] - INFO - Initializing ChromaDB at ./data/chroma/agent_7
+2025-12-07 04:24:57,984 - [agent.memory.vector_store] - INFO - VectorStore initialized. Collection size: 15
+2025-12-07 04:24:57,989 - [agent.memory.vector_store_manager] - INFO - Creating new VectorStore for /opt/tsushin/backend/data/chroma/agent_13
+2025-12-07 04:24:57,989 - [agent.memory.vector_store] - INFO - Initializing ChromaDB at ./data/chroma/agent_13
+2025-12-07 04:24:58,132 - [agent.memory.vector_store] - INFO - VectorStore initialized. Collection size: 16
+INFO:     154.38.189.200:37212 - "GET /api/stats/memory HTTP/1.1" 200 OK
+INFO:     154.38.189.200:37190 - "GET /api/messages/count HTTP/1.1" 200 OK
+INFO:     154.38.189.200:37206 - "GET /api/agent-runs/count HTTP/1.1" 200 OK
+INFO:     154.38.189.200:37172 - "GET /api/messages?limit=50 HTTP/1.1" 200 OK
+INFO:     154.38.189.200:37212 - "GET /api/flows/runs?limit=20 HTTP/1.1" 200 OK
+INFO:     154.38.189.200:37214 - "GET /api/flows/ HTTP/1.1" 200 OK
+INFO:     154.38.189.200:37178 - "GET /api/agent-runs?limit=50 HTTP/1.1" 200 OK
+2025-12-07 04:25:05,776 - [services.playground_service] - INFO - User 4 not mapped to contact, using generic sender_key: playground_user_4
+2025-12-07 04:25:05,805 - [agent.memory.multi_agent_memory] - INFO - MultiAgentMemoryManager initialized with contact-based memory support
+2025-12-07 04:25:05,806 - [agent.memory.semantic_memory] - INFO - Ring buffer initialized (size: 5000)
+2025-12-07 04:25:05,807 - [agent.memory.vector_store_manager] - INFO - Creating new VectorStore for /opt/tsushin/backend/data/chroma/agent_1
+2025-12-07 04:25:05,807 - [agent.memory.vector_store] - INFO - Initializing ChromaDB at ./data/chroma/agent_1
+2025-12-07 04:25:06,860 - [scheduler.worker] - INFO - SchedulerWorker iteration 4 - polling...
+2025-12-07 04:25:06,861 - [scheduler.worker] - INFO - _poll_and_execute started
+2025-12-07 04:25:06,861 - [scheduler.worker] - INFO - Getting database session...
+2025-12-07 04:25:06,861 - [scheduler.worker] - INFO - Creating SchedulerService...
+2025-12-07 04:25:06,862 - [scheduler.worker] - INFO - Querying for due events...
+2025-12-07 04:25:06,907 - [scheduler.worker] - INFO - Query returned 0 events
+2025-12-07 04:25:06,963 - [scheduler.worker] - INFO - No events due for execution
+2025-12-07 04:25:06,966 - [scheduler.worker] - INFO - SchedulerWorker iteration 4 - poll completed
+2025-12-07 04:25:06,974 - [scheduler.worker] - INFO - SchedulerWorker sleeping for 10s...
+2025-12-07 04:25:06,975 - [agent.memory.vector_store] - INFO - VectorStore initialized. Collection size: 0
+2025-12-07 04:25:06,977 - [agent.memory.semantic_memory] - INFO - Semantic search enabled (using VectorStore manager)
+2025-12-07 04:25:06,977 - [agent.memory.agent_memory_system] - INFO - AgentMemorySystem initialized for agent 1
+2025-12-07 04:25:06,978 - [agent.memory.multi_agent_memory] - INFO - Created AgentMemorySystem for agent 1 (memory_size=5000)
+2025-12-07 04:25:07,064 - [agent.memory.shared_memory_pool] - INFO - Retrieved 4 knowledge items for agent 1
+2025-12-07 04:25:07,065 - [services.playground_service] - ERROR - Error sending message to agent 1: No API key found for provider: gemini
+Traceback (most recent call last):
+  File "/opt/tsushin/backend/services/playground_service.py", line 160, in send_message
+    agent_service = AgentService(config_dict, self.db)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/tsushin/backend/agent/agent_service.py", line 52, in __init__
+    self.ai_client = AIClient(
+                     ^^^^^^^^^
+  File "/opt/tsushin/backend/agent/ai_client.py", line 58, in __init__
+    raise ValueError(f"No API key found for provider: {provider}")
+ValueError: No API key found for provider: gemini
+INFO:     127.0.0.1:43130 - "POST /api/playground/chat HTTP/1.1" 200 OK
+2025-12-07 04:25:07,244 - [services.playground_service] - INFO - User 4 not mapped to contact, using generic sender_key: playground_user_4
+2025-12-07 04:25:07,246 - [agent.memory.multi_agent_memory] - INFO - MultiAgentMemoryManager initialized with contact-based memory support
+2025-12-07 04:25:07,246 - [agent.memory.semantic_memory] - INFO - Ring buffer initialized (size: 5000)
+2025-12-07 04:25:07,246 - [agent.memory.semantic_memory] - INFO - Semantic search enabled (using VectorStore manager)
+2025-12-07 04:25:07,246 - [agent.memory.agent_memory_system] - INFO - AgentMemorySystem initialized for agent 1
+2025-12-07 04:25:07,246 - [agent.memory.multi_agent_memory] - INFO - Created AgentMemorySystem for agent 1 (memory_size=5000)
+2025-12-07 04:25:07,252 - [agent.memory.shared_memory_pool] - INFO - Retrieved 4 knowledge items for agent 1
+INFO:     127.0.0.1:43142 - "GET /api/playground/history/1?limit=10 HTTP/1.1" 200 OK
+2025-12-07 04:25:17,048 - [scheduler.worker] - INFO - SchedulerWorker iteration 5 - polling...
+2025-12-07 04:25:17,049 - [scheduler.worker] - INFO - _poll_and_execute started
+2025-12-07 04:25:17,049 - [scheduler.worker] - INFO - Getting database session...
+2025-12-07 04:25:17,049 - [scheduler.worker] - INFO - Creating SchedulerService...
+2025-12-07 04:25:17,050 - [scheduler.worker] - INFO - Querying for due events...
+2025-12-07 04:25:17,055 - [scheduler.worker] - INFO - Query returned 0 events
+2025-12-07 04:25:17,055 - [scheduler.worker] - INFO - No events due for execution
+2025-12-07 04:25:17,056 - [scheduler.worker] - INFO - SchedulerWorker iteration 5 - poll completed
+2025-12-07 04:25:17,056 - [scheduler.worker] - INFO - SchedulerWorker sleeping for 10s...
+INFO:     Shutting down
+2025-12-07 04:25:25,440 - [websocket_manager] - INFO - WebSocket disconnected. Total: 0
+INFO:     connection closed
+INFO:     Waiting for application shutdown.
+2025-12-07 04:25:25,544 - [mcp_reader.watcher] - INFO - Stopping MCP watcher
+2025-12-07 04:25:25,549 - [root] - INFO - Stopped watcher for instance 19
+2025-12-07 04:25:25,551 - [scheduler.worker] - INFO - Stopping SchedulerWorker...
+2025-12-07 04:25:26,117 - [scheduler.worker] - INFO - SchedulerWorker stop event detected
+2025-12-07 04:25:26,120 - [scheduler.worker] - INFO - SchedulerWorker loop ended
+2025-12-07 04:25:26,121 - [scheduler.worker] - INFO - SchedulerWorker stopped successfully
+2025-12-07 04:25:26,122 - [flows.scheduled_flow_executor] - INFO - ScheduledFlowExecutor stopped
+2025-12-07 04:25:26,123 - [root] - INFO - Application shutdown
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1811014]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            2025-12-07 04:24:15,175 - [scheduler.worker] - INFO - SchedulerWorker loop ended
+2025-12-07 04:24:15,176 - [scheduler.worker] - INFO - SchedulerWorker stopped successfully
+2025-12-07 04:24:15,176 - [flows.scheduled_flow_executor] - INFO - ScheduledFlowExecutor stopped
+2025-12-07 04:24:15,177 - [root] - INFO - Application shutdown
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1808443]

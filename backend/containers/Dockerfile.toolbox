@@ -1,0 +1,143 @@
+# Tsushin Toolbox Container
+# Per-tenant container for executing custom tools (security scanning, network analysis, etc.)
+#
+# Build: docker build -f backend/containers/Dockerfile.toolbox -t tsushin-toolbox:base .
+# Usage: Managed by ToolboxContainerService - one container per tenant
+#
+# Pre-installed tools:
+# - nmap: Network scanning
+# - nuclei: Vulnerability scanning
+# - katana: Web crawling
+# - httpx: HTTP toolkit (ProjectDiscovery)
+# - subfinder: Subdomain discovery
+# - Python 3.11 with common packages
+#
+# Phase 9.3: Added multi-architecture support (amd64/arm64)
+
+FROM python:3.11-slim AS base
+
+# Phase 9.3: Architecture detection for multi-platform support
+# TARGETARCH is automatically set by Docker buildx (amd64 or arm64)
+ARG TARGETARCH
+
+# ============================================================================
+# System Dependencies & Security Tools
+# ============================================================================
+
+# Install system dependencies, nmap, and sqlmap
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    unzip \
+    ca-certificates \
+    nmap \
+    dnsutils \
+    iputils-ping \
+    net-tools \
+    jq \
+    git \
+    sqlmap \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# ProjectDiscovery Tools (nuclei, katana, httpx, subfinder)
+# Phase 9.3: Multi-architecture support (amd64/arm64)
+# ============================================================================
+
+# Install nuclei (vulnerability scanner) - architecture-aware
+RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
+    echo "Installing nuclei for architecture: $ARCH" && \
+    wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v3.3.7/nuclei_3.3.7_linux_${ARCH}.zip" \
+    && unzip -o "nuclei_3.3.7_linux_${ARCH}.zip" \
+    && mv nuclei /usr/local/bin/ \
+    && rm -f "nuclei_3.3.7_linux_${ARCH}.zip" LICENSE.md README*.md \
+    && chmod +x /usr/local/bin/nuclei
+
+# Install katana (web crawler) - architecture-aware
+RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
+    echo "Installing katana for architecture: $ARCH" && \
+    wget -q "https://github.com/projectdiscovery/katana/releases/download/v1.1.0/katana_1.1.0_linux_${ARCH}.zip" \
+    && unzip -o "katana_1.1.0_linux_${ARCH}.zip" \
+    && mv katana /usr/local/bin/ \
+    && rm -f "katana_1.1.0_linux_${ARCH}.zip" LICENSE.md README*.md \
+    && chmod +x /usr/local/bin/katana
+
+# Install httpx (HTTP toolkit from ProjectDiscovery) - architecture-aware
+RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
+    echo "Installing httpx for architecture: $ARCH" && \
+    wget -q "https://github.com/projectdiscovery/httpx/releases/download/v1.6.9/httpx_1.6.9_linux_${ARCH}.zip" \
+    && unzip -o "httpx_1.6.9_linux_${ARCH}.zip" \
+    && mv httpx /usr/local/bin/ \
+    && rm -f "httpx_1.6.9_linux_${ARCH}.zip" LICENSE.md README*.md \
+    && chmod +x /usr/local/bin/httpx
+
+# Install subfinder (subdomain discovery) - architecture-aware
+RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
+    echo "Installing subfinder for architecture: $ARCH" && \
+    wget -q "https://github.com/projectdiscovery/subfinder/releases/download/v2.6.7/subfinder_2.6.7_linux_${ARCH}.zip" \
+    && unzip -o "subfinder_2.6.7_linux_${ARCH}.zip" \
+    && mv subfinder /usr/local/bin/ \
+    && rm -f "subfinder_2.6.7_linux_${ARCH}.zip" LICENSE.md README*.md \
+    && chmod +x /usr/local/bin/subfinder
+
+# ============================================================================
+# Python Environment
+# ============================================================================
+
+# Install common Python packages
+# Note: httpx Python package removed to avoid conflict with ProjectDiscovery httpx binary
+RUN pip install --no-cache-dir \
+    requests \
+    beautifulsoup4 \
+    lxml \
+    pyyaml \
+    aiohttp \
+    python-nmap \
+    dnspython \
+    paramiko \
+    netaddr
+
+# ============================================================================
+# User Setup (non-root for security)
+# ============================================================================
+
+# Create non-root user
+RUN groupadd -g 1000 toolbox && \
+    useradd -u 1000 -g toolbox -m -s /bin/bash toolbox
+
+# Create workspace directory
+RUN mkdir -p /workspace && chown -R toolbox:toolbox /workspace
+
+# Create nuclei config directory
+RUN mkdir -p /home/toolbox/.config/nuclei && \
+    chown -R toolbox:toolbox /home/toolbox/.config
+
+# ============================================================================
+# Environment & Entry Point
+# ============================================================================
+
+# Set working directory
+WORKDIR /workspace
+
+# Switch to non-root user
+USER toolbox
+
+# Update nuclei templates (as toolbox user)
+RUN nuclei -update-templates -silent || true
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1
+ENV HOME=/home/toolbox
+ENV PATH="/home/toolbox/.local/bin:${PATH}"
+
+# Keep container running (will be managed by docker exec)
+# Using tail -f /dev/null keeps container alive without consuming resources
+CMD ["tail", "-f", "/dev/null"]
+
+# ============================================================================
+# Labels
+# ============================================================================
+
+LABEL maintainer="Tsushin"
+LABEL description="Toolbox container with security scanning and network analysis tools"
+LABEL version="1.0"
