@@ -28,6 +28,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+!frontend/lib/
+frontend/lib/*.backup
 lib64/
 parts/
 sdist/
