@@ -122,6 +122,8 @@ from api.routes_system_ai import router as system_ai_router
 # Phase 20: Sentinel Security Agent
 from api.routes_sentinel import router as sentinel_router, set_engine as set_sentinel_engine
 from api.routes_sentinel_exceptions import router as sentinel_exceptions_router, set_engine as set_sentinel_exceptions_engine
+# v1.6.0: Sentinel Security Profiles
+from api.routes_sentinel_profiles import router as sentinel_profiles_router, set_engine as set_sentinel_profiles_engine
 # MCP Health Monitor Service (auto-recovery for keepalive timeouts)
 from services.mcp_health_monitor import MCPHealthMonitorService
 from services.mcp_container_manager import MCPContainerManager
@@ -179,6 +181,7 @@ async def lifespan(app: FastAPI):
     # Phase 20: Sentinel Security Agent
     set_sentinel_engine(engine)
     set_sentinel_exceptions_engine(engine)
+    set_sentinel_profiles_engine(engine)
 
     logging.info("Database initialized")
 
@@ -887,9 +890,16 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors with CORS headers"""
+    # Sanitize errors to ensure JSON-serializable (ctx may contain non-serializable objects)
+    errors = []
+    for err in exc.errors():
+        sanitized = {k: v for k, v in err.items() if k != "ctx"}
+        if "ctx" in err and isinstance(err["ctx"], dict):
+            sanitized["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
+        errors.append(sanitized)
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
+        content={"detail": errors},
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "*",
@@ -952,6 +962,7 @@ app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integrat
 app.include_router(system_ai_router)  # Phase 17: System AI Configuration
 app.include_router(sentinel_router, prefix="/api")  # Phase 20: Sentinel Security Agent
 app.include_router(sentinel_exceptions_router, prefix="/api")  # Phase 20 Enhancement: Sentinel Exceptions
+app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel Security Profiles
 
 # Phase 6.11.2: WebSocket endpoint for real-time updates
 @app.websocket("/ws")

@@ -10,12 +10,14 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models import (
     SentinelProfile,
     SentinelProfileAssignment,
     Agent,
+    Contact,
 )
 from .sentinel_effective_config import SentinelEffectiveConfig
 from .sentinel_detections import DETECTION_REGISTRY
@@ -272,7 +274,7 @@ class SentinelProfilesService:
         if skill_type and not agent_id:
             raise ValueError("skill_type requires agent_id")
 
-        # Find or create assignment
+        # Find or create assignment (with race condition handling)
         existing = self.db.query(SentinelProfileAssignment).filter(
             SentinelProfileAssignment.tenant_id == self.tenant_id,
             SentinelProfileAssignment.agent_id == agent_id if agent_id else SentinelProfileAssignment.agent_id.is_(None),
@@ -295,11 +297,28 @@ class SentinelProfilesService:
             assigned_by=assigned_by,
         )
 
-        self.db.add(assignment)
-        self.db.commit()
-        self.db.refresh(assignment)
-        self._invalidate_cache()
+        try:
+            self.db.add(assignment)
+            self.db.commit()
+            self.db.refresh(assignment)
+        except IntegrityError:
+            # Race condition: another request created the assignment concurrently
+            self.db.rollback()
+            existing = self.db.query(SentinelProfileAssignment).filter(
+                SentinelProfileAssignment.tenant_id == self.tenant_id,
+                SentinelProfileAssignment.agent_id == agent_id if agent_id else SentinelProfileAssignment.agent_id.is_(None),
+                SentinelProfileAssignment.skill_type == skill_type if skill_type else SentinelProfileAssignment.skill_type.is_(None),
+            ).first()
+            if existing:
+                existing.profile_id = profile_id
+                existing.assigned_by = assigned_by
+                self.db.commit()
+                self.db.refresh(existing)
+                self._invalidate_cache()
+                return existing
+            raise ValueError("Failed to create or update assignment")
 
+        self._invalidate_cache()
         return assignment
 
     def remove_assignment(self, assignment_id: int) -> bool:
@@ -502,13 +521,17 @@ class SentinelProfilesService:
             if p:
                 tenant_profile = {"id": p.id, "name": p.name, "slug": p.slug}
 
-        # Get all agents for this tenant
-        agents = self.db.query(Agent).filter(
-            Agent.tenant_id == self.tenant_id
-        ).order_by(Agent.name).all()
+        # Get all agents for this tenant (join Contact for display name)
+        agents = (
+            self.db.query(Agent, Contact.friendly_name)
+            .outerjoin(Contact, Agent.contact_id == Contact.id)
+            .filter(Agent.tenant_id == self.tenant_id)
+            .order_by(Contact.friendly_name)
+            .all()
+        )
 
         agent_list = []
-        for agent in agents:
+        for agent, agent_name in agents:
             # Agent-level assignment
             agent_assignment = self.db.query(SentinelProfileAssignment).filter(
                 SentinelProfileAssignment.tenant_id == self.tenant_id,
@@ -569,7 +592,7 @@ class SentinelProfilesService:
 
             agent_list.append({
                 "id": agent.id,
-                "name": agent.name,
+                "name": agent_name or f"Agent {agent.id}",
                 "is_active": agent.is_active,
                 "profile": agent_profile,
                 "effective_profile": effective_profile,
