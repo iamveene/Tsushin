@@ -104,7 +104,7 @@ export default function AgentStudioTab() {
   const handleDeleteSelected = useCallback((nodeIds: string[]) => {
     for (const nodeId of nodeIds) {
       const node = builder.nodes.find(n => n.id === nodeId)
-      if (!node || node.data.type === 'builder-agent') continue
+      if (!node || node.data.type === 'builder-agent' || node.data.type === 'builder-group') continue
       const data = node.data
       let categoryId: string | undefined
       let itemId: string | number | undefined

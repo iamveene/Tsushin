@@ -1,4 +1,5 @@
 import BuilderAgentNode from './BuilderAgentNode'
+import BuilderGroupNode from './BuilderGroupNode'
 import BuilderPersonaNode from './BuilderPersonaNode'
 import BuilderChannelNode from './BuilderChannelNode'
 import BuilderSkillNode from './BuilderSkillNode'
@@ -9,6 +10,7 @@ import BuilderMemoryNode from './BuilderMemoryNode'
 
 export const builderNodeTypes = {
   'builder-agent': BuilderAgentNode,
+  'builder-group': BuilderGroupNode,
   'builder-persona': BuilderPersonaNode,
   'builder-channel': BuilderChannelNode,
   'builder-skill': BuilderSkillNode,
@@ -18,4 +20,4 @@ export const builderNodeTypes = {
   'builder-memory': BuilderMemoryNode,
 }
 
-export { BuilderAgentNode, BuilderPersonaNode, BuilderChannelNode, BuilderSkillNode, BuilderToolNode, BuilderSentinelNode, BuilderKnowledgeNode, BuilderMemoryNode }
+export { BuilderAgentNode, BuilderGroupNode, BuilderPersonaNode, BuilderChannelNode, BuilderSkillNode, BuilderToolNode, BuilderSentinelNode, BuilderKnowledgeNode, BuilderMemoryNode }

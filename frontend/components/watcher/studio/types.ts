@@ -8,6 +8,7 @@ import { Node, Edge } from '@xyflow/react'
 // Builder node type identifiers
 export type BuilderNodeType =
   | 'builder-agent'
+  | 'builder-group'
   | 'builder-persona'
   | 'builder-channel'
   | 'builder-skill'
@@ -35,6 +36,23 @@ export const CATEGORY_CARDINALITY: Record<ProfileCategoryId, { min: number; max:
   security: { min: 0, max: 1, label: '0..1' },
   knowledge: { min: 0, max: null, label: '0..N' },
   memory: { min: 1, max: 1, label: '1' },
+}
+
+// Categories that render as expandable group nodes (0..N cardinality)
+export const GROUPED_CATEGORIES: ProfileCategoryId[] = ['channels', 'skills', 'tools', 'knowledge']
+
+// Categories that render as direct individual nodes
+export const DIRECT_CATEGORIES: ProfileCategoryId[] = ['persona', 'security', 'memory']
+
+// Display configuration per category
+export const CATEGORY_DISPLAY: Record<ProfileCategoryId, { label: string; color: string; borderColor: string; bgColor: string }> = {
+  persona: { label: 'Persona', color: 'text-purple-400', borderColor: 'border-purple-500/50', bgColor: 'bg-purple-500/10' },
+  channels: { label: 'Channels', color: 'text-blue-400', borderColor: 'border-blue-500/50', bgColor: 'bg-blue-500/10' },
+  skills: { label: 'Skills', color: 'text-teal-400', borderColor: 'border-teal-500/50', bgColor: 'bg-teal-500/10' },
+  tools: { label: 'Tools', color: 'text-orange-400', borderColor: 'border-orange-500/50', bgColor: 'bg-orange-500/10' },
+  security: { label: 'Security', color: 'text-red-400', borderColor: 'border-red-500/50', bgColor: 'bg-red-500/10' },
+  knowledge: { label: 'Knowledge', color: 'text-violet-400', borderColor: 'border-violet-500/50', bgColor: 'bg-violet-500/10' },
+  memory: { label: 'Memory', color: 'text-sky-400', borderColor: 'border-sky-500/50', bgColor: 'bg-sky-500/10' },
 }
 
 // Radial layout sector definitions (degrees)
@@ -125,9 +143,21 @@ export interface BuilderMemoryData {
   enableSemanticSearch: boolean
 }
 
+export interface BuilderGroupData {
+  type: 'builder-group'
+  categoryId: ProfileCategoryId
+  categoryLabel: string
+  categoryColor: string
+  childCount: number
+  isExpanded: boolean
+  onExpand: (categoryId: ProfileCategoryId) => void
+  onCollapse: (categoryId: ProfileCategoryId) => void
+}
+
 // Union of all builder node data
 export type BuilderNodeData =
   | BuilderAgentData
+  | BuilderGroupData
   | BuilderPersonaData
   | BuilderChannelData
   | BuilderSkillData

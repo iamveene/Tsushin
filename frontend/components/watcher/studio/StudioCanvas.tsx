@@ -54,7 +54,7 @@ function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelect
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Delete' || e.key === 'Backspace') {
-      const selected = nodes.filter(n => n.selected && n.data.type !== 'builder-agent').map(n => n.id)
+      const selected = nodes.filter(n => n.selected && n.data.type !== 'builder-agent' && n.data.type !== 'builder-group').map(n => n.id)
       if (selected.length > 0) { e.preventDefault(); onDeleteSelected(selected) }
     }
   }, [nodes, onDeleteSelected])

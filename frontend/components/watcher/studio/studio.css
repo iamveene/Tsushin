@@ -42,6 +42,18 @@
 /* Canvas Drop Zone */
 .studio-canvas.drag-over { outline: 2px dashed rgba(60, 90, 254, 0.5); outline-offset: -2px; background: rgba(60, 90, 254, 0.03); }
 
+/* Builder Group Node */
+.builder-group-node { transition: all 0.2s ease; cursor: default; }
+.builder-group-node.group-channels { border-left: 3px solid rgba(59, 130, 246, 0.6) !important; }
+.builder-group-node.group-skills { border-left: 3px solid rgba(20, 184, 166, 0.6) !important; }
+.builder-group-node.group-tools { border-left: 3px solid rgba(249, 115, 22, 0.6) !important; }
+.builder-group-node.group-knowledge { border-left: 3px solid rgba(139, 92, 246, 0.6) !important; }
+.builder-group-node.expanded { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
+.builder-group-node .expand-button { transition: transform 0.2s ease; }
+
+/* Group count badge */
+.group-count-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 9999px; line-height: 1.4; }
+
 /* Save Button */
 @keyframes save-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(60, 90, 254, 0.4); } 50% { box-shadow: 0 0 0 6px rgba(60, 90, 254, 0); } }
 .save-button-dirty { animation: save-pulse 2s ease-in-out infinite; }
