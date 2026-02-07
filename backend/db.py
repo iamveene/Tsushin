@@ -919,6 +919,10 @@ def init_database(engine):
 
         # Phase 20 Enhancement: Run Sentinel migrations (detection mode, exceptions)
         run_sentinel_migrations(session)
+
+        # Phase v1.6.0: Sentinel Security Profiles
+        from services.sentinel_seeding import migrate_to_profiles
+        migrate_to_profiles(session)
     finally:
         session.close()
 

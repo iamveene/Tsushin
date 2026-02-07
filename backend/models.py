@@ -2121,6 +2121,149 @@ class SentinelException(Base):
     )
 
 
+# ============================================================================
+# Phase v1.6.0: Sentinel Security Profiles
+# ============================================================================
+
+class SentinelProfile(Base):
+    """
+    Named, reusable security policy for Sentinel.
+
+    Profiles are self-contained security policy documents that can be assigned
+    at three levels: Tenant -> Agent -> Skill, with hierarchical fallback.
+
+    Replaces the flat column-per-setting approach in SentinelConfig/SentinelAgentConfig
+    with an extensible profile system.
+
+    Key features:
+    - System built-in profiles (off, permissive, moderate, aggressive)
+    - Tenant-created custom profiles
+    - JSON-based detection_overrides for zero-migration extensibility
+    - One default profile per tenant (partial unique index enforced)
+
+    Example:
+        System profile "Moderate" (is_system=True, is_default=True):
+        - detection_mode='block', aggressiveness_level=1
+        - detection_overrides='{}' (all detections use registry defaults)
+
+        Tenant custom profile "Sales Team Permissive":
+        - detection_mode='detect_only', aggressiveness_level=1
+        - detection_overrides='{"shell_malicious": {"enabled": false}}'
+    """
+    __tablename__ = "sentinel_profile"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Identity
+    name = Column(String(100), nullable=False)
+    slug = Column(String(100), nullable=False)  # URL-friendly (e.g. "aggressive")
+    description = Column(Text, nullable=True)
+    tenant_id = Column(String(50), nullable=True)  # NULL = system built-in
+    is_system = Column(Boolean, default=False, nullable=False)  # System profiles: cannot delete/rename
+    is_default = Column(Boolean, default=False, nullable=False)  # Default fallback for this tenant
+
+    # Global settings
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    detection_mode = Column(String(20), default="block", nullable=False)  # 'block' | 'detect_only' | 'off'
+    aggressiveness_level = Column(Integer, default=1, nullable=False)  # 0=Off, 1=Moderate, 2=Aggressive, 3=Extra
+
+    # Component toggles
+    enable_prompt_analysis = Column(Boolean, default=True, nullable=False)
+    enable_tool_analysis = Column(Boolean, default=True, nullable=False)
+    enable_shell_analysis = Column(Boolean, default=True, nullable=False)
+    enable_slash_command_analysis = Column(Boolean, default=True, nullable=False)
+
+    # LLM configuration
+    llm_provider = Column(String(20), default="gemini", nullable=False)
+    llm_model = Column(String(100), default="gemini-2.5-flash-lite", nullable=False)
+    llm_max_tokens = Column(Integer, default=256, nullable=False)
+    llm_temperature = Column(Float, default=0.1, nullable=False)
+
+    # Performance
+    cache_ttl_seconds = Column(Integer, default=300, nullable=False)
+    max_input_chars = Column(Integer, default=5000, nullable=False)
+    timeout_seconds = Column(Float, default=5.0, nullable=False)
+
+    # Actions
+    block_on_detection = Column(Boolean, default=True, nullable=False)
+    log_all_analyses = Column(Boolean, default=False, nullable=False)
+
+    # Notifications
+    enable_notifications = Column(Boolean, default=True, nullable=False)
+    notification_on_block = Column(Boolean, default=True, nullable=False)
+    notification_on_detect = Column(Boolean, default=False, nullable=False)
+    notification_recipient = Column(String(100), nullable=True)
+    notification_message_template = Column(Text, nullable=True)
+
+    # Extensible per-detection config (JSON)
+    # Structure: {"prompt_injection": {"enabled": true, "custom_prompt": null}, ...}
+    # Keys absent from this JSON inherit defaults from DETECTION_REGISTRY.
+    detection_overrides = Column(Text, default="{}", nullable=False)
+
+    # Audit
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    creator = relationship("User", foreign_keys=[created_by], backref="created_sentinel_profiles")
+    updater = relationship("User", foreign_keys=[updated_by], backref="updated_sentinel_profiles")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "slug", name="uq_sentinel_profile_tenant_slug"),
+        Index("idx_sentinel_profile_tenant", "tenant_id"),
+        Index("idx_sentinel_profile_system", "is_system"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class SentinelProfileAssignment(Base):
+    """
+    Maps a Sentinel profile to a specific scope level.
+
+    Scope semantics (determines hierarchy level):
+    - (tenant, NULL, NULL)    = Tenant-level: applies to all agents
+    - (tenant, agent, NULL)   = Agent-level: applies to specific agent
+    - (tenant, agent, skill)  = Skill-level: applies to specific skill on agent
+
+    At most ONE assignment per unique (tenant_id, agent_id, skill_type) tuple.
+    The profile resolution walks: Skill -> Agent -> Tenant -> System Default.
+
+    Example:
+        Tenant "acme-corp" has:
+        - Tenant-level: "Moderate" profile (all agents inherit this)
+        - Agent 5: "Aggressive" profile (overrides tenant for this agent)
+        - Agent 5 + Shell: "Permissive" profile (overrides agent for shell skill only)
+    """
+    __tablename__ = "sentinel_profile_assignment"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Scope (determines hierarchy level)
+    tenant_id = Column(String(50), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=True)
+    skill_type = Column(String(50), nullable=True)  # NULL = agent-level (requires agent_id)
+
+    profile_id = Column(Integer, ForeignKey("sentinel_profile.id", ondelete="CASCADE"), nullable=False)
+
+    # Audit
+    assigned_by = Column(Integer, nullable=True)
+    assigned_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    profile = relationship("SentinelProfile", backref="assignments")
+    agent = relationship("Agent", backref="sentinel_profile_assignments")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "agent_id", "skill_type", name="uq_sentinel_profile_assignment_scope"),
+        Index("idx_profile_assign_tenant", "tenant_id"),
+        Index("idx_profile_assign_agent", "agent_id"),
+        Index("idx_profile_assign_profile", "profile_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
 class OAuthState(Base):
     """
     OAuth state tokens for CSRF protection.

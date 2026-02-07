@@ -388,3 +388,576 @@ def run_sentinel_migrations(db: Session) -> dict:
         logger.warning(f"Sentinel migrations completed with {len(results['errors'])} errors")
 
     return results
+
+
+# ============================================================================
+# Phase v1.6.0: Sentinel Security Profiles Migration
+# ============================================================================
+
+def create_sentinel_profile_tables(db: Session) -> bool:
+    """
+    Create sentinel_profile and sentinel_profile_assignment tables.
+
+    Uses raw SQL for CREATE TABLE IF NOT EXISTS to handle the partial unique
+    index on is_default (SQLAlchemy can't express WHERE clause on indexes
+    declaratively for SQLite).
+
+    Idempotent: safe to run multiple times.
+
+    Args:
+        db: Database session
+
+    Returns:
+        True if tables exist (created or already existed)
+    """
+    try:
+        # Let SQLAlchemy create the tables from model definitions
+        from models import SentinelProfile, SentinelProfileAssignment
+        SentinelProfile.__table__.create(bind=db.get_bind(), checkfirst=True)
+        SentinelProfileAssignment.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+        # Create partial unique index for is_default uniqueness per tenant
+        # This ensures at most one default profile per tenant (including system scope)
+        try:
+            db.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_sentinel_profile_one_default "
+                "ON sentinel_profile(COALESCE(tenant_id, '__system__')) WHERE is_default = 1"
+            ))
+            db.commit()
+            logger.debug("Created partial unique index idx_sentinel_profile_one_default")
+        except Exception as e:
+            db.rollback()
+            if "already exists" in str(e).lower():
+                logger.debug("Partial unique index idx_sentinel_profile_one_default already exists")
+            else:
+                logger.warning(f"Could not create partial unique index: {e}")
+
+        logger.info("Sentinel profile tables ready")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to create Sentinel profile tables: {e}", exc_info=True)
+        db.rollback()
+        return False
+
+
+def seed_system_profiles(db: Session) -> list:
+    """
+    Seed 4 built-in system profiles for Sentinel.
+
+    System profiles (is_system=True, tenant_id=NULL):
+    - off: Sentinel disabled
+    - permissive: Log-only, moderate sensitivity
+    - moderate: Block threats, moderate sensitivity (DEFAULT)
+    - aggressive: Block all, max sensitivity
+
+    Idempotent: skips profiles that already exist (matched by slug).
+
+    Args:
+        db: Database session
+
+    Returns:
+        List of created or existing SentinelProfile instances
+    """
+    from models import SentinelProfile
+
+    SYSTEM_PROFILES = [
+        {
+            "name": "Off",
+            "slug": "off",
+            "description": "Sentinel protection disabled. No analysis or blocking performed.",
+            "is_enabled": True,  # Profile itself is "enabled" but mode=off means no analysis
+            "detection_mode": "off",
+            "aggressiveness_level": 0,
+            "is_default": False,
+        },
+        {
+            "name": "Permissive",
+            "slug": "permissive",
+            "description": "Log-only mode with moderate sensitivity. Threats are detected and logged but not blocked.",
+            "is_enabled": True,
+            "detection_mode": "detect_only",
+            "aggressiveness_level": 1,
+            "is_default": False,
+        },
+        {
+            "name": "Moderate",
+            "slug": "moderate",
+            "description": "Balanced protection. Blocks detected threats with moderate sensitivity. Recommended for production.",
+            "is_enabled": True,
+            "detection_mode": "block",
+            "aggressiveness_level": 1,
+            "is_default": True,  # System-wide default fallback
+        },
+        {
+            "name": "Aggressive",
+            "slug": "aggressive",
+            "description": "Maximum protection. Blocks all potential threats with highest sensitivity. May produce more false positives.",
+            "is_enabled": True,
+            "detection_mode": "block",
+            "aggressiveness_level": 3,
+            "is_default": False,
+        },
+    ]
+
+    created_profiles = []
+
+    for profile_data in SYSTEM_PROFILES:
+        try:
+            # Check if profile already exists
+            existing = db.query(SentinelProfile).filter(
+                SentinelProfile.tenant_id.is_(None),
+                SentinelProfile.slug == profile_data["slug"],
+            ).first()
+
+            if existing:
+                logger.debug(f"System profile '{profile_data['slug']}' already exists")
+                created_profiles.append(existing)
+                continue
+
+            # Create system profile with defaults for all other fields
+            profile = SentinelProfile(
+                tenant_id=None,
+                is_system=True,
+                # Identity
+                name=profile_data["name"],
+                slug=profile_data["slug"],
+                description=profile_data["description"],
+                # Global settings
+                is_enabled=profile_data["is_enabled"],
+                detection_mode=profile_data["detection_mode"],
+                aggressiveness_level=profile_data["aggressiveness_level"],
+                is_default=profile_data["is_default"],
+                # Component toggles (all enabled by default)
+                enable_prompt_analysis=True,
+                enable_tool_analysis=True,
+                enable_shell_analysis=True,
+                enable_slash_command_analysis=True,
+                # LLM (defaults)
+                llm_provider="gemini",
+                llm_model="gemini-2.5-flash-lite",
+                llm_max_tokens=256,
+                llm_temperature=0.1,
+                # Performance (defaults)
+                cache_ttl_seconds=300,
+                max_input_chars=5000,
+                timeout_seconds=5.0,
+                # Actions
+                block_on_detection=True,
+                log_all_analyses=False,
+                # Notifications
+                enable_notifications=True,
+                notification_on_block=True,
+                notification_on_detect=False,
+                # Empty overrides = all detections use registry defaults
+                detection_overrides="{}",
+            )
+            db.add(profile)
+            db.commit()
+            db.refresh(profile)
+
+            logger.info(f"Seeded system profile: {profile_data['name']} (slug={profile_data['slug']})")
+            created_profiles.append(profile)
+
+        except Exception as e:
+            logger.error(f"Failed to seed system profile '{profile_data['slug']}': {e}")
+            db.rollback()
+
+    return created_profiles
+
+
+def _build_detection_overrides(config) -> str:
+    """
+    Build detection_overrides JSON from legacy SentinelConfig columns.
+
+    Only non-default values are written to keep JSON sparse.
+    Default is all detections enabled with no custom prompts.
+
+    Args:
+        config: SentinelConfig instance (legacy flat config)
+
+    Returns:
+        JSON string for detection_overrides column
+    """
+    import json
+
+    overrides = {}
+
+    # Map legacy boolean columns to detection type keys
+    detection_map = {
+        "prompt_injection": {
+            "enabled_col": "detect_prompt_injection",
+            "prompt_col": "prompt_injection_prompt",
+        },
+        "agent_takeover": {
+            "enabled_col": "detect_agent_takeover",
+            "prompt_col": "agent_takeover_prompt",
+        },
+        "poisoning": {
+            "enabled_col": "detect_poisoning",
+            "prompt_col": "poisoning_prompt",
+        },
+        "shell_malicious": {
+            "enabled_col": "detect_shell_malicious_intent",
+            "prompt_col": "shell_intent_prompt",
+        },
+    }
+
+    for det_type, cols in detection_map.items():
+        enabled = getattr(config, cols["enabled_col"], True)
+        custom_prompt = getattr(config, cols["prompt_col"], None)
+
+        # Only write non-default values
+        if not enabled or custom_prompt:
+            override = {}
+            if not enabled:
+                override["enabled"] = False
+            if custom_prompt:
+                override["custom_prompt"] = custom_prompt
+            overrides[det_type] = override
+
+    return json.dumps(overrides)
+
+
+def migrate_legacy_configs_to_profiles(db: Session) -> dict:
+    """
+    Migrate existing SentinelConfig and SentinelAgentConfig to profile system.
+
+    Steps (all idempotent):
+    1. System config: Update the seeded "Moderate" profile with legacy values
+    2. Tenant configs: Create "{tenant} Custom" profiles + tenant-level assignments
+    3. Agent overrides: Create "Agent {id} Override" profiles + agent-level assignments
+
+    Args:
+        db: Database session
+
+    Returns:
+        Dict with migration statistics
+    """
+    from models import SentinelConfig, SentinelAgentConfig, SentinelProfile, SentinelProfileAssignment
+
+    results = {
+        "system_migrated": False,
+        "tenant_profiles_created": 0,
+        "agent_profiles_created": 0,
+        "errors": [],
+    }
+
+    # Step 1: Migrate system config to "Moderate" profile
+    try:
+        system_config = db.query(SentinelConfig).filter(
+            SentinelConfig.tenant_id.is_(None)
+        ).first()
+
+        if system_config:
+            moderate_profile = db.query(SentinelProfile).filter(
+                SentinelProfile.tenant_id.is_(None),
+                SentinelProfile.slug == "moderate",
+            ).first()
+
+            if moderate_profile:
+                # Update moderate profile with legacy system config values
+                moderate_profile.is_enabled = system_config.is_enabled
+                moderate_profile.enable_prompt_analysis = system_config.enable_prompt_analysis
+                moderate_profile.enable_tool_analysis = system_config.enable_tool_analysis
+                moderate_profile.enable_shell_analysis = system_config.enable_shell_analysis
+                moderate_profile.aggressiveness_level = system_config.aggressiveness_level
+                moderate_profile.llm_provider = system_config.llm_provider
+                moderate_profile.llm_model = system_config.llm_model
+                moderate_profile.llm_max_tokens = system_config.llm_max_tokens
+                moderate_profile.llm_temperature = system_config.llm_temperature
+                moderate_profile.cache_ttl_seconds = system_config.cache_ttl_seconds
+                moderate_profile.max_input_chars = system_config.max_input_chars
+                moderate_profile.timeout_seconds = system_config.timeout_seconds
+                moderate_profile.block_on_detection = system_config.block_on_detection
+                moderate_profile.log_all_analyses = system_config.log_all_analyses
+
+                # Phase 20 columns (may not exist on very old DBs, use getattr)
+                detection_mode = getattr(system_config, 'detection_mode', 'block')
+                moderate_profile.detection_mode = detection_mode or 'block'
+
+                enable_slash = getattr(system_config, 'enable_slash_command_analysis', True)
+                moderate_profile.enable_slash_command_analysis = enable_slash if enable_slash is not None else True
+
+                # Notification settings
+                moderate_profile.enable_notifications = getattr(system_config, 'enable_notifications', True)
+                moderate_profile.notification_on_block = getattr(system_config, 'notification_on_block', True)
+                moderate_profile.notification_on_detect = getattr(system_config, 'notification_on_detect', False)
+                moderate_profile.notification_recipient = getattr(system_config, 'notification_recipient', None)
+                moderate_profile.notification_message_template = getattr(system_config, 'notification_message_template', None)
+
+                # Build detection_overrides from legacy boolean + prompt columns
+                moderate_profile.detection_overrides = _build_detection_overrides(system_config)
+
+                db.commit()
+                results["system_migrated"] = True
+                logger.info("Migrated system config to Moderate profile")
+
+    except Exception as e:
+        results["errors"].append(f"System config migration: {e}")
+        logger.error(f"Failed to migrate system config: {e}", exc_info=True)
+        db.rollback()
+
+    # Step 2: Migrate tenant configs
+    try:
+        tenant_configs = db.query(SentinelConfig).filter(
+            SentinelConfig.tenant_id.isnot(None)
+        ).all()
+
+        for config in tenant_configs:
+            try:
+                tenant_id = config.tenant_id
+                slug = f"{tenant_id}-custom"
+
+                # Check if profile already exists for this tenant
+                existing = db.query(SentinelProfile).filter(
+                    SentinelProfile.tenant_id == tenant_id,
+                    SentinelProfile.slug == slug,
+                ).first()
+
+                if existing:
+                    logger.debug(f"Tenant profile '{slug}' already exists")
+                    continue
+
+                # Create tenant custom profile
+                profile = SentinelProfile(
+                    name=f"{tenant_id} Custom",
+                    slug=slug,
+                    description=f"Migrated from legacy config for tenant {tenant_id}",
+                    tenant_id=tenant_id,
+                    is_system=False,
+                    is_default=False,
+                    is_enabled=config.is_enabled,
+                    detection_mode=getattr(config, 'detection_mode', 'block') or 'block',
+                    aggressiveness_level=config.aggressiveness_level,
+                    enable_prompt_analysis=config.enable_prompt_analysis,
+                    enable_tool_analysis=config.enable_tool_analysis,
+                    enable_shell_analysis=config.enable_shell_analysis,
+                    enable_slash_command_analysis=getattr(config, 'enable_slash_command_analysis', True) or True,
+                    llm_provider=config.llm_provider,
+                    llm_model=config.llm_model,
+                    llm_max_tokens=config.llm_max_tokens,
+                    llm_temperature=config.llm_temperature,
+                    cache_ttl_seconds=config.cache_ttl_seconds,
+                    max_input_chars=config.max_input_chars,
+                    timeout_seconds=config.timeout_seconds,
+                    block_on_detection=config.block_on_detection,
+                    log_all_analyses=config.log_all_analyses,
+                    enable_notifications=getattr(config, 'enable_notifications', True),
+                    notification_on_block=getattr(config, 'notification_on_block', True),
+                    notification_on_detect=getattr(config, 'notification_on_detect', False),
+                    notification_recipient=getattr(config, 'notification_recipient', None),
+                    notification_message_template=getattr(config, 'notification_message_template', None),
+                    detection_overrides=_build_detection_overrides(config),
+                )
+                db.add(profile)
+                db.flush()  # Get profile.id
+
+                # Create tenant-level assignment
+                existing_assign = db.query(SentinelProfileAssignment).filter(
+                    SentinelProfileAssignment.tenant_id == tenant_id,
+                    SentinelProfileAssignment.agent_id.is_(None),
+                    SentinelProfileAssignment.skill_type.is_(None),
+                ).first()
+
+                if not existing_assign:
+                    assignment = SentinelProfileAssignment(
+                        tenant_id=tenant_id,
+                        agent_id=None,
+                        skill_type=None,
+                        profile_id=profile.id,
+                    )
+                    db.add(assignment)
+
+                db.commit()
+                results["tenant_profiles_created"] += 1
+                logger.info(f"Migrated tenant config for {tenant_id}")
+
+            except Exception as e:
+                results["errors"].append(f"Tenant {config.tenant_id}: {e}")
+                logger.error(f"Failed to migrate tenant config {config.tenant_id}: {e}")
+                db.rollback()
+
+    except Exception as e:
+        results["errors"].append(f"Tenant config query: {e}")
+        logger.error(f"Failed to query tenant configs: {e}", exc_info=True)
+
+    # Step 3: Migrate agent overrides
+    try:
+        agent_overrides = db.query(SentinelAgentConfig).all()
+
+        for agent_config in agent_overrides:
+            try:
+                agent_id = agent_config.agent_id
+
+                # Get agent's tenant_id
+                from models import Agent
+                agent = db.query(Agent).filter(Agent.id == agent_id).first()
+                if not agent:
+                    logger.warning(f"Agent {agent_id} not found, skipping override migration")
+                    continue
+
+                tenant_id = agent.tenant_id
+                slug = f"agent-{agent_id}-override"
+
+                # Check if profile already exists
+                existing = db.query(SentinelProfile).filter(
+                    SentinelProfile.tenant_id == tenant_id,
+                    SentinelProfile.slug == slug,
+                ).first()
+
+                if existing:
+                    logger.debug(f"Agent override profile '{slug}' already exists")
+                    continue
+
+                # Resolve effective config by merging tenant + agent override
+                # (replicating old _merge_configs logic)
+                system_config = db.query(SentinelConfig).filter(
+                    SentinelConfig.tenant_id.is_(None)
+                ).first()
+
+                tenant_config = db.query(SentinelConfig).filter(
+                    SentinelConfig.tenant_id == tenant_id
+                ).first()
+
+                # Start with system config as base
+                base = system_config or SentinelConfig()
+
+                # Overlay tenant config if present
+                if tenant_config:
+                    base = tenant_config
+
+                # Apply agent overrides (only non-None values)
+                is_enabled = agent_config.is_enabled if agent_config.is_enabled is not None else base.is_enabled
+                enable_prompt = agent_config.enable_prompt_analysis if agent_config.enable_prompt_analysis is not None else base.enable_prompt_analysis
+                enable_tool = agent_config.enable_tool_analysis if agent_config.enable_tool_analysis is not None else base.enable_tool_analysis
+                enable_shell = agent_config.enable_shell_analysis if agent_config.enable_shell_analysis is not None else base.enable_shell_analysis
+                aggressiveness = agent_config.aggressiveness_level if agent_config.aggressiveness_level is not None else base.aggressiveness_level
+
+                profile = SentinelProfile(
+                    name=f"Agent {agent_id} Override",
+                    slug=slug,
+                    description=f"Migrated from legacy agent override for agent {agent_id}",
+                    tenant_id=tenant_id,
+                    is_system=False,
+                    is_default=False,
+                    is_enabled=is_enabled,
+                    detection_mode=getattr(base, 'detection_mode', 'block') or 'block',
+                    aggressiveness_level=aggressiveness,
+                    enable_prompt_analysis=enable_prompt,
+                    enable_tool_analysis=enable_tool,
+                    enable_shell_analysis=enable_shell,
+                    enable_slash_command_analysis=getattr(base, 'enable_slash_command_analysis', True) or True,
+                    llm_provider=base.llm_provider,
+                    llm_model=base.llm_model,
+                    llm_max_tokens=base.llm_max_tokens,
+                    llm_temperature=base.llm_temperature,
+                    cache_ttl_seconds=base.cache_ttl_seconds,
+                    max_input_chars=base.max_input_chars,
+                    timeout_seconds=base.timeout_seconds,
+                    block_on_detection=base.block_on_detection,
+                    log_all_analyses=base.log_all_analyses,
+                    enable_notifications=getattr(base, 'enable_notifications', True),
+                    notification_on_block=getattr(base, 'notification_on_block', True),
+                    notification_on_detect=getattr(base, 'notification_on_detect', False),
+                    notification_recipient=getattr(base, 'notification_recipient', None),
+                    notification_message_template=getattr(base, 'notification_message_template', None),
+                    detection_overrides=_build_detection_overrides(base),
+                )
+                db.add(profile)
+                db.flush()
+
+                # Create agent-level assignment
+                existing_assign = db.query(SentinelProfileAssignment).filter(
+                    SentinelProfileAssignment.tenant_id == tenant_id,
+                    SentinelProfileAssignment.agent_id == agent_id,
+                    SentinelProfileAssignment.skill_type.is_(None),
+                ).first()
+
+                if not existing_assign:
+                    assignment = SentinelProfileAssignment(
+                        tenant_id=tenant_id,
+                        agent_id=agent_id,
+                        skill_type=None,
+                        profile_id=profile.id,
+                    )
+                    db.add(assignment)
+
+                db.commit()
+                results["agent_profiles_created"] += 1
+                logger.info(f"Migrated agent override for agent {agent_id}")
+
+            except Exception as e:
+                results["errors"].append(f"Agent {agent_config.agent_id}: {e}")
+                logger.error(f"Failed to migrate agent override {agent_config.agent_id}: {e}")
+                db.rollback()
+
+    except Exception as e:
+        results["errors"].append(f"Agent override query: {e}")
+        logger.error(f"Failed to query agent overrides: {e}", exc_info=True)
+
+    if not results["errors"]:
+        logger.info(
+            f"Legacy migration complete: system={results['system_migrated']}, "
+            f"tenants={results['tenant_profiles_created']}, agents={results['agent_profiles_created']}"
+        )
+    else:
+        logger.warning(f"Legacy migration completed with {len(results['errors'])} errors")
+
+    return results
+
+
+def migrate_to_profiles(db: Session) -> dict:
+    """
+    Run all Sentinel Security Profile migrations.
+
+    Orchestrator function called from db.py init_database().
+    Runs all profile migration steps in order:
+    1. Create tables
+    2. Seed system profiles
+    3. Migrate legacy configs
+
+    All steps are idempotent.
+
+    Args:
+        db: Database session
+
+    Returns:
+        Dict with combined migration results
+    """
+    results = {
+        "tables_created": False,
+        "system_profiles_seeded": 0,
+        "legacy_migration": {},
+        "errors": [],
+    }
+
+    # Step 1: Create tables
+    try:
+        results["tables_created"] = create_sentinel_profile_tables(db)
+    except Exception as e:
+        results["errors"].append(f"Table creation: {e}")
+        logger.error(f"Profile table creation failed: {e}", exc_info=True)
+        return results  # Can't proceed without tables
+
+    # Step 2: Seed system profiles
+    try:
+        profiles = seed_system_profiles(db)
+        results["system_profiles_seeded"] = len(profiles)
+    except Exception as e:
+        results["errors"].append(f"System profile seeding: {e}")
+        logger.error(f"System profile seeding failed: {e}", exc_info=True)
+
+    # Step 3: Migrate legacy configs
+    try:
+        results["legacy_migration"] = migrate_legacy_configs_to_profiles(db)
+    except Exception as e:
+        results["errors"].append(f"Legacy migration: {e}")
+        logger.error(f"Legacy migration failed: {e}", exc_info=True)
+
+    if not results["errors"]:
+        logger.info("Sentinel profile migration completed successfully")
+    else:
+        logger.warning(f"Sentinel profile migration completed with {len(results['errors'])} errors")
+
+    return results
