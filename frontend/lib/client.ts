@@ -727,6 +727,9 @@ export interface SentinelHierarchyProfile {
   name: string
   slug: string
   source?: string
+  detection_mode?: 'block' | 'detect_only' | 'off'
+  aggressiveness_level?: number
+  is_enabled?: boolean
 }
 
 export interface SentinelHierarchySkill {

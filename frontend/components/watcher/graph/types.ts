@@ -185,6 +185,54 @@ export interface SkillProviderNodeData {
   isFading?: boolean   // Post-processing coordinated fade-out
 }
 
+// Phase F (v1.6.0): Security hierarchy node types for Sentinel profile visualization
+
+export type SecurityDetectionMode = 'block' | 'detect_only' | 'off'
+
+export interface SecurityProfileBadge {
+  id: number
+  name: string
+  slug: string
+}
+
+export interface SecurityEffectiveProfile extends SecurityProfileBadge {
+  source: 'skill' | 'agent' | 'tenant' | 'system'
+}
+
+export interface TenantSecurityNodeData {
+  type: 'tenant-security'
+  tenantId: string
+  tenantName: string
+  profile: SecurityProfileBadge | null
+  effectiveProfile: SecurityEffectiveProfile | null
+  detectionMode: SecurityDetectionMode
+  aggressivenessLevel: number
+  isEnabled: boolean
+}
+
+export interface AgentSecurityNodeData {
+  type: 'agent-security'
+  id: number
+  name: string
+  isActive: boolean
+  profile: SecurityProfileBadge | null
+  effectiveProfile: SecurityEffectiveProfile | null
+  detectionMode: SecurityDetectionMode
+  aggressivenessLevel: number
+  isEnabled: boolean
+}
+
+export interface SkillSecurityNodeData {
+  type: 'skill-security'
+  skillType: string
+  skillName: string
+  isEnabled: boolean
+  parentAgentId: number
+  profile: SecurityProfileBadge | null
+  effectiveProfile: SecurityEffectiveProfile | null
+  detectionMode: SecurityDetectionMode
+}
+
 // Union type for all node data
 export type GraphNodeData =
   | AgentNodeData
@@ -197,13 +245,16 @@ export type GraphNodeData =
   | KnowledgeSummaryNodeData
   | SkillCategoryNodeData
   | SkillProviderNodeData
+  | TenantSecurityNodeData
+  | AgentSecurityNodeData
+  | SkillSecurityNodeData
 
 // Custom node type for React Flow
 export type GraphNode = Node<GraphNodeData>
 export type GraphEdge = Edge
 
 // Graph view types
-export type GraphViewType = 'agents' | 'users' | 'projects'
+export type GraphViewType = 'agents' | 'users' | 'projects' | 'security'
 
 // Graph configuration
 export interface GraphConfig {

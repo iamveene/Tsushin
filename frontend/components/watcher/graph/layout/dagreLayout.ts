@@ -47,6 +47,13 @@ function getNodeRank(node: Node): number {
       return 4
     case 'knowledge':
       return 2 // Same level as skill categories
+    // Phase F (v1.6.0): Security hierarchy nodes
+    case 'tenant-security':
+      return 0 // Root tier
+    case 'agent-security':
+      return 1 // Middle tier
+    case 'skill-security':
+      return 2 // Leaf tier
     default:
       return 1 // Default to center
   }
@@ -87,11 +94,12 @@ export async function getLayoutedElements<T extends Node, E extends Edge>(
     const type = (n.data as { type?: string })?.type
     return type === 'skill' || type === 'skill-category' || type === 'knowledge-summary' || type === 'skill-provider'
   })
+  const hasSecurityNodes = nodes.some(n => (n.data as { type?: string })?.type === 'tenant-security')
 
-  // Use hierarchical LR layout if we have channels connected to agents (Agents view)
-  // This enforces: Channels (left) → Agents (center) → Skills/KB (right)
-  const useHierarchicalLayout = hasChannels || hasSkillsOrCategories
-  const effectiveDirection = useHierarchicalLayout ? 'LR' : options.direction
+  // Use hierarchical layout for Agents view (LR) and Security view (TB)
+  const useHierarchicalLayout = hasChannels || hasSkillsOrCategories || hasSecurityNodes
+  // Security view uses TB (top-to-bottom), Agents view uses LR (left-to-right)
+  const effectiveDirection = hasSecurityNodes ? 'TB' : (useHierarchicalLayout ? 'LR' : options.direction)
 
   dagreGraph.setGraph({
     rankdir: effectiveDirection,

@@ -1132,6 +1132,7 @@ class ShellCommandService:
                     command=script,
                     agent_id=agent_id,
                     sender_key=initiated_by,
+                    skill_type="shell",
                 )
 
                 if sentinel_result.is_threat_detected and sentinel_result.action == "blocked":

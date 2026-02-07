@@ -52,6 +52,10 @@ const EMPTY_STATE_CONFIG: Record<GraphViewType, { title: string; description: st
     title: 'No Users Found',
     description: 'Users will appear here once they interact with your agents.',
   },
+  security: {
+    title: 'No Security Data',
+    description: 'Configure Sentinel security profiles to visualize the security hierarchy.',
+  },
 }
 
 export default function GraphViewTab() {
@@ -213,8 +217,8 @@ export default function GraphViewTab() {
     setExpandedAgentsCount(0) // Reset expand state when switching views
   }
 
-  // Check if view is enabled (Phase 5: all views enabled)
-  const isViewEnabled = (type: GraphViewType) => type === 'agents' || type === 'projects' || type === 'users'
+  // Check if view is enabled (Phase F: added security view)
+  const isViewEnabled = (type: GraphViewType) => type === 'agents' || type === 'projects' || type === 'users' || type === 'security'
 
   // Loading state
   if (loading) {
@@ -262,7 +266,7 @@ export default function GraphViewTab() {
         {/* Keep view selector visible even in empty state */}
         <div className="flex justify-between items-center">
           <div className="glass-card rounded-lg p-1 inline-flex">
-            {(['agents', 'users', 'projects'] as GraphViewType[]).map((type) => (
+            {(['agents', 'users', 'projects', 'security'] as GraphViewType[]).map((type) => (
               <button
                 key={type}
                 disabled={!isViewEnabled(type)}
@@ -295,7 +299,7 @@ export default function GraphViewTab() {
       {/* View Type Selector */}
       <div className="flex justify-between items-center">
         <div className="glass-card rounded-lg p-1 inline-flex">
-          {(['agents', 'users', 'projects'] as GraphViewType[]).map((type) => (
+          {(['agents', 'users', 'projects', 'security'] as GraphViewType[]).map((type) => (
             <button
               key={type}
               disabled={!isViewEnabled(type)}

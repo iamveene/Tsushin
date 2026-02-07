@@ -18,8 +18,9 @@ import {
   AgentGraphPreviewItem,
   WhatsAppChannelInfo,
   TelegramChannelInfo,
+  SentinelHierarchy,
 } from '@/lib/client'
-import { GraphNode, GraphEdge, ChannelStatus, GraphViewType, UserRole } from '../types'
+import { GraphNode, GraphEdge, ChannelStatus, GraphViewType, UserRole, SecurityDetectionMode } from '../types'
 
 
 export interface UseGraphDataOptions {
@@ -456,6 +457,142 @@ async function fetchProjectsViewData(showArchivedProjects: boolean): Promise<{ n
 }
 
 /**
+ * Transform hierarchy API data into graph nodes and edges for Security view
+ * Phase F (v1.6.0): Security hierarchy visualization
+ */
+function transformToSecurityGraphData(
+  hierarchy: SentinelHierarchy
+): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  const nodes: GraphNode[] = []
+  const edges: GraphEdge[] = []
+
+  if (!hierarchy.tenant) return { nodes, edges }
+
+  const tenant = hierarchy.tenant
+
+  // Determine tenant-level effective config from the first agent's data or defaults
+  const tenantEffective = tenant.agents.length > 0
+    ? tenant.agents[0].effective_profile
+    : null
+  const tenantDetectionMode = (tenantEffective?.detection_mode || 'block') as SecurityDetectionMode
+  const tenantAggressiveness = tenantEffective?.aggressiveness_level ?? 1
+  const tenantIsEnabled = tenantEffective?.is_enabled ?? true
+
+  // 1. Tenant security node (root)
+  const tenantNodeId = `tenant-security-${tenant.id}`
+  nodes.push({
+    id: tenantNodeId,
+    type: 'tenant-security',
+    position: { x: 0, y: 0 },
+    data: {
+      type: 'tenant-security',
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      profile: tenant.profile ? { id: tenant.profile.id, name: tenant.profile.name, slug: tenant.profile.slug } : null,
+      effectiveProfile: tenantEffective ? {
+        id: tenantEffective.id,
+        name: tenantEffective.name,
+        slug: tenantEffective.slug,
+        source: (tenantEffective.source || 'system') as 'skill' | 'agent' | 'tenant' | 'system',
+      } : null,
+      detectionMode: tenantDetectionMode,
+      aggressivenessLevel: tenantAggressiveness,
+      isEnabled: tenantIsEnabled,
+    },
+  })
+
+  // 2. Agent security nodes
+  tenant.agents.forEach(agent => {
+    const agentNodeId = `agent-security-${agent.id}`
+    const agentDetectionMode = (agent.effective_profile?.detection_mode || 'block') as SecurityDetectionMode
+    const agentAggressiveness = agent.effective_profile?.aggressiveness_level ?? 1
+    const agentIsEnabled = agent.effective_profile?.is_enabled ?? true
+
+    nodes.push({
+      id: agentNodeId,
+      type: 'agent-security',
+      position: { x: 0, y: 0 },
+      data: {
+        type: 'agent-security',
+        id: agent.id,
+        name: agent.name,
+        isActive: agent.is_active,
+        profile: agent.profile ? { id: agent.profile.id, name: agent.profile.name, slug: agent.profile.slug } : null,
+        effectiveProfile: agent.effective_profile ? {
+          id: agent.effective_profile.id,
+          name: agent.effective_profile.name,
+          slug: agent.effective_profile.slug,
+          source: (agent.effective_profile.source || 'system') as 'skill' | 'agent' | 'tenant' | 'system',
+        } : null,
+        detectionMode: agentDetectionMode,
+        aggressivenessLevel: agentAggressiveness,
+        isEnabled: agentIsEnabled,
+      },
+    })
+
+    // Edge: tenant -> agent
+    const hasExplicitAgentProfile = agent.profile !== null
+    edges.push({
+      id: `e-${tenantNodeId}-${agentNodeId}`,
+      source: tenantNodeId,
+      target: agentNodeId,
+      style: hasExplicitAgentProfile
+        ? { stroke: '#3C5AFE' }  // Blue solid for explicit assignment
+        : { strokeDasharray: '5,5', opacity: 0.5 },  // Dashed for inherited
+    })
+
+    // 3. Skill security nodes (only for skills with explicit assignments)
+    agent.skills.forEach(skill => {
+      const skillNodeId = `skill-security-${agent.id}-${skill.skill_type}`
+      const skillDetectionMode = (skill.effective_profile?.detection_mode || agentDetectionMode) as SecurityDetectionMode
+
+      nodes.push({
+        id: skillNodeId,
+        type: 'skill-security',
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'skill-security',
+          skillType: skill.skill_type,
+          skillName: skill.name,
+          isEnabled: skill.is_enabled,
+          parentAgentId: agent.id,
+          profile: skill.profile ? { id: skill.profile.id, name: skill.profile.name, slug: skill.profile.slug } : null,
+          effectiveProfile: skill.effective_profile ? {
+            id: skill.effective_profile.id,
+            name: skill.effective_profile.name,
+            slug: skill.effective_profile.slug,
+            source: (skill.effective_profile.source || 'agent') as 'skill' | 'agent' | 'tenant' | 'system',
+          } : null,
+          detectionMode: skillDetectionMode,
+        },
+      })
+
+      // Edge: agent -> skill
+      const hasExplicitSkillProfile = skill.profile !== null
+      edges.push({
+        id: `e-${agentNodeId}-${skillNodeId}`,
+        source: agentNodeId,
+        target: skillNodeId,
+        style: hasExplicitSkillProfile
+          ? { stroke: '#A855F7' }  // Purple solid for explicit skill assignment
+          : { strokeDasharray: '5,5', opacity: 0.5 },
+      })
+    })
+  })
+
+  return { nodes, edges }
+}
+
+/**
+ * Fetch security view data — calls hierarchy endpoint
+ * Phase F (v1.6.0): Security hierarchy visualization
+ */
+async function fetchSecurityViewData(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+  const hierarchy = await api.getSentinelHierarchy()
+  return transformToSecurityGraphData(hierarchy)
+}
+
+/**
  * Custom hook for fetching and transforming graph data
  */
 export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataReturn {
@@ -484,6 +621,9 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
           break
         case 'users':
           result = await fetchUsersViewData(showInactiveUsers)
+          break
+        case 'security':
+          result = await fetchSecurityViewData()
           break
         case 'agents':
         default:

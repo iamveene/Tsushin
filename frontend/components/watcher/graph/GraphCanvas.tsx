@@ -930,6 +930,9 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
               if (node.type === 'skill-category') return '#14B8A6'  // Teal (same as skill)
               if (node.type === 'knowledge') return '#A855F7'       // Violet
               if (node.type === 'knowledge-summary') return '#A855F7' // Violet
+              if (node.type === 'tenant-security') return '#EF4444'   // Red (shield)
+              if (node.type === 'agent-security') return '#3C5AFE'    // Blue
+              if (node.type === 'skill-security') return '#14B8A6'    // Teal
               return '#484F58'
             }}
             maskColor="rgba(11, 15, 20, 0.8)"

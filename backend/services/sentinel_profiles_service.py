@@ -554,6 +554,9 @@ class SentinelProfilesService:
                     "name": effective.profile_name,
                     "slug": "",
                     "source": effective.profile_source,
+                    "detection_mode": effective.detection_mode,
+                    "aggressiveness_level": effective.aggressiveness_level,
+                    "is_enabled": effective.is_enabled,
                 }
 
             # Skill-level assignments for this agent
@@ -580,6 +583,9 @@ class SentinelProfilesService:
                         "name": skill_effective.profile_name,
                         "slug": "",
                         "source": skill_effective.profile_source,
+                        "detection_mode": skill_effective.detection_mode,
+                        "aggressiveness_level": skill_effective.aggressiveness_level,
+                        "is_enabled": skill_effective.is_enabled,
                     }
 
                 skills.append({

@@ -312,6 +312,7 @@ class SentinelService:
         source: Optional[str] = None,
         message_id: Optional[str] = None,
         skill_context: Optional[str] = None,
+        skill_type: Optional[str] = None,
     ) -> SentinelAnalysisResult:
         """
         Analyze user prompt for security threats.
@@ -347,8 +348,8 @@ class SentinelService:
                 response_time_ms=int((time.time() - start_time) * 1000),
             )
 
-        # Get effective configuration
-        config = self.get_effective_config(agent_id)
+        # Get effective configuration (skill_type enables skill-level profile resolution)
+        config = self.get_effective_config(agent_id, skill_type=skill_type)
 
         # Check if Sentinel is enabled
         if not config.is_enabled:
@@ -458,6 +459,7 @@ class SentinelService:
         sender_key: Optional[str] = None,
         conversation_context: Optional[List[Dict]] = None,
         skill_context: Optional[str] = None,
+        skill_type: Optional[str] = None,
     ) -> SentinelAnalysisResult:
         """
         Analyze a tool call for security threats before execution.
@@ -482,8 +484,8 @@ class SentinelService:
         """
         start_time = time.time()
 
-        # Get effective configuration
-        config = self.get_effective_config(agent_id)
+        # Get effective configuration (skill_type enables skill-level profile resolution)
+        config = self.get_effective_config(agent_id, skill_type=skill_type)
 
         # Check if Sentinel is enabled
         if not config.is_enabled or not config.enable_tool_analysis:
@@ -505,6 +507,7 @@ class SentinelService:
                     command=script,
                     agent_id=agent_id,
                     sender_key=sender_key,
+                    skill_type=skill_type or "shell",
                 )
                 if shell_result.is_threat_detected:
                     self.logger.warning(
@@ -597,6 +600,8 @@ class SentinelService:
         agent_id: Optional[int] = None,
         sender_key: Optional[str] = None,
         pattern_result: Optional[Any] = None,
+        skill_type: Optional[str] = None,
+        skill_context: Optional[str] = None,
     ) -> SentinelAnalysisResult:
         """
         Analyze shell command for malicious intent.
@@ -609,14 +614,16 @@ class SentinelService:
             agent_id: Agent ID for agent-specific config
             sender_key: User identifier for logging
             pattern_result: Result from ShellSecurityService (for context)
+            skill_type: Skill type for skill-level profile resolution (defaults to "shell")
+            skill_context: Formatted skill context string to inject into analysis
 
         Returns:
             SentinelAnalysisResult with threat detection results
         """
         start_time = time.time()
 
-        # Get effective configuration
-        config = self.get_effective_config(agent_id)
+        # Get effective configuration (default to "shell" skill for shell commands)
+        config = self.get_effective_config(agent_id, skill_type=skill_type or "shell")
 
         # Check if Sentinel is enabled
         if not config.is_enabled or not config.enable_shell_analysis:
@@ -644,6 +651,7 @@ class SentinelService:
             message_id=None,
             agent_id=agent_id,
             start_time=start_time,
+            skill_context=skill_context,
             tool_name="run_shell_command",  # For exception matching
         )
 
