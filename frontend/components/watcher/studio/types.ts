@@ -69,6 +69,7 @@ export const SECTOR_ANGLES: Record<ProfileCategoryId, { start: number; end: numb
 // --- Node Data Interfaces ---
 
 export interface BuilderAgentData {
+  [key: string]: unknown
   type: 'builder-agent'
   agentId: number
   name: string
@@ -82,6 +83,7 @@ export interface BuilderAgentData {
 }
 
 export interface BuilderPersonaData {
+  [key: string]: unknown
   type: 'builder-persona'
   personaId: number
   name: string
@@ -91,6 +93,7 @@ export interface BuilderPersonaData {
 }
 
 export interface BuilderChannelData {
+  [key: string]: unknown
   type: 'builder-channel'
   channelType: 'whatsapp' | 'telegram' | 'playground' | 'phone' | 'discord' | 'email' | 'sms'
   label: string
@@ -101,6 +104,7 @@ export interface BuilderChannelData {
 }
 
 export interface BuilderSkillData {
+  [key: string]: unknown
   type: 'builder-skill'
   skillId: number
   skillType: string
@@ -111,6 +115,7 @@ export interface BuilderSkillData {
 }
 
 export interface BuilderToolData {
+  [key: string]: unknown
   type: 'builder-tool'
   toolId: number
   name: string
@@ -119,6 +124,7 @@ export interface BuilderToolData {
 }
 
 export interface BuilderSentinelData {
+  [key: string]: unknown
   type: 'builder-sentinel'
   profileId: number
   name: string
@@ -127,6 +133,7 @@ export interface BuilderSentinelData {
 }
 
 export interface BuilderKnowledgeData {
+  [key: string]: unknown
   type: 'builder-knowledge'
   docId: number
   filename: string
@@ -137,6 +144,7 @@ export interface BuilderKnowledgeData {
 }
 
 export interface BuilderMemoryData {
+  [key: string]: unknown
   type: 'builder-memory'
   isolationMode: string
   memorySize: number
@@ -144,6 +152,7 @@ export interface BuilderMemoryData {
 }
 
 export interface BuilderGroupData {
+  [key: string]: unknown
   type: 'builder-group'
   categoryId: ProfileCategoryId
   categoryLabel: string

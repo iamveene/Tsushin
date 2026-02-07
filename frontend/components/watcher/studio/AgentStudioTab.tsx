@@ -162,7 +162,7 @@ export default function AgentStudioTab() {
         {selectedAgentId ? (
           <>
             <StudioLeftPanel studioData={studioData} builder={builder} onSave={handleSave} />
-            <StudioCanvasComponent nodes={builder.nodes} edges={builder.edges} onNodesChange={builder.onNodesChange} onDrop={handleDrop} onDeleteSelected={handleDeleteSelected} onReady={handleCanvasReady} />
+            <StudioCanvasComponent nodes={builder.nodes} edges={builder.edges} onNodesChange={builder.onNodesChange} onDrop={handleDrop} onDeleteSelected={handleDeleteSelected} onReady={handleCanvasReady} onExpandAll={builder.expandAll} onCollapseAll={builder.collapseAll} hasAnyExpanded={builder.expandedCategories.size > 0} />
           </>
         ) : (
           <div className="flex items-center justify-center h-full">
