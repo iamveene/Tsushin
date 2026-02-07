@@ -230,48 +230,98 @@ export default function PersonasPage() {
 
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-0 space-y-6">
         {/* Sub Navigation */}
-        <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow">
-          <div className="border-b border-gray-800">
+        <div className="glass-card rounded-xl overflow-hidden">
+          <div className="border-b border-tsushin-border/50">
             <nav className="flex">
               <Link
                 href="/agents"
-                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
+                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
                   pathname === '/agents'
-                    ? 'border-tsushin-indigo text-tsushin-indigo'
-                    : 'border-transparent text-tsushin-slate hover:text-white'
+                    ? 'text-white'
+                    : 'text-tsushin-slate hover:text-white'
                 }`}
               >
-                Agents
+                <span className="relative z-10 flex items-center gap-1.5">
+                  <svg className="w-4 h-4 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  Agents
+                </span>
+                {pathname === '/agents' && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
+                )}
               </Link>
               <Link
                 href="/agents/contacts"
-                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
+                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
                   pathname === '/agents/contacts'
-                    ? 'border-tsushin-indigo text-tsushin-indigo'
-                    : 'border-transparent text-tsushin-slate hover:text-white'
+                    ? 'text-white'
+                    : 'text-tsushin-slate hover:text-white'
                 }`}
               >
-                Contacts
+                <span className="relative z-10 flex items-center gap-1.5">
+                  <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  Contacts
+                </span>
+                {pathname === '/agents/contacts' && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-blue-500 to-cyan-400" />
+                )}
               </Link>
               <Link
                 href="/agents/personas"
-                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
+                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
                   pathname === '/agents/personas'
-                    ? 'border-tsushin-indigo text-tsushin-indigo'
-                    : 'border-transparent text-tsushin-slate hover:text-white'
+                    ? 'text-white'
+                    : 'text-tsushin-slate hover:text-white'
                 }`}
               >
-                Personas
+                <span className="relative z-10 flex items-center gap-1.5">
+                  <svg className="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Personas
+                </span>
+                {pathname === '/agents/personas' && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-purple-500 to-pink-400" />
+                )}
               </Link>
               <Link
                 href="/agents/projects"
-                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
+                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
                   pathname?.startsWith('/agents/projects')
-                    ? 'border-tsushin-indigo text-tsushin-indigo'
-                    : 'border-transparent text-tsushin-slate hover:text-white'
+                    ? 'text-white'
+                    : 'text-tsushin-slate hover:text-white'
                 }`}
               >
-                Projects
+                <span className="relative z-10 flex items-center gap-1.5">
+                  <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  Projects
+                </span>
+                {pathname?.startsWith('/agents/projects') && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-amber-500 to-yellow-400" />
+                )}
+              </Link>
+              <Link
+                href="/agents/security"
+                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
+                  pathname?.startsWith('/agents/security')
+                    ? 'text-white'
+                    : 'text-tsushin-slate hover:text-white'
+                }`}
+              >
+                <span className="relative z-10 flex items-center gap-1.5">
+                  <svg className="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                  Security
+                </span>
+                {pathname?.startsWith('/agents/security') && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-red-500 to-orange-400" />
+                )}
               </Link>
             </nav>
           </div>
