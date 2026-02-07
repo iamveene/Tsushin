@@ -38,6 +38,7 @@ from .sentinel_detections import (
     get_prompt_detection_types,
     get_shell_detection_types,
 )
+from .sentinel_effective_config import SentinelEffectiveConfig
 
 logger = logging.getLogger(__name__)
 
@@ -128,25 +129,49 @@ class SentinelService:
             SentinelAgentConfig.agent_id == agent_id
         ).first()
 
-    def get_effective_config(self, agent_id: Optional[int] = None) -> SentinelConfig:
+    def get_effective_config(self, agent_id: Optional[int] = None, skill_type: Optional[str] = None) -> SentinelEffectiveConfig:
         """
-        Get the effective configuration for analysis.
+        Get the effective security configuration for analysis.
+
+        v1.6.0: Tries profile-based resolution first, falls back to legacy.
+
+        Resolution chain:
+        1. Profile resolution (skill -> agent -> tenant -> system default)
+        2. Legacy fallback (agent override -> tenant config -> system config)
+        3. Hardcoded defaults
+
+        Args:
+            agent_id: Optional agent ID for agent/skill-specific config
+            skill_type: Optional skill type for skill-level profile resolution
+
+        Returns:
+            SentinelEffectiveConfig with resolved settings
+        """
+        try:
+            from .sentinel_profiles_service import SentinelProfilesService
+            profiles_service = SentinelProfilesService(self.db, self.tenant_id)
+            result = profiles_service.get_effective_config(agent_id, skill_type)
+            if result:
+                return result
+        except Exception as e:
+            self.logger.warning(f"Profile resolution failed, using legacy: {e}")
+
+        # Legacy fallback
+        legacy_config = self._legacy_get_effective_config(agent_id)
+        return SentinelEffectiveConfig.from_legacy_config(legacy_config)
+
+    def _legacy_get_effective_config(self, agent_id: Optional[int] = None) -> SentinelConfig:
+        """
+        Legacy configuration resolution (pre-v1.6.0).
 
         Hierarchy:
         1. Agent override (if set)
         2. Tenant config (if set)
         3. System default
-
-        Args:
-            agent_id: Optional agent ID for agent-specific overrides
-
-        Returns:
-            Merged SentinelConfig with effective settings
         """
         # Start with system config
         system_config = self.get_system_config()
         if not system_config:
-            # Create in-memory default if no system config exists
             self.logger.warning("No system Sentinel config found, using defaults")
             return self._create_default_config()
 
@@ -331,7 +356,7 @@ class SentinelService:
 
         # Phase 20 Enhancement: Check if slash command analysis is disabled
         # If prompt starts with "/" and enable_slash_command_analysis is False, skip analysis
-        enable_slash_analysis = getattr(config, 'enable_slash_command_analysis', True)
+        enable_slash_analysis = config.enable_slash_command_analysis
         if not enable_slash_analysis and prompt.strip().startswith("/"):
             self.logger.debug("Skipping Sentinel analysis for slash command (toggle disabled)")
             return self._create_allowed_result("prompt", "slash_command_bypass", start_time)
@@ -349,10 +374,9 @@ class SentinelService:
 
         # Check if any detection types are enabled
         # If none are enabled, skip analysis entirely
-        has_enabled_detection = (
-            config.detect_prompt_injection or
-            config.detect_agent_takeover or
-            config.detect_poisoning
+        has_enabled_detection = any(
+            config.is_detection_enabled(dt)
+            for dt in get_prompt_detection_types()
         )
         if not has_enabled_detection:
             return self._create_allowed_result("prompt", "no_detection_types", start_time)
@@ -408,7 +432,7 @@ class SentinelService:
         input_hash = self._hash_input(truncated_args)
 
         # Use prompt injection detection on tool arguments
-        if config.detect_prompt_injection:
+        if config.is_detection_enabled("prompt_injection"):
             result = await self._analyze_single(
                 input_content=truncated_args,
                 input_hash=input_hash,
@@ -533,7 +557,7 @@ class SentinelService:
         input_hash = self._hash_input(truncated_args)
 
         # Detect prompt injection in tool arguments
-        if config.detect_prompt_injection:
+        if config.is_detection_enabled("prompt_injection"):
             result = await self._analyze_single(
                 input_content=truncated_args,
                 input_hash=input_hash,
@@ -601,7 +625,7 @@ class SentinelService:
         if config.aggressiveness_level <= 0:
             return self._create_allowed_result("shell", "aggressiveness_off", start_time)
 
-        if not config.detect_shell_malicious_intent:
+        if not config.is_detection_enabled("shell_malicious"):
             return self._create_allowed_result("shell", "shell_intent_disabled", start_time)
 
         # Truncate command for analysis
@@ -635,7 +659,7 @@ class SentinelService:
         input_hash: str,
         analysis_type: str,
         detection_type: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         sender_key: Optional[str],
         message_id: Optional[str],
         agent_id: Optional[int],
@@ -655,8 +679,8 @@ class SentinelService:
             tool_name: Optional tool name for tool-type exception matching.
             target_domain: Optional domain extracted from URLs for domain-type exceptions.
         """
-        # Phase 20 Enhancement: Check detection mode
-        detection_mode = getattr(config, 'detection_mode', 'block')
+        # Check detection mode
+        detection_mode = config.detection_mode
         if detection_mode == 'off':
             self.logger.debug(f"Detection mode is 'off', skipping {detection_type} analysis")
             return self._create_allowed_result(analysis_type, "detection_off", start_time)
@@ -813,7 +837,7 @@ class SentinelService:
         self,
         system_prompt: str,
         user_content: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
     ) -> Dict[str, Any]:
         """
         Call LLM for security analysis.
@@ -844,7 +868,7 @@ class SentinelService:
         llm_result: Dict[str, Any],
         analysis_type: str,
         detection_type: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         response_time_ms: int,
     ) -> SentinelAnalysisResult:
         """Parse LLM response into SentinelAnalysisResult."""
@@ -880,7 +904,7 @@ class SentinelService:
             # Determine action based on detection_mode
             action = "allowed"
             if is_threat:
-                mode = getattr(config, 'detection_mode', 'block')
+                mode = config.detection_mode
                 if mode == 'block':
                     action = "blocked"
                 elif mode == 'warn_only':
@@ -913,21 +937,15 @@ class SentinelService:
                 response_time_ms=response_time_ms,
             )
 
-    def _get_custom_prompt(self, detection_type: str, config: SentinelConfig) -> Optional[str]:
+    def _get_custom_prompt(self, detection_type: str, config: SentinelEffectiveConfig) -> Optional[str]:
         """Get custom prompt from config if set."""
-        prompt_map = {
-            "prompt_injection": config.prompt_injection_prompt,
-            "agent_takeover": config.agent_takeover_prompt,
-            "poisoning": config.poisoning_prompt,
-            "shell_malicious": config.shell_intent_prompt,
-        }
-        return prompt_map.get(detection_type)
+        return config.get_custom_prompt(detection_type)
 
     async def _analyze_unified(
         self,
         input_content: str,
         analysis_type: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         sender_key: Optional[str],
         message_id: Optional[str],
         agent_id: Optional[int],
@@ -945,7 +963,7 @@ class SentinelService:
         from .sentinel_detections import get_unified_prompt
 
         # Check detection mode
-        detection_mode = getattr(config, 'detection_mode', 'block')
+        detection_mode = config.detection_mode
         if detection_mode == 'off':
             self.logger.debug("Detection mode is 'off', skipping unified analysis")
             return self._create_allowed_result(analysis_type, "detection_off", start_time)
@@ -1040,7 +1058,7 @@ class SentinelService:
         self,
         llm_result: Dict[str, Any],
         analysis_type: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         response_time_ms: int,
     ) -> SentinelAnalysisResult:
         """
@@ -1115,7 +1133,7 @@ class SentinelService:
     async def send_threat_notification(
         self,
         result: SentinelAnalysisResult,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         sender_key: Optional[str] = None,
         agent_id: Optional[int] = None,
         mcp_api_url: Optional[str] = None,
@@ -1139,15 +1157,15 @@ class SentinelService:
             True if notification was sent successfully
         """
         # Check if notifications are enabled
-        if not getattr(config, 'enable_notifications', True):
+        if not config.enable_notifications:
             self.logger.debug("Notifications disabled, skipping")
             return False
 
         # Check action-specific settings
-        if result.action == "blocked" and not getattr(config, 'notification_on_block', True):
+        if result.action == "blocked" and not config.notification_on_block:
             self.logger.debug("Notification on block disabled, skipping")
             return False
-        if result.action == "allowed" and not getattr(config, 'notification_on_detect', False):
+        if result.action == "allowed" and not config.notification_on_detect:
             self.logger.debug("Notification on detect disabled, skipping")
             return False
 
@@ -1160,7 +1178,7 @@ class SentinelService:
         recipient = sender_key
 
         # Build message from template
-        template = getattr(config, 'notification_message_template', None)
+        template = config.notification_message_template
         if not template:
             # Default template - user-friendly message explaining why their message was blocked
             template = (
