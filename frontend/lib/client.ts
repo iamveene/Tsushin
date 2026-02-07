@@ -580,6 +580,181 @@ export interface SentinelExceptionTestResult {
   extracted_domains?: string[]
 }
 
+// Sentinel Security Profiles (v1.6.0)
+export interface SentinelProfile {
+  id: number
+  name: string
+  slug: string
+  description: string | null
+  tenant_id: string | null
+  is_system: boolean
+  is_default: boolean
+  is_enabled: boolean
+  detection_mode: 'block' | 'detect_only' | 'off'
+  aggressiveness_level: number
+  enable_prompt_analysis: boolean
+  enable_tool_analysis: boolean
+  enable_shell_analysis: boolean
+  enable_slash_command_analysis: boolean
+  llm_provider: string
+  llm_model: string
+  llm_max_tokens: number
+  llm_temperature: number
+  cache_ttl_seconds: number
+  max_input_chars: number
+  timeout_seconds: number
+  block_on_detection: boolean
+  log_all_analyses: boolean
+  enable_notifications: boolean
+  notification_on_block: boolean
+  notification_on_detect: boolean
+  notification_recipient: string | null
+  notification_message_template: string | null
+  created_by: number | null
+  updated_by: number | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface DetectionConfigItem {
+  detection_type: string
+  name: string
+  description: string
+  severity: string
+  applies_to: string[]
+  enabled: boolean
+  custom_prompt: string | null
+  source: 'explicit' | 'registry_default'
+}
+
+export interface SentinelProfileDetail extends SentinelProfile {
+  detection_overrides_raw: string
+  resolved_detections: DetectionConfigItem[]
+}
+
+export interface SentinelProfileCreate {
+  name: string
+  slug: string
+  description?: string
+  is_default?: boolean
+  is_enabled?: boolean
+  detection_mode?: 'block' | 'detect_only' | 'off'
+  aggressiveness_level?: number
+  enable_prompt_analysis?: boolean
+  enable_tool_analysis?: boolean
+  enable_shell_analysis?: boolean
+  enable_slash_command_analysis?: boolean
+  llm_provider?: string
+  llm_model?: string
+  llm_max_tokens?: number
+  llm_temperature?: number
+  cache_ttl_seconds?: number
+  max_input_chars?: number
+  timeout_seconds?: number
+  block_on_detection?: boolean
+  log_all_analyses?: boolean
+  enable_notifications?: boolean
+  notification_on_block?: boolean
+  notification_on_detect?: boolean
+  notification_recipient?: string | null
+  notification_message_template?: string | null
+  detection_overrides?: string
+}
+
+export interface SentinelProfileUpdate extends Partial<SentinelProfileCreate> {}
+
+export interface SentinelProfileCloneRequest {
+  name: string
+  slug: string
+}
+
+export interface SentinelProfileAssignment {
+  id: number
+  tenant_id: string
+  agent_id: number | null
+  skill_type: string | null
+  profile_id: number
+  assigned_by: number | null
+  assigned_at: string | null
+  profile_name: string | null
+  profile_slug: string | null
+}
+
+export interface SentinelProfileAssignRequest {
+  profile_id: number
+  agent_id?: number
+  skill_type?: string
+}
+
+export interface DetectionEffectiveItem {
+  detection_type: string
+  name: string
+  enabled: boolean
+  custom_prompt: string | null
+  source: 'explicit' | 'registry_default'
+}
+
+export interface SentinelEffectiveConfig {
+  profile_id: number
+  profile_name: string
+  profile_source: 'skill' | 'agent' | 'tenant' | 'system' | 'legacy'
+  is_enabled: boolean
+  detection_mode: string
+  aggressiveness_level: number
+  enable_prompt_analysis: boolean
+  enable_tool_analysis: boolean
+  enable_shell_analysis: boolean
+  enable_slash_command_analysis: boolean
+  llm_provider: string
+  llm_model: string
+  llm_max_tokens: number
+  llm_temperature: number
+  cache_ttl_seconds: number
+  max_input_chars: number
+  timeout_seconds: number
+  block_on_detection: boolean
+  log_all_analyses: boolean
+  enable_notifications: boolean
+  notification_on_block: boolean
+  notification_on_detect: boolean
+  notification_recipient: string | null
+  notification_message_template: string | null
+  detections: DetectionEffectiveItem[]
+}
+
+export interface SentinelHierarchyProfile {
+  id: number
+  name: string
+  slug: string
+  source?: string
+}
+
+export interface SentinelHierarchySkill {
+  skill_type: string
+  name: string
+  is_enabled: boolean
+  profile: SentinelHierarchyProfile | null
+  effective_profile: SentinelHierarchyProfile | null
+}
+
+export interface SentinelHierarchyAgent {
+  id: number
+  name: string
+  is_active: boolean
+  profile: SentinelHierarchyProfile | null
+  effective_profile: SentinelHierarchyProfile | null
+  skills: SentinelHierarchySkill[]
+}
+
+export interface SentinelHierarchy {
+  tenant: {
+    id: string
+    name: string
+    profile: SentinelHierarchyProfile | null
+    agents: SentinelHierarchyAgent[]
+  } | null
+}
+
 export interface Persona {
   id: number
   name: string
@@ -5346,6 +5521,100 @@ export const api = {
       const error = await res.json().catch(() => ({ detail: 'Failed to toggle exception' }))
       throw new Error(error.detail || 'Failed to toggle Sentinel exception')
     }
+    return res.json()
+  },
+
+  // ─── Sentinel Security Profiles (v1.6.0) ─────────────────────────────
+
+  async getSentinelProfiles(includeSystem = true): Promise<SentinelProfile[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles?include_system=${includeSystem}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch security profiles')
+    return res.json()
+  },
+
+  async getSentinelProfile(profileId: number): Promise<SentinelProfileDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles/${profileId}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch security profile')
+    return res.json()
+  },
+
+  async createSentinelProfile(data: SentinelProfileCreate): Promise<SentinelProfile> {
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create security profile')
+    return res.json()
+  },
+
+  async updateSentinelProfile(profileId: number, data: SentinelProfileUpdate): Promise<SentinelProfile> {
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles/${profileId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update security profile')
+    return res.json()
+  },
+
+  async deleteSentinelProfile(profileId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles/${profileId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete security profile')
+  },
+
+  async cloneSentinelProfile(profileId: number, data: SentinelProfileCloneRequest): Promise<SentinelProfile> {
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles/${profileId}/clone`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to clone security profile')
+    return res.json()
+  },
+
+  async getSentinelProfileAssignments(agentId?: number, skillType?: string): Promise<SentinelProfileAssignment[]> {
+    const params = new URLSearchParams()
+    if (agentId !== undefined) params.set('agent_id', agentId.toString())
+    if (skillType) params.set('skill_type', skillType)
+    const qs = params.toString()
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles/assignments${qs ? `?${qs}` : ''}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch profile assignments')
+    return res.json()
+  },
+
+  async assignSentinelProfile(data: SentinelProfileAssignRequest): Promise<SentinelProfileAssignment> {
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles/assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to assign security profile')
+    return res.json()
+  },
+
+  async removeSentinelProfileAssignment(assignmentId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles/assignments/${assignmentId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to remove profile assignment')
+  },
+
+  async getSentinelEffectiveConfig(agentId?: number, skillType?: string): Promise<SentinelEffectiveConfig> {
+    const params = new URLSearchParams()
+    if (agentId !== undefined) params.set('agent_id', agentId.toString())
+    if (skillType) params.set('skill_type', skillType)
+    const qs = params.toString()
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles/effective${qs ? `?${qs}` : ''}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch effective security config')
+    return res.json()
+  },
+
+  async getSentinelHierarchy(): Promise<SentinelHierarchy> {
+    const res = await authenticatedFetch(`${API_URL}/api/sentinel/profiles/hierarchy`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch security hierarchy')
     return res.json()
   },
 }

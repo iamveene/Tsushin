@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, SentinelConfig, SentinelConfigUpdate, SentinelPrompt, SentinelLLMProvider, SentinelStats, SentinelException, SentinelExceptionCreate, SentinelExceptionUpdate, Contact } from '@/lib/client'
+import { api, SentinelConfig, SentinelConfigUpdate, SentinelPrompt, SentinelLLMProvider, SentinelStats, SentinelException, SentinelExceptionCreate, SentinelExceptionUpdate, Contact, SentinelProfile, SentinelProfileDetail, SentinelProfileCreate, SentinelProfileUpdate, SentinelProfileCloneRequest, DetectionConfigItem } from '@/lib/client'
 import Link from 'next/link'
 import {
   SettingsIcon,
@@ -27,9 +27,13 @@ import {
   PauseIcon,
   EditIcon,
   TrashIcon,
+  ShieldIcon,
 } from '@/components/ui/icons'
 
-type TabType = 'general' | 'prompts' | 'llm' | 'stats' | 'exceptions'
+type TabType = 'general' | 'profiles' | 'prompts' | 'llm' | 'stats' | 'exceptions'
+
+type ProfileModalMode = 'create' | 'edit' | 'clone'
+type ProfileEditorSection = 'general' | 'analysis' | 'detections' | 'llm' | 'performance' | 'notifications'
 
 export default function SentinelSettingsPage() {
   const { user, loading: authLoading, hasPermission } = useRequireAuth()
@@ -75,6 +79,32 @@ export default function SentinelSettingsPage() {
   // Prompt editing state
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null)
   const [promptText, setPromptText] = useState('')
+
+  // Profile state (v1.6.0)
+  const [profiles, setProfiles] = useState<SentinelProfile[]>([])
+  const [profilesLoading, setProfilesLoading] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [profileModalMode, setProfileModalMode] = useState<ProfileModalMode>('create')
+  const [editingProfile, setEditingProfile] = useState<SentinelProfileDetail | null>(null)
+  const [profileEditorSection, setProfileEditorSection] = useState<ProfileEditorSection>('general')
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [profileForm, setProfileForm] = useState<SentinelProfileCreate>({
+    name: '', slug: '', description: '',
+    is_enabled: true, detection_mode: 'block', aggressiveness_level: 1,
+    enable_prompt_analysis: true, enable_tool_analysis: true,
+    enable_shell_analysis: true, enable_slash_command_analysis: true,
+    llm_provider: 'gemini', llm_model: 'gemini-2.5-flash-lite',
+    llm_max_tokens: 256, llm_temperature: 0.1,
+    cache_ttl_seconds: 300, max_input_chars: 5000, timeout_seconds: 5.0,
+    block_on_detection: true, log_all_analyses: false,
+    enable_notifications: true, notification_on_block: true, notification_on_detect: false,
+    notification_recipient: null, notification_message_template: null,
+    detection_overrides: '{}',
+  })
+  const [profileDetections, setProfileDetections] = useState<DetectionConfigItem[]>([])
+  const [showCloneDialog, setShowCloneDialog] = useState(false)
+  const [cloneSourceId, setCloneSourceId] = useState<number | null>(null)
+  const [cloneForm, setCloneForm] = useState<SentinelProfileCloneRequest>({ name: '', slug: '' })
 
   // LLM test state
   const [testingLLM, setTestingLLM] = useState(false)
@@ -160,6 +190,158 @@ export default function SentinelSettingsPage() {
     }
   }, [])
 
+  const fetchProfiles = useCallback(async () => {
+    setProfilesLoading(true)
+    try {
+      const data = await api.getSentinelProfiles(true)
+      setProfiles(data)
+    } catch (err: any) {
+      console.error('Failed to fetch profiles:', err)
+    } finally {
+      setProfilesLoading(false)
+    }
+  }, [])
+
+  const openProfileEditor = useCallback(async (mode: ProfileModalMode, profileId?: number) => {
+    setProfileModalMode(mode)
+    setProfileEditorSection('general')
+    if (mode === 'create') {
+      setEditingProfile(null)
+      setProfileForm({
+        name: '', slug: '', description: '',
+        is_enabled: true, detection_mode: 'block', aggressiveness_level: 1,
+        enable_prompt_analysis: true, enable_tool_analysis: true,
+        enable_shell_analysis: true, enable_slash_command_analysis: true,
+        llm_provider: 'gemini', llm_model: 'gemini-2.5-flash-lite',
+        llm_max_tokens: 256, llm_temperature: 0.1,
+        cache_ttl_seconds: 300, max_input_chars: 5000, timeout_seconds: 5.0,
+        block_on_detection: true, log_all_analyses: false,
+        enable_notifications: true, notification_on_block: true, notification_on_detect: false,
+        notification_recipient: null, notification_message_template: null,
+        detection_overrides: '{}',
+      })
+      setProfileDetections([])
+      setShowProfileModal(true)
+    } else if (profileId) {
+      try {
+        const detail = await api.getSentinelProfile(profileId)
+        setEditingProfile(detail)
+        setProfileDetections(detail.resolved_detections || [])
+        setProfileForm({
+          name: detail.name, slug: detail.slug, description: detail.description || '',
+          is_enabled: detail.is_enabled, detection_mode: detail.detection_mode,
+          aggressiveness_level: detail.aggressiveness_level,
+          enable_prompt_analysis: detail.enable_prompt_analysis,
+          enable_tool_analysis: detail.enable_tool_analysis,
+          enable_shell_analysis: detail.enable_shell_analysis,
+          enable_slash_command_analysis: detail.enable_slash_command_analysis,
+          llm_provider: detail.llm_provider, llm_model: detail.llm_model,
+          llm_max_tokens: detail.llm_max_tokens, llm_temperature: detail.llm_temperature,
+          cache_ttl_seconds: detail.cache_ttl_seconds, max_input_chars: detail.max_input_chars,
+          timeout_seconds: detail.timeout_seconds,
+          block_on_detection: detail.block_on_detection, log_all_analyses: detail.log_all_analyses,
+          enable_notifications: detail.enable_notifications,
+          notification_on_block: detail.notification_on_block,
+          notification_on_detect: detail.notification_on_detect,
+          notification_recipient: detail.notification_recipient,
+          notification_message_template: detail.notification_message_template,
+          detection_overrides: detail.detection_overrides_raw || '{}',
+        })
+        setShowProfileModal(true)
+      } catch (err: any) {
+        setError(err.message || 'Failed to load profile')
+      }
+    }
+  }, [])
+
+  const handleSaveProfile = async () => {
+    if (!profileForm.name || !profileForm.slug) {
+      setError('Name and slug are required')
+      return
+    }
+    if (!/^[a-z0-9\-]+$/.test(profileForm.slug)) {
+      setError('Slug must contain only lowercase letters, numbers, and hyphens')
+      return
+    }
+    setSavingProfile(true)
+    setError(null)
+    try {
+      // Build detection_overrides from profileDetections state
+      const overrides: Record<string, { enabled: boolean; custom_prompt?: string | null }> = {}
+      for (const det of profileDetections) {
+        if (det.source === 'explicit') {
+          overrides[det.detection_type] = { enabled: det.enabled }
+          if (det.custom_prompt) overrides[det.detection_type].custom_prompt = det.custom_prompt
+        }
+      }
+      const formData = { ...profileForm, detection_overrides: JSON.stringify(overrides) }
+
+      if (profileModalMode === 'edit' && editingProfile) {
+        await api.updateSentinelProfile(editingProfile.id, formData as SentinelProfileUpdate)
+        setSuccess('Profile updated successfully')
+      } else {
+        await api.createSentinelProfile(formData)
+        setSuccess('Profile created successfully')
+      }
+      setShowProfileModal(false)
+      setEditingProfile(null)
+      fetchProfiles()
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: any) {
+      setError(err.message || 'Failed to save profile')
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
+  const handleDeleteProfile = async (profileId: number) => {
+    if (!confirm('Are you sure you want to delete this profile?')) return
+    try {
+      await api.deleteSentinelProfile(profileId)
+      setSuccess('Profile deleted')
+      fetchProfiles()
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete profile')
+    }
+  }
+
+  const handleCloneProfile = async () => {
+    if (!cloneSourceId || !cloneForm.name || !cloneForm.slug) {
+      setError('Name and slug are required for clone')
+      return
+    }
+    if (!/^[a-z0-9\-]+$/.test(cloneForm.slug)) {
+      setError('Slug must contain only lowercase letters, numbers, and hyphens')
+      return
+    }
+    try {
+      await api.cloneSentinelProfile(cloneSourceId, cloneForm)
+      setSuccess('Profile cloned successfully')
+      setShowCloneDialog(false)
+      setCloneSourceId(null)
+      setCloneForm({ name: '', slug: '' })
+      fetchProfiles()
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: any) {
+      setError(err.message || 'Failed to clone profile')
+    }
+  }
+
+  const slugify = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+
+  // Close profile modals on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showProfileModal) { setShowProfileModal(false); setEditingProfile(null) }
+        if (showCloneDialog) { setShowCloneDialog(false); setCloneSourceId(null) }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [showProfileModal, showCloneDialog])
+
   useEffect(() => {
     if (!authLoading && user) {
       fetchData()
@@ -173,7 +355,10 @@ export default function SentinelSettingsPage() {
     if (activeTab === 'exceptions') {
       fetchExceptions()
     }
-  }, [activeTab, fetchPrompts, fetchExceptions])
+    if (activeTab === 'profiles') {
+      fetchProfiles()
+    }
+  }, [activeTab, fetchPrompts, fetchExceptions, fetchProfiles])
 
   const handleSave = async () => {
     setSaving(true)
@@ -296,6 +481,7 @@ export default function SentinelSettingsPage() {
         <div className="flex space-x-1 glass-card rounded-xl p-1 mb-6">
           {[
             { id: 'general', label: 'General', Icon: SettingsIcon },
+            { id: 'profiles', label: 'Profiles', Icon: ShieldIcon },
             { id: 'prompts', label: 'Analysis Prompts', Icon: DocumentIcon },
             { id: 'llm', label: 'LLM Configuration', Icon: BotIcon },
             { id: 'stats', label: 'Statistics', Icon: ChartBarIcon },
@@ -843,6 +1029,164 @@ If you believe this is an error, please contact support."
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Profiles Tab (v1.6.0) */}
+        {activeTab === 'profiles' && (
+          <div className="space-y-6">
+            {/* Header with Create Button */}
+            <div className="flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  Security Profiles
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Named, reusable security policy configurations. Assign profiles to tenants, agents, or skills.
+                </p>
+              </div>
+              {canEdit && (
+                <button
+                  onClick={() => openProfileEditor('create')}
+                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Create Profile
+                </button>
+              )}
+            </div>
+
+            {/* Profile Cards Grid */}
+            {profilesLoading ? (
+              <div className="flex justify-center py-12">
+                <div className="relative w-8 h-8">
+                  <div className="absolute inset-0 rounded-full border-4 border-tsushin-surface"></div>
+                  <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-tsushin-indigo animate-spin"></div>
+                </div>
+              </div>
+            ) : profiles.length === 0 ? (
+              <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+                No security profiles found
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {profiles.map((profile) => (
+                  <div
+                    key={profile.id}
+                    className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-5 border border-gray-200 dark:border-gray-700 hover:border-teal-500/50 transition-colors"
+                  >
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h4 className="font-semibold text-gray-900 dark:text-gray-100 truncate">
+                            {profile.name}
+                          </h4>
+                          {profile.is_system && (
+                            <span className="px-2 py-0.5 text-xs rounded-full bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 flex-shrink-0">
+                              System
+                            </span>
+                          )}
+                          {profile.is_default && (
+                            <span className="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 flex-shrink-0">
+                              Default
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-400 font-mono">{profile.slug}</p>
+                      </div>
+                      {/* Detection Mode Badge */}
+                      <span className={`px-2 py-1 text-xs rounded-full flex-shrink-0 ${
+                        profile.detection_mode === 'block' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' :
+                        profile.detection_mode === 'detect_only' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' :
+                        'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+                      }`}>
+                        {profile.detection_mode === 'block' ? 'Block' :
+                         profile.detection_mode === 'detect_only' ? 'Detect Only' : 'Off'}
+                      </span>
+                    </div>
+
+                    {profile.description && (
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-3 line-clamp-2">
+                        {profile.description}
+                      </p>
+                    )}
+
+                    {/* Profile Details Row */}
+                    <div className="flex items-center gap-3 mb-4 text-xs text-gray-500 dark:text-gray-400">
+                      <span className="flex items-center gap-1">
+                        Aggressiveness: <strong className="text-gray-700 dark:text-gray-300">
+                          {['Off', 'Moderate', 'Aggressive', 'Extra'][profile.aggressiveness_level]}
+                        </strong>
+                      </span>
+                      <span>|</span>
+                      <span className={profile.is_enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}>
+                        {profile.is_enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+
+                    {/* Analysis Components Indicators */}
+                    <div className="flex gap-1.5 mb-4">
+                      {[
+                        { key: 'enable_prompt_analysis', label: 'P', title: 'Prompt Analysis' },
+                        { key: 'enable_tool_analysis', label: 'T', title: 'Tool Analysis' },
+                        { key: 'enable_shell_analysis', label: 'S', title: 'Shell Analysis' },
+                        { key: 'enable_slash_command_analysis', label: '/', title: 'Slash Command Analysis' },
+                      ].map((comp) => (
+                        <span
+                          key={comp.key}
+                          title={comp.title}
+                          className={`w-6 h-6 flex items-center justify-center text-xs rounded font-mono ${
+                            (profile as any)[comp.key]
+                              ? 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400'
+                              : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
+                          }`}
+                        >
+                          {comp.label}
+                        </span>
+                      ))}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex gap-2 pt-3 border-t border-gray-200 dark:border-gray-700">
+                      <button
+                        onClick={() => openProfileEditor(profile.is_system ? 'edit' : 'edit', profile.id)}
+                        className="flex-1 px-3 py-1.5 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
+                      >
+                        {profile.is_system ? 'View' : 'Edit'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setCloneSourceId(profile.id)
+                          setCloneForm({ name: `${profile.name} (Copy)`, slug: `${profile.slug}-copy` })
+                          setShowCloneDialog(true)
+                        }}
+                        className="flex-1 px-3 py-1.5 text-sm text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded transition-colors"
+                      >
+                        Clone
+                      </button>
+                      {!profile.is_system && canEdit && (
+                        <button
+                          onClick={() => handleDeleteProfile(profile.id)}
+                          className="px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Info Box */}
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+              <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">About Security Profiles</h4>
+              <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1 list-disc list-inside">
+                <li><strong>System profiles</strong> are built-in and cannot be modified or deleted, but can be cloned</li>
+                <li>Profiles can be assigned at <strong>tenant</strong>, <strong>agent</strong>, or <strong>skill</strong> levels</li>
+                <li>The resolution chain is: Skill → Agent → Tenant → System Default</li>
+                <li>New detection types are automatically available in all profiles</li>
+              </ul>
             </div>
           </div>
         )}
@@ -1412,6 +1756,533 @@ If you believe this is an error, please contact support."
                 <li><strong>Pattern</strong> exceptions match against the entire input content</li>
                 <li><strong>Tool</strong> exceptions match against the tool name being called</li>
               </ul>
+            </div>
+          </div>
+        )}
+
+        {/* Profile Editor Modal (v1.6.0) */}
+        {showProfileModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  {profileModalMode === 'create' ? 'Create Profile' : profileModalMode === 'clone' ? 'Clone Profile' : editingProfile?.is_system ? 'View Profile (System)' : 'Edit Profile'}
+                </h3>
+              </div>
+
+              {/* Section Navigation */}
+              <div className="px-6 pt-4 flex gap-1 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+                {([
+                  { id: 'general', label: 'General' },
+                  { id: 'analysis', label: 'Analysis' },
+                  { id: 'detections', label: 'Detections' },
+                  { id: 'llm', label: 'LLM' },
+                  { id: 'performance', label: 'Performance' },
+                  { id: 'notifications', label: 'Notifications' },
+                ] as { id: ProfileEditorSection; label: string }[]).map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setProfileEditorSection(s.id)}
+                    className={`px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap ${
+                      profileEditorSection === s.id
+                        ? 'bg-teal-500/20 text-teal-400 border-b-2 border-teal-400'
+                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="p-6 space-y-4">
+                {/* General Section */}
+                {profileEditorSection === 'general' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name *</label>
+                      <input
+                        type="text"
+                        value={profileForm.name}
+                        onChange={(e) => {
+                          const name = e.target.value
+                          setProfileForm({
+                            ...profileForm,
+                            name,
+                            slug: profileModalMode === 'create' ? slugify(name) : profileForm.slug,
+                          })
+                        }}
+                        disabled={editingProfile?.is_system}
+                        maxLength={100}
+                        placeholder="e.g., High Security"
+                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Slug *</label>
+                      <input
+                        type="text"
+                        value={profileForm.slug}
+                        onChange={(e) => setProfileForm({ ...profileForm, slug: e.target.value })}
+                        disabled={editingProfile?.is_system}
+                        maxLength={100}
+                        placeholder="e.g., high-security"
+                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-sm disabled:opacity-50"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">URL-friendly identifier (lowercase, hyphens only)</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+                      <textarea
+                        value={profileForm.description || ''}
+                        onChange={(e) => setProfileForm({ ...profileForm, description: e.target.value })}
+                        disabled={editingProfile?.is_system}
+                        rows={2}
+                        maxLength={500}
+                        placeholder="Optional description"
+                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between py-2">
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">Enabled</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Activate this security profile</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={profileForm.is_enabled ?? true}
+                          onChange={(e) => setProfileForm({ ...profileForm, is_enabled: e.target.checked })}
+                          disabled={editingProfile?.is_system}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
+                      </label>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Detection Mode</label>
+                      <select
+                        value={profileForm.detection_mode || 'block'}
+                        onChange={(e) => setProfileForm({ ...profileForm, detection_mode: e.target.value as any })}
+                        disabled={editingProfile?.is_system}
+                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                      >
+                        <option value="block">Block — Analyze and block threats</option>
+                        <option value="detect_only">Detect Only — Log threats silently</option>
+                        <option value="off">Off — Disable analysis</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Aggressiveness Level: <strong>{aggressivenessLabels[profileForm.aggressiveness_level ?? 1]}</strong>
+                      </label>
+                      <input
+                        type="range" min="0" max="3"
+                        value={profileForm.aggressiveness_level ?? 1}
+                        onChange={(e) => setProfileForm({ ...profileForm, aggressiveness_level: parseInt(e.target.value) })}
+                        disabled={editingProfile?.is_system}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                      />
+                      <div className="flex justify-between text-xs text-gray-400 mt-1">
+                        {aggressivenessLabels.map((l) => <span key={l}>{l}</span>)}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between py-2">
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">Set as Default</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Use as fallback when no profile is assigned</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={profileForm.is_default ?? false}
+                          onChange={(e) => setProfileForm({ ...profileForm, is_default: e.target.checked })}
+                          disabled={editingProfile?.is_system}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
+                      </label>
+                    </div>
+                  </>
+                )}
+
+                {/* Analysis Section */}
+                {profileEditorSection === 'analysis' && (
+                  <>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                      Enable or disable analysis components for this profile.
+                    </p>
+                    {[
+                      { key: 'enable_prompt_analysis', label: 'Prompt Analysis', desc: 'Analyze user messages for injection attempts' },
+                      { key: 'enable_tool_analysis', label: 'Tool Analysis', desc: 'Analyze tool arguments for malicious patterns' },
+                      { key: 'enable_shell_analysis', label: 'Shell Analysis', desc: 'Analyze shell commands for malicious intent' },
+                      { key: 'enable_slash_command_analysis', label: 'Slash Command Analysis', desc: 'Analyze slash commands for threats' },
+                    ].map((toggle) => (
+                      <div key={toggle.key} className="flex items-center justify-between py-2">
+                        <div>
+                          <p className="font-medium text-gray-900 dark:text-gray-100">{toggle.label}</p>
+                          <p className="text-sm text-gray-500 dark:text-gray-400">{toggle.desc}</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={(profileForm as any)[toggle.key] ?? true}
+                            onChange={(e) => setProfileForm({ ...profileForm, [toggle.key]: e.target.checked })}
+                            disabled={editingProfile?.is_system}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
+                        </label>
+                      </div>
+                    ))}
+                    <div className="flex items-center justify-between py-2">
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">Block on Detection</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Block messages when threats are detected</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={profileForm.block_on_detection ?? true}
+                          onChange={(e) => setProfileForm({ ...profileForm, block_on_detection: e.target.checked })}
+                          disabled={editingProfile?.is_system}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
+                      </label>
+                    </div>
+                    <div className="flex items-center justify-between py-2">
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">Log All Analyses</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Log all analyses including allowed messages</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={profileForm.log_all_analyses ?? false}
+                          onChange={(e) => setProfileForm({ ...profileForm, log_all_analyses: e.target.checked })}
+                          disabled={editingProfile?.is_system}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
+                      </label>
+                    </div>
+                  </>
+                )}
+
+                {/* Detections Section */}
+                {profileEditorSection === 'detections' && (
+                  <>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                      Configure which detection types are enabled. Overrides are saved per-profile; others use registry defaults.
+                    </p>
+                    {profileDetections.length === 0 ? (
+                      <p className="text-gray-400 text-center py-8">
+                        {profileModalMode === 'create' ? 'Detection types will use registry defaults. Save the profile to configure overrides.' : 'No detection types available'}
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        {profileDetections.map((det, idx) => (
+                          <div key={det.detection_type} className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <span className={`px-2 py-0.5 text-xs rounded-full ${
+                                  det.severity === 'critical' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' :
+                                  det.severity === 'high' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400' :
+                                  'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+                                }`}>
+                                  {det.severity}
+                                </span>
+                                <div>
+                                  <p className="font-medium text-gray-900 dark:text-gray-100 text-sm">{det.name}</p>
+                                  <p className="text-xs text-gray-500 dark:text-gray-400">{det.description}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {det.source === 'registry_default' && (
+                                  <span className="text-xs text-gray-400">(default)</span>
+                                )}
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={det.enabled}
+                                    onChange={(e) => {
+                                      const updated = [...profileDetections]
+                                      updated[idx] = { ...det, enabled: e.target.checked, source: 'explicit' }
+                                      setProfileDetections(updated)
+                                    }}
+                                    disabled={editingProfile?.is_system}
+                                    className="sr-only peer"
+                                  />
+                                  <div className="w-11 h-6 bg-gray-200 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
+                                </label>
+                              </div>
+                            </div>
+                            {det.source === 'explicit' && det.enabled && (
+                              <div className="mt-2">
+                                <label className="block text-xs text-gray-500 mb-1">Custom Prompt (optional)</label>
+                                <textarea
+                                  value={det.custom_prompt || ''}
+                                  onChange={(e) => {
+                                    const updated = [...profileDetections]
+                                    updated[idx] = { ...det, custom_prompt: e.target.value || null }
+                                    setProfileDetections(updated)
+                                  }}
+                                  disabled={editingProfile?.is_system}
+                                  rows={2}
+                                  placeholder="Leave empty to use default prompt"
+                                  className="w-full px-2 py-1 text-xs border dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono disabled:opacity-50"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* LLM Section */}
+                {profileEditorSection === 'llm' && (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Provider</label>
+                        <input
+                          type="text"
+                          value={profileForm.llm_provider || 'gemini'}
+                          onChange={(e) => setProfileForm({ ...profileForm, llm_provider: e.target.value })}
+                          disabled={editingProfile?.is_system}
+                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model</label>
+                        <input
+                          type="text"
+                          value={profileForm.llm_model || 'gemini-2.5-flash-lite'}
+                          onChange={(e) => setProfileForm({ ...profileForm, llm_model: e.target.value })}
+                          disabled={editingProfile?.is_system}
+                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Max Tokens (64-1024)</label>
+                        <input
+                          type="number"
+                          value={profileForm.llm_max_tokens ?? 256}
+                          onChange={(e) => setProfileForm({ ...profileForm, llm_max_tokens: parseInt(e.target.value) })}
+                          disabled={editingProfile?.is_system}
+                          min={64} max={1024}
+                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Temperature (0.0-1.0)</label>
+                        <input
+                          type="number"
+                          value={profileForm.llm_temperature ?? 0.1}
+                          onChange={(e) => setProfileForm({ ...profileForm, llm_temperature: parseFloat(e.target.value) })}
+                          disabled={editingProfile?.is_system}
+                          min={0} max={1} step={0.1}
+                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Performance Section */}
+                {profileEditorSection === 'performance' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cache TTL (seconds, 0-3600)</label>
+                      <input
+                        type="number"
+                        value={profileForm.cache_ttl_seconds ?? 300}
+                        onChange={(e) => setProfileForm({ ...profileForm, cache_ttl_seconds: parseInt(e.target.value) })}
+                        disabled={editingProfile?.is_system}
+                        min={0} max={3600}
+                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">How long to cache analysis results. Set to 0 to disable.</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Max Input Characters (100-10000)</label>
+                      <input
+                        type="number"
+                        value={profileForm.max_input_chars ?? 5000}
+                        onChange={(e) => setProfileForm({ ...profileForm, max_input_chars: parseInt(e.target.value) })}
+                        disabled={editingProfile?.is_system}
+                        min={100} max={10000}
+                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Maximum characters of input sent to analysis. Longer inputs are truncated.</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Timeout (seconds, 1.0-30.0)</label>
+                      <input
+                        type="number"
+                        value={profileForm.timeout_seconds ?? 5.0}
+                        onChange={(e) => setProfileForm({ ...profileForm, timeout_seconds: parseFloat(e.target.value) })}
+                        disabled={editingProfile?.is_system}
+                        min={1} max={30} step={0.5}
+                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Maximum time to wait for analysis response.</p>
+                    </div>
+                  </>
+                )}
+
+                {/* Notifications Section */}
+                {profileEditorSection === 'notifications' && (
+                  <>
+                    <div className="flex items-center justify-between py-2">
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">Enable Notifications</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Send notifications when security events occur</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={profileForm.enable_notifications ?? true}
+                          onChange={(e) => setProfileForm({ ...profileForm, enable_notifications: e.target.checked })}
+                          disabled={editingProfile?.is_system}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
+                      </label>
+                    </div>
+                    {profileForm.enable_notifications && (
+                      <>
+                        <div className="flex items-center justify-between py-2 pl-4 border-l-2 border-teal-500">
+                          <div>
+                            <p className="font-medium text-gray-900 dark:text-gray-100">Notify on Block</p>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">Send notification when a message is blocked</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={profileForm.notification_on_block ?? true}
+                              onChange={(e) => setProfileForm({ ...profileForm, notification_on_block: e.target.checked })}
+                              disabled={editingProfile?.is_system}
+                              className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-gray-200 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
+                          </label>
+                        </div>
+                        <div className="flex items-center justify-between py-2 pl-4 border-l-2 border-teal-500">
+                          <div>
+                            <p className="font-medium text-gray-900 dark:text-gray-100">Notify on Detect</p>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">Send notification on detection (even if not blocked)</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={profileForm.notification_on_detect ?? false}
+                              onChange={(e) => setProfileForm({ ...profileForm, notification_on_detect: e.target.checked })}
+                              disabled={editingProfile?.is_system}
+                              className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-gray-200 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
+                          </label>
+                        </div>
+                        <div className="pl-4 border-l-2 border-teal-500">
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notification Recipient</label>
+                          <input
+                            type="text"
+                            value={profileForm.notification_recipient || ''}
+                            onChange={(e) => setProfileForm({ ...profileForm, notification_recipient: e.target.value || null })}
+                            disabled={editingProfile?.is_system}
+                            placeholder="Leave empty for default (notify sender)"
+                            className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                          />
+                        </div>
+                        <div className="pl-4 border-l-2 border-teal-500">
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Message Template</label>
+                          <textarea
+                            value={profileForm.notification_message_template || ''}
+                            onChange={(e) => setProfileForm({ ...profileForm, notification_message_template: e.target.value || null })}
+                            disabled={editingProfile?.is_system}
+                            rows={3}
+                            placeholder="Custom notification message template"
+                            className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-sm disabled:opacity-50"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+                <button
+                  onClick={() => { setShowProfileModal(false); setEditingProfile(null) }}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
+                >
+                  {editingProfile?.is_system ? 'Close' : 'Cancel'}
+                </button>
+                {!editingProfile?.is_system && (
+                  <button
+                    onClick={handleSaveProfile}
+                    disabled={savingProfile || !profileForm.name || !profileForm.slug}
+                    className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded-md disabled:opacity-50 transition-colors"
+                  >
+                    {savingProfile ? 'Saving...' : profileModalMode === 'edit' ? 'Update' : 'Create'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Clone Profile Dialog (v1.6.0) */}
+        {showCloneDialog && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
+              <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Clone Profile</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Create a copy with a new name</p>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name *</label>
+                  <input
+                    type="text"
+                    value={cloneForm.name}
+                    onChange={(e) => setCloneForm({ name: e.target.value, slug: slugify(e.target.value) })}
+                    placeholder="e.g., My Custom Profile"
+                    className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Slug *</label>
+                  <input
+                    type="text"
+                    value={cloneForm.slug}
+                    onChange={(e) => setCloneForm({ ...cloneForm, slug: e.target.value })}
+                    placeholder="e.g., my-custom-profile"
+                    className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-sm"
+                  />
+                </div>
+              </div>
+              <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+                <button
+                  onClick={() => { setShowCloneDialog(false); setCloneSourceId(null) }}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCloneProfile}
+                  disabled={!cloneForm.name || !cloneForm.slug}
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-md disabled:opacity-50 transition-colors"
+                >
+                  Clone
+                </button>
+              </div>
             </div>
           </div>
         )}
