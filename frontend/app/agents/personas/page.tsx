@@ -273,6 +273,26 @@ export default function PersonasPage() {
               >
                 Projects
               </Link>
+              <Link
+                href="/agents/security"
+                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  pathname?.startsWith('/agents/security')
+                    ? 'border-tsushin-indigo text-tsushin-indigo'
+                    : 'border-transparent text-tsushin-slate hover:text-white'
+                }`}
+              >
+                Security
+              </Link>
+              <Link
+                href="/agents/builder"
+                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  pathname === '/agents/builder'
+                    ? 'border-tsushin-indigo text-tsushin-indigo'
+                    : 'border-transparent text-tsushin-slate hover:text-white'
+                }`}
+              >
+                Builder
+              </Link>
             </nav>
           </div>
         </div>
