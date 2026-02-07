@@ -1,11 +1,11 @@
 'use client'
 
 /**
- * Studio Security Page - Phase 20
+ * Studio Security Page - Phase 20 + v1.6.0 Phase E
  *
  * Agent-level Sentinel Security configuration:
  * - Global Sentinel status overview
- * - Per-agent security overrides
+ * - Per-agent security profile assignment
  * - Recent security events
  */
 
@@ -13,11 +13,12 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRequireAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { api, Agent, SentinelConfig, SentinelAgentConfig, SentinelAgentConfigUpdate, SentinelLog, SentinelStats } from '@/lib/client'
+import { api, Agent, SentinelConfig, SentinelLog, SentinelStats, SentinelProfile, SentinelProfileAssignment } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
+import EffectiveSecurityConfig from '@/components/EffectiveSecurityConfig'
 
 interface AgentWithSecurity extends Agent {
-  sentinelConfig?: SentinelAgentConfig | null
+  profileAssignment?: SentinelProfileAssignment | null
 }
 
 export default function SecurityPage() {
@@ -34,48 +35,46 @@ export default function SecurityPage() {
   const [agents, setAgents] = useState<AgentWithSecurity[]>([])
   const [stats, setStats] = useState<SentinelStats | null>(null)
   const [recentLogs, setRecentLogs] = useState<SentinelLog[]>([])
+  const [profiles, setProfiles] = useState<SentinelProfile[]>([])
+  const [assignments, setAssignments] = useState<SentinelProfileAssignment[]>([])
 
   // Modal state
   const [selectedAgent, setSelectedAgent] = useState<AgentWithSecurity | null>(null)
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Form state for agent override
-  const [useCustomSettings, setUseCustomSettings] = useState(false)
-  const [formData, setFormData] = useState<SentinelAgentConfigUpdate>({
-    is_enabled: null,
-    enable_prompt_analysis: null,
-    enable_tool_analysis: null,
-    enable_shell_analysis: null,
-    aggressiveness_level: null,
-  })
+  // Profile assignment form state
+  const [assignmentMode, setAssignmentMode] = useState<'inherit' | 'custom'>('inherit')
+  const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null)
+
+  const aggressivenessLabels = ['Off', 'Moderate', 'Aggressive', 'Extra Aggressive']
 
   const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [configData, agentsData, statsData, logsData] = await Promise.all([
+      const [configData, agentsData, statsData, logsData, profilesData, assignmentsData] = await Promise.all([
         api.getSentinelConfig(),
         api.getAgents(),
         api.getSentinelStats(7),
         api.getSentinelLogs({ limit: 10, threat_only: true }),
+        api.getSentinelProfiles(true),
+        api.getSentinelProfileAssignments(),
       ])
 
       setSentinelConfig(configData)
       setStats(statsData)
       setRecentLogs(logsData)
+      setProfiles(profilesData)
+      setAssignments(assignmentsData)
 
-      // Load sentinel config for each agent
-      const agentsWithSecurity: AgentWithSecurity[] = await Promise.all(
-        agentsData.map(async (agent: Agent) => {
-          try {
-            const sentinelConfig = await api.getSentinelAgentConfig(agent.id)
-            return { ...agent, sentinelConfig }
-          } catch {
-            return { ...agent, sentinelConfig: null }
-          }
-        })
-      )
+      // Map agents with their profile assignments
+      const agentsWithSecurity: AgentWithSecurity[] = agentsData.map((agent: Agent) => {
+        const assignment = assignmentsData.find(
+          (a: SentinelProfileAssignment) => a.agent_id === agent.id && a.skill_type === null
+        )
+        return { ...agent, profileAssignment: assignment || null }
+      })
       setAgents(agentsWithSecurity)
     } catch (err: any) {
       console.error('Failed to load security data:', err)
@@ -93,24 +92,12 @@ export default function SecurityPage() {
 
   const openAgentModal = (agent: AgentWithSecurity) => {
     setSelectedAgent(agent)
-    if (agent.sentinelConfig) {
-      setUseCustomSettings(true)
-      setFormData({
-        is_enabled: agent.sentinelConfig.is_enabled,
-        enable_prompt_analysis: agent.sentinelConfig.enable_prompt_analysis,
-        enable_tool_analysis: agent.sentinelConfig.enable_tool_analysis,
-        enable_shell_analysis: agent.sentinelConfig.enable_shell_analysis,
-        aggressiveness_level: agent.sentinelConfig.aggressiveness_level,
-      })
+    if (agent.profileAssignment) {
+      setAssignmentMode('custom')
+      setSelectedProfileId(agent.profileAssignment.profile_id)
     } else {
-      setUseCustomSettings(false)
-      setFormData({
-        is_enabled: null,
-        enable_prompt_analysis: null,
-        enable_tool_analysis: null,
-        enable_shell_analysis: null,
-        aggressiveness_level: null,
-      })
+      setAssignmentMode('inherit')
+      setSelectedProfileId(null)
     }
     setShowModal(true)
   }
@@ -120,13 +107,21 @@ export default function SecurityPage() {
     setSaving(true)
     setError(null)
     try {
-      if (useCustomSettings) {
-        await api.updateSentinelAgentConfig(selectedAgent.id, formData)
-        setSuccess(`Security settings saved for ${selectedAgent.contact_name}`)
+      if (assignmentMode === 'custom' && selectedProfileId) {
+        await api.assignSentinelProfile({
+          profile_id: selectedProfileId,
+          agent_id: selectedAgent.id,
+        })
+        setSuccess(`Security profile assigned to ${selectedAgent.contact_name}`)
       } else {
-        // Delete custom config to use defaults
-        await api.deleteSentinelAgentConfig(selectedAgent.id)
-        setSuccess(`${selectedAgent.contact_name} now uses tenant defaults`)
+        // Remove assignment to inherit from tenant
+        const existingAssignment = assignments.find(
+          a => a.agent_id === selectedAgent.id && a.skill_type === null
+        )
+        if (existingAssignment) {
+          await api.removeSentinelProfileAssignment(existingAssignment.id)
+        }
+        setSuccess(`${selectedAgent.contact_name} now inherits from tenant`)
       }
       setShowModal(false)
       loadData()
@@ -138,19 +133,22 @@ export default function SecurityPage() {
     }
   }
 
-  const aggressivenessLabels = ['Off', 'Moderate', 'Aggressive', 'Extra Aggressive']
-
   const getProtectionBadge = (agent: AgentWithSecurity) => {
     if (!sentinelConfig?.is_enabled) {
       return <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-400">Disabled</span>
     }
-    if (agent.sentinelConfig) {
-      if (agent.sentinelConfig.is_enabled === false) {
-        return <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400">Custom (Disabled)</span>
-      }
-      return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400">Custom Settings</span>
+    if (agent.profileAssignment) {
+      return (
+        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">
+          {agent.profileAssignment.profile_name}
+        </span>
+      )
     }
-    return <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/20 text-green-400">Using Defaults</span>
+    return (
+      <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-400 border border-dashed border-gray-500/50">
+        Inherited
+      </span>
+    )
   }
 
   const formatDate = (dateStr: string) => formatDateTimeFull(dateStr)
@@ -168,6 +166,8 @@ export default function SecurityPage() {
         return 'bg-gray-500/20 text-gray-400 border-gray-500/50'
     }
   }
+
+  const customAssignments = agents.filter(a => a.profileAssignment).length
 
   if (authLoading || loading) {
     return (
@@ -289,7 +289,7 @@ export default function SecurityPage() {
               <div>
                 <p className="text-sm font-medium text-tsushin-slate">Protected</p>
                 <p className="text-3xl font-display font-bold text-green-400 mt-1">
-                  {sentinelConfig?.is_enabled ? agents.filter(a => !a.sentinelConfig || a.sentinelConfig.is_enabled !== false).length : 0}
+                  {sentinelConfig?.is_enabled ? agents.length : 0}
                 </p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-green-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -316,15 +316,14 @@ export default function SecurityPage() {
           <div className="stat-card stat-card-accent group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Custom Configs</p>
+                <p className="text-sm font-medium text-tsushin-slate">Profile Assignments</p>
                 <p className="text-3xl font-display font-bold text-purple-400 mt-1">
-                  {agents.filter(a => a.sentinelConfig).length}
+                  {customAssignments}
                 </p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-purple-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <svg className="w-6 h-6 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                 </svg>
               </div>
             </div>
@@ -359,8 +358,8 @@ export default function SecurityPage() {
         {/* Agents Grid */}
         <div className="glass-card rounded-xl overflow-hidden">
           <div className="p-6 border-b border-tsushin-border/50">
-            <h3 className="text-lg font-display font-semibold text-white">Agent Security Configuration</h3>
-            <p className="text-sm text-tsushin-slate mt-1">Configure per-agent Sentinel overrides or use tenant defaults</p>
+            <h3 className="text-lg font-display font-semibold text-white">Agent Security Profiles</h3>
+            <p className="text-sm text-tsushin-slate mt-1">Assign security profiles per agent or inherit from tenant</p>
           </div>
 
           <div className="divide-y divide-tsushin-border/50">
@@ -389,43 +388,13 @@ export default function SecurityPage() {
                           {getProtectionBadge(agent)}
                         </div>
                         <p className="text-xs text-tsushin-slate">
-                          {agent.sentinelConfig
-                            ? `Custom: ${agent.sentinelConfig.aggressiveness_level !== null ? aggressivenessLabels[agent.sentinelConfig.aggressiveness_level] : 'Inherited'}`
-                            : 'Using tenant defaults'}
+                          {agent.profileAssignment
+                            ? `Profile: ${agent.profileAssignment.profile_name}`
+                            : 'Inheriting from tenant'}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
-                      {/* Protection icons */}
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className={`px-2 py-1 rounded ${
-                          agent.sentinelConfig?.enable_prompt_analysis === false
-                            ? 'bg-gray-500/20 text-gray-400'
-                            : sentinelConfig?.enable_prompt_analysis
-                              ? 'bg-green-500/20 text-green-400'
-                              : 'bg-gray-500/20 text-gray-400'
-                        }`}>
-                          Prompt
-                        </span>
-                        <span className={`px-2 py-1 rounded ${
-                          agent.sentinelConfig?.enable_tool_analysis === false
-                            ? 'bg-gray-500/20 text-gray-400'
-                            : sentinelConfig?.enable_tool_analysis
-                              ? 'bg-green-500/20 text-green-400'
-                              : 'bg-gray-500/20 text-gray-400'
-                        }`}>
-                          Tool
-                        </span>
-                        <span className={`px-2 py-1 rounded ${
-                          agent.sentinelConfig?.enable_shell_analysis === false
-                            ? 'bg-gray-500/20 text-gray-400'
-                            : sentinelConfig?.enable_shell_analysis
-                              ? 'bg-green-500/20 text-green-400'
-                              : 'bg-gray-500/20 text-gray-400'
-                        }`}>
-                          Shell
-                        </span>
-                      </div>
                       {canEdit && (
                         <svg className="w-5 h-5 text-tsushin-slate" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -483,142 +452,94 @@ export default function SecurityPage() {
         </div>
       </div>
 
-      {/* Agent Override Modal */}
+      {/* Agent Profile Assignment Modal */}
       {showModal && selectedAgent && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
           onClick={() => setShowModal(false)}
         >
           <div
-            className="bg-tsushin-elevated rounded-xl max-w-lg w-full shadow-xl"
+            className="bg-tsushin-elevated rounded-xl max-w-lg w-full shadow-xl max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6 border-b border-tsushin-border/50">
               <h3 className="text-lg font-semibold text-white">
-                Security Settings - {selectedAgent.contact_name}
+                Security Profile — {selectedAgent.contact_name}
               </h3>
               <p className="text-sm text-tsushin-slate mt-1">
-                Configure Sentinel protection for this agent
+                Assign a security profile to this agent
               </p>
             </div>
 
             <div className="p-6 space-y-6">
-              {/* Use Custom Settings Toggle */}
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-white">Use Custom Settings</p>
-                  <p className="text-sm text-tsushin-slate">Override tenant defaults for this agent</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setUseCustomSettings(!useCustomSettings)}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                    useCustomSettings ? 'bg-teal-500' : 'bg-gray-600'
+              {/* Assignment Mode */}
+              <div className="space-y-3">
+                <label
+                  className={`flex items-center gap-4 p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                    assignmentMode === 'inherit'
+                      ? 'border-teal-500 bg-teal-500/10'
+                      : 'border-gray-700 hover:border-gray-600'
                   }`}
+                  onClick={() => { setAssignmentMode('inherit'); setSelectedProfileId(null) }}
                 >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      useCustomSettings ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
-                </button>
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                    assignmentMode === 'inherit' ? 'border-teal-400' : 'border-gray-500'
+                  }`}>
+                    {assignmentMode === 'inherit' && <div className="w-2 h-2 rounded-full bg-teal-400" />}
+                  </div>
+                  <div>
+                    <p className="font-medium text-white">Inherit from Tenant</p>
+                    <p className="text-sm text-tsushin-slate">Use the tenant&apos;s default security profile</p>
+                  </div>
+                </label>
+
+                <label
+                  className={`flex items-center gap-4 p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                    assignmentMode === 'custom'
+                      ? 'border-blue-500 bg-blue-500/10'
+                      : 'border-gray-700 hover:border-gray-600'
+                  }`}
+                  onClick={() => setAssignmentMode('custom')}
+                >
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                    assignmentMode === 'custom' ? 'border-blue-400' : 'border-gray-500'
+                  }`}>
+                    {assignmentMode === 'custom' && <div className="w-2 h-2 rounded-full bg-blue-400" />}
+                  </div>
+                  <div>
+                    <p className="font-medium text-white">Assign Custom Profile</p>
+                    <p className="text-sm text-tsushin-slate">Override with a specific security profile</p>
+                  </div>
+                </label>
               </div>
 
-              {useCustomSettings && (
-                <>
-                  {/* Enable Sentinel */}
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-white">Enable Sentinel</p>
-                      <p className="text-sm text-tsushin-slate">Turn on/off security for this agent</p>
-                    </div>
-                    <select
-                      value={formData.is_enabled === null ? 'inherit' : formData.is_enabled ? 'true' : 'false'}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        is_enabled: e.target.value === 'inherit' ? null : e.target.value === 'true'
-                      })}
-                      className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm"
-                    >
-                      <option value="inherit">Inherit from tenant</option>
-                      <option value="true">Enabled</option>
-                      <option value="false">Disabled</option>
-                    </select>
-                  </div>
-
-                  {/* Component Toggles */}
-                  <div className="space-y-3">
-                    <p className="font-medium text-white">Analysis Components</p>
-
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-tsushin-slate">Prompt Analysis</span>
-                      <select
-                        value={formData.enable_prompt_analysis === null ? 'inherit' : formData.enable_prompt_analysis ? 'true' : 'false'}
-                        onChange={(e) => setFormData({
-                          ...formData,
-                          enable_prompt_analysis: e.target.value === 'inherit' ? null : e.target.value === 'true'
-                        })}
-                        className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-white text-sm"
-                      >
-                        <option value="inherit">Inherit</option>
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                      </select>
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-tsushin-slate">Tool Analysis</span>
-                      <select
-                        value={formData.enable_tool_analysis === null ? 'inherit' : formData.enable_tool_analysis ? 'true' : 'false'}
-                        onChange={(e) => setFormData({
-                          ...formData,
-                          enable_tool_analysis: e.target.value === 'inherit' ? null : e.target.value === 'true'
-                        })}
-                        className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-white text-sm"
-                      >
-                        <option value="inherit">Inherit</option>
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                      </select>
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-tsushin-slate">Shell Analysis</span>
-                      <select
-                        value={formData.enable_shell_analysis === null ? 'inherit' : formData.enable_shell_analysis ? 'true' : 'false'}
-                        onChange={(e) => setFormData({
-                          ...formData,
-                          enable_shell_analysis: e.target.value === 'inherit' ? null : e.target.value === 'true'
-                        })}
-                        className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-white text-sm"
-                      >
-                        <option value="inherit">Inherit</option>
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Aggressiveness */}
-                  <div>
-                    <p className="font-medium text-white mb-2">Aggressiveness Level</p>
-                    <select
-                      value={formData.aggressiveness_level === null ? 'inherit' : formData.aggressiveness_level.toString()}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        aggressiveness_level: e.target.value === 'inherit' ? null : parseInt(e.target.value)
-                      })}
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm"
-                    >
-                      <option value="inherit">Inherit from tenant</option>
-                      <option value="0">Off</option>
-                      <option value="1">Moderate</option>
-                      <option value="2">Aggressive</option>
-                      <option value="3">Extra Aggressive</option>
-                    </select>
-                  </div>
-                </>
+              {/* Profile Dropdown */}
+              {assignmentMode === 'custom' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Select Profile
+                  </label>
+                  <select
+                    value={selectedProfileId || ''}
+                    onChange={(e) => setSelectedProfileId(e.target.value ? parseInt(e.target.value) : null)}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="">Choose a profile...</option>
+                    {profiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.detection_mode}){p.is_system ? ' [System]' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               )}
+
+              {/* Effective Config Preview */}
+              <div className="pt-4 border-t border-tsushin-border/50">
+                <p className="text-sm font-medium text-gray-300 mb-1">Current Effective Configuration</p>
+                <p className="text-xs text-gray-500 mb-3">Save changes to update the effective configuration</p>
+                <EffectiveSecurityConfig agentId={selectedAgent.id} />
+              </div>
             </div>
 
             <div className="p-6 border-t border-tsushin-border/50 flex justify-end gap-3">
@@ -630,10 +551,10 @@ export default function SecurityPage() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={saving}
+                disabled={saving || (assignmentMode === 'custom' && !selectedProfileId)}
                 className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
               >
-                {saving ? 'Saving...' : 'Save Settings'}
+                {saving ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>

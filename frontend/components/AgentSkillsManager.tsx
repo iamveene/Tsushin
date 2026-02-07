@@ -1,7 +1,7 @@
 'use client'
 
-import React, { useEffect, useState, useCallback } from 'react'
-import { api, AgentSkill, SkillDefinition, SkillIntegration, SkillProvider, TTSProviderInfo, TTSVoice, AgentTTSConfig } from '@/lib/client'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
+import { api, AgentSkill, SkillDefinition, SkillIntegration, SkillProvider, TTSProviderInfo, TTSVoice, AgentTTSConfig, SentinelProfile, SentinelProfileAssignment } from '@/lib/client'
 import { ArrayConfigInput } from './ArrayConfigInput'
 import {
   PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon, BotIcon,
@@ -64,17 +64,36 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [shellConfig, setShellConfig] = useState<Record<string, any>>({ wait_for_result: false, default_timeout: 60 })
   const [shellBeacons, setShellBeacons] = useState<any[]>([])
 
+  // Skill-level security profile state (v1.6.0 Phase E)
+  const [securityProfiles, setSecurityProfiles] = useState<SentinelProfile[]>([])
+  const [skillSecurityAssignments, setSkillSecurityAssignments] = useState<Map<string, SentinelProfileAssignment | null>>(new Map())
+  const [skillSecurityPopover, setSkillSecurityPopover] = useState<string | null>(null)
+  const securityPopoverRef = useRef<HTMLDivElement>(null)
+
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const [available, agent, integrations] = await Promise.all([
+      const [available, agent, integrations, profiles, secAssignments] = await Promise.all([
         api.getAvailableSkills(),
         api.getAgentSkills(agentId),
         api.getAgentSkillIntegrations(agentId),
+        api.getSentinelProfiles(true).catch(() => [] as SentinelProfile[]),
+        api.getSentinelProfileAssignments(agentId).catch(() => [] as SentinelProfileAssignment[]),
       ])
       setAvailableSkills(available)
       setAgentSkills(agent)
       setSkillIntegrations(integrations)
+      setSecurityProfiles(profiles)
+
+      // Build skill-level assignment map
+      const skillMap = new Map<string, SentinelProfileAssignment | null>()
+      for (const skillType of ['shell', 'web_search']) {
+        const assignment = secAssignments.find(
+          (a: SentinelProfileAssignment) => a.skill_type === skillType
+        )
+        skillMap.set(skillType, assignment || null)
+      }
+      setSkillSecurityAssignments(skillMap)
     } catch (err) {
       console.error('Failed to load skills:', err)
     } finally {
@@ -85,6 +104,18 @@ export default function AgentSkillsManager({ agentId }: Props) {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // Close security popover on click outside
+  useEffect(() => {
+    if (!skillSecurityPopover) return
+    const handleClick = (e: MouseEvent) => {
+      if (securityPopoverRef.current && !securityPopoverRef.current.contains(e.target as Node)) {
+        setSkillSecurityPopover(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [skillSecurityPopover])
 
   const isSkillEnabled = (skillType: string): boolean => {
     return agentSkills.some(s => s.skill_type === skillType && s.is_enabled)
@@ -464,6 +495,89 @@ export default function AgentSkillsManager({ agentId }: Props) {
     )
   }
 
+  // Skill-level Security Profile Indicator (v1.6.0 Phase E)
+  const handleSkillSecurityAssignment = async (skillType: string, profileId: number | null) => {
+    try {
+      if (profileId) {
+        await api.assignSentinelProfile({
+          profile_id: profileId,
+          agent_id: agentId,
+          skill_type: skillType,
+        })
+      } else {
+        const existing = skillSecurityAssignments.get(skillType)
+        if (existing) {
+          await api.removeSentinelProfileAssignment(existing.id)
+        }
+      }
+      setSkillSecurityPopover(null)
+      loadData()
+    } catch (err: any) {
+      console.error('Failed to update skill security:', err)
+    }
+  }
+
+  const SecurityIndicator = ({ skillType }: { skillType: string }) => {
+    const assignment = skillSecurityAssignments.get(skillType)
+    const isInherited = !assignment
+    const isOpen = skillSecurityPopover === skillType
+
+    return (
+      <div className="relative" ref={isOpen ? securityPopoverRef : undefined}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            setSkillSecurityPopover(isOpen ? null : skillType)
+          }}
+          className={`flex items-center gap-1 px-2 py-0.5 text-xs rounded-full transition-colors ${
+            isInherited
+              ? 'bg-gray-200 dark:bg-gray-700/50 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600/50'
+              : 'bg-teal-100 dark:bg-teal-800/30 text-teal-700 dark:text-teal-300 hover:bg-teal-200 dark:hover:bg-teal-700/30'
+          }`}
+          title="Security Profile"
+        >
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          </svg>
+          {isInherited ? 'Inherited' : assignment?.profile_name}
+        </button>
+
+        {isOpen && (
+          <div
+            className="absolute right-0 top-full mt-1 w-52 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Security Profile</p>
+            </div>
+            <div className="p-1 max-h-60 overflow-y-auto">
+              <button
+                onClick={() => handleSkillSecurityAssignment(skillType, null)}
+                className={`w-full px-3 py-2 text-left text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
+                  isInherited ? 'text-teal-600 dark:text-teal-400 font-medium' : 'text-gray-700 dark:text-gray-300'
+                }`}
+              >
+                Inherit from Agent
+              </button>
+              {securityProfiles.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => handleSkillSecurityAssignment(skillType, p.id)}
+                  className={`w-full px-3 py-2 text-left text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
+                    assignment?.profile_id === p.id ? 'text-teal-600 dark:text-teal-400 font-medium' : 'text-gray-700 dark:text-gray-300'
+                  }`}
+                >
+                  {p.name}
+                  {p.is_system && <span className="text-xs text-gray-400 ml-1">[System]</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   // Render provider-based skill card (Scheduler, Email, Web Search)
   const renderProviderSkillCard = (
     displayName: string,
@@ -525,6 +639,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   Active
                 </span>
               )}
+              {enabled && providerKey === 'web_search' && <SecurityIndicator skillType="web_search" />}
             </div>
             <p className="text-sm text-gray-600 dark:text-gray-400">{description}</p>
           </div>
@@ -835,6 +950,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   Active
                 </span>
               )}
+              {enabled && <SecurityIndicator skillType="shell" />}
             </div>
             <p className="text-sm text-gray-600 dark:text-gray-400">
               Execute remote shell commands on connected beacons. Supports programmatic (/shell) and agentic (natural language) modes.
