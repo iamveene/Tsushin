@@ -323,6 +323,26 @@ export default function PersonasPage() {
                   <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-red-500 to-orange-400" />
                 )}
               </Link>
+              <Link
+                href="/agents/security"
+                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  pathname?.startsWith('/agents/security')
+                    ? 'border-tsushin-indigo text-tsushin-indigo'
+                    : 'border-transparent text-tsushin-slate hover:text-white'
+                }`}
+              >
+                Security
+              </Link>
+              <Link
+                href="/agents/builder"
+                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
+                  pathname === '/agents/builder'
+                    ? 'border-tsushin-indigo text-tsushin-indigo'
+                    : 'border-transparent text-tsushin-slate hover:text-white'
+                }`}
+              >
+                Builder
+              </Link>
             </nav>
           </div>
         </div>

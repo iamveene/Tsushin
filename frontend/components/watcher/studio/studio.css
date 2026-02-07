@@ -1,0 +1,59 @@
+/**
+ * Agent Studio - Theme Overrides & Custom Styles
+ */
+
+/* React Flow Overrides */
+.studio-canvas .react-flow__controls { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3) !important; }
+.studio-canvas .react-flow__controls-button { background: rgba(22, 27, 34, 0.9) !important; border-bottom: 1px solid rgba(48, 54, 61, 0.5) !important; fill: #8B929E !important; }
+.studio-canvas .react-flow__controls-button:hover { background: rgba(28, 33, 40, 1) !important; fill: white !important; }
+.studio-canvas .react-flow__controls-button:first-child { border-top-left-radius: 8px !important; border-top-right-radius: 8px !important; }
+.studio-canvas .react-flow__controls-button:last-child { border-bottom-left-radius: 8px !important; border-bottom-right-radius: 8px !important; border-bottom: none !important; }
+.studio-canvas .react-flow__edge-path { stroke: #484F58 !important; stroke-width: 2 !important; }
+.studio-canvas .react-flow__edge.selected .react-flow__edge-path { stroke: #3C5AFE !important; }
+.studio-canvas .react-flow__node { cursor: grab; }
+.studio-canvas .react-flow__node:active { cursor: grabbing; }
+.studio-canvas .react-flow__node.dragging { z-index: 1000 !important; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
+
+/* Builder Node Accents */
+.builder-node { transition: all 0.2s ease; }
+.builder-node-agent { min-width: 220px; min-height: 100px; }
+.builder-node-persona { border-left: 3px solid rgba(168, 85, 247, 0.6) !important; }
+.builder-node-channel-whatsapp { border-left: 3px solid rgba(37, 211, 102, 0.6) !important; }
+.builder-node-channel-telegram { border-left: 3px solid rgba(0, 136, 204, 0.6) !important; }
+.builder-node-channel-playground { border-left: 3px solid rgba(60, 90, 254, 0.6) !important; }
+.builder-node-channel-default { border-left: 3px solid rgba(139, 146, 158, 0.6) !important; }
+.builder-node-skill { border-left: 3px solid rgba(20, 184, 166, 0.6) !important; }
+.builder-node-tool { border-left: 3px solid rgba(249, 115, 22, 0.6) !important; }
+.builder-node-sentinel { border-left: 3px solid rgba(239, 68, 68, 0.6) !important; }
+.builder-node-knowledge { border-left: 3px solid rgba(139, 92, 246, 0.6) !important; }
+.builder-node-memory { border-left: 3px solid rgba(59, 130, 246, 0.6) !important; }
+
+/* Palette Styles */
+.studio-palette { scrollbar-width: thin; scrollbar-color: rgba(139, 146, 158, 0.3) transparent; }
+.studio-palette::-webkit-scrollbar { width: 4px; }
+.studio-palette::-webkit-scrollbar-track { background: transparent; }
+.studio-palette::-webkit-scrollbar-thumb { background-color: rgba(139, 146, 158, 0.3); border-radius: 4px; }
+.palette-item { cursor: grab; transition: all 0.15s ease; user-select: none; }
+.palette-item:hover { background: rgba(60, 90, 254, 0.08); }
+.palette-item:active { cursor: grabbing; opacity: 0.6; }
+.palette-item.attached { background: rgba(60, 90, 254, 0.06); }
+.palette-item.disabled { cursor: not-allowed; opacity: 0.4; }
+
+/* Canvas Drop Zone */
+.studio-canvas.drag-over { outline: 2px dashed rgba(60, 90, 254, 0.5); outline-offset: -2px; background: rgba(60, 90, 254, 0.03); }
+
+/* Builder Group Node */
+.builder-group-node { transition: all 0.2s ease; cursor: default; }
+.builder-group-node.group-channels { border-left: 3px solid rgba(59, 130, 246, 0.6) !important; }
+.builder-group-node.group-skills { border-left: 3px solid rgba(20, 184, 166, 0.6) !important; }
+.builder-group-node.group-tools { border-left: 3px solid rgba(249, 115, 22, 0.6) !important; }
+.builder-group-node.group-knowledge { border-left: 3px solid rgba(139, 92, 246, 0.6) !important; }
+.builder-group-node.expanded { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
+.builder-group-node .expand-button { transition: transform 0.2s ease; }
+
+/* Group count badge */
+.group-count-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 9999px; line-height: 1.4; }
+
+/* Save Button */
+@keyframes save-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(60, 90, 254, 0.4); } 50% { box-shadow: 0 0 0 6px rgba(60, 90, 254, 0); } }
+.save-button-dirty { animation: save-pulse 2s ease-in-out infinite; }
