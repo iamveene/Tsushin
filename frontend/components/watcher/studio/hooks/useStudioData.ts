@@ -1,0 +1,66 @@
+'use client'
+
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { api } from '@/lib/client'
+import type { Agent, Persona, SandboxedTool, SentinelProfile, SkillExpandInfo, AgentKnowledge, SentinelProfileAssignment } from '@/lib/client'
+
+export interface UseStudioDataReturn {
+  agents: Agent[]; personas: Persona[]; tools: SandboxedTool[]; sentinelProfiles: SentinelProfile[]
+  agent: Agent | null; skills: SkillExpandInfo[]; knowledge: AgentKnowledge[]; sentinelAssignments: SentinelProfileAssignment[]; agentTools: number[]
+  loading: boolean; agentLoading: boolean; error: string | null; refetch: () => void
+}
+
+export function useStudioData(agentId: number | null): UseStudioDataReturn {
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [personas, setPersonas] = useState<Persona[]>([])
+  const [tools, setTools] = useState<SandboxedTool[]>([])
+  const [sentinelProfiles, setSentinelProfiles] = useState<SentinelProfile[]>([])
+  const [agent, setAgent] = useState<Agent | null>(null)
+  const [skills, setSkills] = useState<SkillExpandInfo[]>([])
+  const [knowledge, setKnowledge] = useState<AgentKnowledge[]>([])
+  const [sentinelAssignments, setSentinelAssignments] = useState<SentinelProfileAssignment[]>([])
+  const [agentTools, setAgentTools] = useState<number[]>([])
+  const [loading, setLoading] = useState(true)
+  const [agentLoading, setAgentLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const fetchVersion = useRef(0)
+
+  const loadGlobalData = useCallback(async () => {
+    setLoading(true); setError(null)
+    try {
+      const [a, p, t, sp] = await Promise.all([api.getAgents(), api.getPersonas(), api.getSandboxedTools(), api.getSentinelProfiles(true)])
+      setAgents(a); setPersonas(p); setTools(t); setSentinelProfiles(sp)
+    } catch (err) { setError(err instanceof Error ? err.message : 'Failed to load studio data') }
+    finally { setLoading(false) }
+  }, [])
+
+  const loadAgentData = useCallback(async (id: number) => {
+    const version = ++fetchVersion.current
+    setAgentLoading(true); setError(null)
+    try {
+      const selectedAgent = agents.find(a => a.id === id) || null
+      setAgent(selectedAgent)
+      const [expandData, knowledgeData, assignments, agentCustomTools] = await Promise.all([
+        api.getAgentExpandData(id), api.getAgentKnowledge(id), api.getSentinelProfileAssignments(id), api.getAgentSandboxedTools(id),
+      ])
+      if (version !== fetchVersion.current) return
+      setSkills(expandData.skills); setKnowledge(knowledgeData); setSentinelAssignments(assignments)
+      setAgentTools(agentCustomTools.filter(t => t.is_enabled).map(t => t.sandboxed_tool_id))
+    } catch (err) { if (version !== fetchVersion.current) return; setError(err instanceof Error ? err.message : 'Failed to load agent data') }
+    finally { if (version === fetchVersion.current) setAgentLoading(false) }
+  }, [agents])
+
+  useEffect(() => { loadGlobalData() }, [loadGlobalData])
+
+  useEffect(() => {
+    if (agentId && agents.length > 0) { loadAgentData(agentId) }
+    else { setAgent(null); setSkills([]); setKnowledge([]); setSentinelAssignments([]); setAgentTools([]) }
+  }, [agentId, agents, loadAgentData])
+
+  const refetch = useCallback(() => {
+    loadGlobalData()
+    if (agentId) setTimeout(() => { if (agentId) loadAgentData(agentId) }, 200)
+  }, [loadGlobalData, loadAgentData, agentId])
+
+  return { agents, personas, tools, sentinelProfiles, agent, skills, knowledge, sentinelAssignments, agentTools, loading: loading || agentLoading, agentLoading, error, refetch }
+}
