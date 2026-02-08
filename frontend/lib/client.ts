@@ -890,6 +890,64 @@ export interface AgentExpandDataResponse {
   knowledge_summary: KnowledgeSummary
 }
 
+// Phase I: Agent Builder Batch Endpoints
+export interface BuilderDataResponse {
+  agent: {
+    id: number
+    contact_name: string
+    persona_id: number | null
+    persona_name: string | null
+    model_provider: string
+    model_name: string
+    is_active: boolean
+    is_default: boolean
+    enabled_channels: string[]
+    whatsapp_integration_id: number | null
+    telegram_integration_id: number | null
+    memory_size: number | null
+    memory_isolation_mode: string
+    enable_semantic_search: boolean
+  }
+  skills: SkillExpandInfo[]
+  knowledge: AgentKnowledge[]
+  sentinel_assignments: SentinelProfileAssignment[]
+  tool_mappings: AgentSandboxedTool[]
+  globals?: {
+    agents: Array<{ id: number; contact_name: string; is_active: boolean; is_default: boolean; model_provider: string; model_name: string }>
+    personas: Persona[]
+    sandboxed_tools: SandboxedTool[]
+    sentinel_profiles: SentinelProfile[]
+  }
+}
+
+export interface BuilderSaveRequest {
+  agent?: {
+    memory_size?: number
+    memory_isolation_mode?: string
+    enable_semantic_search?: boolean
+  }
+  skills?: Array<{
+    skill_type: string
+    is_enabled: boolean
+    config?: Record<string, any>
+  }>
+  tool_overrides?: Array<{
+    mapping_id: number
+    is_enabled: boolean
+  }>
+  sentinel?: {
+    action: 'assign' | 'remove' | 'unchanged'
+    profile_id?: number
+    assignment_id?: number
+  }
+}
+
+export interface BuilderSaveResponse {
+  success: boolean
+  agent_id: number
+  changes: Record<string, any>
+}
+
 // Phase 10.2: Channel Mapping
 export interface ChannelMapping {
   id: number
@@ -2587,6 +2645,24 @@ export const api = {
   async getAgentExpandData(agentId: number): Promise<AgentExpandDataResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/v2/agents/${agentId}/expand-data`)
     if (!res.ok) throw new Error('Failed to fetch agent expand data')
+    return res.json()
+  },
+
+  // Phase I: Agent Builder Batch Endpoints
+  async getAgentBuilderData(agentId: number, includeGlobals = false): Promise<BuilderDataResponse> {
+    const params = includeGlobals ? '?include_globals=true' : ''
+    const res = await authenticatedFetch(`${API_URL}/api/v2/agents/${agentId}/builder-data${params}`)
+    if (!res.ok) throw new Error('Failed to fetch builder data')
+    return res.json()
+  },
+
+  async saveAgentBuilderData(agentId: number, data: BuilderSaveRequest): Promise<BuilderSaveResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/v2/agents/${agentId}/builder-save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) throw new Error('Failed to save builder data')
     return res.json()
   },
 

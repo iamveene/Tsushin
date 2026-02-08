@@ -36,19 +36,20 @@ export function useStudioData(agentId: number | null): UseStudioDataReturn {
     finally { setLoading(false) }
   }, [])
 
+  // Phase I: Use batch builder-data endpoint (replaces 4 parallel calls with 1)
   const loadAgentData = useCallback(async (id: number) => {
     const version = ++fetchVersion.current
     setAgentLoading(true); setError(null)
     try {
       const selectedAgent = agents.find(a => a.id === id) || null
       setAgent(selectedAgent)
-      const [expandData, knowledgeData, assignments, agentCustomTools] = await Promise.all([
-        api.getAgentExpandData(id), api.getAgentKnowledge(id), api.getSentinelProfileAssignments(id), api.getAgentSandboxedTools(id),
-      ])
+      const builderData = await api.getAgentBuilderData(id)
       if (version !== fetchVersion.current) return
-      setSkills(expandData.skills); setKnowledge(knowledgeData); setSentinelAssignments(assignments)
-      setAgentToolMappings(agentCustomTools)
-      setAgentTools(agentCustomTools.filter(t => t.is_enabled).map(t => t.sandboxed_tool_id))
+      setSkills(builderData.skills)
+      setKnowledge(builderData.knowledge)
+      setSentinelAssignments(builderData.sentinel_assignments)
+      setAgentToolMappings(builderData.tool_mappings)
+      setAgentTools(builderData.tool_mappings.filter(t => t.is_enabled).map(t => t.sandboxed_tool_id))
     } catch (err) { if (version !== fetchVersion.current) return; setError(err instanceof Error ? err.message : 'Failed to load agent data') }
     finally { if (version === fetchVersion.current) setAgentLoading(false) }
   }, [agents])
