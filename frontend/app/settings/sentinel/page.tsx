@@ -1371,49 +1371,52 @@ If you believe this is an error, please contact support."
               </div>
             </div>
 
-            {/* Configuration */}
+            {/* Current Sentinel Settings */}
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-200 dark:border-gray-700">
               <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Configuration</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Fine-tune MemGuard sensitivity and behavior</p>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Sentinel Settings</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">MemGuard inherits these from the global Sentinel configuration</p>
               </div>
-              <div className="p-6 space-y-6">
-                {/* Aggressiveness for MemGuard */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Sensitivity Level
-                  </label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="3"
-                    value={formState.aggressiveness_level ?? 1}
-                    onChange={(e) => setFormState({ ...formState, aggressiveness_level: parseInt(e.target.value) })}
-                    disabled={!canEdit || !(formState as any).detect_memory_poisoning}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-purple-500"
-                  />
-                  <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    <span>Off</span>
-                    <span>Moderate</span>
-                    <span>Aggressive</span>
-                    <span>Maximum</span>
+              <div className="p-6 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="p-3 bg-gray-50 dark:bg-gray-700/30 rounded-lg">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Sensitivity Level</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                      {formState.aggressiveness_level === 0 && 'Off'}
+                      {formState.aggressiveness_level === 1 && 'Moderate'}
+                      {formState.aggressiveness_level === 2 && 'Aggressive'}
+                      {formState.aggressiveness_level === 3 && 'Maximum'}
+                    </p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                      {formState.aggressiveness_level === 0 && 'No LLM analysis performed'}
+                      {formState.aggressiveness_level === 1 && 'Catches explicit poisoning attempts'}
+                      {formState.aggressiveness_level === 2 && 'Also flags credential storage and behavioral overrides'}
+                      {formState.aggressiveness_level === 3 && 'Flags any sensitive data storage and subtle manipulation'}
+                    </p>
                   </div>
-                  <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-700/30 rounded-lg">
-                    <p className="text-sm text-gray-600 dark:text-gray-300">
-                      {formState.aggressiveness_level === 0 && 'Detection is off. No analysis is performed.'}
-                      {formState.aggressiveness_level === 1 && 'Moderate: Catches explicit poisoning attempts. Low false positive rate.'}
-                      {formState.aggressiveness_level === 2 && 'Aggressive: Also flags credential storage requests and behavioral override attempts.'}
-                      {formState.aggressiveness_level === 3 && 'Maximum: Flags any attempt to store sensitive data, indirect phrasing, and subtle manipulation.'}
+                  <div className="p-3 bg-gray-50 dark:bg-gray-700/30 rounded-lg">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Detection Mode</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                      {formState.detection_mode === 'block' && 'Block'}
+                      {formState.detection_mode === 'detect_only' && 'Detect Only'}
+                      {formState.detection_mode === 'warn_only' && 'Warn Only'}
+                      {formState.detection_mode === 'off' && 'Off'}
+                      {!formState.detection_mode && 'Block'}
+                    </p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                      {(formState.detection_mode === 'block' || !formState.detection_mode) && 'Threats are blocked and logged'}
+                      {formState.detection_mode === 'detect_only' && 'Threats are logged but not blocked'}
+                      {formState.detection_mode === 'warn_only' && 'User is warned but message proceeds'}
+                      {formState.detection_mode === 'off' && 'No action taken'}
                     </p>
                   </div>
                 </div>
-
-                {/* Note about shared settings */}
-                <div className="p-3 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800/30 rounded-lg">
-                  <p className="text-xs text-purple-700 dark:text-purple-300">
-                    <strong>Note:</strong> Sensitivity level and detection mode are shared with the global Sentinel configuration. Changes here affect all detection types. For per-detection customization, use <button onClick={() => setActiveTab('profiles')} className="underline hover:no-underline">Profiles</button>.
-                  </p>
-                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  These settings are shared across all Sentinel detection types. To adjust them, go to the{' '}
+                  <button onClick={() => setActiveTab('general')} className="text-purple-400 hover:text-purple-300 underline hover:no-underline">General</button> tab
+                  {' '}or configure per-detection overrides in{' '}
+                  <button onClick={() => setActiveTab('profiles')} className="text-purple-400 hover:text-purple-300 underline hover:no-underline">Profiles</button>.
+                </p>
               </div>
             </div>
 
