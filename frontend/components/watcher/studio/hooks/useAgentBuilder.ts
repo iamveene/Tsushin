@@ -286,7 +286,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
         type: 'builder-group',
         position: { x: 0, y: 0 },
         draggable: false,
-        selectable: false,
+        selectable: true,
         data: {
           type: 'builder-group',
           categoryId: catId,
