@@ -55,6 +55,20 @@ export default function AgentStudioTab() {
   const studioData = useStudioData(selectedAgentId)
   const builder = useAgentBuilder(selectedAgentId, studioData)
 
+  // Auto-select default agent on initial load or after refresh if selected agent is gone
+  useEffect(() => {
+    if (studioData.loading || studioData.agents.length === 0) return
+    if (selectedAgentId === null) {
+      const defaultAgent = studioData.agents.find(a => a.is_default)
+      setSelectedAgentId(defaultAgent?.id ?? studioData.agents[0].id)
+      return
+    }
+    if (!studioData.agents.some(a => a.id === selectedAgentId)) {
+      const defaultAgent = studioData.agents.find(a => a.is_default)
+      setSelectedAgentId(defaultAgent?.id ?? studioData.agents[0].id)
+    }
+  }, [selectedAgentId, studioData.agents, studioData.loading])
+
   // Load skill definitions once for schema-driven config forms
   useEffect(() => {
     api.getAvailableSkills().then(setSkillDefinitions).catch(() => {})

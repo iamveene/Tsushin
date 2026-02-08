@@ -3,7 +3,7 @@
  * Phase G2: Hierarchical auto-arrange layout using dagre
  *
  * Activated when any group node is expanded.
- * Produces: Agent (left) -> Groups + Directs (middle) -> Children (right)
+ * Produces: Agent (top) -> Groups + Directs (middle) -> Children (bottom)
  *
  * Note: Uses dynamic import for dagre to avoid SSR issues.
  */
@@ -42,7 +42,7 @@ function getBuilderNodeDimensions(nodeType: string): { width: number; height: nu
 
 /**
  * Calculate dagre-based hierarchical layout for the builder.
- * Agent -> Groups/Directs -> Expanded Children (LR direction)
+ * Agent -> Groups/Directs -> Expanded Children (TB direction)
  */
 export async function calculateDagreBuilderLayout(
   agentNode: Node<BuilderNodeData>,
@@ -55,9 +55,9 @@ export async function calculateDagreBuilderLayout(
   dagreGraph.setDefaultEdgeLabel(() => ({}))
 
   dagreGraph.setGraph({
-    rankdir: 'LR',
+    rankdir: 'TB',
     nodesep: 60,
-    ranksep: 180,
+    ranksep: 120,
     marginx: 40,
     marginy: 40,
   })
