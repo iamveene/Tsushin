@@ -41,10 +41,23 @@ export function useStudioData(agentId: number | null): UseStudioDataReturn {
     const version = ++fetchVersion.current
     setAgentLoading(true); setError(null)
     try {
-      const selectedAgent = agents.find(a => a.id === id) || null
-      setAgent(selectedAgent)
       const builderData = await api.getAgentBuilderData(id)
       if (version !== fetchVersion.current) return
+      // Use builderData.agent as authoritative source (includes enabled_channels, avatar, etc.)
+      const baseAgent = agents.find(a => a.id === id)
+      const mergedAgent: Agent | null = baseAgent ? {
+        ...baseAgent,
+        persona_id: builderData.agent.persona_id ?? undefined,
+        enabled_channels: builderData.agent.enabled_channels,
+        whatsapp_integration_id: builderData.agent.whatsapp_integration_id ?? undefined,
+        telegram_integration_id: builderData.agent.telegram_integration_id ?? undefined,
+        memory_size: builderData.agent.memory_size ?? undefined,
+        memory_isolation_mode: builderData.agent.memory_isolation_mode,
+        enable_semantic_search: builderData.agent.enable_semantic_search,
+        avatar: builderData.agent.avatar,
+        contact_name: builderData.agent.contact_name,
+      } : null
+      setAgent(mergedAgent)
       setSkills(builderData.skills)
       setKnowledge(builderData.knowledge)
       setSentinelAssignments(builderData.sentinel_assignments)

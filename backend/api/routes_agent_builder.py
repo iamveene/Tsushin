@@ -198,6 +198,8 @@ class SentinelSaveData(BaseModel):
 
 
 class AgentSaveData(BaseModel):
+    persona_id: Optional[int] = None
+    enabled_channels: Optional[List[str]] = None
     memory_size: Optional[int] = None
     memory_isolation_mode: Optional[str] = None
     enable_semantic_search: Optional[bool] = None
@@ -555,6 +557,10 @@ async def save_builder_data(
     try:
         # --- Step 1: Agent core fields ---
         if data.agent:
+            if data.agent.persona_id is not None:
+                agent.persona_id = data.agent.persona_id if data.agent.persona_id > 0 else None
+            if data.agent.enabled_channels is not None:
+                agent.enabled_channels = data.agent.enabled_channels
             if data.agent.memory_size is not None:
                 agent.memory_size = data.agent.memory_size
             if data.agent.memory_isolation_mode is not None:

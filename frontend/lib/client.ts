@@ -911,6 +911,7 @@ export interface BuilderDataResponse {
     memory_size: number | null
     memory_isolation_mode: string
     enable_semantic_search: boolean
+    avatar: string | null
   }
   skills: SkillExpandInfo[]
   knowledge: AgentKnowledge[]
@@ -926,6 +927,8 @@ export interface BuilderDataResponse {
 
 export interface BuilderSaveRequest {
   agent?: {
+    persona_id?: number | null
+    enabled_channels?: string[]
     memory_size?: number
     memory_isolation_mode?: string
     enable_semantic_search?: boolean

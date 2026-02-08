@@ -144,16 +144,18 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
     if (!agentId || !studioData.agent) { setState(INITIAL_STATE); setNodes([]); setEdges([]); savedSnapshot.current = ''; userPositions.current.clear(); return }
     const agent = studioData.agent
     const agentAssignment = studioData.sentinelAssignments.find(a => a.agent_id === agentId && !a.skill_type)
+    // Validate persona reference: clear if persona doesn't exist in available list
+    const validPersonaId = agent.persona_id && studioData.personas.some(p => p.id === agent.persona_id) ? agent.persona_id : null
     const newState: AgentBuilderState = {
       agentId, agent: {
         name: agent.contact_name, modelProvider: agent.model_provider, modelName: agent.model_name,
-        isActive: agent.is_active, isDefault: agent.is_default, personaId: agent.persona_id || null,
+        isActive: agent.is_active, isDefault: agent.is_default, personaId: validPersonaId,
         enabledChannels: agent.enabled_channels || [], whatsappIntegrationId: agent.whatsapp_integration_id || null,
         telegramIntegrationId: agent.telegram_integration_id || null, memorySize: agent.memory_size || 10,
         memoryIsolationMode: agent.memory_isolation_mode || 'isolated', enableSemanticSearch: agent.enable_semantic_search || false,
         avatar: agent.avatar || null,
       },
-      attachedPersonaId: agent.persona_id || null,
+      attachedPersonaId: validPersonaId,
       attachedChannels: agent.enabled_channels || [],
       attachedSkills: studioData.skills.filter(s => s.is_enabled).map(s => ({ skillType: s.skill_type, skillId: s.id, config: s.config || undefined })),
       attachedTools: studioData.agentTools,
@@ -420,6 +422,8 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
 
       // Agent core fields
       request.agent = {
+        persona_id: state.attachedPersonaId ?? 0,
+        enabled_channels: state.attachedChannels,
         memory_size: state.agent.memorySize,
         memory_isolation_mode: state.agent.memoryIsolationMode,
         enable_semantic_search: state.agent.enableSemanticSearch,
