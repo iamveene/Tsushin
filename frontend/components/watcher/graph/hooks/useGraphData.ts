@@ -461,7 +461,8 @@ async function fetchProjectsViewData(showArchivedProjects: boolean): Promise<{ n
  * Phase F (v1.6.0): Security hierarchy visualization
  */
 function transformToSecurityGraphData(
-  hierarchy: SentinelHierarchy
+  hierarchy: SentinelHierarchy,
+  showInactiveAgents: boolean
 ): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const nodes: GraphNode[] = []
   const edges: GraphEdge[] = []
@@ -501,8 +502,13 @@ function transformToSecurityGraphData(
     },
   })
 
+  // Filter agents based on showInactiveAgents toggle
+  const filteredAgents = showInactiveAgents
+    ? tenant.agents
+    : tenant.agents.filter(a => a.is_active)
+
   // 2. Agent security nodes
-  tenant.agents.forEach(agent => {
+  filteredAgents.forEach(agent => {
     const agentNodeId = `agent-security-${agent.id}`
     const agentDetectionMode = (agent.effective_profile?.detection_mode || 'block') as SecurityDetectionMode
     const agentAggressiveness = agent.effective_profile?.aggressiveness_level ?? 1
@@ -587,9 +593,9 @@ function transformToSecurityGraphData(
  * Fetch security view data — calls hierarchy endpoint
  * Phase F (v1.6.0): Security hierarchy visualization
  */
-async function fetchSecurityViewData(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+async function fetchSecurityViewData(showInactiveAgents: boolean): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
   const hierarchy = await api.getSentinelHierarchy()
-  return transformToSecurityGraphData(hierarchy)
+  return transformToSecurityGraphData(hierarchy, showInactiveAgents)
 }
 
 /**
@@ -623,7 +629,7 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
           result = await fetchUsersViewData(showInactiveUsers)
           break
         case 'security':
-          result = await fetchSecurityViewData()
+          result = await fetchSecurityViewData(showInactiveAgents)
           break
         case 'agents':
         default:

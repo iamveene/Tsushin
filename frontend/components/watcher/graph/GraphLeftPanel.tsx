@@ -139,7 +139,7 @@ export default function GraphLeftPanel({
   const [collapsed, setCollapsed] = useState(true)
 
   // Determine if we should show any filters
-  const hasAgentsFilter = viewType === 'agents' && onShowInactiveAgentsChange
+  const hasAgentsFilter = (viewType === 'agents' || viewType === 'security') && onShowInactiveAgentsChange
   const hasProjectsFilter = viewType === 'projects' && onShowArchivedProjectsChange
   const hasUsersFilter = viewType === 'users' && onShowInactiveUsersChange
   const hasAnyFilter = hasAgentsFilter || hasProjectsFilter || hasUsersFilter
