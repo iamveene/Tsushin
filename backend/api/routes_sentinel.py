@@ -68,6 +68,7 @@ class SentinelConfigResponse(BaseModel):
     detect_agent_takeover: bool
     detect_poisoning: bool
     detect_shell_malicious_intent: bool
+    detect_memory_poisoning: bool
     aggressiveness_level: int
     llm_provider: str
     llm_model: str
@@ -111,6 +112,7 @@ class SentinelConfigUpdate(BaseModel):
     detect_agent_takeover: Optional[bool] = None
     detect_poisoning: Optional[bool] = None
     detect_shell_malicious_intent: Optional[bool] = None
+    detect_memory_poisoning: Optional[bool] = None
     aggressiveness_level: Optional[int] = Field(None, ge=0, le=3)
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
@@ -289,6 +291,7 @@ async def get_sentinel_config(
         config.agent_takeover_prompt,
         config.poisoning_prompt,
         config.shell_intent_prompt,
+        getattr(config, 'memory_poisoning_prompt', None),
     ])
 
     return SentinelConfigResponse(
@@ -302,6 +305,7 @@ async def get_sentinel_config(
         detect_agent_takeover=config.detect_agent_takeover,
         detect_poisoning=config.detect_poisoning,
         detect_shell_malicious_intent=config.detect_shell_malicious_intent,
+        detect_memory_poisoning=getattr(config, 'detect_memory_poisoning', True),
         aggressiveness_level=config.aggressiveness_level,
         llm_provider=config.llm_provider,
         llm_model=config.llm_model,
@@ -362,6 +366,7 @@ async def update_sentinel_config(
             detect_agent_takeover=system_config.detect_agent_takeover,
             detect_poisoning=system_config.detect_poisoning,
             detect_shell_malicious_intent=system_config.detect_shell_malicious_intent,
+            detect_memory_poisoning=getattr(system_config, 'detect_memory_poisoning', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -401,6 +406,7 @@ async def update_sentinel_config(
         config.agent_takeover_prompt,
         config.poisoning_prompt,
         config.shell_intent_prompt,
+        getattr(config, 'memory_poisoning_prompt', None),
     ])
 
     return SentinelConfigResponse(
@@ -414,6 +420,7 @@ async def update_sentinel_config(
         detect_agent_takeover=config.detect_agent_takeover,
         detect_poisoning=config.detect_poisoning,
         detect_shell_malicious_intent=config.detect_shell_malicious_intent,
+        detect_memory_poisoning=getattr(config, 'detect_memory_poisoning', True),
         aggressiveness_level=config.aggressiveness_level,
         llm_provider=config.llm_provider,
         llm_model=config.llm_model,
@@ -710,6 +717,7 @@ async def get_sentinel_prompts(
                 "agent_takeover": config.agent_takeover_prompt,
                 "poisoning": config.poisoning_prompt,
                 "shell_malicious": config.shell_intent_prompt,
+                "memory_poisoning": getattr(config, 'memory_poisoning_prompt', None),
             }
             custom_prompt = prompt_map.get(detection_type)
 
@@ -764,6 +772,7 @@ async def update_sentinel_prompt(
             detect_agent_takeover=system_config.detect_agent_takeover,
             detect_poisoning=system_config.detect_poisoning,
             detect_shell_malicious_intent=system_config.detect_shell_malicious_intent,
+            detect_memory_poisoning=getattr(system_config, 'detect_memory_poisoning', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -777,6 +786,7 @@ async def update_sentinel_prompt(
         "agent_takeover": "agent_takeover_prompt",
         "poisoning": "poisoning_prompt",
         "shell_malicious": "shell_intent_prompt",
+        "memory_poisoning": "memory_poisoning_prompt",
     }
 
     field_name = prompt_field_map.get(detection_type)

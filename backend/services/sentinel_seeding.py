@@ -74,6 +74,7 @@ def seed_sentinel_config(db: Session) -> Optional["SentinelConfig"]:
             detect_agent_takeover=True,
             detect_poisoning=True,
             detect_shell_malicious_intent=True,
+            detect_memory_poisoning=True,
 
             # Moderate aggressiveness (1) - balanced false positive/detection rate
             # 0=Off, 1=Moderate, 2=Aggressive, 3=Extra Aggressive
@@ -190,6 +191,9 @@ def migrate_sentinel_config_columns(db: Session) -> bool:
         ("notification_on_detect", "BOOLEAN DEFAULT 0 NOT NULL"),
         ("notification_recipient", "VARCHAR(100)"),
         ("notification_message_template", "TEXT"),
+        # MemGuard (memory poisoning) detection
+        ("detect_memory_poisoning", "BOOLEAN DEFAULT 1 NOT NULL"),
+        ("memory_poisoning_prompt", "TEXT"),
     ]
 
     success = True
@@ -600,6 +604,10 @@ def _build_detection_overrides(config) -> str:
         "shell_malicious": {
             "enabled_col": "detect_shell_malicious_intent",
             "prompt_col": "shell_intent_prompt",
+        },
+        "memory_poisoning": {
+            "enabled_col": "detect_memory_poisoning",
+            "prompt_col": "memory_poisoning_prompt",
         },
     }
 

@@ -547,10 +547,12 @@ class TestProfileIntegration:
         mock_config.detect_agent_takeover = True
         mock_config.detect_poisoning = True
         mock_config.detect_shell_malicious_intent = True
+        mock_config.detect_memory_poisoning = True
         mock_config.prompt_injection_prompt = None
         mock_config.agent_takeover_prompt = None
         mock_config.poisoning_prompt = None
         mock_config.shell_intent_prompt = None
+        mock_config.memory_poisoning_prompt = None
 
         effective = SentinelEffectiveConfig.from_legacy_config(mock_config)
         assert "memory_poisoning" in effective.detection_config

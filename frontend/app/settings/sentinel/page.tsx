@@ -151,6 +151,7 @@ export default function SentinelSettingsPage() {
         detect_agent_takeover: configData.detect_agent_takeover,
         detect_poisoning: configData.detect_poisoning,
         detect_shell_malicious_intent: configData.detect_shell_malicious_intent,
+        detect_memory_poisoning: configData.detect_memory_poisoning,
         aggressiveness_level: configData.aggressiveness_level,
         llm_provider: configData.llm_provider,
         llm_model: configData.llm_model,
@@ -768,6 +769,7 @@ export default function SentinelSettingsPage() {
                   { key: 'detect_agent_takeover', label: 'Agent Takeover', desc: 'Attempts to hijack agent identity', severity: 'high' },
                   { key: 'detect_poisoning', label: 'Poisoning Attacks', desc: 'Gradual manipulation patterns', severity: 'medium' },
                   { key: 'detect_shell_malicious_intent', label: 'Shell Malicious Intent', desc: 'Malicious shell command patterns', severity: 'critical' },
+                  { key: 'detect_memory_poisoning', label: 'Memory Poisoning', desc: 'Attempts to plant malicious data in persistent memory', severity: 'high' },
                 ].map((detection) => (
                   <div key={detection.key} className="flex items-center justify-between py-2">
                     <div className="flex items-center gap-3">
@@ -1112,6 +1114,7 @@ If you believe this is an error, please contact support."
                     <option value="agent_takeover">Agent Takeover</option>
                     <option value="poisoning">Poisoning</option>
                     <option value="shell_malicious">Shell Malicious Intent</option>
+                    <option value="memory_poisoning">Memory Poisoning</option>
                   </select>
                 </div>
                 <div>
@@ -2499,7 +2502,7 @@ If you believe this is an error, please contact support."
                     placeholder="* for all, or comma-separated: shell_malicious,prompt_injection"
                     className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Use * for all detection types, or specify: shell_malicious, prompt_injection, agent_takeover, poisoning</p>
+                  <p className="text-xs text-gray-500 mt-1">Use * for all detection types, or specify: shell_malicious, prompt_injection, agent_takeover, poisoning, memory_poisoning</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Priority</label>

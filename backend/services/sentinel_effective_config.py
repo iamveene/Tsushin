@@ -108,8 +108,8 @@ class SentinelEffectiveConfig:
                 "custom_prompt": getattr(config, "shell_intent_prompt", None),
             },
             "memory_poisoning": {
-                "enabled": True,  # No legacy column — default to enabled
-                "custom_prompt": None,
+                "enabled": getattr(config, "detect_memory_poisoning", True),
+                "custom_prompt": getattr(config, "memory_poisoning_prompt", None),
             },
         }
 

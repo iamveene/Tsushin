@@ -85,6 +85,7 @@ export default function SecurityTab() {
     switch (detectionType) {
       case 'shell_malicious':
         return 'bg-red-500/20 text-red-400 border-red-500/50'
+      case 'memory_poisoning':
       case 'prompt_injection':
       case 'agent_takeover':
         return 'bg-orange-500/20 text-orange-400 border-orange-500/50'
@@ -307,6 +308,7 @@ export default function SecurityTab() {
               <option value="agent_takeover">Agent Takeover</option>
               <option value="poisoning">Poisoning</option>
               <option value="shell_malicious">Shell Malicious</option>
+              <option value="memory_poisoning">Memory Poisoning</option>
             </select>
           </div>
 

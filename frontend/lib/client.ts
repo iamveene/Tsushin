@@ -373,6 +373,7 @@ export interface SentinelConfig {
   detect_agent_takeover: boolean
   detect_poisoning: boolean
   detect_shell_malicious_intent: boolean
+  detect_memory_poisoning: boolean
   aggressiveness_level: number
   llm_provider: string
   llm_model: string
@@ -406,6 +407,7 @@ export interface SentinelConfigUpdate {
   detect_agent_takeover?: boolean
   detect_poisoning?: boolean
   detect_shell_malicious_intent?: boolean
+  detect_memory_poisoning?: boolean
   aggressiveness_level?: number
   llm_provider?: string
   llm_model?: string
