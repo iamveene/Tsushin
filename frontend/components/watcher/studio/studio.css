@@ -55,8 +55,9 @@
 /* Group count badge */
 .group-count-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 9999px; line-height: 1.4; }
 
-/* Smooth node position transitions for layout switching */
+/* Smooth node position transitions for layout switching — NOT during drag */
 .studio-canvas .react-flow__node { transition: transform 0.3s ease-out; }
+.studio-canvas .react-flow__node.dragging { transition: none !important; }
 
 /* Layout Controls Toolbar */
 .studio-layout-toolbar {

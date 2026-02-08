@@ -39,11 +39,14 @@ function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelect
 
   useEffect(() => { onReady?.(refMethods) }, [onReady, refMethods])
 
-  const prevNodeCount = useRef(nodes.length)
+  // Fit view once when nodes first appear (initial load only, resets on agent switch)
+  const hasInitialFit = useRef(false)
   useEffect(() => {
-    if (nodes.length !== prevNodeCount.current && nodes.length > 0) {
-      setTimeout(() => fitView({ padding: 0.3, duration: 300 }), 100)
-      prevNodeCount.current = nodes.length
+    if (nodes.length === 0) {
+      hasInitialFit.current = false  // Reset on agent switch (nodes cleared)
+    } else if (!hasInitialFit.current) {
+      hasInitialFit.current = true
+      setTimeout(() => fitView({ padding: 0.3, duration: 300 }), 150)
     }
   }, [nodes.length, fitView])
 

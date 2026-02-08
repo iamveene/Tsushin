@@ -194,7 +194,7 @@ export default function AgentStudioTab() {
 
       {isMaximized && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick={() => setIsMaximized(false)} />}
 
-      <div className={`${isMaximized ? 'fixed inset-4 z-50 h-auto' : 'h-[600px] relative'} glass-card rounded-xl p-1 transition-all duration-300`}>
+      <div className={`${isMaximized ? 'fixed inset-4 z-50 h-auto' : 'h-[calc(100vh-19rem)] min-h-[350px] relative'} glass-card rounded-xl p-1 transition-all duration-300`}>
         {selectedAgentId ? (
           <>
             <StudioLeftPanel studioData={studioData} builder={builder} onSave={handleSave} />
