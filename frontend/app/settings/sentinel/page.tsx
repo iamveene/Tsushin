@@ -1371,55 +1371,6 @@ If you believe this is an error, please contact support."
               </div>
             </div>
 
-            {/* Current Sentinel Settings */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-200 dark:border-gray-700">
-              <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Sentinel Settings</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400">MemGuard inherits these from the global Sentinel configuration</p>
-              </div>
-              <div className="p-6 space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="p-3 bg-gray-50 dark:bg-gray-700/30 rounded-lg">
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Sensitivity Level</p>
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                      {formState.aggressiveness_level === 0 && 'Off'}
-                      {formState.aggressiveness_level === 1 && 'Moderate'}
-                      {formState.aggressiveness_level === 2 && 'Aggressive'}
-                      {formState.aggressiveness_level === 3 && 'Maximum'}
-                    </p>
-                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                      {formState.aggressiveness_level === 0 && 'No LLM analysis performed'}
-                      {formState.aggressiveness_level === 1 && 'Catches explicit poisoning attempts'}
-                      {formState.aggressiveness_level === 2 && 'Also flags credential storage and behavioral overrides'}
-                      {formState.aggressiveness_level === 3 && 'Flags any sensitive data storage and subtle manipulation'}
-                    </p>
-                  </div>
-                  <div className="p-3 bg-gray-50 dark:bg-gray-700/30 rounded-lg">
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Detection Mode</p>
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                      {formState.detection_mode === 'block' && 'Block'}
-                      {formState.detection_mode === 'detect_only' && 'Detect Only'}
-                      {formState.detection_mode === 'warn_only' && 'Warn Only'}
-                      {formState.detection_mode === 'off' && 'Off'}
-                      {!formState.detection_mode && 'Block'}
-                    </p>
-                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                      {(formState.detection_mode === 'block' || !formState.detection_mode) && 'Threats are blocked and logged'}
-                      {formState.detection_mode === 'detect_only' && 'Threats are logged but not blocked'}
-                      {formState.detection_mode === 'warn_only' && 'User is warned but message proceeds'}
-                      {formState.detection_mode === 'off' && 'No action taken'}
-                    </p>
-                  </div>
-                </div>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  These settings are shared across all Sentinel detection types. To adjust them, go to the{' '}
-                  <button onClick={() => setActiveTab('general')} className="text-purple-400 hover:text-purple-300 underline hover:no-underline">General</button> tab
-                  {' '}or configure per-detection overrides in{' '}
-                  <button onClick={() => setActiveTab('profiles')} className="text-purple-400 hover:text-purple-300 underline hover:no-underline">Profiles</button>.
-                </p>
-              </div>
-            </div>
-
             {/* Save Button */}
             {canEdit && (
               <div className="flex justify-end">
