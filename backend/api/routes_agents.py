@@ -84,6 +84,7 @@ class AgentResponse(BaseModel):
 
     # Per-agent configuration (Item 10)
     memory_size: Optional[int]  # Messages per sender (1-50)
+    memory_isolation_mode: Optional[str] = None  # isolated | shared | channel_isolated
     trigger_dm_enabled: Optional[bool]  # Enable DM auto-response
     trigger_group_filters: Optional[List[str]]  # Group names to monitor
     trigger_number_filters: Optional[List[str]]  # Phone numbers to monitor
@@ -153,12 +154,13 @@ class AgentUpdate(BaseModel):
 
     # Per-agent configuration (Item 10)
     memory_size: Optional[int] = Field(None, ge=1, le=5000, description="Messages per sender (1-5000), null uses system default")
+    memory_isolation_mode: Optional[str] = Field(None, pattern="^(isolated|shared|channel_isolated)$", description="Memory isolation mode")
+    enable_semantic_search: Optional[bool] = Field(None, description="Enable semantic memory search")
     trigger_dm_enabled: Optional[bool] = Field(None, description="Enable DM auto-response, null uses system default")
     trigger_group_filters: Optional[List[str]] = Field(None, description="Group names to monitor, null uses system default")
     trigger_number_filters: Optional[List[str]] = Field(None, description="Phone numbers to monitor, null uses system default")
     context_message_count: Optional[int] = Field(None, ge=1, le=5000, description="Group context messages (1-5000), null uses system default")
     context_char_limit: Optional[int] = Field(None, ge=100, le=100000, description="Context character limit (100-100000), null uses system default")
-    # Note: enable_semantic_search is managed via AgentSkill table (/api/agent-skills endpoint)
 
     # Phase 10: Channel Configuration
     enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram")
@@ -416,6 +418,7 @@ def list_agents(
 
             # Per-agent configuration (Item 10)
             "memory_size": agent.memory_size,
+            "memory_isolation_mode": agent.memory_isolation_mode,
             "trigger_dm_enabled": agent.trigger_dm_enabled,
             "trigger_group_filters": trigger_group_filters,
             "trigger_number_filters": trigger_number_filters,
@@ -529,6 +532,7 @@ def get_agent(
 
         # Per-agent configuration (Item 10)
         "memory_size": agent.memory_size,
+        "memory_isolation_mode": agent.memory_isolation_mode,
         "trigger_dm_enabled": agent.trigger_dm_enabled,
         "trigger_group_filters": trigger_group_filters,
         "trigger_number_filters": trigger_number_filters,

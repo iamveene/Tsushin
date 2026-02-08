@@ -112,6 +112,7 @@ export interface BuilderSkillData {
   category?: string
   providerName?: string
   isEnabled: boolean
+  config?: Record<string, unknown>
 }
 
 export interface BuilderToolData {
@@ -212,6 +213,7 @@ export interface AgentBuilderState {
   attachedChannels: string[]
   attachedSkills: Array<{ skillType: string; skillId: number; config?: Record<string, unknown> }>
   attachedTools: number[]
+  toolEnabledOverrides: Record<number, boolean>
   attachedSentinelProfileId: number | null
   attachedSentinelAssignmentId: number | null
   attachedKnowledgeDocs: number[]
@@ -226,4 +228,11 @@ export interface DragTransferData {
   itemId: string | number
   itemName: string
   metadata: Record<string, unknown>
+}
+
+// Config panel target (for inline editing)
+export interface ConfigPanelTarget {
+  nodeId: string
+  nodeType: BuilderNodeType
+  nodeData: BuilderNodeData
 }

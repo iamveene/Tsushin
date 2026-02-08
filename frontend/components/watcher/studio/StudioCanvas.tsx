@@ -21,13 +21,14 @@ interface StudioCanvasProps {
   onNodesChange: OnNodesChange<Node<BuilderNodeData>>
   onDrop: (data: DragTransferData) => void
   onDeleteSelected: (nodeIds: string[]) => void
+  onNodeDoubleClick?: (nodeId: string, nodeType: string, nodeData: BuilderNodeData) => void
   onReady?: (methods: StudioCanvasRef) => void
   onExpandAll?: () => void
   onCollapseAll?: () => void
   hasAnyExpanded?: boolean
 }
 
-function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelected, onReady, onExpandAll, onCollapseAll, hasAnyExpanded }: StudioCanvasProps) {
+function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelected, onNodeDoubleClick, onReady, onExpandAll, onCollapseAll, hasAnyExpanded }: StudioCanvasProps) {
   const { fitView } = useReactFlow()
   const [isDragOver, setIsDragOver] = useState(false)
 
@@ -58,6 +59,11 @@ function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelect
     if (!raw) return
     try { onDrop(JSON.parse(raw) as DragTransferData) } catch { console.error('[StudioCanvas] Failed to parse drop data') }
   }, [onDrop])
+
+  const handleNodeDblClick = useCallback((_event: React.MouseEvent, node: Node<BuilderNodeData>) => {
+    if (node.data.type === 'builder-agent' || node.data.type === 'builder-group') return
+    onNodeDoubleClick?.(node.id, node.data.type as string, node.data as BuilderNodeData)
+  }, [onNodeDoubleClick])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -99,7 +105,7 @@ function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelect
         </div>
       )}
       <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} nodeTypes={builderNodeTypes}
-        fitView minZoom={0.2} maxZoom={1.5}
+        onNodeDoubleClick={handleNodeDblClick} fitView minZoom={0.2} maxZoom={1.5}
         defaultEdgeOptions={{ type: 'smoothstep', animated: false, style: { stroke: '#484F58', strokeWidth: 2 } }}
         proOptions={{ hideAttribution: true }} nodesDraggable nodesConnectable={false} elementsSelectable selectNodesOnDrag={false}>
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="rgba(139, 146, 158, 0.15)" />

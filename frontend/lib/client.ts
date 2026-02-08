@@ -2547,10 +2547,17 @@ export const api = {
     system_prompt: string
     tone_preset_id: number
     custom_tone: string
+    persona_id: number | null
     keywords: string[]
-    // enabled_tools removed - use AgentSkill table for web_search, weather, etc.
     model_provider: string
     model_name: string
+    response_template: string
+    memory_size: number
+    memory_isolation_mode: string
+    enable_semantic_search: boolean
+    enabled_channels: string[]
+    whatsapp_integration_id: number | null
+    telegram_integration_id: number | null
     is_active: boolean
     is_default: boolean
   }>): Promise<Agent> {

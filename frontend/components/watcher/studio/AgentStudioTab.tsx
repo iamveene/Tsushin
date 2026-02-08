@@ -9,10 +9,12 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import StudioAgentSelector from './StudioAgentSelector'
 import StudioLeftPanel from './StudioLeftPanel'
+import { NodeConfigPanel } from './config'
 import { useAgentBuilder } from './hooks/useAgentBuilder'
 import { useStudioData } from './hooks/useStudioData'
+import { api, type SkillDefinition } from '@/lib/client'
 import type { StudioCanvasRef } from './StudioCanvas'
-import type { DragTransferData } from './types'
+import type { DragTransferData, BuilderNodeData, BuilderNodeType, ConfigPanelTarget } from './types'
 import './studio.css'
 
 const StudioCanvasComponent = dynamic(() => import('./StudioCanvas'), {
@@ -46,10 +48,17 @@ export default function AgentStudioTab() {
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null)
   const [isMaximized, setIsMaximized] = useState(false)
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [configPanel, setConfigPanel] = useState<ConfigPanelTarget | null>(null)
+  const [skillDefinitions, setSkillDefinitions] = useState<SkillDefinition[]>([])
   const canvasRef = useRef<StudioCanvasRef | null>(null)
 
   const studioData = useStudioData(selectedAgentId)
   const builder = useAgentBuilder(selectedAgentId, studioData)
+
+  // Load skill definitions once for schema-driven config forms
+  useEffect(() => {
+    api.getAvailableSkills().then(setSkillDefinitions).catch(() => {})
+  }, [])
 
   const handleCanvasReady = useCallback((methods: StudioCanvasRef) => {
     canvasRef.current = methods
@@ -83,6 +92,19 @@ export default function AgentStudioTab() {
     const timer = setTimeout(() => setToast(null), 3000)
     return () => clearTimeout(timer)
   }, [toast])
+
+  // Close config panel when agent changes
+  useEffect(() => {
+    setConfigPanel(null)
+  }, [selectedAgentId])
+
+  const handleNodeDoubleClick = useCallback((nodeId: string, nodeType: string, nodeData: BuilderNodeData) => {
+    setConfigPanel({ nodeId, nodeType: nodeType as BuilderNodeType, nodeData })
+  }, [])
+
+  const handleConfigPanelClose = useCallback(() => {
+    setConfigPanel(null)
+  }, [])
 
   const handleSave = async () => {
     try {
@@ -162,7 +184,22 @@ export default function AgentStudioTab() {
         {selectedAgentId ? (
           <>
             <StudioLeftPanel studioData={studioData} builder={builder} onSave={handleSave} />
-            <StudioCanvasComponent nodes={builder.nodes} edges={builder.edges} onNodesChange={builder.onNodesChange} onDrop={handleDrop} onDeleteSelected={handleDeleteSelected} onReady={handleCanvasReady} onExpandAll={builder.expandAll} onCollapseAll={builder.collapseAll} hasAnyExpanded={builder.expandedCategories.size > 0} />
+            <StudioCanvasComponent nodes={builder.nodes} edges={builder.edges} onNodesChange={builder.onNodesChange} onDrop={handleDrop} onDeleteSelected={handleDeleteSelected} onNodeDoubleClick={handleNodeDoubleClick} onReady={handleCanvasReady} onExpandAll={builder.expandAll} onCollapseAll={builder.collapseAll} hasAnyExpanded={builder.expandedCategories.size > 0} />
+            {configPanel && (() => {
+              const liveNode = builder.nodes.find(n => n.id === configPanel.nodeId)
+              const liveData = liveNode?.data || configPanel.nodeData
+              return (
+                <NodeConfigPanel
+                  isOpen={!!configPanel}
+                  nodeId={configPanel.nodeId}
+                  nodeType={configPanel.nodeType}
+                  nodeData={liveData}
+                  onClose={handleConfigPanelClose}
+                  onUpdate={builder.updateNodeConfig}
+                  skillDefinitions={skillDefinitions}
+                />
+              )
+            })()}
           </>
         ) : (
           <div className="flex items-center justify-center h-full">

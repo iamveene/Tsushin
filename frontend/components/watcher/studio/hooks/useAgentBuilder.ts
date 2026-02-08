@@ -19,6 +19,7 @@ export interface UseAgentBuilderReturn {
   onNodesChange: OnNodesChange<Node<BuilderNodeData>>
   attachProfile: (categoryId: ProfileCategoryId, item: PaletteItemData) => void
   detachProfile: (categoryId: ProfileCategoryId, itemId: string | number) => void
+  updateNodeConfig: (nodeType: string, nodeId: string, config: Record<string, unknown>) => void
   save: () => Promise<void>; isDirty: boolean; isSaving: boolean
   expandedCategories: Set<ProfileCategoryId>
   toggleCategoryExpand: (categoryId: ProfileCategoryId) => void
@@ -28,7 +29,7 @@ export interface UseAgentBuilderReturn {
 
 const INITIAL_STATE: AgentBuilderState = {
   agentId: null, agent: null, attachedPersonaId: null, attachedChannels: [], attachedSkills: [],
-  attachedTools: [], attachedSentinelProfileId: null, attachedSentinelAssignmentId: null, attachedKnowledgeDocs: [],
+  attachedTools: [], toolEnabledOverrides: {}, attachedSentinelProfileId: null, attachedSentinelAssignmentId: null, attachedKnowledgeDocs: [],
   isDirty: false, isSaving: false,
 }
 
@@ -73,13 +74,20 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       attachedChannels: agent.enabled_channels || [],
       attachedSkills: studioData.skills.filter(s => s.is_enabled).map(s => ({ skillType: s.skill_type, skillId: s.id, config: s.config || undefined })),
       attachedTools: studioData.agentTools,
+      toolEnabledOverrides: {},
       attachedSentinelProfileId: agentAssignment?.profile_id || null,
       attachedSentinelAssignmentId: agentAssignment?.id || null,
       attachedKnowledgeDocs: studioData.knowledge.map(k => k.id),
       isDirty: false, isSaving: false,
     }
     setState(newState)
-    savedSnapshot.current = JSON.stringify({ personaId: newState.attachedPersonaId, channels: newState.attachedChannels, skills: newState.attachedSkills.map(s => s.skillType).sort(), tools: [...newState.attachedTools].sort(), sentinelProfileId: newState.attachedSentinelProfileId })
+    savedSnapshot.current = JSON.stringify({
+      personaId: newState.attachedPersonaId, channels: newState.attachedChannels,
+      skills: newState.attachedSkills.map(s => ({ t: s.skillType, c: s.config })).sort((a, b) => a.t.localeCompare(b.t)),
+      tools: [...newState.attachedTools].sort(), sentinelProfileId: newState.attachedSentinelProfileId,
+      memory: { size: newState.agent?.memorySize, mode: newState.agent?.memoryIsolationMode, semantic: newState.agent?.enableSemanticSearch },
+      toolOverrides: {},
+    })
   }, [agentId, studioData.agent, studioData.skills, studioData.agentTools, studioData.knowledge, studioData.sentinelAssignments, setNodes])
 
   // Generate nodes/edges from state using grouped layout
@@ -105,13 +113,16 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
     // Skills (grouped)
     for (const skill of state.attachedSkills) {
       const si = studioData.skills.find(s => s.skill_type === skill.skillType)
-      skillNodes.push({ id: `skill-${skill.skillType}`, type: 'builder-skill', position: { x: 0, y: 0 }, data: { type: 'builder-skill', skillId: skill.skillId, skillType: skill.skillType, skillName: si?.skill_name || skill.skillType, category: si?.category, providerName: si?.provider_name || undefined, isEnabled: true } as BuilderSkillData })
+      skillNodes.push({ id: `skill-${skill.skillType}`, type: 'builder-skill', position: { x: 0, y: 0 }, data: { type: 'builder-skill', skillId: skill.skillId, skillType: skill.skillType, skillName: si?.skill_name || skill.skillType, category: si?.category, providerName: si?.provider_name || undefined, isEnabled: true, config: skill.config } as BuilderSkillData })
     }
 
     // Tools (grouped)
     for (const toolId of state.attachedTools) {
       const tool = studioData.tools.find(t => t.id === toolId)
-      if (tool) toolNodes.push({ id: `tool-${toolId}`, type: 'builder-tool', position: { x: 0, y: 0 }, data: { type: 'builder-tool', toolId: tool.id, name: tool.name, toolType: tool.tool_type, isEnabled: tool.is_enabled } as BuilderToolData })
+      if (tool) {
+        const isEnabled = state.toolEnabledOverrides[toolId] !== undefined ? state.toolEnabledOverrides[toolId] : tool.is_enabled
+        toolNodes.push({ id: `tool-${toolId}`, type: 'builder-tool', position: { x: 0, y: 0 }, data: { type: 'builder-tool', toolId: tool.id, name: tool.name, toolType: tool.tool_type, isEnabled } as BuilderToolData })
+      }
     }
 
     // Knowledge (grouped)
@@ -201,7 +212,13 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
 
   const isDirty = useMemo(() => {
     if (!state.agentId || !savedSnapshot.current) return false
-    return JSON.stringify({ personaId: state.attachedPersonaId, channels: state.attachedChannels, skills: state.attachedSkills.map(s => s.skillType).sort(), tools: [...state.attachedTools].sort(), sentinelProfileId: state.attachedSentinelProfileId }) !== savedSnapshot.current
+    return JSON.stringify({
+      personaId: state.attachedPersonaId, channels: state.attachedChannels,
+      skills: state.attachedSkills.map(s => ({ t: s.skillType, c: s.config })).sort((a, b) => a.t.localeCompare(b.t)),
+      tools: [...state.attachedTools].sort(), sentinelProfileId: state.attachedSentinelProfileId,
+      memory: { size: state.agent?.memorySize, mode: state.agent?.memoryIsolationMode, semantic: state.agent?.enableSemanticSearch },
+      toolOverrides: state.toolEnabledOverrides,
+    }) !== savedSnapshot.current
   }, [state])
 
   const attachProfile = useCallback((categoryId: ProfileCategoryId, item: PaletteItemData) => {
@@ -234,25 +251,79 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
     })
   }, [])
 
+  const updateNodeConfig = useCallback((nodeType: string, nodeId: string, config: Record<string, unknown>) => {
+    setState(prev => {
+      if (!prev.agent) return prev
+      const next = { ...prev }
+      switch (nodeType) {
+        case 'builder-memory':
+          next.agent = {
+            ...prev.agent,
+            memorySize: config.memorySize !== undefined ? (config.memorySize as number) : prev.agent.memorySize,
+            memoryIsolationMode: config.memoryIsolationMode !== undefined ? (config.memoryIsolationMode as string) : prev.agent.memoryIsolationMode,
+            enableSemanticSearch: config.enableSemanticSearch !== undefined ? (config.enableSemanticSearch as boolean) : prev.agent.enableSemanticSearch,
+          }
+          break
+        case 'builder-skill': {
+          const skillType = config.skillType as string
+          next.attachedSkills = prev.attachedSkills.map(s =>
+            s.skillType === skillType ? { ...s, config: config.skillConfig as Record<string, unknown> } : s
+          )
+          break
+        }
+        case 'builder-tool': {
+          const toolId = config.toolId as number
+          const isEnabled = config.isEnabled as boolean
+          next.toolEnabledOverrides = { ...prev.toolEnabledOverrides, [toolId]: isEnabled }
+          break
+        }
+      }
+      return next
+    })
+  }, [])
+
   const save = useCallback(async () => {
     if (!state.agentId || !state.agent) throw new Error('No agent selected')
     setState(prev => ({ ...prev, isSaving: true }))
     try {
-      await api.updateAgent(state.agentId, { model_provider: state.agent.modelProvider, model_name: state.agent.modelName, is_active: state.agent.isActive })
+      await api.updateAgent(state.agentId, {
+        model_provider: state.agent.modelProvider, model_name: state.agent.modelName, is_active: state.agent.isActive,
+        memory_size: state.agent.memorySize, memory_isolation_mode: state.agent.memoryIsolationMode,
+        enable_semantic_search: state.agent.enableSemanticSearch,
+      })
       for (const skill of studioData.skills) {
-        const isAttached = state.attachedSkills.some(s => s.skillType === skill.skill_type)
-        if (isAttached !== skill.is_enabled) await api.updateAgentSkill(state.agentId, skill.skill_type, { is_enabled: isAttached })
+        const attachedSkill = state.attachedSkills.find(s => s.skillType === skill.skill_type)
+        const isAttached = !!attachedSkill
+        if (isAttached !== skill.is_enabled) {
+          await api.updateAgentSkill(state.agentId, skill.skill_type, { is_enabled: isAttached })
+        }
+        if (isAttached && attachedSkill?.config) {
+          await api.updateAgentSkill(state.agentId, skill.skill_type, { config: attachedSkill.config })
+        }
       }
+      // Tool enabled overrides
+      for (const [toolIdStr, isEnabled] of Object.entries(state.toolEnabledOverrides)) {
+        const toolId = Number(toolIdStr)
+        const mapping = studioData.agentToolMappings.find(m => m.sandboxed_tool_id === toolId)
+        if (mapping) await api.updateAgentSandboxedTool(state.agentId, mapping.id, { is_enabled: isEnabled })
+      }
+      // Sentinel
       if (state.attachedSentinelProfileId) {
         if (state.attachedSentinelAssignmentId) {
           const cur = studioData.sentinelAssignments.find(a => a.id === state.attachedSentinelAssignmentId)
           if (cur && cur.profile_id !== state.attachedSentinelProfileId) { await api.removeSentinelProfileAssignment(state.attachedSentinelAssignmentId); await api.assignSentinelProfile({ profile_id: state.attachedSentinelProfileId, agent_id: state.agentId }) }
         } else { await api.assignSentinelProfile({ profile_id: state.attachedSentinelProfileId, agent_id: state.agentId }) }
       } else if (state.attachedSentinelAssignmentId) { await api.removeSentinelProfileAssignment(state.attachedSentinelAssignmentId) }
-      savedSnapshot.current = JSON.stringify({ personaId: state.attachedPersonaId, channels: state.attachedChannels, skills: state.attachedSkills.map(s => s.skillType).sort(), tools: [...state.attachedTools].sort(), sentinelProfileId: state.attachedSentinelProfileId })
-      setState(prev => ({ ...prev, isDirty: false, isSaving: false }))
+      savedSnapshot.current = JSON.stringify({
+        personaId: state.attachedPersonaId, channels: state.attachedChannels,
+        skills: state.attachedSkills.map(s => ({ t: s.skillType, c: s.config })).sort((a, b) => a.t.localeCompare(b.t)),
+        tools: [...state.attachedTools].sort(), sentinelProfileId: state.attachedSentinelProfileId,
+        memory: { size: state.agent.memorySize, mode: state.agent.memoryIsolationMode, semantic: state.agent.enableSemanticSearch },
+        toolOverrides: {},
+      })
+      setState(prev => ({ ...prev, isDirty: false, isSaving: false, toolEnabledOverrides: {} }))
     } catch (err) { setState(prev => ({ ...prev, isSaving: false })); throw err }
-  }, [state, studioData.skills, studioData.sentinelAssignments])
+  }, [state, studioData.skills, studioData.sentinelAssignments, studioData.agentToolMappings])
 
-  return { state, nodes, edges, onNodesChange, attachProfile, detachProfile, save, isDirty, isSaving: state.isSaving, expandedCategories, toggleCategoryExpand, expandAll, collapseAll }
+  return { state, nodes, edges, onNodesChange, attachProfile, detachProfile, updateNodeConfig, save, isDirty, isSaving: state.isSaving, expandedCategories, toggleCategoryExpand, expandAll, collapseAll }
 }
