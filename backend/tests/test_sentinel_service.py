@@ -30,6 +30,7 @@ from models import (
     SentinelAnalysisCache,
 )
 from services.sentinel_service import SentinelService, SentinelAnalysisResult
+from services.sentinel_effective_config import SentinelEffectiveConfig
 from services.sentinel_detections import (
     DETECTION_REGISTRY,
     DEFAULT_PROMPTS,
@@ -69,6 +70,7 @@ def system_config(db_session):
     config = SentinelConfig(
         tenant_id=None,  # System-wide
         is_enabled=True,
+        detection_mode="block",
         enable_prompt_analysis=True,
         enable_tool_analysis=True,
         enable_shell_analysis=True,
@@ -221,7 +223,8 @@ class TestSentinelConfiguration:
         # Should have tenant-specific values
         assert config.aggressiveness_level == 2
         assert config.enable_tool_analysis is False
-        assert config.detect_poisoning is False
+        # After v1.6.0 refactor, detection toggles are in detection_config
+        assert config.is_detection_enabled("poisoning") is False
 
     def test_agent_override(self, db_session, system_config, test_tenant_id):
         """Test agent-specific override."""
@@ -557,7 +560,7 @@ class TestAnalysisResultParsing:
     def test_parse_valid_json(self, db_session, system_config):
         """Test parsing valid JSON response."""
         service = SentinelService(db_session, tenant_id="test")
-        config = service._create_default_config()
+        config = SentinelEffectiveConfig(detection_mode="block")
 
         llm_result = {
             "answer": '{"threat": true, "score": 0.85, "reason": "Detected injection"}'
@@ -575,7 +578,7 @@ class TestAnalysisResultParsing:
     def test_parse_json_with_markdown(self, db_session, system_config):
         """Test parsing JSON wrapped in markdown code blocks."""
         service = SentinelService(db_session, tenant_id="test")
-        config = service._create_default_config()
+        config = SentinelEffectiveConfig(detection_mode="block")
 
         llm_result = {
             "answer": '```json\n{"threat": false, "score": 0.1, "reason": "Safe message"}\n```'
@@ -591,7 +594,7 @@ class TestAnalysisResultParsing:
     def test_parse_invalid_json_fails_open(self, db_session, system_config):
         """Test that invalid JSON fails open (allows content)."""
         service = SentinelService(db_session, tenant_id="test")
-        config = service._create_default_config()
+        config = SentinelEffectiveConfig(detection_mode="block")
 
         llm_result = {"answer": "This is not valid JSON"}
 
@@ -606,7 +609,7 @@ class TestAnalysisResultParsing:
     def test_parse_empty_response_fails_open(self, db_session, system_config):
         """Test that empty response fails open."""
         service = SentinelService(db_session, tenant_id="test")
-        config = service._create_default_config()
+        config = SentinelEffectiveConfig(detection_mode="block")
 
         llm_result = {"answer": ""}
 
@@ -631,8 +634,9 @@ class TestAnalysisFlow:
         service = SentinelService(db_session, tenant_id="test-tenant")
 
         with patch.object(service, '_call_llm', new_callable=AsyncMock) as mock_llm:
+            # Unified analysis expects {"threat_type": "...", "score": ..., "reason": ...}
             mock_llm.return_value = {
-                "answer": '{"threat": true, "score": 0.9, "reason": "Detected ignore instructions pattern"}'
+                "answer": '{"threat_type": "prompt_injection", "score": 0.9, "reason": "Detected ignore instructions pattern"}'
             }
 
             result = await service.analyze_prompt(
@@ -651,7 +655,7 @@ class TestAnalysisFlow:
 
         with patch.object(service, '_call_llm', new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = {
-                "answer": '{"threat": false, "score": 0.1, "reason": "Normal message"}'
+                "answer": '{"threat_type": "none", "score": 0.1, "reason": "Normal message"}'
             }
 
             result = await service.analyze_prompt(
@@ -668,6 +672,7 @@ class TestAnalysisFlow:
         service = SentinelService(db_session, tenant_id="test-tenant")
 
         with patch.object(service, '_call_llm', new_callable=AsyncMock) as mock_llm:
+            # Shell analysis uses _analyze_single which expects {"threat": true, ...}
             mock_llm.return_value = {
                 "answer": '{"threat": true, "score": 0.95, "reason": "Detected reverse shell pattern"}'
             }
