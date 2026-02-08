@@ -671,6 +671,8 @@ class AgentMemorySystem:
             from services.memguard_service import MemGuardService
             memguard = MemGuardService(self.db, tenant_id)
 
+            detection_mode = getattr(effective_config, "detection_mode", "block")
+
             # Batch-fetch existing facts once (not per-fact)
             existing_facts = self.knowledge_service.get_user_facts(
                 agent_id=self.agent_id,
@@ -679,6 +681,7 @@ class AgentMemorySystem:
 
             validated_facts = []
             blocked_count = 0
+            flagged_count = 0
 
             for fact in facts:
                 validation = memguard.validate_fact(
@@ -686,10 +689,17 @@ class AgentMemorySystem:
                     existing_facts=existing_facts,
                     agent_id=self.agent_id,
                     user_id=user_id,
+                    detection_mode=detection_mode,
                 )
 
                 if validation.is_valid:
                     validated_facts.append(fact)
+                    if validation.flagged:
+                        flagged_count += 1
+                        self.logger.info(
+                            f"🛡️ MEMGUARD Layer B (detect_only): Flagged fact allowed - "
+                            f"topic={fact.get('topic')}, key={fact.get('key')}: {validation.reason}"
+                        )
                 else:
                     blocked_count += 1
                     self.logger.warning(
@@ -700,6 +710,10 @@ class AgentMemorySystem:
             if blocked_count > 0:
                 self.logger.info(
                     f"🛡️ MEMGUARD Layer B: {blocked_count}/{len(facts)} facts blocked for {user_id}"
+                )
+            if flagged_count > 0:
+                self.logger.info(
+                    f"🛡️ MEMGUARD Layer B: {flagged_count}/{len(facts)} facts flagged (allowed) for {user_id}"
                 )
 
             return validated_facts

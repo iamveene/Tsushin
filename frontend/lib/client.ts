@@ -419,7 +419,7 @@ export interface SentinelConfigUpdate {
   block_on_detection?: boolean
   log_all_analyses?: boolean
   // Phase 20 Enhancement
-  detection_mode?: 'block' | 'detect_only' | 'off'
+  detection_mode?: 'block' | 'warn_only' | 'detect_only' | 'off'
   enable_slash_command_analysis?: boolean
   // Notification settings
   enable_notifications?: boolean
@@ -640,7 +640,7 @@ export interface SentinelProfileCreate {
   description?: string
   is_default?: boolean
   is_enabled?: boolean
-  detection_mode?: 'block' | 'detect_only' | 'off'
+  detection_mode?: 'block' | 'warn_only' | 'detect_only' | 'off'
   aggressiveness_level?: number
   enable_prompt_analysis?: boolean
   enable_tool_analysis?: boolean
@@ -729,7 +729,7 @@ export interface SentinelHierarchyProfile {
   name: string
   slug: string
   source?: string
-  detection_mode?: 'block' | 'detect_only' | 'off'
+  detection_mode?: 'block' | 'warn_only' | 'detect_only' | 'off'
   aggressiveness_level?: number
   is_enabled?: boolean
 }

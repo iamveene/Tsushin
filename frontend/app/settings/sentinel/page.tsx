@@ -1184,7 +1184,7 @@ If you believe this is an error, please contact support."
           <div className="space-y-6">
             {/* Hero Banner */}
             <div className={`relative overflow-hidden rounded-xl border ${
-              (formState as any).detect_memory_poisoning
+              formState.detect_memory_poisoning
                 ? 'bg-gradient-to-br from-purple-900/40 via-purple-800/20 to-gray-900 border-purple-500/30'
                 : 'bg-gradient-to-br from-gray-900/60 via-gray-800/40 to-gray-900 border-gray-600/30'
             }`}>
@@ -1196,21 +1196,21 @@ If you believe this is an error, please contact support."
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-4">
                     <div className={`p-3 rounded-xl ${
-                      (formState as any).detect_memory_poisoning
+                      formState.detect_memory_poisoning
                         ? 'bg-purple-500/20 border border-purple-500/40'
                         : 'bg-gray-700/40 border border-gray-600/40'
                     }`}>
-                      <BrainIcon size={28} className={(formState as any).detect_memory_poisoning ? 'text-purple-400' : 'text-gray-500'} />
+                      <BrainIcon size={28} className={formState.detect_memory_poisoning ? 'text-purple-400' : 'text-gray-500'} />
                     </div>
                     <div>
                       <h2 className="text-2xl font-bold text-white flex items-center gap-3">
                         MemGuard
                         <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
-                          (formState as any).detect_memory_poisoning
+                          formState.detect_memory_poisoning
                             ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
                             : 'bg-red-500/20 text-red-400 border border-red-500/40'
                         }`}>
-                          {(formState as any).detect_memory_poisoning ? 'ACTIVE' : 'DISABLED'}
+                          {formState.detect_memory_poisoning ? 'ACTIVE' : 'DISABLED'}
                         </span>
                       </h2>
                       <p className="text-purple-200/70 mt-1 max-w-xl">
@@ -1228,34 +1228,34 @@ If you believe this is an error, please contact support."
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4">
                     <div className={`w-3 h-3 rounded-full ${
-                      (formState as any).detect_memory_poisoning ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'
+                      formState.detect_memory_poisoning ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'
                     }`} />
                     <div>
                       <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                         Memory Poisoning Protection
                       </h3>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {(formState as any).detect_memory_poisoning
+                        {formState.detect_memory_poisoning
                           ? 'Enabled for all agents in this tenant. Incoming messages and extracted facts are screened before storage.'
                           : 'Protection is disabled. Agents\' memory is vulnerable to poisoning attacks.'}
                       </p>
                     </div>
                   </div>
                   <button
-                    onClick={() => setFormState({ ...formState, detect_memory_poisoning: !(formState as any).detect_memory_poisoning })}
+                    onClick={() => setFormState({ ...formState, detect_memory_poisoning: !formState.detect_memory_poisoning })}
                     disabled={!canEdit}
                     className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors ${
-                      (formState as any).detect_memory_poisoning ? 'bg-purple-600' : 'bg-gray-300 dark:bg-gray-600'
+                      formState.detect_memory_poisoning ? 'bg-purple-600' : 'bg-gray-300 dark:bg-gray-600'
                     } ${!canEdit ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     <span
                       className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform shadow-sm ${
-                        (formState as any).detect_memory_poisoning ? 'translate-x-8' : 'translate-x-1'
+                        formState.detect_memory_poisoning ? 'translate-x-8' : 'translate-x-1'
                       }`}
                     />
                   </button>
                 </div>
-                {!(formState as any).detect_memory_poisoning && (
+                {!formState.detect_memory_poisoning && (
                   <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/40 rounded-lg">
                     <p className="text-sm text-red-700 dark:text-red-300 flex items-center gap-2">
                       <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">

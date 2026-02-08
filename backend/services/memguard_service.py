@@ -43,6 +43,7 @@ class FactValidationResult:
     """Result from Layer B fact validation."""
     is_valid: bool
     reason: str = ""
+    flagged: bool = False
 
 
 # --- Layer A: Pattern Definitions ---
@@ -200,6 +201,7 @@ class MemGuardService:
                 score=max_score,
                 reason=matched_reason,
                 action="blocked" if blocked else "detected",
+                detection_mode=detection_mode,
             )
 
             return MemGuardResult(
@@ -227,6 +229,7 @@ class MemGuardService:
                 score=max_score,
                 reason=f"{matched_reason} (LLM escalation failed, using pattern score)",
                 action="blocked" if blocked else "detected",
+                detection_mode=detection_mode,
             )
 
             return MemGuardResult(
@@ -327,6 +330,7 @@ class MemGuardService:
         existing_facts: List[Dict],
         agent_id: int,
         user_id: str,
+        detection_mode: str = "block",
     ) -> FactValidationResult:
         """
         Layer B: Validate an extracted fact before storage.
@@ -341,6 +345,7 @@ class MemGuardService:
             existing_facts: All existing facts for this user (batch-fetched)
             agent_id: Agent ID
             user_id: User identifier
+            detection_mode: 'block' blocks the fact, 'detect_only' logs but allows
 
         Returns:
             FactValidationResult indicating if fact is safe to store
@@ -350,20 +355,26 @@ class MemGuardService:
         value = str(fact.get("value", ""))
         confidence = float(fact.get("confidence", 0.0))
 
+        should_block = detection_mode == "block"
+
         # Check 1: Credential-like values in any fact
         for pattern in CREDENTIAL_VALUE_PATTERNS:
             if pattern.search(value):
                 reason = f"Credential-like value detected in fact {topic}/{key}"
-                self._log_fact_block(agent_id, user_id, fact, reason)
-                return FactValidationResult(is_valid=False, reason=reason)
+                self._log_fact_block(agent_id, user_id, fact, reason, detection_mode=detection_mode, threat_score=0.95)
+                if should_block:
+                    return FactValidationResult(is_valid=False, reason=reason, flagged=True)
+                return FactValidationResult(is_valid=True, reason=reason, flagged=True)
 
         # Check 2: Command-like patterns in instruction facts
         if topic == "instructions":
             for pattern in INSTRUCTION_COMMAND_PATTERNS:
                 if pattern.search(value):
                     reason = f"Command pattern detected in instruction fact: {key}"
-                    self._log_fact_block(agent_id, user_id, fact, reason)
-                    return FactValidationResult(is_valid=False, reason=reason)
+                    self._log_fact_block(agent_id, user_id, fact, reason, detection_mode=detection_mode, threat_score=0.85)
+                    if should_block:
+                        return FactValidationResult(is_valid=False, reason=reason, flagged=True)
+                    return FactValidationResult(is_valid=True, reason=reason, flagged=True)
 
         # Check 3: Contradiction detection — high-confidence overrides
         if existing_facts and confidence > 0.0:
@@ -379,8 +390,10 @@ class MemGuardService:
                             f"Suspicious override of established fact: "
                             f"{topic}/{key} (confidence {existing.get('confidence', 0):.1f} -> {confidence:.1f})"
                         )
-                        self._log_fact_block(agent_id, user_id, fact, reason)
-                        return FactValidationResult(is_valid=False, reason=reason)
+                        self._log_fact_block(agent_id, user_id, fact, reason, detection_mode=detection_mode, threat_score=0.75)
+                        if should_block:
+                            return FactValidationResult(is_valid=False, reason=reason, flagged=True)
+                        return FactValidationResult(is_valid=True, reason=reason, flagged=True)
 
         return FactValidationResult(is_valid=True)
 
@@ -424,6 +437,7 @@ class MemGuardService:
         score: float,
         reason: str,
         action: str,
+        detection_mode: str = "block",
     ) -> None:
         """Log a MemGuard Layer A analysis to SentinelAnalysisLog."""
         try:
@@ -444,7 +458,7 @@ class MemGuardService:
                 threat_reason=reason,
                 action_taken=action,
                 sender_key=sender_key,
-                detection_mode_used=action,
+                detection_mode_used=detection_mode,
             )
 
             self.db.add(log_entry)
@@ -462,11 +476,14 @@ class MemGuardService:
         user_id: str,
         fact: Dict,
         reason: str,
+        detection_mode: str = "block",
+        threat_score: float = 0.9,
     ) -> None:
-        """Log a MemGuard Layer B fact block to SentinelAnalysisLog."""
+        """Log a MemGuard Layer B fact detection to SentinelAnalysisLog."""
         try:
             from models import SentinelAnalysisLog
 
+            action = "blocked" if detection_mode == "block" else "detected"
             fact_repr = f"[{fact.get('topic', '?')}/{fact.get('key', '?')}] = {str(fact.get('value', ''))[:200]}"
             input_hash = hashlib.sha256(fact_repr.encode()).hexdigest()
 
@@ -478,11 +495,11 @@ class MemGuardService:
                 input_content=fact_repr[:500],
                 input_hash=input_hash,
                 is_threat_detected=True,
-                threat_score=0.9,
+                threat_score=threat_score,
                 threat_reason=reason,
-                action_taken="blocked",
+                action_taken=action,
                 sender_key=user_id,
-                detection_mode_used="block",
+                detection_mode_used=detection_mode,
             )
 
             self.db.add(log_entry)
