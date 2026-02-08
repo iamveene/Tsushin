@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useNodesState, type OnNodesChange, type Node, type Edge } from '@xyflow/react'
 import { api } from '@/lib/client'
+import type { BuilderSaveRequest } from '@/lib/client'
 import { calculateGroupedRadialLayout, type GroupedCategoryInput } from '../layout/radialLayout'
 import { calculateDagreBuilderLayout } from '../layout/dagreBuilderLayout'
 import type {
@@ -282,38 +283,63 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
     })
   }, [])
 
+  // Phase I: Atomic save using batch builder-save endpoint (replaces 10+ sequential calls with 1)
   const save = useCallback(async () => {
     if (!state.agentId || !state.agent) throw new Error('No agent selected')
     setState(prev => ({ ...prev, isSaving: true }))
     try {
-      await api.updateAgent(state.agentId, {
-        model_provider: state.agent.modelProvider, model_name: state.agent.modelName, is_active: state.agent.isActive,
-        memory_size: state.agent.memorySize, memory_isolation_mode: state.agent.memoryIsolationMode,
+      const request: BuilderSaveRequest = {}
+
+      // Agent core fields
+      request.agent = {
+        memory_size: state.agent.memorySize,
+        memory_isolation_mode: state.agent.memoryIsolationMode,
         enable_semantic_search: state.agent.enableSemanticSearch,
+      }
+
+      // Skills: send full desired state
+      request.skills = studioData.skills.map(skill => {
+        const attached = state.attachedSkills.find(s => s.skillType === skill.skill_type)
+        return {
+          skill_type: skill.skill_type,
+          is_enabled: !!attached,
+          config: attached?.config || undefined,
+        }
       })
-      for (const skill of studioData.skills) {
-        const attachedSkill = state.attachedSkills.find(s => s.skillType === skill.skill_type)
-        const isAttached = !!attachedSkill
-        if (isAttached !== skill.is_enabled) {
-          await api.updateAgentSkill(state.agentId, skill.skill_type, { is_enabled: isAttached })
-        }
-        if (isAttached && attachedSkill?.config) {
-          await api.updateAgentSkill(state.agentId, skill.skill_type, { config: attachedSkill.config })
-        }
-      }
-      // Tool enabled overrides
-      for (const [toolIdStr, isEnabled] of Object.entries(state.toolEnabledOverrides)) {
-        const toolId = Number(toolIdStr)
-        const mapping = studioData.agentToolMappings.find(m => m.sandboxed_tool_id === toolId)
-        if (mapping) await api.updateAgentSandboxedTool(state.agentId, mapping.id, { is_enabled: isEnabled })
-      }
+
+      // Tool overrides: only changed ones
+      const toolOverrides = Object.entries(state.toolEnabledOverrides)
+        .map(([toolIdStr, isEnabled]) => {
+          const toolId = Number(toolIdStr)
+          const mapping = studioData.agentToolMappings.find(m => m.sandboxed_tool_id === toolId)
+          return mapping ? { mapping_id: mapping.id, is_enabled: isEnabled as boolean } : null
+        })
+        .filter((o): o is { mapping_id: number; is_enabled: boolean } => o !== null)
+      if (toolOverrides.length > 0) request.tool_overrides = toolOverrides
+
       // Sentinel
       if (state.attachedSentinelProfileId) {
-        if (state.attachedSentinelAssignmentId) {
-          const cur = studioData.sentinelAssignments.find(a => a.id === state.attachedSentinelAssignmentId)
-          if (cur && cur.profile_id !== state.attachedSentinelProfileId) { await api.removeSentinelProfileAssignment(state.attachedSentinelAssignmentId); await api.assignSentinelProfile({ profile_id: state.attachedSentinelProfileId, agent_id: state.agentId }) }
-        } else { await api.assignSentinelProfile({ profile_id: state.attachedSentinelProfileId, agent_id: state.agentId }) }
-      } else if (state.attachedSentinelAssignmentId) { await api.removeSentinelProfileAssignment(state.attachedSentinelAssignmentId) }
+        const cur = state.attachedSentinelAssignmentId
+          ? studioData.sentinelAssignments.find(a => a.id === state.attachedSentinelAssignmentId)
+          : null
+        if (cur && cur.profile_id === state.attachedSentinelProfileId) {
+          // No change
+        } else {
+          request.sentinel = {
+            action: 'assign',
+            profile_id: state.attachedSentinelProfileId,
+            assignment_id: state.attachedSentinelAssignmentId || undefined,
+          }
+        }
+      } else if (state.attachedSentinelAssignmentId) {
+        request.sentinel = {
+          action: 'remove',
+          assignment_id: state.attachedSentinelAssignmentId,
+        }
+      }
+
+      await api.saveAgentBuilderData(state.agentId, request)
+
       savedSnapshot.current = JSON.stringify({
         personaId: state.attachedPersonaId, channels: state.attachedChannels,
         skills: state.attachedSkills.map(s => ({ t: s.skillType, c: s.config })).sort((a, b) => a.t.localeCompare(b.t)),

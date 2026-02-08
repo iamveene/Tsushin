@@ -91,6 +91,8 @@ from api.routes_analytics import router as analytics_router
 from auth_routes import router as auth_router
 # Phase 7.6.4: Protected Endpoints (Example)
 from api.routes_agents_protected import router as agents_protected_router
+# Phase I: Agent Builder Batch Endpoints
+from api.routes_agent_builder import router as agent_builder_router
 # Phase 8: MCP Instance Management
 from api.routes_mcp_instances import router as mcp_instances_router
 # Playground Feature
@@ -945,6 +947,7 @@ app.include_router(cache_router)  # Phase 6.11.3 - Cache Management API
 app.include_router(analytics_router)  # Phase 7.2 - Token Analytics
 app.include_router(auth_router)  # Phase 7.6.3 - Authentication
 app.include_router(agents_protected_router)  # Phase 7.6.4 - Protected Agents API (Example)
+app.include_router(agent_builder_router)  # Phase I - Agent Builder Batch Endpoints
 app.include_router(mcp_instances_router)  # Phase 8 - MCP Instance Management
 app.include_router(playground_router)  # Playground Feature
 app.include_router(projects_router)  # Phase 14.4: Projects
