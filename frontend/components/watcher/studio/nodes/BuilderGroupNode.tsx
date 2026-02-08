@@ -123,7 +123,7 @@ function BuilderGroupNode({ data, selected }: NodeProps<BuilderGroupData>) {
           aria-label={data.isExpanded ? `Collapse ${data.categoryLabel}` : `Expand ${data.childCount} ${data.categoryLabel}`}
           aria-expanded={data.isExpanded}
           className={`
-            p-1 rounded transition-colors
+            nodrag nopan p-1 rounded transition-colors
             ${data.isExpanded
               ? `${display.bgColor} ${display.color}`
               : 'bg-tsushin-surface/50 text-tsushin-slate hover:text-white'
