@@ -20,7 +20,7 @@ import {
   TelegramChannelInfo,
   SentinelHierarchy,
 } from '@/lib/client'
-import { GraphNode, GraphEdge, ChannelStatus, GraphViewType, UserRole, SecurityDetectionMode } from '../types'
+import { GraphNode, GraphEdge, ChannelStatus, GraphViewType, UserRole, SecurityDetectionMode, SecuritySkillData } from '../types'
 
 
 export interface UseGraphDataOptions {
@@ -514,6 +514,24 @@ function transformToSecurityGraphData(
     const agentAggressiveness = agent.effective_profile?.aggressiveness_level ?? 1
     const agentIsEnabled = agent.effective_profile?.is_enabled ?? true
 
+    // 3. Pre-build skill data for this agent (stored on node, not rendered initially)
+    const skillsData: SecuritySkillData[] = agent.skills.map(skill => {
+      const skillDetectionMode = (skill.effective_profile?.detection_mode || agentDetectionMode) as SecurityDetectionMode
+      return {
+        skillType: skill.skill_type,
+        skillName: skill.name,
+        isEnabled: skill.is_enabled,
+        profile: skill.profile ? { id: skill.profile.id, name: skill.profile.name, slug: skill.profile.slug } : null,
+        effectiveProfile: skill.effective_profile ? {
+          id: skill.effective_profile.id,
+          name: skill.effective_profile.name,
+          slug: skill.effective_profile.slug,
+          source: (skill.effective_profile.source || 'agent') as 'skill' | 'agent' | 'tenant' | 'system',
+        } : null,
+        detectionMode: skillDetectionMode,
+      }
+    })
+
     nodes.push({
       id: agentNodeId,
       type: 'agent-security',
@@ -533,6 +551,9 @@ function transformToSecurityGraphData(
         detectionMode: agentDetectionMode,
         aggressivenessLevel: agentAggressiveness,
         isEnabled: agentIsEnabled,
+        skillsCount: skillsData.length,
+        skills: skillsData,
+        isExpanded: false,
       },
     })
 
@@ -547,43 +568,7 @@ function transformToSecurityGraphData(
         : { strokeDasharray: '5,5', opacity: 0.5 },  // Dashed for inherited
     })
 
-    // 3. Skill security nodes (only for skills with explicit assignments)
-    agent.skills.forEach(skill => {
-      const skillNodeId = `skill-security-${agent.id}-${skill.skill_type}`
-      const skillDetectionMode = (skill.effective_profile?.detection_mode || agentDetectionMode) as SecurityDetectionMode
-
-      nodes.push({
-        id: skillNodeId,
-        type: 'skill-security',
-        position: { x: 0, y: 0 },
-        data: {
-          type: 'skill-security',
-          skillType: skill.skill_type,
-          skillName: skill.name,
-          isEnabled: skill.is_enabled,
-          parentAgentId: agent.id,
-          profile: skill.profile ? { id: skill.profile.id, name: skill.profile.name, slug: skill.profile.slug } : null,
-          effectiveProfile: skill.effective_profile ? {
-            id: skill.effective_profile.id,
-            name: skill.effective_profile.name,
-            slug: skill.effective_profile.slug,
-            source: (skill.effective_profile.source || 'agent') as 'skill' | 'agent' | 'tenant' | 'system',
-          } : null,
-          detectionMode: skillDetectionMode,
-        },
-      })
-
-      // Edge: agent -> skill
-      const hasExplicitSkillProfile = skill.profile !== null
-      edges.push({
-        id: `e-${agentNodeId}-${skillNodeId}`,
-        source: agentNodeId,
-        target: skillNodeId,
-        style: hasExplicitSkillProfile
-          ? { stroke: '#A855F7' }  // Purple solid for explicit skill assignment
-          : { strokeDasharray: '5,5', opacity: 0.5 },
-      })
-    })
+    // Skills are NOT rendered initially — they expand on agent click
   })
 
   return { nodes, edges }

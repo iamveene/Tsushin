@@ -175,9 +175,15 @@ export default function GraphViewTab() {
   // This is more reliable than calling through the ref
   const hasExpandableNodes = useMemo(() => {
     return nodes.some(n => {
-      if (n.data.type !== 'agent') return false
-      const agentData = n.data as { skillsCount?: number; hasKnowledgeBase?: boolean }
-      return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+      if (n.data.type === 'agent') {
+        const agentData = n.data as { skillsCount?: number; hasKnowledgeBase?: boolean }
+        return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+      }
+      if (n.data.type === 'agent-security') {
+        const agentData = n.data as { skillsCount: number }
+        return agentData.skillsCount > 0
+      }
+      return false
     })
   }, [nodes])
 
@@ -188,11 +194,17 @@ export default function GraphViewTab() {
     setIsExpandingAll(true)
     try {
       await graphCanvasRef.current.expandAll()
-      // Count how many agents we expanded
+      // Count how many agents we expanded (both agents and security agents)
       const expandableCount = nodes.filter(n => {
-        if (n.data.type !== 'agent') return false
-        const agentData = n.data as { skillsCount?: number; hasKnowledgeBase?: boolean }
-        return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+        if (n.data.type === 'agent') {
+          const agentData = n.data as { skillsCount?: number; hasKnowledgeBase?: boolean }
+          return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+        }
+        if (n.data.type === 'agent-security') {
+          const agentData = n.data as { skillsCount: number }
+          return agentData.skillsCount > 0
+        }
+        return false
       }).length
       setExpandedAgentsCount(expandableCount)
     } finally {

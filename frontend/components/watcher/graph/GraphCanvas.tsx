@@ -24,7 +24,7 @@ import {
 import '@xyflow/react/dist/style.css'
 
 import { nodeTypes } from './nodes'
-import { GraphNode, GraphEdge, AgentNodeData, ChannelNodeData, SkillNodeData, KnowledgeSummaryNodeData, SkillCategoryNodeData, SkillProviderNodeData } from './types'
+import { GraphNode, GraphEdge, AgentNodeData, AgentSecurityNodeData, SkillSecurityNodeData, ChannelNodeData, SkillNodeData, KnowledgeSummaryNodeData, SkillCategoryNodeData, SkillProviderNodeData, SecurityDetectionMode } from './types'
 import type { LayoutOptions } from './layout'
 import { DEFAULT_LAYOUT_OPTIONS } from './layout'
 // Import useAutoLayout directly to avoid SSR issues (this file is dynamically imported)
@@ -91,10 +91,13 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
     // Phase 5: Track expanded agents
     const [expandedAgents, setExpandedAgents] = useState<Set<number>>(new Set())
 
-    // Notify parent when expanded count changes
+    // Phase F: Track expanded security agents (separate from agents view expand)
+    const [expandedSecurityAgents, setExpandedSecurityAgents] = useState<Set<number>>(new Set())
+
+    // Notify parent when expanded count changes (both agents and security agents)
     useEffect(() => {
-      onExpandedCountChange?.(expandedAgents.size)
-    }, [expandedAgents.size, onExpandedCountChange])
+      onExpandedCountChange?.(expandedAgents.size + expandedSecurityAgents.size)
+    }, [expandedAgents.size, expandedSecurityAgents.size, onExpandedCountChange])
 
     // Phase 6: Cache for expand data to eliminate delay on subsequent clicks
     const expandDataCache = useRef<Map<number, AgentExpandDataResponse>>(new Map())
@@ -104,7 +107,6 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
 
     // Phase 7: Track expanded skill categories (key: "agentId-category")
     const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set())
-
 
     // Phase 7: Threshold for skill grouping - always use category grouping for consistency
     // Set to 0 to always show consolidation nodes (Agent → Category → Skill)
@@ -663,54 +665,156 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
       setTimeout(() => runLayout(), 50)
     }, [setNodes, setEdges, runLayout])
 
+    // Phase F: Handle security agent expand - creates skill-security nodes from stored data
+    const handleSecurityAgentExpand = useCallback((agentId: number) => {
+      // Get skills data from initialNodes (stable source of truth)
+      const agentNode = initialNodes.find(n => n.id === `agent-security-${agentId}` && n.data.type === 'agent-security')
+      if (!agentNode) return
+
+      const agentData = agentNode.data as AgentSecurityNodeData
+      if (!agentData.skills || agentData.skills.length === 0) return
+
+      // Create skill-security nodes from stored data
+      const childNodes: GraphNode[] = agentData.skills.map(skill => ({
+        id: `skill-security-${agentId}-${skill.skillType}`,
+        type: 'skill-security',
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'skill-security',
+          skillType: skill.skillType,
+          skillName: skill.skillName,
+          isEnabled: skill.isEnabled,
+          parentAgentId: agentId,
+          profile: skill.profile,
+          effectiveProfile: skill.effectiveProfile,
+          detectionMode: skill.detectionMode,
+        } as SkillSecurityNodeData,
+      }))
+
+      // Create edges from agent to skills
+      const childEdges: GraphEdge[] = agentData.skills.map(skill => ({
+        id: `e-agent-security-${agentId}-skill-security-${agentId}-${skill.skillType}`,
+        source: `agent-security-${agentId}`,
+        target: `skill-security-${agentId}-${skill.skillType}`,
+        style: skill.profile !== null
+          ? { stroke: '#A855F7' }  // Purple solid for explicit skill assignment
+          : { strokeDasharray: '5,5', opacity: 0.5 },
+      }))
+
+      // Update nodes: mark agent as expanded + add child skill nodes
+      setNodes(prev => {
+        const updatedNodes = prev.map(n => {
+          if (n.id === `agent-security-${agentId}`) {
+            return { ...n, data: { ...n.data, isExpanded: true } as AgentSecurityNodeData }
+          }
+          return n
+        })
+        return [...updatedNodes, ...childNodes]
+      })
+
+      setEdges(prev => [...prev, ...childEdges])
+      setExpandedSecurityAgents(prev => new Set(prev).add(agentId))
+      setTimeout(() => runLayout(), 50)
+    }, [initialNodes, setNodes, setEdges, runLayout])
+
+    // Phase F: Handle security agent collapse
+    const handleSecurityAgentCollapse = useCallback((agentId: number) => {
+      setNodes(prev => {
+        const filtered = prev.filter(n => {
+          if (n.data.type === 'skill-security' && 'parentAgentId' in n.data && n.data.parentAgentId === agentId) {
+            return false
+          }
+          return true
+        })
+        return filtered.map(n => {
+          if (n.id === `agent-security-${agentId}`) {
+            return { ...n, data: { ...n.data, isExpanded: false } as AgentSecurityNodeData }
+          }
+          return n
+        })
+      })
+
+      setEdges(prev => prev.filter(e =>
+        !e.id.startsWith(`e-agent-security-${agentId}-skill-security-`)
+      ))
+
+      setExpandedSecurityAgents(prev => {
+        const next = new Set(prev)
+        next.delete(agentId)
+        return next
+      })
+
+      setTimeout(() => runLayout(), 50)
+    }, [setNodes, setEdges, runLayout])
+
     // Phase 6: Check if agent is loading
     const isAgentLoading = useCallback((agentId: number) => {
       return loadingAgents.has(agentId)
     }, [loadingAgents])
 
     // Phase 7: Expand All - expand all agent nodes that have expandable content
-    // Uses initialNodes as the source of truth for data properties
+    // Supports both agents view and security view
     const expandAll = useCallback(async () => {
-      // Find all agent nodes that have skills or KB and are not expanded
+      // Agents view: expand agent nodes with skills/KB
       const agentNodes = initialNodes.filter(n => {
-        if (n.data.type !== 'agent') return false
-        const agentData = n.data as AgentNodeData
-        if (expandedAgents.has(agentData.id)) return false
-        // Only expand agents that have skills or knowledge base
-        return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+        if (n.data.type === 'agent') {
+          const agentData = n.data as AgentNodeData
+          if (expandedAgents.has(agentData.id)) return false
+          return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+        }
+        return false
       })
 
-      // Expand each agent sequentially to avoid race conditions
       for (const node of agentNodes) {
         const agentData = node.data as AgentNodeData
         await handleAgentExpand(agentData.id)
       }
-    }, [initialNodes, expandedAgents, handleAgentExpand])
+
+      // Security view: expand security agent nodes with skills
+      const securityAgentNodes = initialNodes.filter(n => {
+        if (n.data.type === 'agent-security') {
+          const data = n.data as AgentSecurityNodeData
+          if (expandedSecurityAgents.has(data.id)) return false
+          return data.skillsCount > 0
+        }
+        return false
+      })
+
+      securityAgentNodes.forEach(node => {
+        const data = node.data as AgentSecurityNodeData
+        handleSecurityAgentExpand(data.id)
+      })
+    }, [initialNodes, expandedAgents, handleAgentExpand, expandedSecurityAgents, handleSecurityAgentExpand])
 
     // Phase 7: Collapse All - collapse all expanded agent nodes
     const collapseAll = useCallback(() => {
-      // Collapse all expanded agents
-      const expandedAgentIds = Array.from(expandedAgents)
-      expandedAgentIds.forEach(agentId => {
-        handleAgentCollapse(agentId)
-      })
-    }, [expandedAgents, handleAgentCollapse])
+      // Agents view
+      Array.from(expandedAgents).forEach(agentId => handleAgentCollapse(agentId))
+      // Security view
+      Array.from(expandedSecurityAgents).forEach(agentId => handleSecurityAgentCollapse(agentId))
+    }, [expandedAgents, handleAgentCollapse, expandedSecurityAgents, handleSecurityAgentCollapse])
 
     // Phase 7: Check if there are expandable nodes (for button visibility)
-    // Uses initialNodes as the source of truth since it has the complete data from API
     const hasExpandableNodes = useCallback(() => {
       return initialNodes.some(n => {
-        if (n.data.type !== 'agent') return false
-        const agentData = n.data as AgentNodeData
-        if (expandedAgents.has(agentData.id)) return false
-        return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+        if (n.data.type === 'agent') {
+          const agentData = n.data as AgentNodeData
+          if (expandedAgents.has(agentData.id)) return false
+          return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+        }
+        if (n.data.type === 'agent-security') {
+          const data = n.data as AgentSecurityNodeData
+          if (expandedSecurityAgents.has(data.id)) return false
+          return data.skillsCount > 0
+        }
+        return false
       })
-    }, [initialNodes, expandedAgents])
+    }, [initialNodes, expandedAgents, expandedSecurityAgents])
 
     // Phase 7: Check if there are expanded nodes (for button visibility)
     const hasExpandedNodes = useCallback(() => {
-      return expandedAgents.size > 0
-    }, [expandedAgents])
+      return expandedAgents.size > 0 || expandedSecurityAgents.size > 0
+    }, [expandedAgents, expandedSecurityAgents])
 
     // Expose runLayout and expand/collapse methods to parent via ref
     // Phase 10: Wrap fitView for ref exposure
@@ -747,7 +851,7 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
         initializedRef.current = true
         prevInitialNodesRef.current = initialNodesKey
 
-        // Inject expand/collapse handlers into agent nodes
+        // Inject expand/collapse handlers into agent nodes and security agent nodes
         const nodesWithHandlers = initialNodes.map(n => {
           if (n.data.type === 'agent') {
             return {
@@ -761,6 +865,17 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
               } as AgentNodeData,
             }
           }
+          if (n.data.type === 'agent-security') {
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                isExpanded: false,
+                onExpand: handleSecurityAgentExpand,
+                onCollapse: handleSecurityAgentCollapse,
+              } as AgentSecurityNodeData,
+            }
+          }
           return n
         })
 
@@ -769,6 +884,7 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
         prevNodesLengthRef.current = initialNodes.length
         // Reset expansion state when view changes
         setExpandedAgents(new Set())
+        setExpandedSecurityAgents(new Set())
         // Phase 7: Reset expanded categories when view changes
         setExpandedCategories(new Set())
         // Clear cache when view changes
@@ -776,7 +892,7 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
         // Run layout after state update
         setTimeout(() => runLayout(), 50)
       }
-    }, [initialNodes, initialEdges, setNodes, setEdges, runLayout, handleAgentExpand, handleAgentCollapse, isAgentLoading])
+    }, [initialNodes, initialEdges, setNodes, setEdges, runLayout, handleAgentExpand, handleAgentCollapse, isAgentLoading, handleSecurityAgentExpand, handleSecurityAgentCollapse])
 
     // Phase 8: Merge real-time activity state into React Flow's internal nodes
     // Uses session-based model: all glows coordinated by agent processing lifecycle

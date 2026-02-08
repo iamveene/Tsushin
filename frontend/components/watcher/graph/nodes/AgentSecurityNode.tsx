@@ -3,9 +3,10 @@
 /**
  * AgentSecurityNode - Agent node for security hierarchy graph
  * Phase F (v1.6.0): Shows agent with assigned/effective Sentinel profile
+ * Supports expand/collapse to show skill-security child nodes
  */
 
-import { memo, useState } from 'react'
+import { memo, useState, useCallback } from 'react'
 import { NodeProps, Handle, Position } from '@xyflow/react'
 import { AgentSecurityNodeData, SecurityDetectionMode } from '../types'
 
@@ -31,6 +32,16 @@ function AgentSecurityNode(props: NodeProps<AgentSecurityNodeData>) {
   const effectiveName = data.effectiveProfile?.name || 'None'
   const mode = modeColors[data.detectionMode]
   const source = sourceColors[effectiveSource] || sourceColors.system
+  const hasSkills = data.skillsCount > 0
+
+  const handleExpandClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (data.isExpanded) {
+      data.onCollapse?.(data.id)
+    } else {
+      data.onExpand?.(data.id)
+    }
+  }, [data])
 
   return (
     <div
@@ -86,6 +97,12 @@ function AgentSecurityNode(props: NodeProps<AgentSecurityNodeData>) {
             <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${source.bg} ${source.text} capitalize`}>
               {hasExplicitProfile ? 'Custom' : `Inherited (${effectiveSource})`}
             </span>
+            {/* Skills count badge */}
+            {hasSkills && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-tsushin-surface text-tsushin-slate">
+                {data.skillsCount} skill{data.skillsCount !== 1 ? 's' : ''}
+              </span>
+            )}
             {/* Inactive badge */}
             {!data.isActive && (
               <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-500/20 text-gray-400">
@@ -94,6 +111,25 @@ function AgentSecurityNode(props: NodeProps<AgentSecurityNodeData>) {
             )}
           </div>
         </div>
+
+        {/* Expand/Collapse button */}
+        {hasSkills && (
+          <button
+            onClick={handleExpandClick}
+            className="w-6 h-6 rounded flex items-center justify-center shrink-0 hover:bg-tsushin-surface transition-colors"
+            title={data.isExpanded ? 'Collapse skills' : 'Expand skills'}
+          >
+            <svg
+              className={`w-3.5 h-3.5 text-tsushin-slate transition-transform duration-200 ${data.isExpanded ? 'rotate-180' : ''}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Hover tooltip */}
@@ -126,6 +162,12 @@ function AgentSecurityNode(props: NodeProps<AgentSecurityNodeData>) {
               <span className="text-tsushin-slate">Aggressiveness:</span>
               <span className="text-white font-medium">{data.aggressivenessLevel}</span>
             </div>
+            {hasSkills && (
+              <div className="flex justify-between gap-4">
+                <span className="text-tsushin-slate">Skills:</span>
+                <span className="text-white font-medium">{data.skillsCount}</span>
+              </div>
+            )}
           </div>
         </div>
       )}

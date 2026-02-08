@@ -17,6 +17,7 @@ from models import (
     SentinelProfile,
     SentinelProfileAssignment,
     Agent,
+    AgentSkill,
     Contact,
 )
 from .sentinel_effective_config import SentinelEffectiveConfig
@@ -559,22 +560,35 @@ class SentinelProfilesService:
                     "is_enabled": effective.is_enabled,
                 }
 
-            # Skill-level assignments for this agent
+            # All skills configured on this agent
+            agent_skills = self.db.query(AgentSkill).filter(
+                AgentSkill.agent_id == agent.id,
+            ).all()
+
+            # Skill-level security profile assignments
             skill_assignments = self.db.query(SentinelProfileAssignment).filter(
                 SentinelProfileAssignment.tenant_id == self.tenant_id,
                 SentinelProfileAssignment.agent_id == agent.id,
                 SentinelProfileAssignment.skill_type.isnot(None),
             ).all()
+            assignment_map = {sa.skill_type: sa for sa in skill_assignments}
 
             skills = []
-            for sa in skill_assignments:
+            seen_skill_types = set()
+
+            for skill_record in agent_skills:
+                st = skill_record.skill_type
+                seen_skill_types.add(st)
+
+                sa = assignment_map.get(st)
                 skill_profile = None
-                p = self.db.query(SentinelProfile).get(sa.profile_id)
-                if p:
-                    skill_profile = {"id": p.id, "name": p.name, "slug": p.slug}
+                if sa:
+                    p = self.db.query(SentinelProfile).get(sa.profile_id)
+                    if p:
+                        skill_profile = {"id": p.id, "name": p.name, "slug": p.slug}
 
                 skill_effective = self.get_effective_config(
-                    agent_id=agent.id, skill_type=sa.skill_type
+                    agent_id=agent.id, skill_type=st
                 )
                 skill_effective_profile = None
                 if skill_effective:
@@ -589,12 +603,43 @@ class SentinelProfilesService:
                     }
 
                 skills.append({
-                    "skill_type": sa.skill_type,
-                    "name": sa.skill_type,
-                    "is_enabled": True,
+                    "skill_type": st,
+                    "name": st,
+                    "is_enabled": skill_record.is_enabled,
                     "profile": skill_profile,
                     "effective_profile": skill_effective_profile,
                 })
+
+            # Include orphaned assignments (skill removed but assignment remains)
+            for sa in skill_assignments:
+                if sa.skill_type not in seen_skill_types:
+                    skill_profile = None
+                    p = self.db.query(SentinelProfile).get(sa.profile_id)
+                    if p:
+                        skill_profile = {"id": p.id, "name": p.name, "slug": p.slug}
+
+                    skill_effective = self.get_effective_config(
+                        agent_id=agent.id, skill_type=sa.skill_type
+                    )
+                    skill_effective_profile = None
+                    if skill_effective:
+                        skill_effective_profile = {
+                            "id": skill_effective.profile_id,
+                            "name": skill_effective.profile_name,
+                            "slug": "",
+                            "source": skill_effective.profile_source,
+                            "detection_mode": skill_effective.detection_mode,
+                            "aggressiveness_level": skill_effective.aggressiveness_level,
+                            "is_enabled": skill_effective.is_enabled,
+                        }
+
+                    skills.append({
+                        "skill_type": sa.skill_type,
+                        "name": sa.skill_type,
+                        "is_enabled": False,
+                        "profile": skill_profile,
+                        "effective_profile": skill_effective_profile,
+                    })
 
             agent_list.append({
                 "id": agent.id,

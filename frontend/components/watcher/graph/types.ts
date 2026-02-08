@@ -210,6 +210,15 @@ export interface TenantSecurityNodeData {
   isEnabled: boolean
 }
 
+export interface SecuritySkillData {
+  skillType: string
+  skillName: string
+  isEnabled: boolean
+  profile: SecurityProfileBadge | null
+  effectiveProfile: SecurityEffectiveProfile | null
+  detectionMode: SecurityDetectionMode
+}
+
 export interface AgentSecurityNodeData {
   type: 'agent-security'
   id: number
@@ -220,6 +229,11 @@ export interface AgentSecurityNodeData {
   detectionMode: SecurityDetectionMode
   aggressivenessLevel: number
   isEnabled: boolean
+  skillsCount: number
+  skills: SecuritySkillData[]
+  isExpanded?: boolean
+  onExpand?: (agentId: number) => void
+  onCollapse?: (agentId: number) => void
 }
 
 export interface SkillSecurityNodeData {

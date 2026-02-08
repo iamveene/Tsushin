@@ -249,8 +249,8 @@ export default function GraphLeftPanel({
           <span className="text-sm font-medium">Re-arrange Layout</span>
         </button>
 
-        {/* Phase 7: Expand All / Collapse All buttons - only for agents view */}
-        {viewType === 'agents' && (onExpandAll || onCollapseAll) && (
+        {/* Phase 7: Expand All / Collapse All buttons - agents and security views */}
+        {(viewType === 'agents' || viewType === 'security') && (onExpandAll || onCollapseAll) && (
           <div className="flex gap-2">
             {onExpandAll && (
               <button
