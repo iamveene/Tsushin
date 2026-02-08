@@ -14,7 +14,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api, SentinelLog, SentinelStats } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
-import { SearchIcon, AlertTriangleIcon, ShieldIcon, CheckCircleIcon, ChartBarIcon, LockIcon, UnlockIcon, EyeIcon } from '@/components/ui/icons'
+import { SearchIcon, AlertTriangleIcon, ShieldIcon, CheckCircleIcon, ChartBarIcon, LockIcon, UnlockIcon, EyeIcon, BrainIcon } from '@/components/ui/icons'
 
 interface Agent {
   id: number
@@ -272,8 +272,11 @@ export default function SecurityTab() {
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {Object.entries(stats.by_detection_type).map(([type, count]) => (
-              <div key={type} className={`rounded-lg border p-4 ${getSeverityColor(type)}`}>
-                <p className="text-sm capitalize">{type.replace('_', ' ')}</p>
+              <div key={type} className={`rounded-lg border p-4 ${type === 'memory_poisoning' ? 'bg-purple-500/20 text-purple-400 border-purple-500/50' : getSeverityColor(type)}`}>
+                <p className="text-sm capitalize flex items-center gap-1.5">
+                  {type === 'memory_poisoning' && <BrainIcon size={14} />}
+                  {type === 'memory_poisoning' ? 'MemGuard' : type.replace('_', ' ')}
+                </p>
                 <p className="text-2xl font-bold mt-1">{count}</p>
               </div>
             ))}
@@ -407,6 +410,13 @@ export default function SecurityTab() {
                           </span>
                         )
                       })()}
+                      {/* MemGuard Badge */}
+                      {log.detection_type === 'memory_poisoning' && (
+                        <span className="px-2 py-0.5 text-xs rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 flex items-center gap-1">
+                          <BrainIcon size={10} />
+                          <span>MemGuard</span>
+                        </span>
+                      )}
                       {/* Detection Mode indicator */}
                       {log.detection_mode_used && log.detection_mode_used !== 'block' && (
                         <span className="px-2 py-0.5 text-xs rounded-full bg-purple-600/30 text-purple-300 border border-purple-500/50">
@@ -487,6 +497,12 @@ export default function SecurityTab() {
                     </span>
                   )
                 })()}
+                {selectedLog.detection_type === 'memory_poisoning' && (
+                  <span className="px-3 py-1 text-sm rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 flex items-center gap-1">
+                    <BrainIcon size={12} />
+                    <span>MemGuard</span>
+                  </span>
+                )}
                 {selectedLog.detection_mode_used && (
                   <span className="px-3 py-1 text-sm rounded-full bg-purple-600/30 text-purple-300 border border-purple-500/50">
                     Mode: {selectedLog.detection_mode_used}
