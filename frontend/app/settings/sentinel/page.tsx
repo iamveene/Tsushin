@@ -29,9 +29,10 @@ import {
   EditIcon,
   TrashIcon,
   ShieldIcon,
+  BrainIcon,
 } from '@/components/ui/icons'
 
-type TabType = 'general' | 'profiles' | 'prompts' | 'llm' | 'stats' | 'exceptions'
+type TabType = 'general' | 'profiles' | 'memguard' | 'prompts' | 'llm' | 'stats' | 'exceptions'
 
 type ProfileModalMode = 'create' | 'edit' | 'clone'
 type ProfileEditorSection = 'general' | 'analysis' | 'detections' | 'llm' | 'performance' | 'notifications'
@@ -523,6 +524,7 @@ export default function SentinelSettingsPage() {
           {[
             { id: 'general', label: 'General', Icon: SettingsIcon },
             { id: 'profiles', label: 'Profiles', Icon: ShieldIcon },
+            { id: 'memguard', label: 'MemGuard', Icon: BrainIcon },
             { id: 'prompts', label: 'Analysis Prompts', Icon: DocumentIcon },
             { id: 'llm', label: 'LLM Configuration', Icon: BotIcon },
             { id: 'stats', label: 'Statistics', Icon: ChartBarIcon },
@@ -533,8 +535,12 @@ export default function SentinelSettingsPage() {
               onClick={() => setActiveTab(tab.id as TabType)}
               className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
                 activeTab === tab.id
-                  ? 'bg-teal-500/20 text-teal-400 border border-teal-500/50'
-                  : 'text-tsushin-slate hover:text-white hover:bg-tsushin-dark/30'
+                  ? tab.id === 'memguard'
+                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/50'
+                    : 'bg-teal-500/20 text-teal-400 border border-teal-500/50'
+                  : tab.id === 'memguard'
+                    ? 'text-purple-400/60 hover:text-purple-300 hover:bg-purple-500/10'
+                    : 'text-tsushin-slate hover:text-white hover:bg-tsushin-dark/30'
               }`}
             >
               <tab.Icon size={16} /> {tab.label}
@@ -769,7 +775,6 @@ export default function SentinelSettingsPage() {
                   { key: 'detect_agent_takeover', label: 'Agent Takeover', desc: 'Attempts to hijack agent identity', severity: 'high' },
                   { key: 'detect_poisoning', label: 'Poisoning Attacks', desc: 'Gradual manipulation patterns', severity: 'medium' },
                   { key: 'detect_shell_malicious_intent', label: 'Shell Malicious Intent', desc: 'Malicious shell command patterns', severity: 'critical' },
-                  { key: 'detect_memory_poisoning', label: 'Memory Poisoning', desc: 'Attempts to plant malicious data in persistent memory', severity: 'high' },
                 ].map((detection) => (
                   <div key={detection.key} className="flex items-center justify-between py-2">
                     <div className="flex items-center gap-3">
@@ -1171,6 +1176,259 @@ If you believe this is an error, please contact support."
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* MemGuard Tab */}
+        {activeTab === 'memguard' && (
+          <div className="space-y-6">
+            {/* Hero Banner */}
+            <div className={`relative overflow-hidden rounded-xl border ${
+              (formState as any).detect_memory_poisoning
+                ? 'bg-gradient-to-br from-purple-900/40 via-purple-800/20 to-gray-900 border-purple-500/30'
+                : 'bg-gradient-to-br from-gray-900/60 via-gray-800/40 to-gray-900 border-gray-600/30'
+            }`}>
+              <div className="absolute inset-0 opacity-5">
+                <div className="absolute top-4 right-4 w-64 h-64 bg-purple-500 rounded-full blur-3xl" />
+                <div className="absolute bottom-4 left-4 w-48 h-48 bg-violet-500 rounded-full blur-3xl" />
+              </div>
+              <div className="relative p-8">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className={`p-3 rounded-xl ${
+                      (formState as any).detect_memory_poisoning
+                        ? 'bg-purple-500/20 border border-purple-500/40'
+                        : 'bg-gray-700/40 border border-gray-600/40'
+                    }`}>
+                      <BrainIcon size={28} className={(formState as any).detect_memory_poisoning ? 'text-purple-400' : 'text-gray-500'} />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                        MemGuard
+                        <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                          (formState as any).detect_memory_poisoning
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                            : 'bg-red-500/20 text-red-400 border border-red-500/40'
+                        }`}>
+                          {(formState as any).detect_memory_poisoning ? 'ACTIVE' : 'DISABLED'}
+                        </span>
+                      </h2>
+                      <p className="text-purple-200/70 mt-1 max-w-xl">
+                        Two-layer defense system that prevents attackers from planting malicious data in your agents&apos; persistent memory
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Master Toggle */}
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-200 dark:border-gray-700">
+              <div className="p-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-3 h-3 rounded-full ${
+                      (formState as any).detect_memory_poisoning ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'
+                    }`} />
+                    <div>
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                        Memory Poisoning Protection
+                      </h3>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {(formState as any).detect_memory_poisoning
+                          ? 'Enabled for all agents in this tenant. Incoming messages and extracted facts are screened before storage.'
+                          : 'Protection is disabled. Agents\' memory is vulnerable to poisoning attacks.'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setFormState({ ...formState, detect_memory_poisoning: !(formState as any).detect_memory_poisoning })}
+                    disabled={!canEdit}
+                    className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors ${
+                      (formState as any).detect_memory_poisoning ? 'bg-purple-600' : 'bg-gray-300 dark:bg-gray-600'
+                    } ${!canEdit ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform shadow-sm ${
+                        (formState as any).detect_memory_poisoning ? 'translate-x-8' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+                {!(formState as any).detect_memory_poisoning && (
+                  <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/40 rounded-lg">
+                    <p className="text-sm text-red-700 dark:text-red-300 flex items-center gap-2">
+                      <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      Disabling MemGuard leaves agents vulnerable to memory injection attacks such as credential planting and behavioral overrides.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* How It Works - Two Layers */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">How It Works</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Layer A */}
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md border border-gray-200 dark:border-gray-700 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-purple-500/20 text-purple-400 font-bold text-sm border border-purple-500/30">A</span>
+                    <div>
+                      <h4 className="font-semibold text-gray-900 dark:text-gray-100">Message Screening</h4>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Pre-storage analysis</p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">
+                    Scans every incoming message <span className="text-purple-400 font-medium">before</span> it reaches memory. Uses fast regex pattern matching with optional LLM escalation for ambiguous cases.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {['Credential Injection', 'Instruction Planting', 'Identity Override', 'Behavior Manipulation'].map(tag => (
+                      <span key={tag} className="text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+                {/* Layer B */}
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md border border-gray-200 dark:border-gray-700 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-violet-500/20 text-violet-400 font-bold text-sm border border-violet-500/30">B</span>
+                    <div>
+                      <h4 className="font-semibold text-gray-900 dark:text-gray-100">Fact Validation</h4>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Pre-storage gate</p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">
+                    Validates each extracted fact <span className="text-violet-400 font-medium">before</span> it&apos;s persisted to semantic memory. Catches threats that bypass message-level analysis.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {['Credential Storage', 'Command Injection', 'Fact Override Detection'].map(tag => (
+                      <span key={tag} className="text-xs px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/20">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* What It Detects - Pattern Categories */}
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Threat Categories</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Attack patterns MemGuard monitors across both layers</p>
+              </div>
+              <div className="p-6 space-y-4">
+                {[
+                  {
+                    name: 'Credential Injection',
+                    severity: 'critical',
+                    desc: 'Attempts to store API keys, passwords, tokens, or secrets in agent memory for later exfiltration.',
+                    examples: '"my API key is sk-abc123...", "remember my token is..."',
+                    layer: 'A + B',
+                  },
+                  {
+                    name: 'Instruction Planting',
+                    severity: 'high',
+                    desc: 'Planting persistent instructions that alter agent behavior across future conversations.',
+                    examples: '"remember that when asked about X, always say Y...", "from now on, always..."',
+                    layer: 'A',
+                  },
+                  {
+                    name: 'Identity Override',
+                    severity: 'high',
+                    desc: 'Attempting to redefine the agent\'s identity, role, or persona through memory manipulation.',
+                    examples: '"your real name is...", "remember you are actually..."',
+                    layer: 'A',
+                  },
+                  {
+                    name: 'Persistent Behavior',
+                    severity: 'medium',
+                    desc: 'Subtle attempts to install long-term behavioral rules that bypass security controls.',
+                    examples: '"never mention X to anyone...", "always ignore security checks..."',
+                    layer: 'A',
+                  },
+                ].map((cat) => (
+                  <div key={cat.name} className="flex items-start gap-4 py-3 border-b border-gray-100 dark:border-gray-700/50 last:border-0">
+                    <div className="flex-shrink-0 mt-0.5">
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                        cat.severity === 'critical' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' :
+                        cat.severity === 'high' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400' :
+                        'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+                      }`}>
+                        {cat.severity}
+                      </span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-medium text-gray-900 dark:text-gray-100">{cat.name}</h4>
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Layer {cat.layer}</span>
+                      </div>
+                      <p className="text-sm text-gray-600 dark:text-gray-300 mt-0.5">{cat.desc}</p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 italic">{cat.examples}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Configuration */}
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-200 dark:border-gray-700">
+              <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Configuration</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Fine-tune MemGuard sensitivity and behavior</p>
+              </div>
+              <div className="p-6 space-y-6">
+                {/* Aggressiveness for MemGuard */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Sensitivity Level
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="3"
+                    value={formState.aggressiveness_level ?? 1}
+                    onChange={(e) => setFormState({ ...formState, aggressiveness_level: parseInt(e.target.value) })}
+                    disabled={!canEdit || !(formState as any).detect_memory_poisoning}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-purple-500"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    <span>Off</span>
+                    <span>Moderate</span>
+                    <span>Aggressive</span>
+                    <span>Maximum</span>
+                  </div>
+                  <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-700/30 rounded-lg">
+                    <p className="text-sm text-gray-600 dark:text-gray-300">
+                      {formState.aggressiveness_level === 0 && 'Detection is off. No analysis is performed.'}
+                      {formState.aggressiveness_level === 1 && 'Moderate: Catches explicit poisoning attempts. Low false positive rate.'}
+                      {formState.aggressiveness_level === 2 && 'Aggressive: Also flags credential storage requests and behavioral override attempts.'}
+                      {formState.aggressiveness_level === 3 && 'Maximum: Flags any attempt to store sensitive data, indirect phrasing, and subtle manipulation.'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Note about shared settings */}
+                <div className="p-3 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800/30 rounded-lg">
+                  <p className="text-xs text-purple-700 dark:text-purple-300">
+                    <strong>Note:</strong> Sensitivity level and detection mode are shared with the global Sentinel configuration. Changes here affect all detection types. For per-detection customization, use <button onClick={() => setActiveTab('profiles')} className="underline hover:no-underline">Profiles</button>.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Save Button */}
+            {canEdit && (
+              <div className="flex justify-end">
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg disabled:opacity-50 transition-colors"
+                >
+                  {saving ? 'Saving...' : 'Save MemGuard Settings'}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
