@@ -78,18 +78,18 @@ function BuilderGroupNode({ data, selected }: NodeProps<BuilderGroupData>) {
         ${data.isExpanded ? 'expanded shadow-md' : ''}
       `}
     >
-      {/* Target handle (from agent) */}
+      {/* Target handle (from agent above) */}
       <Handle
         type="target"
-        position={Position.Left}
+        position={Position.Top}
         className="!w-2.5 !h-2.5 !border-2 !border-tsushin-deep"
         style={{ backgroundColor: handleColor }}
       />
 
-      {/* Source handle (to children - hidden when collapsed) */}
+      {/* Source handle (to children below - hidden when collapsed) */}
       <Handle
         type="source"
-        position={Position.Right}
+        position={Position.Bottom}
         className={`!w-2.5 !h-2.5 !border-2 !border-tsushin-deep ${!data.isExpanded ? '!opacity-0' : ''}`}
         style={{
           backgroundColor: handleColor,

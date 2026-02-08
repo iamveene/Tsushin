@@ -9,8 +9,7 @@ function BuilderAgentNode({ data, selected }: NodeProps) {
   return (
     <div role="group" aria-label={`Agent: ${d.name}`}
       className={`builder-node builder-node-agent px-6 py-4 rounded-xl border-2 transition-all duration-200 ${selected ? 'border-tsushin-indigo shadow-glow-sm' : 'border-tsushin-indigo/40 hover:border-tsushin-indigo/70'} bg-tsushin-surface`}>
-      <Handle type="source" position={Position.Right} className="!bg-tsushin-indigo !border-tsushin-surface !w-3 !h-3" />
-      <Handle type="target" position={Position.Left} className="!bg-tsushin-accent !border-tsushin-surface !w-3 !h-3" />
+      <Handle type="source" position={Position.Bottom} className="!bg-tsushin-indigo !border-tsushin-surface !w-3 !h-3" />
       <div className="flex items-center gap-3 mb-3">
         <div className="w-10 h-10 rounded-lg bg-tsushin-indigo/20 flex items-center justify-center flex-shrink-0">
           <svg className="w-5 h-5 text-tsushin-indigo" fill="none" viewBox="0 0 24 24" stroke="currentColor">

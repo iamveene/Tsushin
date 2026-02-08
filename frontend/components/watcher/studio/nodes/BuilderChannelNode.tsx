@@ -19,8 +19,7 @@ function BuilderChannelNode({ data, selected }: NodeProps) {
   return (
     <div role="group" aria-label={`Channel: ${d.label}`}
       className={`builder-node ${config.nodeClass} px-4 py-3 rounded-xl border transition-all duration-200 ${selected ? 'border-cyan-400 shadow-glow-sm' : 'border-tsushin-border hover:border-tsushin-muted'} bg-tsushin-surface`}>
-      <Handle type="source" position={Position.Right} className="!bg-cyan-400 !border-tsushin-surface !w-3 !h-3" />
-      <Handle type="target" position={Position.Left} className="!bg-cyan-400 !border-tsushin-surface !w-3 !h-3" />
+      <Handle type="target" position={Position.Top} className="!bg-cyan-400 !border-tsushin-surface !w-3 !h-3" />
       <div className="flex items-center gap-2.5">
         <div className={`w-8 h-8 rounded-lg ${config.bgColor} flex items-center justify-center flex-shrink-0`}>
           <svg className={`w-4 h-4 ${config.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">

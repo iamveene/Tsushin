@@ -187,26 +187,20 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       })
     }
 
-    // Use dagre when any group is expanded (avoids overlaps), radial when all collapsed
-    const hasAnyExpanded = expandedCategories.size > 0
+    // Always use tree layout (top-down) for consistent TB handle routing
     let cancelled = false
 
-    if (hasAnyExpanded) {
-      calculateDagreBuilderLayout(agentNode, groupedCategories, directNodes)
-        .then(layout => {
-          if (!cancelled) { setNodes(layout.nodes); setEdges(layout.edges) }
-        })
-        .catch(err => {
-          console.error('[Agent Studio] Dagre layout failed, falling back to radial:', err)
-          if (!cancelled) {
-            const fallback = calculateGroupedRadialLayout(agentNode, groupedCategories, directNodes)
-            setNodes(fallback.nodes); setEdges(fallback.edges)
-          }
-        })
-    } else {
-      const layout = calculateGroupedRadialLayout(agentNode, groupedCategories, directNodes)
-      setNodes(layout.nodes); setEdges(layout.edges)
-    }
+    calculateDagreBuilderLayout(agentNode, groupedCategories, directNodes)
+      .then(layout => {
+        if (!cancelled) { setNodes(layout.nodes); setEdges(layout.edges) }
+      })
+      .catch(err => {
+        console.error('[Agent Studio] Tree layout failed, falling back to radial:', err)
+        if (!cancelled) {
+          const fallback = calculateGroupedRadialLayout(agentNode, groupedCategories, directNodes)
+          setNodes(fallback.nodes); setEdges(fallback.edges)
+        }
+      })
 
     return () => { cancelled = true }
   }, [state.agentId, state.agent, state.attachedPersonaId, state.attachedChannels, state.attachedSkills, state.attachedTools, state.attachedSentinelProfileId, state.attachedKnowledgeDocs, studioData.personas, studioData.skills, studioData.tools, studioData.sentinelProfiles, studioData.knowledge, setNodes, expandedCategories, toggleCategoryExpand])
