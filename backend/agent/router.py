@@ -1574,7 +1574,7 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         f"{sentinel_result.detection_type}: {sentinel_result.threat_reason}"
                     )
                     # Send blocked response and return early (no memory storage = no poisoning)
-                    blocked_response = sentinel_result.response_message or "Message blocked for security reasons."
+                    blocked_response = sentinel_result.threat_reason or "Message blocked for security reasons."
                     recipient = message.get("chat_id") or message.get("sender")
                     channel = message.get("channel", "whatsapp")
                     await self._send_message(

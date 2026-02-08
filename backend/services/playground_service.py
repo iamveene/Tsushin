@@ -276,7 +276,7 @@ class PlaygroundService:
                             # Return early with blocked response (no memory storage = no poisoning)
                             return {
                                 "status": "blocked",
-                                "message": sentinel_result.response_message or "Message blocked for security reasons.",
+                                "message": sentinel_result.threat_reason or "Message blocked for security reasons.",
                                 "agent_name": agent_name,
                                 "security_blocked": True,
                                 "threat_type": sentinel_result.detection_type,
