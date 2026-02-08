@@ -83,12 +83,15 @@ export async function calculateDagreBuilderLayout(
   const allNodes: Node<BuilderNodeData>[] = []
   const edges: Edge[] = []
 
-  // Build tier-1 entries: groups first, then direct nodes
-  const tier1Entries: Tier1Entry[] = []
+  // Build tier-1 entries: direct nodes on left, groups in center, memory on right
+  // This creates a balanced, organized layout
+  const groupEntries: Tier1Entry[] = []
+  const leftDirectEntries: Tier1Entry[] = []  // persona, sentinel
+  const rightDirectEntries: Tier1Entry[] = [] // memory
 
   for (const { groupNode, childNodes, isExpanded } of groupedCategories) {
     const visibleChildren = isExpanded ? childNodes : []
-    tier1Entries.push({ node: groupNode, children: visibleChildren, isGroup: true })
+    groupEntries.push({ node: groupNode, children: visibleChildren, isGroup: true })
 
     edges.push({
       id: `edge-${agentNode.id}-${groupNode.id}`,
@@ -112,7 +115,13 @@ export async function calculateDagreBuilderLayout(
   }
 
   for (const node of directNodes) {
-    tier1Entries.push({ node, children: [], isGroup: false })
+    const entry: Tier1Entry = { node, children: [], isGroup: false }
+    // Memory goes to the right, persona/sentinel go to the left
+    if (node.type === 'builder-memory') {
+      rightDirectEntries.push(entry)
+    } else {
+      leftDirectEntries.push(entry)
+    }
     edges.push({
       id: `edge-${agentNode.id}-${node.id}`,
       source: agentNode.id,
@@ -121,6 +130,9 @@ export async function calculateDagreBuilderLayout(
       style: EDGE_STYLE,
     })
   }
+
+  // Final order: [left directs] [groups] [right directs]
+  const tier1Entries: Tier1Entry[] = [...leftDirectEntries, ...groupEntries, ...rightDirectEntries]
 
   // --- Step 1: Calculate the width each tier-1 entry occupies ---
   // Width = max(node width, total children width)
@@ -147,7 +159,7 @@ export async function calculateDagreBuilderLayout(
 
   // --- Step 2: Position tier-1 nodes and their children ---
   const tier1Y = TIER_GAP_Y  // Y position for tier-1 nodes
-  const tier2Y = TIER_GAP_Y * 2 + getNodeHeight('builder-group') // Y position for tier-2 children
+  const tier2Y = tier1Y + getNodeHeight('builder-group') + TIER_GAP_Y * 0.75 // Consistent gap below groups
   const tier3Y = tier2Y + getNodeHeight('builder-skill') + TIER_3_GAP_Y // Y position for tier-3 providers
 
   // Track skill node positions for provider placement
