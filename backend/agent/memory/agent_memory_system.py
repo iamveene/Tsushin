@@ -598,6 +598,10 @@ class AgentMemorySystem:
                 agent_id=self.agent_id
             )
 
+            # MemGuard Layer B: Validate facts before storage
+            if facts:
+                facts = self._validate_facts_memguard(facts, user_id)
+
             # Store extracted facts
             for fact in facts:
                 success = self.knowledge_service.store_fact(
@@ -619,6 +623,90 @@ class AgentMemorySystem:
 
         except Exception as e:
             self.logger.error(f"Fact extraction failed: {e}")
+
+    def _get_tenant_id(self) -> Optional[str]:
+        """Get tenant_id for this agent from the database."""
+        try:
+            from models import Agent
+            agent = self.db.query(Agent).filter(Agent.id == self.agent_id).first()
+            return agent.tenant_id if agent else None
+        except Exception as e:
+            self.logger.error(f"Failed to get tenant_id for agent {self.agent_id}: {e}")
+            return None
+
+    def _validate_facts_memguard(self, facts: List[Dict], user_id: str) -> List[Dict]:
+        """
+        MemGuard Layer B: Validate extracted facts before storage.
+
+        Runs fact validation through MemGuardService to catch:
+        - Credential-like values
+        - Command patterns in instruction facts
+        - Suspicious overrides of established facts
+
+        Fail-open: returns all facts if validation errors occur.
+
+        Args:
+            facts: List of extracted fact dicts
+            user_id: User identifier
+
+        Returns:
+            Filtered list of validated facts
+        """
+        try:
+            tenant_id = self._get_tenant_id()
+            if not tenant_id:
+                return facts  # Can't validate without tenant context
+
+            from services.sentinel_service import SentinelService
+            sentinel = SentinelService(self.db, tenant_id)
+            effective_config = sentinel.get_effective_config(self.agent_id)
+
+            memguard_enabled = effective_config.detection_config.get(
+                "memory_poisoning", {}
+            ).get("enabled", True)
+
+            if not memguard_enabled:
+                return facts
+
+            from services.memguard_service import MemGuardService
+            memguard = MemGuardService(self.db, tenant_id)
+
+            # Batch-fetch existing facts once (not per-fact)
+            existing_facts = self.knowledge_service.get_user_facts(
+                agent_id=self.agent_id,
+                user_id=user_id
+            )
+
+            validated_facts = []
+            blocked_count = 0
+
+            for fact in facts:
+                validation = memguard.validate_fact(
+                    fact=fact,
+                    existing_facts=existing_facts,
+                    agent_id=self.agent_id,
+                    user_id=user_id,
+                )
+
+                if validation.is_valid:
+                    validated_facts.append(fact)
+                else:
+                    blocked_count += 1
+                    self.logger.warning(
+                        f"🛡️ MEMGUARD Layer B: Blocked fact - "
+                        f"topic={fact.get('topic')}, key={fact.get('key')}: {validation.reason}"
+                    )
+
+            if blocked_count > 0:
+                self.logger.info(
+                    f"🛡️ MEMGUARD Layer B: {blocked_count}/{len(facts)} facts blocked for {user_id}"
+                )
+
+            return validated_facts
+
+        except Exception as e:
+            self.logger.warning(f"MemGuard Layer B validation failed, allowing all facts: {e}")
+            return facts
 
     async def extract_facts_now(self, user_id: str) -> List[Dict]:
         """

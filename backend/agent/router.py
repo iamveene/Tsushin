@@ -1556,6 +1556,7 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
         # Phase 21: Sentinel Security Analysis BEFORE memory storage
         # This prevents memory poisoning from blocked messages in WhatsApp/Telegram channels
         tenant_id = self._get_agent_tenant_id(agent_id)
+        sentinel = None  # Will be set by Sentinel check, reused by MemGuard
         if tenant_id:
             try:
                 from services.sentinel_service import SentinelService
@@ -1592,6 +1593,53 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                     )
             except Exception as e:
                 self.logger.warning(f"Sentinel pre-check failed, allowing message: {e}")
+
+        # MemGuard Layer A: Pre-storage memory poisoning check
+        if tenant_id:
+            try:
+                from services.memguard_service import MemGuardService
+
+                # Reuse Sentinel's effective config for detection settings
+                if not sentinel:
+                    from services.sentinel_service import SentinelService
+                    sentinel = SentinelService(self.db, tenant_id)
+
+                effective_config = sentinel.get_effective_config(agent_id)
+                memguard_enabled = effective_config.detection_config.get(
+                    "memory_poisoning", {}
+                ).get("enabled", True)
+
+                if memguard_enabled:
+                    memguard = MemGuardService(self.db, tenant_id)
+                    memguard_result = await memguard.analyze_for_memory_poisoning(
+                        content=message_text,
+                        agent_id=agent_id,
+                        sender_key=sender_key,
+                        config=effective_config,
+                    )
+
+                    if memguard_result.blocked:
+                        self.logger.warning(
+                            f"🛡️ MEMGUARD: Blocking message BEFORE memory storage - "
+                            f"Memory poisoning detected: {memguard_result.reason}"
+                        )
+                        blocked_response = "Message blocked: memory poisoning attempt detected."
+                        recipient = message.get("chat_id") or message.get("sender")
+                        channel = message.get("channel", "whatsapp")
+                        await self._send_message(
+                            recipient=recipient,
+                            message_text=blocked_response,
+                            channel=channel,
+                            agent_id=agent_id
+                        )
+                        return
+                    elif memguard_result.is_poisoning:
+                        self.logger.info(
+                            f"🛡️ MEMGUARD (detect_only): Memory poisoning detected but allowing - "
+                            f"{memguard_result.reason}"
+                        )
+            except Exception as e:
+                self.logger.warning(f"MemGuard Layer A check failed, allowing message: {e}")
 
         # Phase 4.8: Add to agent-scoped memory (with automatic fact extraction)
         # Item 10: Contact-based memory support with WhatsApp ID resolution

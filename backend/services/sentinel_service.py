@@ -1103,7 +1103,7 @@ class SentinelService:
             reason = parsed.get("reason", "")
 
             # Validate threat_type
-            valid_types = ["none", "prompt_injection", "agent_takeover", "poisoning", "shell_malicious"]
+            valid_types = ["none", "prompt_injection", "agent_takeover", "poisoning", "shell_malicious", "memory_poisoning"]
             if threat_type not in valid_types:
                 self.logger.warning(f"Invalid threat_type '{threat_type}', defaulting to 'none'")
                 threat_type = "none"
