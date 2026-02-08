@@ -80,6 +80,7 @@ class BuilderAgentDetail(BaseModel):
     memory_size: Optional[int] = None
     memory_isolation_mode: str
     enable_semantic_search: bool
+    avatar: Optional[str] = None
 
 
 class BuilderSkillInfo(BaseModel):
@@ -130,6 +131,7 @@ class BuilderAgentListItem(BaseModel):
     is_default: bool
     model_provider: str
     model_name: str
+    avatar: Optional[str] = None
 
 
 class BuilderPersonaItem(BaseModel):
@@ -199,6 +201,7 @@ class AgentSaveData(BaseModel):
     memory_size: Optional[int] = None
     memory_isolation_mode: Optional[str] = None
     enable_semantic_search: Optional[bool] = None
+    avatar: Optional[str] = None
 
 
 class BuilderSaveRequest(BaseModel):
@@ -368,6 +371,7 @@ async def get_builder_data(
         memory_size=agent.memory_size,
         memory_isolation_mode=agent.memory_isolation_mode or "isolated",
         enable_semantic_search=agent.enable_semantic_search if agent.enable_semantic_search is not None else True,
+        avatar=agent.avatar,
     )
 
     # 2. Skills (all, not just enabled — builder needs full state for diff)
@@ -456,6 +460,7 @@ async def get_builder_data(
                 is_default=a.is_default or False,
                 model_provider=a.model_provider or "gemini",
                 model_name=a.model_name or "gemini-2.5-pro",
+                avatar=a.avatar,
             )
             for a, cn in agents_rows
         ]
@@ -558,6 +563,8 @@ async def save_builder_data(
                 agent.memory_isolation_mode = data.agent.memory_isolation_mode
             if data.agent.enable_semantic_search is not None:
                 agent.enable_semantic_search = data.agent.enable_semantic_search
+            if data.agent.avatar is not None:
+                agent.avatar = data.agent.avatar if data.agent.avatar != "" else None
             agent.updated_at = datetime.utcnow()
             changes["agent_updated"] = True
 

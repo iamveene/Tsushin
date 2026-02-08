@@ -94,6 +94,8 @@ class AgentResponse(BaseModel):
     semantic_search_results: Optional[int]  # Number of semantic results (1-50)
     semantic_similarity_threshold: Optional[float]  # Similarity threshold (0.0-1.0)
 
+    avatar: Optional[str] = None  # Agent avatar slug
+
     is_active: bool
     is_default: bool
     skills_count: Optional[int] = 0  # Number of enabled skills
@@ -428,6 +430,8 @@ def list_agents(
             "semantic_search_results": agent.semantic_search_results,
             "semantic_similarity_threshold": agent.semantic_similarity_threshold,
 
+            "avatar": agent.avatar,
+
             "is_active": agent.is_active,
             "is_default": agent.is_default,
             "skills_count": skills_count,
@@ -541,6 +545,8 @@ def get_agent(
         "enable_semantic_search": agent.enable_semantic_search,
         "semantic_search_results": agent.semantic_search_results,
         "semantic_similarity_threshold": agent.semantic_similarity_threshold,
+
+        "avatar": agent.avatar,
 
         "is_active": agent.is_active,
         "is_default": agent.is_default,

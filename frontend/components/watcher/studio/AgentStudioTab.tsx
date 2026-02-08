@@ -198,7 +198,7 @@ export default function AgentStudioTab() {
         {selectedAgentId ? (
           <>
             <StudioLeftPanel studioData={studioData} builder={builder} onSave={handleSave} />
-            <StudioCanvasComponent nodes={builder.nodes} edges={builder.edges} onNodesChange={builder.onNodesChange} onDrop={handleDrop} onDeleteSelected={handleDeleteSelected} onNodeDoubleClick={handleNodeDoubleClick} onReady={handleCanvasReady} onExpandAll={builder.expandAll} onCollapseAll={builder.collapseAll} hasAnyExpanded={builder.expandedCategories.size > 0} />
+            <StudioCanvasComponent nodes={builder.nodes} edges={builder.edges} onNodesChange={builder.onNodesChange} onDrop={handleDrop} onDeleteSelected={handleDeleteSelected} onNodeDoubleClick={handleNodeDoubleClick} onReady={handleCanvasReady} onExpandAll={builder.expandAll} onCollapseAll={builder.collapseAll} onResetLayout={builder.resetLayout} hasAnyExpanded={builder.expandedCategories.size > 0} />
             {configPanel && (() => {
               const liveNode = builder.nodes.find(n => n.id === configPanel.nodeId)
               const liveData = liveNode?.data || configPanel.nodeData

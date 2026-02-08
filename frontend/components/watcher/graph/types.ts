@@ -26,6 +26,7 @@ export interface AgentNodeData {
   isActive: boolean
   modelProvider?: string
   modelName?: string
+  avatar?: string | null
   // Phase 3: Badge and channel data
   memoryIsolationMode?: MemoryIsolationMode
   skillsCount?: number

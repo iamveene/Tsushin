@@ -117,6 +117,7 @@ class AgentGraphPreviewItem(BaseModel):
     knowledge_doc_count: int
     knowledge_chunk_count: int
     sentinel_enabled: bool
+    avatar: Optional[str] = None
 
 
 class WhatsAppChannelInfo(BaseModel):
@@ -245,7 +246,8 @@ async def get_agents_graph_preview(
             skills_count=skills_count,
             knowledge_doc_count=knowledge_doc_count,
             knowledge_chunk_count=knowledge_chunk_count,
-            sentinel_enabled=bool(sentinel_enabled)
+            sentinel_enabled=bool(sentinel_enabled),
+            avatar=agent.avatar,
         ))
 
     # Fetch channel instances (excluding test/internal instances)

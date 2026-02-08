@@ -16,7 +16,8 @@
 
 /* Builder Node Accents */
 .builder-node { transition: all 0.2s ease; }
-.builder-node-agent { min-width: 220px; min-height: 100px; }
+.builder-node-agent { min-width: 260px; min-height: 120px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3); }
+.builder-group-node { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
 .builder-node-persona { border-left: 3px solid rgba(168, 85, 247, 0.6) !important; }
 .builder-node-channel-whatsapp { border-left: 3px solid rgba(37, 211, 102, 0.6) !important; }
 .builder-node-channel-telegram { border-left: 3px solid rgba(0, 136, 204, 0.6) !important; }

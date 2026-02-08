@@ -25,10 +25,11 @@ interface StudioCanvasProps {
   onReady?: (methods: StudioCanvasRef) => void
   onExpandAll?: () => void
   onCollapseAll?: () => void
+  onResetLayout?: () => void
   hasAnyExpanded?: boolean
 }
 
-function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelected, onNodeDoubleClick, onReady, onExpandAll, onCollapseAll, hasAnyExpanded }: StudioCanvasProps) {
+function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelected, onNodeDoubleClick, onReady, onExpandAll, onCollapseAll, onResetLayout, hasAnyExpanded }: StudioCanvasProps) {
   const { fitView } = useReactFlow()
   const [isDragOver, setIsDragOver] = useState(false)
 
@@ -49,6 +50,11 @@ function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelect
   const handleAutoArrange = useCallback(() => {
     fitView({ padding: 0.3, duration: 300 })
   }, [fitView])
+
+  const handleResetLayout = useCallback(() => {
+    onResetLayout?.()
+    setTimeout(() => fitView({ padding: 0.3, duration: 300 }), 150)
+  }, [onResetLayout, fitView])
 
   const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setIsDragOver(true) }, [])
   const handleDragLeave = useCallback(() => { setIsDragOver(false) }, [])
@@ -85,6 +91,12 @@ function StudioCanvasInner({ nodes, edges, onNodesChange, onDrop, onDeleteSelect
               <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
             </svg>
             Fit View
+          </button>
+          <button onClick={handleResetLayout} className="studio-layout-btn" title="Reset all nodes to auto-calculated positions">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.992 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+            </svg>
+            Reset Layout
           </button>
           <button
             onClick={() => hasAnyExpanded ? onCollapseAll?.() : onExpandAll?.()}

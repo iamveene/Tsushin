@@ -74,6 +74,7 @@ function transformBatchToAgentsGraphData(
         hasSentinelProtection: agent.sentinel_enabled,
         enabledChannels: agent.enabled_channels,
         isDefault: agent.is_default,
+        avatar: agent.avatar || null,
         // Phase 6: Store knowledge counts for expand preview
         knowledgeDocCount: agent.knowledge_doc_count,
         knowledgeChunkCount: agent.knowledge_chunk_count,

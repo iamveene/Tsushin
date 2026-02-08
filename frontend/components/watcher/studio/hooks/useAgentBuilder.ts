@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { useNodesState, type OnNodesChange, type Node, type Edge } from '@xyflow/react'
+import { useNodesState, type OnNodesChange, type Node, type Edge, type NodeChange } from '@xyflow/react'
 import { api } from '@/lib/client'
 import type { BuilderSaveRequest } from '@/lib/client'
 import { calculateGroupedRadialLayout, type GroupedCategoryInput } from '../layout/radialLayout'
@@ -9,8 +9,8 @@ import { calculateDagreBuilderLayout } from '../layout/dagreBuilderLayout'
 import type {
   AgentBuilderState, BuilderNodeData, PaletteItemData, ProfileCategoryId,
   BuilderAgentData, BuilderPersonaData, BuilderChannelData, BuilderSkillData,
-  BuilderToolData, BuilderSentinelData, BuilderKnowledgeData, BuilderMemoryData,
-  BuilderGroupData,
+  BuilderSkillProviderData, BuilderToolData, BuilderSentinelData, BuilderKnowledgeData,
+  BuilderMemoryData, BuilderGroupData,
 } from '../types'
 import { GROUPED_CATEGORIES, CATEGORY_DISPLAY } from '../types'
 import type { UseStudioDataReturn } from './useStudioData'
@@ -21,11 +21,13 @@ export interface UseAgentBuilderReturn {
   attachProfile: (categoryId: ProfileCategoryId, item: PaletteItemData) => void
   detachProfile: (categoryId: ProfileCategoryId, itemId: string | number) => void
   updateNodeConfig: (nodeType: string, nodeId: string, config: Record<string, unknown>) => void
+  updateAvatar: (slug: string | null) => void
   save: () => Promise<void>; isDirty: boolean; isSaving: boolean
   expandedCategories: Set<ProfileCategoryId>
   toggleCategoryExpand: (categoryId: ProfileCategoryId) => void
   expandAll: () => void
   collapseAll: () => void
+  resetLayout: () => void
 }
 
 const INITIAL_STATE: AgentBuilderState = {
@@ -36,31 +38,110 @@ const INITIAL_STATE: AgentBuilderState = {
 
 export function useAgentBuilder(agentId: number | null, studioData: UseStudioDataReturn): UseAgentBuilderReturn {
   const [state, setState] = useState<AgentBuilderState>(INITIAL_STATE)
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node<BuilderNodeData>>([])
+  const [nodes, setNodes, rawOnNodesChange] = useNodesState<Node<BuilderNodeData>>([])
   const [edges, setEdges] = useState<Edge[]>([])
   const savedSnapshot = useRef<string>('')
   const [expandedCategories, setExpandedCategories] = useState<Set<ProfileCategoryId>>(new Set())
+  const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set())
+  const [expandedKnowledge, setExpandedKnowledge] = useState<Set<number>>(new Set())
+
+  // Phase A: Track user-dragged positions so layout doesn't overwrite them
+  const userPositions = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const structuralFingerprint = useRef<string>('')
+  const layoutVersion = useRef(0)
+
+  // Wrapped onNodesChange: intercept drag-end to store user positions
+  const onNodesChange: OnNodesChange<Node<BuilderNodeData>> = useCallback((changes: NodeChange<Node<BuilderNodeData>>[]) => {
+    for (const change of changes) {
+      if (change.type === 'position' && change.position && !change.dragging) {
+        // Drag ended — store final position
+        userPositions.current.set(change.id, { ...change.position })
+      }
+    }
+    rawOnNodesChange(changes)
+  }, [rawOnNodesChange])
 
   const toggleCategoryExpand = useCallback((categoryId: ProfileCategoryId) => {
+    // Clear user positions for children of this group when toggling
     setExpandedCategories(prev => {
       const next = new Set(prev)
-      if (next.has(categoryId)) next.delete(categoryId)
-      else next.add(categoryId)
+      const wasExpanded = next.has(categoryId)
+      if (wasExpanded) {
+        next.delete(categoryId)
+      } else {
+        next.add(categoryId)
+      }
+      // Clear child positions for this category since they're appearing/disappearing
+      const prefix = categoryId === 'channels' ? 'channel-'
+        : categoryId === 'skills' ? 'skill-'
+        : categoryId === 'tools' ? 'tool-'
+        : categoryId === 'knowledge' ? 'knowledge-'
+        : ''
+      if (prefix) {
+        for (const key of userPositions.current.keys()) {
+          if (key.startsWith(prefix)) userPositions.current.delete(key)
+        }
+      }
       return next
     })
   }, [])
 
   const expandAll = useCallback(() => {
+    userPositions.current.clear()
     setExpandedCategories(new Set(GROUPED_CATEGORIES as ProfileCategoryId[]))
   }, [])
 
   const collapseAll = useCallback(() => {
+    userPositions.current.clear()
     setExpandedCategories(new Set())
+    setExpandedSkills(new Set())
+    setExpandedKnowledge(new Set())
+  }, [])
+
+  const toggleSkillExpand = useCallback((skillType: string) => {
+    setExpandedSkills(prev => {
+      const next = new Set(prev)
+      if (next.has(skillType)) {
+        next.delete(skillType)
+      } else {
+        next.add(skillType)
+      }
+      // Clear provider node positions
+      for (const key of userPositions.current.keys()) {
+        if (key.startsWith(`provider-${skillType}-`)) userPositions.current.delete(key)
+      }
+      return next
+    })
+  }, [])
+
+  const toggleKnowledgeExpand = useCallback((docId: number) => {
+    setExpandedKnowledge(prev => {
+      const next = new Set(prev)
+      if (next.has(docId)) next.delete(docId)
+      else next.add(docId)
+      return next
+    })
+  }, [])
+
+  const resetLayout = useCallback(() => {
+    userPositions.current.clear()
+    layoutVersion.current += 1
+    // Force re-layout by bumping structural fingerprint
+    structuralFingerprint.current = ''
+    // Trigger state update to force the effect to re-run
+    setState(prev => ({ ...prev }))
+  }, [])
+
+  const updateAvatar = useCallback((slug: string | null) => {
+    setState(prev => {
+      if (!prev.agent) return prev
+      return { ...prev, agent: { ...prev.agent, avatar: slug } }
+    })
   }, [])
 
   // Load agent state from studio data
   useEffect(() => {
-    if (!agentId || !studioData.agent) { setState(INITIAL_STATE); setNodes([]); setEdges([]); savedSnapshot.current = ''; return }
+    if (!agentId || !studioData.agent) { setState(INITIAL_STATE); setNodes([]); setEdges([]); savedSnapshot.current = ''; userPositions.current.clear(); return }
     const agent = studioData.agent
     const agentAssignment = studioData.sentinelAssignments.find(a => a.agent_id === agentId && !a.skill_type)
     const newState: AgentBuilderState = {
@@ -70,6 +151,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
         enabledChannels: agent.enabled_channels || [], whatsappIntegrationId: agent.whatsapp_integration_id || null,
         telegramIntegrationId: agent.telegram_integration_id || null, memorySize: agent.memory_size || 10,
         memoryIsolationMode: agent.memory_isolation_mode || 'isolated', enableSemanticSearch: agent.enable_semantic_search || false,
+        avatar: agent.avatar || null,
       },
       attachedPersonaId: agent.persona_id || null,
       attachedChannels: agent.enabled_channels || [],
@@ -82,21 +164,45 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       isDirty: false, isSaving: false,
     }
     setState(newState)
+    userPositions.current.clear()
     savedSnapshot.current = JSON.stringify({
       personaId: newState.attachedPersonaId, channels: newState.attachedChannels,
       skills: newState.attachedSkills.map(s => ({ t: s.skillType, c: s.config })).sort((a, b) => a.t.localeCompare(b.t)),
       tools: [...newState.attachedTools].sort(), sentinelProfileId: newState.attachedSentinelProfileId,
       memory: { size: newState.agent?.memorySize, mode: newState.agent?.memoryIsolationMode, semantic: newState.agent?.enableSemanticSearch },
       toolOverrides: {},
+      avatar: newState.agent?.avatar || null,
     })
   }, [agentId, studioData.agent, studioData.skills, studioData.agentTools, studioData.knowledge, studioData.sentinelAssignments, setNodes])
 
-  // Generate nodes/edges from state using grouped layout
+  // Compute structural fingerprint — only changes when nodes are added/removed/expanded/collapsed
+  const currentFingerprint = useMemo(() => JSON.stringify({
+    agentId: state.agentId,
+    channels: [...state.attachedChannels].sort(),
+    skills: state.attachedSkills.map(s => s.skillType).sort(),
+    tools: [...state.attachedTools].sort(),
+    personaId: state.attachedPersonaId,
+    sentinelId: state.attachedSentinelProfileId,
+    knowledgeDocs: [...state.attachedKnowledgeDocs].sort(),
+    expanded: [...expandedCategories].sort(),
+    expandedSkills: [...expandedSkills].sort(),
+    expandedKnowledge: [...expandedKnowledge].sort(),
+    version: layoutVersion.current,
+  }), [state.agentId, state.attachedChannels, state.attachedSkills, state.attachedTools,
+       state.attachedPersonaId, state.attachedSentinelProfileId, state.attachedKnowledgeDocs,
+       expandedCategories, expandedSkills, expandedKnowledge])
+
+  // Generate nodes/edges from state — only re-layout when structural fingerprint changes
   useEffect(() => {
     if (!state.agentId || !state.agent) return
+
+    // Skip re-layout if structure hasn't changed
+    if (currentFingerprint === structuralFingerprint.current) return
+    structuralFingerprint.current = currentFingerprint
+
     const agentNode: Node<BuilderNodeData> = {
       id: `agent-${state.agentId}`, type: 'builder-agent', position: { x: 0, y: 0 }, draggable: false,
-      data: { type: 'builder-agent', agentId: state.agentId, name: state.agent.name, modelProvider: state.agent.modelProvider, modelName: state.agent.modelName, isActive: state.agent.isActive, isDefault: state.agent.isDefault, enabledChannels: state.attachedChannels, skillsCount: state.attachedSkills.length, personaName: state.attachedPersonaId ? studioData.personas.find(p => p.id === state.attachedPersonaId)?.name : undefined } as BuilderAgentData,
+      data: { type: 'builder-agent', agentId: state.agentId, name: state.agent.name, modelProvider: state.agent.modelProvider, modelName: state.agent.modelName, isActive: state.agent.isActive, isDefault: state.agent.isDefault, enabledChannels: state.attachedChannels, skillsCount: state.attachedSkills.length, personaName: state.attachedPersonaId ? studioData.personas.find(p => p.id === state.attachedPersonaId)?.name : undefined, avatar: state.agent.avatar, onAvatarChange: updateAvatar } as BuilderAgentData,
     }
 
     // Build child nodes by category
@@ -111,10 +217,24 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       channelNodes.push({ id: `channel-${ch}`, type: 'builder-channel', position: { x: 0, y: 0 }, data: { type: 'builder-channel', channelType: ch as BuilderChannelData['channelType'], label: ch.charAt(0).toUpperCase() + ch.slice(1) } as BuilderChannelData })
     }
 
-    // Skills (grouped)
+    // Skills (grouped) — with provider expansion support
+    const providerNodes: Node<BuilderNodeData>[] = []
+    const providerEdges: Edge[] = []
     for (const skill of state.attachedSkills) {
       const si = studioData.skills.find(s => s.skill_type === skill.skillType)
-      skillNodes.push({ id: `skill-${skill.skillType}`, type: 'builder-skill', position: { x: 0, y: 0 }, data: { type: 'builder-skill', skillId: skill.skillId, skillType: skill.skillType, skillName: si?.skill_name || skill.skillType, category: si?.category, providerName: si?.provider_name || undefined, isEnabled: true, config: skill.config } as BuilderSkillData })
+      const hasProviders = !!(si?.provider_type)
+      const isSkillExpanded = expandedSkills.has(skill.skillType)
+      skillNodes.push({ id: `skill-${skill.skillType}`, type: 'builder-skill', position: { x: 0, y: 0 }, data: { type: 'builder-skill', skillId: skill.skillId, skillType: skill.skillType, skillName: si?.skill_name || skill.skillType, category: si?.category, providerName: si?.provider_name || undefined, providerType: si?.provider_type || undefined, isEnabled: true, config: skill.config, hasProviders, isExpanded: isSkillExpanded, onToggleExpand: toggleSkillExpand } as BuilderSkillData })
+
+      // Generate provider sub-nodes when skill is expanded
+      if (isSkillExpanded && si?.provider_type) {
+        const providerId = `provider-${skill.skillType}-${si.provider_type}`
+        providerNodes.push({
+          id: providerId, type: 'builder-skill-provider', position: { x: 0, y: 0 },
+          data: { type: 'builder-skill-provider', parentSkillType: skill.skillType, providerType: si.provider_type, providerName: si.provider_name || si.provider_type, isConfigured: !!si.integration_id, requiresIntegration: true, integrationId: si.integration_id || undefined } as BuilderSkillProviderData,
+        })
+        providerEdges.push({ id: `e-skill-${skill.skillType}-provider-${si.provider_type}`, source: `skill-${skill.skillType}`, target: providerId, type: 'smoothstep', animated: true, style: { stroke: '#2dd4bf', strokeWidth: 1, opacity: 0.5 } })
+      }
     }
 
     // Tools (grouped)
@@ -126,10 +246,10 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       }
     }
 
-    // Knowledge (grouped)
+    // Knowledge (grouped) — with inline expand support
     for (const docId of state.attachedKnowledgeDocs) {
       const doc = studioData.knowledge.find(k => k.id === docId)
-      if (doc) knowledgeNodes.push({ id: `knowledge-${docId}`, type: 'builder-knowledge', position: { x: 0, y: 0 }, data: { type: 'builder-knowledge', docId: doc.id, filename: doc.document_name, contentType: doc.document_type, fileSize: doc.file_size_bytes, status: doc.status, chunkCount: doc.num_chunks } as BuilderKnowledgeData })
+      if (doc) knowledgeNodes.push({ id: `knowledge-${docId}`, type: 'builder-knowledge', position: { x: 0, y: 0 }, data: { type: 'builder-knowledge', docId: doc.id, filename: doc.document_name, contentType: doc.document_type, fileSize: doc.file_size_bytes, status: doc.status, chunkCount: doc.num_chunks, uploadDate: doc.upload_date, isExpanded: expandedKnowledge.has(docId), onToggleExpand: toggleKnowledgeExpand } as BuilderKnowledgeData })
     }
 
     // Direct nodes: persona, security, memory
@@ -187,10 +307,23 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       })
     }
 
+    // Clean up user positions for nodes that no longer exist
+    const allNodeIds = new Set<string>()
+    allNodeIds.add(agentNode.id)
+    for (const gc of groupedCategories) {
+      allNodeIds.add(gc.groupNode.id)
+      for (const cn of gc.childNodes) allNodeIds.add(cn.id)
+    }
+    for (const dn of directNodes) allNodeIds.add(dn.id)
+    for (const pn of providerNodes) allNodeIds.add(pn.id)
+    for (const key of userPositions.current.keys()) {
+      if (!allNodeIds.has(key)) userPositions.current.delete(key)
+    }
+
     // Always use tree layout (top-down) for consistent TB handle routing
     let cancelled = false
 
-    calculateDagreBuilderLayout(agentNode, groupedCategories, directNodes)
+    calculateDagreBuilderLayout(agentNode, groupedCategories, directNodes, userPositions.current, providerNodes, providerEdges)
       .then(layout => {
         if (!cancelled) { setNodes(layout.nodes); setEdges(layout.edges) }
       })
@@ -203,7 +336,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       })
 
     return () => { cancelled = true }
-  }, [state.agentId, state.agent, state.attachedPersonaId, state.attachedChannels, state.attachedSkills, state.attachedTools, state.attachedSentinelProfileId, state.attachedKnowledgeDocs, studioData.personas, studioData.skills, studioData.tools, studioData.sentinelProfiles, studioData.knowledge, setNodes, expandedCategories, toggleCategoryExpand])
+  }, [currentFingerprint, state, studioData.personas, studioData.skills, studioData.tools, studioData.sentinelProfiles, studioData.knowledge, setNodes, expandedCategories, expandedSkills, expandedKnowledge, toggleCategoryExpand, toggleSkillExpand, toggleKnowledgeExpand, updateAvatar])
 
   const isDirty = useMemo(() => {
     if (!state.agentId || !savedSnapshot.current) return false
@@ -213,6 +346,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       tools: [...state.attachedTools].sort(), sentinelProfileId: state.attachedSentinelProfileId,
       memory: { size: state.agent?.memorySize, mode: state.agent?.memoryIsolationMode, semantic: state.agent?.enableSemanticSearch },
       toolOverrides: state.toolEnabledOverrides,
+      avatar: state.agent?.avatar || null,
     }) !== savedSnapshot.current
   }, [state])
 
@@ -289,6 +423,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
         memory_size: state.agent.memorySize,
         memory_isolation_mode: state.agent.memoryIsolationMode,
         enable_semantic_search: state.agent.enableSemanticSearch,
+        avatar: state.agent.avatar,
       }
 
       // Skills: send full desired state
@@ -345,5 +480,5 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
     } catch (err) { setState(prev => ({ ...prev, isSaving: false })); throw err }
   }, [state, studioData.skills, studioData.sentinelAssignments, studioData.agentToolMappings])
 
-  return { state, nodes, edges, onNodesChange, attachProfile, detachProfile, updateNodeConfig, save, isDirty, isSaving: state.isSaving, expandedCategories, toggleCategoryExpand, expandAll, collapseAll }
+  return { state, nodes, edges, onNodesChange, attachProfile, detachProfile, updateNodeConfig, updateAvatar, save, isDirty, isSaving: state.isSaving, expandedCategories, toggleCategoryExpand, expandAll, collapseAll, resetLayout }
 }

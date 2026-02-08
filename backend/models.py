@@ -344,6 +344,9 @@ class Agent(Base):
     whatsapp_integration_id = Column(Integer, ForeignKey("whatsapp_mcp_instance.id", ondelete="SET NULL"), nullable=True)  # Specific MCP instance
     telegram_integration_id = Column(Integer, nullable=True)  # Future: FK to TelegramBotInstance
 
+    # Avatar
+    avatar = Column(String(50), nullable=True, default=None)  # Avatar slug (e.g., "samurai", "robot", "ninja")
+
     # Status
     is_active = Column(Boolean, default=True)
     is_default = Column(Boolean, default=False)  # Default agent for new chats

@@ -12,6 +12,7 @@ export type BuilderNodeType =
   | 'builder-persona'
   | 'builder-channel'
   | 'builder-skill'
+  | 'builder-skill-provider'
   | 'builder-tool'
   | 'builder-sentinel'
   | 'builder-knowledge'
@@ -80,6 +81,8 @@ export interface BuilderAgentData {
   enabledChannels: string[]
   skillsCount: number
   personaName?: string
+  avatar?: string | null
+  onAvatarChange?: (slug: string | null) => void
 }
 
 export interface BuilderPersonaData {
@@ -111,8 +114,23 @@ export interface BuilderSkillData {
   skillName: string
   category?: string
   providerName?: string
+  providerType?: string
   isEnabled: boolean
   config?: Record<string, unknown>
+  hasProviders?: boolean
+  isExpanded?: boolean
+  onToggleExpand?: (skillType: string) => void
+}
+
+export interface BuilderSkillProviderData {
+  [key: string]: unknown
+  type: 'builder-skill-provider'
+  parentSkillType: string
+  providerType: string
+  providerName: string
+  isConfigured: boolean
+  requiresIntegration: boolean
+  integrationId?: number
 }
 
 export interface BuilderToolData {
@@ -142,6 +160,9 @@ export interface BuilderKnowledgeData {
   fileSize: number
   status: string
   chunkCount?: number
+  uploadDate?: string
+  isExpanded?: boolean
+  onToggleExpand?: (docId: number) => void
 }
 
 export interface BuilderMemoryData {
@@ -171,6 +192,7 @@ export type BuilderNodeData =
   | BuilderPersonaData
   | BuilderChannelData
   | BuilderSkillData
+  | BuilderSkillProviderData
   | BuilderToolData
   | BuilderSentinelData
   | BuilderKnowledgeData
@@ -208,6 +230,7 @@ export interface AgentBuilderState {
     memorySize: number
     memoryIsolationMode: string
     enableSemanticSearch: boolean
+    avatar: string | null
   } | null
   attachedPersonaId: number | null
   attachedChannels: string[]

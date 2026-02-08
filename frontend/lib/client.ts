@@ -815,6 +815,9 @@ export interface Agent {
   whatsapp_integration_id?: number  // Specific MCP instance
   telegram_integration_id?: number  // Future: Telegram bot instance
 
+  // Agent avatar
+  avatar?: string | null
+
   is_active: boolean
   is_default: boolean
   skills_count?: number  // Number of enabled skills
@@ -838,6 +841,7 @@ export interface AgentGraphPreviewItem {
   knowledge_doc_count: number
   knowledge_chunk_count: number
   sentinel_enabled: boolean
+  avatar?: string | null
 }
 
 export interface WhatsAppChannelInfo {
@@ -925,6 +929,7 @@ export interface BuilderSaveRequest {
     memory_size?: number
     memory_isolation_mode?: string
     enable_semantic_search?: boolean
+    avatar?: string | null
   }
   skills?: Array<{
     skill_type: string
