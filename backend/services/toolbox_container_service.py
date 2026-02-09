@@ -286,7 +286,7 @@ class ToolboxContainerService:
                 image_to_use,
                 name=container_name,
                 volumes={
-                    host_workspace: {'bind': '/workspace', 'mode': 'rw'}
+                    host_workspace: {'bind': '/workspace', 'mode': 'rw,z'}
                 },
                 environment={
                     'TENANT_ID': tenant_id,
