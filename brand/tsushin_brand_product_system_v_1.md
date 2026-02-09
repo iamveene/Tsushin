@@ -11,7 +11,9 @@
 
 **Pronunciation:** _TSOO‑sheen_ (IPA: /tsuːʃiːn/). In Japanese romanization often written **tsūshin** (with a macron). We use "Tsushin" for global legibility.
 
-**Positioning (one-liner):** _“The agentic messaging OS: orchestrate conversations, automate outcomes.”_
+**Slogan:** _"Think, Secure, Build"_
+
+**Positioning (one-liner):** _"The agentic messaging OS: orchestrate conversations, automate outcomes."_
 
 **Core idea:** Tsushin unifies channels (WhatsApp, Gmail, Telegram, etc.) behind persona‑driven agents that can converse, plan, schedule, and execute workflows.
 

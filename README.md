@@ -1,4 +1,6 @@
-# Tsushin - Multi-Tenant Agentic Framework
+# Tsushin — Think, Secure, Build
+
+> **Multi-Tenant Agentic Framework**
 
 [![Status](https://img.shields.io/badge/status-beta-orange)]()
 [![Version](https://img.shields.io/badge/version-v0.5.0--beta-blue)]()

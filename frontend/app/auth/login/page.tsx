@@ -109,7 +109,7 @@ function LoginContent() {
                 TSUSHIN
               </span>
               <span className="text-xs text-gray-500 dark:text-gray-400 -mt-0.5 tracking-wide uppercase">
-                Agentic Framework
+                Think, Secure, Build
               </span>
             </div>
           </div>
@@ -216,7 +216,7 @@ function LoginContent() {
 
         {/* Footer */}
         <p className="text-center text-xs text-gray-500 dark:text-gray-400">
-          &copy; 2026 Tsushin. The Agentic Framework.
+          &copy; 2026 Tsushin. Think, Secure, Build.
         </p>
       </div>
     </div>

@@ -91,7 +91,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                   </span>
                 </div>
                 <span className="text-[10px] text-tsushin-slate -mt-0.5 tracking-wide uppercase">
-                  Agentic Framework
+                  Think, Secure, Build
                 </span>
               </div>
             </Link>
@@ -198,7 +198,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
           <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4">
             <div className="flex items-center justify-between text-xs text-tsushin-slate">
               <span className="flex items-center gap-2">
-                <span className="text-tsushin-indigo">©</span> 2026 Tsushin. The Agentic Framework.
+                <span className="text-tsushin-indigo">©</span> 2026 Tsushin. Think, Secure, Build.
               </span>
               <span className="flex items-center gap-2">
                 <span className="font-mono text-tsushin-muted">tsn-core</span>

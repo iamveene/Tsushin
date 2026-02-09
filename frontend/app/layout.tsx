@@ -27,7 +27,7 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata = {
-  title: 'Tsushin Beta — The Agentic Framework',
+  title: 'Tsushin Beta — Think, Secure, Build',
   description: 'Orchestrate conversations. Automate outcomes.',
 }
 

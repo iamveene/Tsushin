@@ -220,7 +220,7 @@ const defaultContent: Record<EmptyStateVariant, { title: string; description: st
   },
   'welcome': {
     title: 'Welcome to Tsushin',
-    description: 'Your agentic messaging framework is ready. Let\'s get started!',
+    description: 'Think, Secure, Build. Let\'s get started!',
   },
   'coming-soon': {
     title: 'Coming Soon',
