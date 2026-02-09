@@ -52,6 +52,34 @@ class SandboxedToolsSkill(BaseSkill):
         )
 
     @classmethod
+    def get_sentinel_context(cls) -> Dict[str, Any]:
+        """
+        Security context for Sentinel analysis.
+
+        Sandboxed tools are expected to use security-related commands
+        (nmap, dig, nuclei, etc.) within isolated containers.
+        """
+        return {
+            "expected_intents": [
+                "Run a network scan using nmap",
+                "Perform DNS lookup using dig",
+                "Run a vulnerability scan using nuclei",
+                "Execute a sandboxed security tool command",
+                "Check HTTP headers or endpoints using httpx",
+            ],
+            "expected_patterns": [
+                "scan", "nmap", "dig", "nuclei", "httpx", "lookup",
+                "vulnerability", "port", "dns", "domain",
+                "/tool", "quick_scan", "target",
+            ],
+            "risk_notes": (
+                "Sandboxed tools intentionally execute security-related commands "
+                "in isolated Docker containers. Shell-like patterns are expected "
+                "and should be evaluated in context of sandboxed tool usage."
+            ),
+        }
+
+    @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         return {}
 

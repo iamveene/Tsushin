@@ -1562,11 +1562,22 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                 from services.sentinel_service import SentinelService
                 sentinel = SentinelService(self.db, tenant_id)
 
+                # Load skill context so Sentinel knows what behaviors are expected
+                skill_context_str = None
+                try:
+                    from services.skill_context_service import SkillContextService
+                    skill_ctx_service = SkillContextService(self.db)
+                    skill_ctx = skill_ctx_service.get_agent_skill_context(agent_id)
+                    skill_context_str = skill_ctx.get('formatted_context')
+                except Exception as skill_e:
+                    self.logger.warning(f"Failed to load skill context for Sentinel: {skill_e}")
+
                 sentinel_result = await sentinel.analyze_prompt(
                     prompt=message_text,
                     agent_id=agent_id,
                     sender_key=sender_key,
                     source=None,  # User message - no internal source tag
+                    skill_context=skill_context_str,
                 )
 
                 if sentinel_result.is_threat_detected and sentinel_result.action == "blocked":

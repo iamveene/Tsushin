@@ -1112,7 +1112,13 @@ class SentinelService:
 
             action = "allowed"
             if is_threat:
-                action = "blocked" if config.block_on_detection else "warned"
+                mode = getattr(config, 'detection_mode', 'block')
+                if mode == 'block':
+                    action = "blocked"
+                elif mode == 'warn_only':
+                    action = "warned"
+                else:
+                    action = "allowed"
 
             return SentinelAnalysisResult(
                 is_threat_detected=is_threat,

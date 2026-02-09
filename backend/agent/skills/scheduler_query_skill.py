@@ -259,6 +259,29 @@ class SchedulerQuerySkill(BaseSkill):
         return "\n".join(lines)
 
     @classmethod
+    def get_sentinel_context(cls) -> Dict[str, Any]:
+        """
+        Security context for Sentinel analysis.
+
+        Query operations are read-only and safe.
+        """
+        return {
+            "expected_intents": [
+                "List upcoming scheduled events",
+                "Query reminders and appointments",
+                "Show scheduled notifications",
+                "Check what events are coming up",
+            ],
+            "expected_patterns": [
+                "list", "show", "upcoming", "scheduled", "events",
+                "reminders", "what's scheduled", "my events",
+                "listar", "mostrar", "agendados", "próximos",
+                "meus eventos", "meus lembretes",
+            ],
+            "risk_notes": None,
+        }
+
+    @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         """Default configuration"""
         return {

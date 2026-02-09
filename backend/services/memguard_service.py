@@ -56,8 +56,8 @@ INSTRUCTION_PLANTING_PATTERNS = [
     r"(?:from\s+now\s+on|going\s+forward|henceforth)\s*[,.]?\s*(?:always|never|you\s+(?:must|should|will))",
     r"(?:always|never)\s+(?:respond|reply|answer|say)\s+(?:with|that|in)",
     r"when\s+(?:i|someone|anyone)\s+(?:say|ask|type|send)s?\s+['\"]?.+['\"]?\s*,?\s*(?:respond|reply|answer|say)",
-    # Portuguese
-    r"(?:lembre|memorize|guarde|salve|anote)\s+(?:que|isso|o\s+seguinte)",
+    # Portuguese (require instruction word after "que" to avoid matching "lembre que tenho reuniao")
+    r"(?:lembre|memorize|guarde|salve|anote)\s+(?:que|isso|o\s+seguinte)\s*[:.]?\s*(?:quando|se|sempre|nunca|voc[eê]\s+(?:[eé]|deve|precisa|vai))",
     r"(?:a\s+partir\s+de\s+agora|daqui\s+(?:em|pra)\s+(?:diante|frente))",
     r"(?:sempre|nunca)\s+(?:responda|diga|fale|mencione)",
     r"quando\s+(?:eu|algu[eé]m)\s+(?:perguntar|falar|dizer|enviar)\s+.+\s*,?\s*(?:responda|diga|fale)",

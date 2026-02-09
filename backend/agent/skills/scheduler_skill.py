@@ -1037,6 +1037,33 @@ Respond ONLY with valid JSON (no markdown, no explanation):
         return msg
 
     @classmethod
+    def get_sentinel_context(cls) -> Dict[str, Any]:
+        """
+        Security context for Sentinel analysis.
+
+        Provides expected intents and patterns for scheduling/reminder
+        operations so Sentinel doesn't flag legitimate usage.
+        """
+        return {
+            "expected_intents": [
+                "Schedule a reminder or notification",
+                "Set an appointment or meeting reminder",
+                "Create a scheduled event at a specific time",
+                "List or query upcoming scheduled events",
+                "Cancel or modify a scheduled reminder",
+            ],
+            "expected_patterns": [
+                "remind", "reminder", "remind me", "schedule", "appointment",
+                "meeting", "calendar", "event", "notify", "notification",
+                "don't forget", "set a reminder",
+                "lembrete", "lembrar", "lembre-me", "agendar", "agenda",
+                "reuniao", "reunião", "compromisso", "consulta", "evento",
+                "notificar", "notificação", "não esqueça",
+            ],
+            "risk_notes": None,
+        }
+
+    @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         """Default configuration"""
         return {
