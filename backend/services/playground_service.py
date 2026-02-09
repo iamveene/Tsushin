@@ -680,9 +680,18 @@ class PlaygroundService:
                 except Exception as e:
                     self.logger.error(f"Error in post-response hooks: {e}", exc_info=True)
 
+            # Check for error in agent response
+            if result.get("error"):
+                return {
+                    "status": "error",
+                    "error": result.get("error"),
+                    "agent_name": agent_name,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
             return {
                 "status": "success",
-                "message": result.get("answer", ""),
+                "message": result.get("answer") or "",
                 "tool_used": result.get("tool_used"),
                 "execution_time": result.get("execution_time"),
                 "agent_name": agent_name,
@@ -1064,7 +1073,7 @@ class PlaygroundService:
 
             # Simulate streaming by yielding the response in chunks
             # This maintains the WebSocket streaming protocol while using the properly enhanced agent
-            full_response = response.get("message", "")
+            full_response = response.get("message") or ""
             accumulated_response = ""
             token_usage = None
 

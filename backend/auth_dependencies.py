@@ -171,7 +171,7 @@ class TenantContext:
     def __init__(self, user: User, db: Session):
         self.user = user
         self.db = db
-        self.tenant_id = user.tenant_id if not user.is_global_admin else None
+        self.tenant_id = user.tenant_id
         self.is_global_admin = user.is_global_admin
 
     def filter_by_tenant(self, query, tenant_column, include_shared: bool = False):

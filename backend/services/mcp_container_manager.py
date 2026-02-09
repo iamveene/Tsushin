@@ -249,13 +249,13 @@ class MCPContainerManager:
             name=container_name,
             ports={'8080/tcp': ('127.0.0.1', port)},  # Also expose on localhost for debugging
             volumes={
-                session_dir_abs: {'bind': '/app/store', 'mode': 'rw'},
+                session_dir_abs: {'bind': '/app/store', 'mode': 'rw,z'},
                 # Shared audio volume for TTS - allows backend to generate audio and MCP to read it
-                'tsushin-audio': {'bind': '/tmp/tsushin_audio', 'mode': 'ro'},
+                'tsushin-audio': {'bind': '/tmp/tsushin_audio', 'mode': 'ro,z'},
                 # Shared screenshots volume for browser automation
-                'tsushin-screenshots': {'bind': '/tmp/tsushin_screenshots', 'mode': 'ro'},
+                'tsushin-screenshots': {'bind': '/tmp/tsushin_screenshots', 'mode': 'ro,z'},
                 # Shared images volume for ImageSkill
-                'tsushin-images': {'bind': '/tmp/tsushin_images', 'mode': 'ro'}
+                'tsushin-images': {'bind': '/tmp/tsushin_images', 'mode': 'ro,z'}
             },
             environment={
                 'PHONE_NUMBER': phone_number,

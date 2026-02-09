@@ -30,17 +30,19 @@ services:
       - "${TSN_APP_PORT:-8081}:8081"
     volumes:
       # Persistent data storage
-      - ./backend/data:/app/data
+      - ./backend/data:/app/data:Z
       # Logs (optional - for debugging)
-      - ./logs/backend:/app/logs
+      - ./logs/backend:/app/logs:Z
       # Docker socket for MCP container management
       - /var/run/docker.sock:/var/run/docker.sock
       # Shared audio directory for TTS (shared with MCP containers)
-      - tsushin-audio:/tmp/tsushin_audio
+      - tsushin-audio:/tmp/tsushin_audio:z
       # Shared screenshots directory for browser automation (shared with MCP containers)
-      - tsushin-screenshots:/tmp/tsushin_screenshots
+      - tsushin-screenshots:/tmp/tsushin_screenshots:z
       # Shared images directory for ImageSkill (shared with MCP containers)
-      - tsushin-images:/tmp/tsushin_images
+      - tsushin-images:/tmp/tsushin_images:z
+    security_opt:
+      - label:disable
     environment:
       # Application
       - TSN_APP_HOST=0.0.0.0
