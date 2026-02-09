@@ -34,7 +34,8 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler(settings.LOG_FILE, encoding='utf-8'),
         logging.StreamHandler()
-    ]
+    ],
+    force=True  # Ensure config is applied even if root logger was initialized by imports
 )
 
 logger = logging.getLogger(__name__)
