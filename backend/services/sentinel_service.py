@@ -200,7 +200,7 @@ class SentinelService:
             detect_shell_malicious_intent=True,
             aggressiveness_level=1,
             llm_provider="gemini",
-            llm_model="gemini-2.0-flash-lite",
+            llm_model="gemini-2.5-flash-lite",
             llm_max_tokens=256,
             llm_temperature=0.1,
             cache_ttl_seconds=300,

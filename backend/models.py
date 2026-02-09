@@ -1867,7 +1867,7 @@ class SentinelConfig(Base):
 
     # LLM configuration for analysis
     llm_provider = Column(String(20), default="gemini", nullable=False)
-    llm_model = Column(String(100), default="gemini-2.0-flash-lite", nullable=False)
+    llm_model = Column(String(100), default="gemini-2.5-flash-lite", nullable=False)
     llm_max_tokens = Column(Integer, default=256, nullable=False)
     llm_temperature = Column(Float, default=0.1, nullable=False)
 
