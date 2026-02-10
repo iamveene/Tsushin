@@ -10,6 +10,7 @@ and ensuring save atomicity (no more partial-save failures).
 """
 
 import json
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
@@ -58,7 +59,10 @@ SKILL_METADATA = {
 
 EXCLUDED_SKILL_TYPES = {"automation"}
 
-SENSITIVE_CONFIG_PATTERNS = {"api_key", "secret", "token", "password", "credential", "key"}
+VALID_CHANNELS = {"playground", "whatsapp", "telegram"}
+SENSITIVE_CONFIG_PATTERNS = {"api_key", "secret", "access_token", "auth_token", "password", "credential"}
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -312,6 +316,7 @@ def _parse_enabled_channels(agent: Agent) -> List[str]:
         try:
             return json.loads(agent.enabled_channels)
         except (json.JSONDecodeError, TypeError):
+            logger.warning(f"Agent {agent.id}: failed to parse enabled_channels '{agent.enabled_channels}', falling back to defaults")
             return ["playground", "whatsapp"]
     return ["playground", "whatsapp"]
 
@@ -558,10 +563,22 @@ async def save_builder_data(
         # --- Step 1: Agent core fields ---
         if data.agent:
             if data.agent.persona_id is not None:
+                if data.agent.persona_id > 0:
+                    persona = db.query(Persona).filter(
+                        Persona.id == data.agent.persona_id,
+                        (Persona.is_system == True) | (Persona.tenant_id == None) | (Persona.tenant_id == ctx.tenant_id),
+                    ).first()
+                    if not persona:
+                        raise HTTPException(status_code=400, detail=f"Persona {data.agent.persona_id} not found")
                 agent.persona_id = data.agent.persona_id if data.agent.persona_id > 0 else None
             if data.agent.enabled_channels is not None:
+                invalid_ch = set(data.agent.enabled_channels) - VALID_CHANNELS
+                if invalid_ch:
+                    raise HTTPException(status_code=400, detail=f"Invalid channels: {', '.join(invalid_ch)}")
                 agent.enabled_channels = data.agent.enabled_channels
             if data.agent.memory_size is not None:
+                if data.agent.memory_size < 1 or data.agent.memory_size > 5000:
+                    raise HTTPException(status_code=400, detail="memory_size must be between 1 and 5000")
                 agent.memory_size = data.agent.memory_size
             if data.agent.memory_isolation_mode is not None:
                 if data.agent.memory_isolation_mode not in ("isolated", "shared", "channel_isolated"):
@@ -576,6 +593,11 @@ async def save_builder_data(
 
         # --- Step 2: Skills ---
         if data.skills is not None:
+            valid_skill_types = set(SKILL_METADATA.keys())
+            for sd in data.skills:
+                if sd.skill_type not in valid_skill_types:
+                    raise HTTPException(status_code=400, detail=f"Invalid skill_type: {sd.skill_type}")
+
             skills_updated = []
             skills_created = []
 
@@ -624,17 +646,23 @@ async def save_builder_data(
         # --- Step 3: Tool overrides ---
         if data.tool_overrides:
             tools_updated = []
+            tools_invalid = []
             for override in data.tool_overrides:
                 mapping = db.query(AgentSandboxedTool).filter(
                     AgentSandboxedTool.id == override.mapping_id,
                     AgentSandboxedTool.agent_id == agent_id,
                 ).first()
-                if mapping and mapping.is_enabled != override.is_enabled:
+                if not mapping:
+                    tools_invalid.append(override.mapping_id)
+                    continue
+                if mapping.is_enabled != override.is_enabled:
                     mapping.is_enabled = override.is_enabled
                     mapping.updated_at = datetime.utcnow()
                     tools_updated.append(override.mapping_id)
             if tools_updated:
                 changes["tools_updated"] = tools_updated
+            if tools_invalid:
+                changes["tools_invalid"] = tools_invalid
 
         # --- Step 4: Sentinel profile assignment ---
         sentinel_changed = False
@@ -695,7 +723,9 @@ async def save_builder_data(
                 from services.sentinel_profiles_service import SentinelProfilesService
                 SentinelProfilesService._invalidate_cache()
             except ImportError:
-                pass  # Sentinel service not available
+                logger.warning("SentinelProfilesService not available for cache invalidation")
+            except Exception as e:
+                logger.error(f"Failed to invalidate sentinel cache: {e}")
 
         return BuilderSaveResponse(
             success=True,
@@ -707,5 +737,6 @@ async def save_builder_data(
         db.rollback()
         raise
     except Exception as e:
+        logger.exception(f"Builder save failed for agent {agent_id}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to save builder data: {str(e)}")

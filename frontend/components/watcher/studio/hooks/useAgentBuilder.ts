@@ -479,6 +479,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
         tools: [...state.attachedTools].sort(), sentinelProfileId: state.attachedSentinelProfileId,
         memory: { size: state.agent.memorySize, mode: state.agent.memoryIsolationMode, semantic: state.agent.enableSemanticSearch },
         toolOverrides: {},
+        avatar: state.agent?.avatar || null,
       })
       setState(prev => ({ ...prev, isDirty: false, isSaving: false, toolEnabledOverrides: {} }))
     } catch (err) { setState(prev => ({ ...prev, isSaving: false })); throw err }
