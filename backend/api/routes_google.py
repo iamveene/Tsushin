@@ -72,6 +72,7 @@ class IntegrationResponse(BaseModel):
     is_active: bool
     authorized_at: datetime
     health_status: str
+    health_status_reason: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -243,7 +244,8 @@ async def list_gmail_integrations(
             email_address=integration.email_address,
             is_active=base.is_active if base else True,
             authorized_at=integration.authorized_at,
-            health_status=base.health_status if base else "unknown"
+            health_status=base.health_status if base else "unknown",
+            health_status_reason=getattr(base, 'health_status_reason', None) if base else None
         ))
 
     return IntegrationListResponse(integrations=result, count=len(result))
@@ -371,7 +373,8 @@ async def list_calendar_integrations(
             email_address=integration.email_address,
             is_active=base.is_active if base else True,
             authorized_at=integration.authorized_at,
-            health_status=base.health_status if base else "unknown"
+            health_status=base.health_status if base else "unknown",
+            health_status_reason=getattr(base, 'health_status_reason', None) if base else None
         ))
 
     return IntegrationListResponse(integrations=result, count=len(result))
@@ -625,3 +628,62 @@ async def check_calendar_health(
         return health
     except Exception as e:
         return {"status": "unavailable", "errors": [str(e)]}
+
+
+# ============================================
+# Re-Authorization
+# ============================================
+
+@router.post("/reauthorize/{integration_id}", response_model=OAuthAuthorizeResponse)
+async def reauthorize_integration(
+    integration_id: int,
+    redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
+    ctx: TenantContext = Depends(get_current_tenant_context),
+    db: Session = Depends(get_session)
+):
+    """
+    Generate a re-authorization URL for a disconnected/expired integration.
+
+    Used when a refresh token is revoked (e.g., Google Testing mode 7-day expiry
+    or user revocation). Returns a new OAuth URL with login_hint pre-filled.
+    """
+    integration = db.query(HubIntegration).filter(
+        HubIntegration.id == integration_id,
+        HubIntegration.tenant_id == ctx.tenant_id
+    ).first()
+
+    if not integration:
+        raise HTTPException(status_code=404, detail="Integration not found")
+
+    # Get email for login_hint
+    email = None
+    if integration.type == 'calendar':
+        cal = db.query(CalendarIntegration).filter(
+            CalendarIntegration.id == integration_id
+        ).first()
+        email = cal.email_address if cal else None
+    elif integration.type == 'gmail':
+        gmail = db.query(GmailIntegration).filter(
+            GmailIntegration.id == integration_id
+        ).first()
+        email = gmail.email_address if gmail else None
+
+    try:
+        handler = get_google_oauth_handler(db, ctx.tenant_id)
+
+        auth_url, state = await handler.generate_authorization_url(
+            integration_type=integration.type,
+            redirect_url=redirect_url or f"{settings.FRONTEND_URL}/hub",
+            display_name=integration.display_name,
+            login_hint=email
+        )
+
+        logger.info(
+            "Generated re-authorization URL for integration %s (type=%s, email=%s)",
+            integration_id, integration.type, email
+        )
+
+        return OAuthAuthorizeResponse(authorization_url=auth_url, state=state)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

@@ -706,7 +706,9 @@ async def lifespan(app: FastAPI):
         start_oauth_refresh_worker(
             engine,
             poll_interval_minutes=settings.OAUTH_REFRESH_POLL_MINUTES,
-            refresh_threshold_hours=settings.OAUTH_REFRESH_THRESHOLD_HOURS
+            refresh_threshold_hours=settings.OAUTH_REFRESH_THRESHOLD_HOURS,
+            max_retries=settings.OAUTH_REFRESH_MAX_RETRIES,
+            retry_delay=settings.OAUTH_REFRESH_RETRY_DELAY,
         )
         logging.info(
             "OAuth Token Refresh Worker started (polling every %s min, threshold %s h)",

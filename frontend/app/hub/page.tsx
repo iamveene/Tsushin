@@ -141,6 +141,7 @@ interface HubIntegration {
   name: string
   is_active: boolean
   health_status: string
+  health_status_reason?: string
   workspace_gid?: string
   workspace_name?: string
 }
@@ -1108,6 +1109,28 @@ export default function HubPage() {
     }
   }
 
+  // Re-authorize an expired/revoked integration
+  const handleReauthorize = async (integrationId: number) => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const params = new URLSearchParams({ redirect_url: '/hub' })
+      const response = await fetch(`${apiUrl}/api/hub/google/reauthorize/${integrationId}?${params}`, {
+        method: 'POST',
+        headers: getAuthHeaders()
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
+        throw new Error(errorData.detail || `HTTP ${response.status}`)
+      }
+
+      const data = await response.json()
+      window.location.href = data.authorization_url
+    } catch (err: any) {
+      setError(`Failed to re-authorize: ${err.message}`)
+    }
+  }
+
   // Helper functions
   const getApiKeyForService = (service: string) => apiKeys.find(k => k.service === service)
 
@@ -1645,7 +1668,7 @@ export default function HubPage() {
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     {/* Existing Gmail Integrations */}
                     {hubIntegrations.filter(i => i.type === 'gmail').map(integration => (
-                      <div key={integration.id} className="card p-5 hover-glow border-red-700/30">
+                      <div key={integration.id} className={`card p-5 hover-glow ${integration.health_status === 'unavailable' ? 'border-red-500/50' : 'border-red-700/30'}`}>
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-3">
                             <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
@@ -1653,24 +1676,44 @@ export default function HubPage() {
                             </div>
                             <h3 className="font-semibold text-white">Gmail</h3>
                           </div>
-                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${integration.health_status === 'healthy'
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                            integration.health_status === 'healthy'
                               ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                              : integration.health_status === 'unavailable'
+                              ? 'bg-red-500/10 text-red-400 border border-red-500/20'
                               : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
                             }`}>
-                            {integration.health_status === 'healthy' ? 'Connected' : integration.health_status}
+                            {integration.health_status === 'healthy' ? 'Connected' : integration.health_status === 'unavailable' ? 'Expired' : integration.health_status}
                           </span>
                         </div>
                         <p className="text-xs text-tsushin-slate mb-3">Email actions & reading</p>
                         <div className="text-sm text-tsushin-slate mb-3">
                           <p className="text-xs">Account: {integration.name?.replace('Gmail - ', '') || 'Unknown'}</p>
                         </div>
+                        {integration.health_status === 'unavailable' && (
+                          <div className="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                            <p className="text-xs text-red-400">
+                              <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" />
+                              Authorization expired. Re-authorize to restore access.
+                            </p>
+                          </div>
+                        )}
                         <div className="flex gap-2">
-                          <button
-                            onClick={() => handleGmailDisconnect(integration.id)}
-                            className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
-                          >
-                            Disconnect
-                          </button>
+                          {integration.health_status === 'unavailable' ? (
+                            <button
+                              onClick={() => handleReauthorize(integration.id)}
+                              className="flex-1 py-2 text-sm rounded-lg font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-all"
+                            >
+                              Re-authorize
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleGmailDisconnect(integration.id)}
+                              className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
+                            >
+                              Disconnect
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1878,7 +1921,7 @@ export default function HubPage() {
                   {/* Google Calendar Integration */}
                   {/* Existing Calendar Integrations */}
                   {hubIntegrations.filter(i => i.type === 'calendar').map(integration => (
-                    <div key={integration.id} className="card p-5 hover-glow border-blue-700/30">
+                    <div key={integration.id} className={`card p-5 hover-glow ${integration.health_status === 'unavailable' ? 'border-red-500/50' : 'border-blue-700/30'}`}>
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
@@ -1886,24 +1929,44 @@ export default function HubPage() {
                           </div>
                           <h3 className="font-semibold text-white">Google Calendar</h3>
                         </div>
-                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${integration.health_status === 'healthy'
+                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                          integration.health_status === 'healthy'
                             ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                            : integration.health_status === 'unavailable'
+                            ? 'bg-red-500/10 text-red-400 border border-red-500/20'
                             : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
                           }`}>
-                          {integration.health_status === 'healthy' ? 'Connected' : integration.health_status}
+                          {integration.health_status === 'healthy' ? 'Connected' : integration.health_status === 'unavailable' ? 'Expired' : integration.health_status}
                         </span>
                       </div>
                       <p className="text-xs text-tsushin-slate mb-3">Calendar & scheduling</p>
                       <div className="text-sm text-tsushin-slate mb-3">
                         <p className="text-xs">Account: {integration.name?.replace('Google Calendar - ', '') || 'Unknown'}</p>
                       </div>
+                      {integration.health_status === 'unavailable' && (
+                        <div className="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                          <p className="text-xs text-red-400">
+                            <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" />
+                            Authorization expired. Re-authorize to restore access.
+                          </p>
+                        </div>
+                      )}
                       <div className="flex gap-2">
-                        <button
-                          onClick={() => handleGoogleCalendarDisconnect(integration.id)}
-                          className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
-                        >
-                          Disconnect
-                        </button>
+                        {integration.health_status === 'unavailable' ? (
+                          <button
+                            onClick={() => handleReauthorize(integration.id)}
+                            className="flex-1 py-2 text-sm rounded-lg font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-all"
+                          >
+                            Re-authorize
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleGoogleCalendarDisconnect(integration.id)}
+                            className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
+                          >
+                            Disconnect
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}

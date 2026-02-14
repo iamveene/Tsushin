@@ -93,6 +93,12 @@ OAUTH_REFRESH_POLL_MINUTES = int(
 OAUTH_REFRESH_THRESHOLD_HOURS = int(
     get_env("TSN_OAUTH_REFRESH_THRESHOLD_HOURS", "OAUTH_REFRESH_THRESHOLD_HOURS", "24")
 )
+OAUTH_REFRESH_MAX_RETRIES = int(
+    get_env("TSN_OAUTH_REFRESH_MAX_RETRIES", None, "3")
+)
+OAUTH_REFRESH_RETRY_DELAY = int(
+    get_env("TSN_OAUTH_REFRESH_RETRY_DELAY", None, "5")  # seconds, base for exponential backoff
+)
 
 # Stale Flow Cleanup Service (Phase 19 - BUG-FLOWS-002)
 STALE_FLOW_THRESHOLD_SECONDS = int(

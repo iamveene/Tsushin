@@ -599,6 +599,7 @@ class GoogleOAuthHandler:
 
             integration.is_active = False
             integration.health_status = "unavailable"
+            integration.health_status_reason = reason[:500] if reason else None
             integration.last_health_check = datetime.utcnow()
             self.db.commit()
 

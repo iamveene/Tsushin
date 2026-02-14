@@ -1520,6 +1520,7 @@ class HubIntegration(Base):
     # Health monitoring
     last_health_check = Column(DateTime)
     health_status = Column(String(20), default="unknown")  # "healthy", "degraded", "unavailable"
+    health_status_reason = Column(String(500), nullable=True)  # Why the status changed (e.g., "invalid_grant")
 
     # Relationships
     tokens = relationship("OAuthToken", back_populates="integration", cascade="all, delete-orphan")

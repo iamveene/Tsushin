@@ -3,14 +3,20 @@ OAuth Token Refresh Worker
 
 Background worker that proactively refreshes OAuth tokens before they expire.
 Runs periodically to ensure tokens are always valid.
+
+Includes:
+- Exponential backoff retry for transient failures
+- Permanent failure detection (revoked tokens) with CRITICAL logging
+- Clean asyncio handling via asyncio.run()
 """
 
+import asyncio
 import logging
+import random
 import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional
-import os
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -28,11 +34,15 @@ class OAuthTokenRefreshWorker:
         self,
         engine: Engine,
         poll_interval_minutes: int = 30,
-        refresh_threshold_hours: int = 24
+        refresh_threshold_hours: int = 24,
+        max_retries: int = 3,
+        retry_delay: int = 5,
     ):
         self.engine = engine
         self.poll_interval = poll_interval_minutes * 60
         self.refresh_threshold = timedelta(hours=refresh_threshold_hours)
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay  # base seconds for exponential backoff
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._running = False
@@ -54,9 +64,10 @@ class OAuthTokenRefreshWorker:
 
         logger.info(
             "OAuthTokenRefreshWorker started "
-            "(poll=%s min, threshold=%s h)",
+            "(poll=%s min, threshold=%s h, retries=%s)",
             int(self.poll_interval / 60),
-            int(self.refresh_threshold.total_seconds() / 3600)
+            int(self.refresh_threshold.total_seconds() / 3600),
+            self.max_retries
         )
 
     def stop(self, timeout: int = 10) -> None:
@@ -114,7 +125,7 @@ class OAuthTokenRefreshWorker:
 
             for token in expiring_tokens:
                 try:
-                    self._refresh_token(db, token)
+                    self._refresh_token_with_retry(db, token)
                 except Exception as e:
                     logger.error(
                         "Failed to refresh token for integration %s: %s",
@@ -123,8 +134,8 @@ class OAuthTokenRefreshWorker:
                         exc_info=True
                     )
 
-    def _refresh_token(self, db: Session, token: OAuthToken) -> None:
-        """Refresh a specific token."""
+    def _refresh_token_with_retry(self, db: Session, token: OAuthToken) -> None:
+        """Refresh a token with retry logic and failure notification."""
         integration = db.query(HubIntegration).filter(
             HubIntegration.id == token.integration_id
         ).first()
@@ -141,18 +152,75 @@ class OAuthTokenRefreshWorker:
             token.expires_at
         )
 
-        if integration_type == "gmail":
-            self._refresh_gmail_token(db, integration.id)
-        elif integration_type == "calendar":
-            self._refresh_calendar_token(db, integration.id)
-        else:
-            logger.warning("Unknown integration type for token refresh: %s", integration_type)
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                if integration_type == "gmail":
+                    self._refresh_gmail_token(db, integration.id)
+                elif integration_type == "calendar":
+                    self._refresh_calendar_token(db, integration.id)
+                else:
+                    logger.warning("Unknown integration type: %s", integration_type)
+                    return
+
+                # Success
+                return
+
+            except RuntimeError as e:
+                # Permanent failure (token revoked / refresh returned False)
+                last_error = e
+                logger.error(
+                    "Permanent refresh failure for %s integration %s (attempt %s): %s",
+                    integration_type, integration.id, attempt + 1, e
+                )
+                break  # Don't retry permanent failures
+
+            except Exception as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    delay = self.retry_delay * (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        "Transient refresh failure for %s integration %s "
+                        "(attempt %s/%s), retrying in %.1fs: %s",
+                        integration_type, integration.id,
+                        attempt + 1, self.max_retries, delay, e
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "All %s refresh attempts failed for %s integration %s: %s",
+                        self.max_retries, integration_type, integration.id, e
+                    )
+
+        # All retries exhausted or permanent failure
+        if last_error:
+            self._notify_token_failure(db, integration, str(last_error))
+
+    def _notify_token_failure(self, db: Session, integration: HubIntegration, error: str) -> None:
+        """Log critical alert when a token refresh permanently fails."""
+        try:
+            import settings
+
+            display_name = integration.display_name or integration.name
+            reauth_url = f"{settings.FRONTEND_URL}/hub"
+
+            logger.critical(
+                "INTEGRATION UNAVAILABLE — Tenant: %s, Integration: %s (%s, type=%s), "
+                "Error: %s. User must re-authorize at: %s",
+                integration.tenant_id,
+                integration.id,
+                display_name,
+                integration.type,
+                error,
+                reauth_url
+            )
+        except Exception as e:
+            logger.error("Failed to send token failure notification: %s", e, exc_info=True)
 
     def _refresh_gmail_token(self, db: Session, integration_id: int) -> None:
         """Refresh Gmail integration token."""
         from hub.google.gmail_service import GmailService
         from services.encryption_key_service import get_google_encryption_key
-        import asyncio
 
         service = GmailService(
             db=db,
@@ -160,15 +228,10 @@ class OAuthTokenRefreshWorker:
             encryption_key=get_google_encryption_key(db)
         )
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            success = loop.run_until_complete(service.refresh_tokens())
-        finally:
-            loop.close()
+        success = asyncio.run(service.refresh_tokens())
 
         if success:
-            logger.info("✅ Gmail token refreshed for integration %s", integration_id)
+            logger.info("Gmail token refreshed for integration %s", integration_id)
         else:
             raise RuntimeError("Gmail token refresh returned False")
 
@@ -176,7 +239,6 @@ class OAuthTokenRefreshWorker:
         """Refresh Calendar integration token."""
         from hub.google.calendar_service import CalendarService
         from services.encryption_key_service import get_google_encryption_key
-        import asyncio
 
         service = CalendarService(
             db=db,
@@ -184,15 +246,10 @@ class OAuthTokenRefreshWorker:
             encryption_key=get_google_encryption_key(db)
         )
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            success = loop.run_until_complete(service.refresh_tokens())
-        finally:
-            loop.close()
+        success = asyncio.run(service.refresh_tokens())
 
         if success:
-            logger.info("✅ Calendar token refreshed for integration %s", integration_id)
+            logger.info("Calendar token refreshed for integration %s", integration_id)
         else:
             raise RuntimeError("Calendar token refresh returned False")
 
@@ -203,7 +260,9 @@ _worker_instance: Optional[OAuthTokenRefreshWorker] = None
 def get_oauth_refresh_worker(
     engine: Engine,
     poll_interval_minutes: int = 30,
-    refresh_threshold_hours: int = 24
+    refresh_threshold_hours: int = 24,
+    max_retries: int = 3,
+    retry_delay: int = 5,
 ) -> OAuthTokenRefreshWorker:
     """Get or create the global OAuth refresh worker instance."""
     global _worker_instance
@@ -212,7 +271,9 @@ def get_oauth_refresh_worker(
         _worker_instance = OAuthTokenRefreshWorker(
             engine,
             poll_interval_minutes,
-            refresh_threshold_hours
+            refresh_threshold_hours,
+            max_retries,
+            retry_delay,
         )
 
     return _worker_instance
@@ -221,13 +282,17 @@ def get_oauth_refresh_worker(
 def start_oauth_refresh_worker(
     engine: Engine,
     poll_interval_minutes: int = 30,
-    refresh_threshold_hours: int = 24
+    refresh_threshold_hours: int = 24,
+    max_retries: int = 3,
+    retry_delay: int = 5,
 ) -> None:
     """Start the global OAuth refresh worker."""
     worker = get_oauth_refresh_worker(
         engine,
         poll_interval_minutes,
-        refresh_threshold_hours
+        refresh_threshold_hours,
+        max_retries,
+        retry_delay,
     )
     worker.start()
 

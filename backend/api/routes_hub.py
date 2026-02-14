@@ -84,6 +84,7 @@ class IntegrationResponse(BaseModel):
     name: str
     is_active: bool
     health_status: str
+    health_status_reason: Optional[str] = None
     tenant_id: Optional[str] = None
     workspace_gid: Optional[str] = None
     workspace_name: Optional[str] = None
@@ -373,7 +374,12 @@ async def list_integrations(
     query = ctx.filter_by_tenant(query, HubIntegration.tenant_id)
 
     if active_only:
-        query = query.filter(HubIntegration.is_active == True)
+        # Also include unavailable integrations (need re-auth) so the UI can show them
+        from sqlalchemy import or_
+        query = query.filter(or_(
+            HubIntegration.is_active == True,
+            HubIntegration.health_status == "unavailable"
+        ))
 
     hub_integrations = query.all()
     logger.info(f"[list_integrations] Found {len(hub_integrations)} integrations: {[(h.id, h.type, h.tenant_id) for h in hub_integrations]}")
@@ -437,6 +443,7 @@ async def list_integrations(
             name=hub.name,
             is_active=hub.is_active,
             health_status=hub.health_status,
+            health_status_reason=getattr(hub, 'health_status_reason', None),
             tenant_id=hub.tenant_id,
             workspace_gid=asana.workspace_gid if asana else None,
             workspace_name=asana.workspace_name if asana else None,
