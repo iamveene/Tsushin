@@ -592,7 +592,7 @@ async def toggle_persistence(
         commands=[system_commands[action]],
         initiated_by=f"user:{current_user.email}",
         status="queued",
-        timeout_seconds=60
+        timeout_seconds=120
     )
 
     db.add(command)

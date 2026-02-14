@@ -2104,7 +2104,7 @@ Type `/help all` to see syntax for all commands.
         # Get skill config for execution mode
         skill_config = shell_skill.config or {}
         wait_for_result = skill_config.get("wait_for_result", False)  # Slash command defaults to fire-and-forget
-        default_timeout = skill_config.get("default_timeout", 60)
+        default_timeout = skill_config.get("default_timeout", 120)
 
         self.logger.info(f"Executing shell command: target={target}, command={command}, wait={wait_for_result}")
 

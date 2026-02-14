@@ -712,7 +712,7 @@ command_name: run_shell_command
 parameters:
   script: <the shell command to run>
   target: default
-  timeout: 60
+  timeout: 120
 [/TOOL_CALL]
 
 EXAMPLES:
@@ -724,7 +724,7 @@ command_name: run_shell_command
 parameters:
   script: df -h
   target: default
-  timeout: 60
+  timeout: 120
 [/TOOL_CALL]
 
 User: "what's the hostname?"
@@ -834,7 +834,7 @@ IMPORTANT: When the user asks for system information, server status, file listin
                             # Shell tool needs special parameter handling
                             script = parameters.get('script', '')
                             target = parameters.get('target', 'default')
-                            timeout = int(parameters.get('timeout', 60))
+                            timeout = int(parameters.get('timeout', 120))
 
                             if script:
                                 tool_execution_result = await skill_manager.execute_tool_call(

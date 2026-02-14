@@ -66,7 +66,7 @@ class ShellSkill(BaseSkill):
             "default_target": "default",
 
             # Default timeout for command execution (seconds)
-            "default_timeout": 60,
+            "default_timeout": 120,
 
             # Maximum timeout allowed
             "max_timeout": 300,
@@ -98,7 +98,7 @@ class ShellSkill(BaseSkill):
                 "default_timeout": {
                     "type": "integer",
                     "description": "Default timeout in seconds",
-                    "default": 60,
+                    "default": 120,
                     "minimum": 1,
                     "maximum": 300
                 },
@@ -204,7 +204,7 @@ class ShellSkill(BaseSkill):
                             "Maximum time to wait for result in seconds. "
                             "If exceeded, command may still run in background."
                         ),
-                        "default": 60
+                        "default": 120
                     }
                 },
                 "required": ["script"]
@@ -253,9 +253,9 @@ class ShellSkill(BaseSkill):
                         "type": "integer",
                         "description": (
                             "Maximum time to wait for result in seconds. "
-                            "Default: 60. If exceeded, command may still run in background."
+                            "Default: 120. If exceeded, command may still run in background."
                         ),
-                        "default": 60
+                        "default": 120
                     }
                 },
                 "required": ["script"]
@@ -366,7 +366,7 @@ class ShellSkill(BaseSkill):
         # This allows users to toggle between synchronous (inline output) and
         # fire-and-forget modes via the Skill Configuration UI
         wait_for_result = config.get('wait_for_result', True)
-        timeout_seconds = config.get('default_timeout', 60)
+        timeout_seconds = config.get('default_timeout', 120)
 
         # Execute command
         result = service.execute_command(
@@ -487,14 +487,14 @@ class ShellSkill(BaseSkill):
         # Extract arguments
         script = arguments.get('script', '')
         target = arguments.get('target', 'default')
-        timeout = arguments.get('timeout', 60)
+        timeout = arguments.get('timeout', 120)
 
         # Ensure timeout is an integer
         if isinstance(timeout, str):
             try:
                 timeout = int(timeout)
             except ValueError:
-                timeout = 60
+                timeout = 120
 
         if not script:
             return SkillResult(
