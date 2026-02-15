@@ -2148,8 +2148,8 @@ class SentinelProfile(Base):
     - One default profile per tenant (partial unique index enforced)
 
     Example:
-        System profile "Moderate" (is_system=True, is_default=True):
-        - detection_mode='block', aggressiveness_level=1
+        System profile "Permissive" (is_system=True, is_default=True):
+        - detection_mode='detect_only', aggressiveness_level=1
         - detection_overrides='{}' (all detections use registry defaults)
 
         Tenant custom profile "Sales Team Permissive":

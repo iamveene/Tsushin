@@ -451,8 +451,8 @@ def seed_system_profiles(db: Session) -> list:
 
     System profiles (is_system=True, tenant_id=NULL):
     - off: Sentinel disabled
-    - permissive: Log-only, moderate sensitivity
-    - moderate: Block threats, moderate sensitivity (DEFAULT)
+    - permissive: Log-only, moderate sensitivity (DEFAULT)
+    - moderate: Block threats, moderate sensitivity
     - aggressive: Block all, max sensitivity
 
     Idempotent: skips profiles that already exist (matched by slug).
@@ -482,7 +482,7 @@ def seed_system_profiles(db: Session) -> list:
             "is_enabled": True,
             "detection_mode": "detect_only",
             "aggressiveness_level": 1,
-            "is_default": False,
+            "is_default": True,  # System-wide default fallback — detect-only so admins can evaluate before enabling blocking
         },
         {
             "name": "Moderate",
@@ -491,7 +491,7 @@ def seed_system_profiles(db: Session) -> list:
             "is_enabled": True,
             "detection_mode": "block",
             "aggressiveness_level": 1,
-            "is_default": True,  # System-wide default fallback
+            "is_default": False,
         },
         {
             "name": "Aggressive",
@@ -566,6 +566,39 @@ def seed_system_profiles(db: Session) -> list:
         except Exception as e:
             logger.error(f"Failed to seed system profile '{profile_data['slug']}': {e}")
             db.rollback()
+
+    # Migration: ensure "permissive" is the system default (not "moderate")
+    # This fixes existing DBs where "moderate" was seeded as is_default=True.
+    # Must be done in two commits to avoid UNIQUE constraint violation on the
+    # partial index (idx_sentinel_profile_one_default) which enforces one
+    # default per tenant scope.
+    try:
+        moderate = db.query(SentinelProfile).filter(
+            SentinelProfile.tenant_id.is_(None),
+            SentinelProfile.slug == "moderate",
+            SentinelProfile.is_default == True,
+        ).first()
+
+        if moderate:
+            permissive = db.query(SentinelProfile).filter(
+                SentinelProfile.tenant_id.is_(None),
+                SentinelProfile.slug == "permissive",
+            ).first()
+
+            if permissive:
+                # Step 1: unset moderate as default
+                moderate.is_default = False
+                db.commit()
+                # Step 2: set permissive as default
+                permissive.is_default = True
+                db.commit()
+                logger.info(
+                    "Migrated system default profile: moderate -> permissive "
+                    "(detect_only mode aligns with legacy SentinelConfig)"
+                )
+    except Exception as e:
+        logger.error(f"Failed to migrate default profile: {e}")
+        db.rollback()
 
     return created_profiles
 
