@@ -752,13 +752,20 @@ class SentinelService:
             self.logger.debug(f"Cache hit for {detection_type}")
             cached_result.response_time_ms = int((time.time() - start_time) * 1000)
 
-            # Phase 20 Enhancement: Apply detect_only mode to cached results too
-            if cached_result.is_threat_detected and detection_mode == "detect_only":
-                self.logger.info(
-                    f"Detect-only mode (cached): Threat detected in {detection_type} but allowing. "
-                    f"Reason: {cached_result.threat_reason}"
-                )
-                cached_result.action = "allowed"
+            # Phase 20 Enhancement: Apply detection_mode to cached results too
+            if cached_result.is_threat_detected:
+                if detection_mode == "detect_only":
+                    self.logger.info(
+                        f"Detect-only mode (cached): Threat detected in {detection_type} but allowing. "
+                        f"Reason: {cached_result.threat_reason}"
+                    )
+                    cached_result.action = "allowed"
+                elif detection_mode == "warn_only":
+                    self.logger.info(
+                        f"Warn-only mode (cached): Threat detected in {detection_type} but allowing with warning. "
+                        f"Reason: {cached_result.threat_reason}"
+                    )
+                    cached_result.action = "warned"
 
             return cached_result
 
@@ -803,14 +810,20 @@ class SentinelService:
             response_time_ms,
         )
 
-        # Phase 20 Enhancement: Handle detect_only mode
-        # If threat detected but mode is detect_only, log but allow
+        # Phase 20 Enhancement: Handle non-blocking detection modes
+        # If threat detected but mode is detect_only or warn_only, override action
         if result.is_threat_detected and detection_mode == "detect_only":
             self.logger.info(
                 f"Detect-only mode: Threat detected in {detection_type} but allowing. "
                 f"Reason: {result.threat_reason}"
             )
             result.action = "allowed"
+        elif result.is_threat_detected and detection_mode == "warn_only":
+            self.logger.info(
+                f"Warn-only mode: Threat detected in {detection_type} but allowing with warning. "
+                f"Reason: {result.threat_reason}"
+            )
+            result.action = "warned"
 
         # Cache result
         self._save_cache(
@@ -989,8 +1002,11 @@ class SentinelService:
         if cached_result:
             self.logger.debug("Cache hit for unified analysis")
             cached_result.response_time_ms = int((time.time() - start_time) * 1000)
-            if cached_result.is_threat_detected and detection_mode == "detect_only":
-                cached_result.action = "allowed"
+            if cached_result.is_threat_detected:
+                if detection_mode == "detect_only":
+                    cached_result.action = "allowed"
+                elif detection_mode == "warn_only":
+                    cached_result.action = "warned"
             return cached_result
 
         # Get unified classification prompt
@@ -1025,13 +1041,19 @@ class SentinelService:
             response_time_ms,
         )
 
-        # Handle detect_only mode
+        # Handle non-blocking detection modes
         if result.is_threat_detected and detection_mode == "detect_only":
             self.logger.info(
                 f"Detect-only mode: {result.detection_type} threat detected but allowing. "
                 f"Reason: {result.threat_reason}"
             )
             result.action = "allowed"
+        elif result.is_threat_detected and detection_mode == "warn_only":
+            self.logger.info(
+                f"Warn-only mode: {result.detection_type} threat detected but allowing with warning. "
+                f"Reason: {result.threat_reason}"
+            )
+            result.action = "warned"
 
         # Cache result
         self._save_cache(
@@ -1179,8 +1201,8 @@ class SentinelService:
         if result.action == "blocked" and not config.notification_on_block:
             self.logger.debug("Notification on block disabled, skipping")
             return False
-        if result.action == "allowed" and not config.notification_on_detect:
-            self.logger.debug("Notification on detect disabled, skipping")
+        if result.action in ("allowed", "warned") and not config.notification_on_detect:
+            self.logger.debug("Notification on detect/warn disabled, skipping")
             return False
 
         # The recipient is the sender (the user who sent the blocked message)
