@@ -15,7 +15,7 @@ import logging
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
@@ -153,6 +153,14 @@ async def create_or_update_credentials(
     """
     encryption_key = get_encryption_key(db)
     token_encryption = TokenEncryption(encryption_key.encode())
+
+    if not ctx.tenant_id:
+        logger.warning(f"User {ctx.user.email} attempted to save Google credentials without a tenant context")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must be associated with a tenant to configure Google OAuth credentials. "
+                   "If you are a global admin, please assign yourself to a tenant first."
+        )
 
     # Encrypt client secret
     encrypted_secret = token_encryption.encrypt(data.client_secret, ctx.tenant_id)
