@@ -1164,6 +1164,41 @@ class AgentRouter:
                 self.logger.info(f"[SLASH] Command handled: {message_text[:50]}")
                 return
 
+        # Phase 21: Detect @agent /command pattern in group messages
+        # Handles: @bot /tool nmap quick_scan target=x, @bot /help, etc.
+        if not message_text.startswith('/') and '@' in message_text and '/' in message_text:
+            if hasattr(self, 'contact_service') and self.contact_service:
+                mention_result = self.contact_service.extract_mention_and_command(message_text)
+                if mention_result:
+                    agent_contact, slash_command_text = mention_result
+
+                    # Resolve the agent from the contact
+                    agent = self.db.query(Agent).filter(
+                        Agent.contact_id == agent_contact.id,
+                        Agent.is_active == True
+                    ).first()
+
+                    if agent:
+                        self.logger.info(
+                            f"[SLASH-MENTION] Detected @{agent_contact.friendly_name} "
+                            f"+ slash command: {slash_command_text[:50]}"
+                        )
+
+                        # Execute slash command in the context of the mentioned agent
+                        slash_result = await self._handle_slash_command(
+                            sender_key=sender_key,
+                            message_text=slash_command_text,
+                            message=message,
+                            trigger_type=trigger_type,
+                            override_agent_id=agent.id
+                        )
+                        if slash_result and slash_result.get("handled"):
+                            self.logger.info(
+                                f"[SLASH-MENTION] Command handled for agent {agent.id}: "
+                                f"{slash_command_text[:50]}"
+                            )
+                            return
+
         # Phase 8.0: Check for active conversation thread FIRST (highest priority)
         active_thread = self._find_active_conversation_thread(sender)
 
@@ -3199,7 +3234,8 @@ Current turn: {thread.current_turn} of {thread.max_turns}
         sender_key: str,
         message_text: str,
         message: Dict,
-        trigger_type: str
+        trigger_type: str,
+        override_agent_id: Optional[int] = None
     ) -> Optional[Dict]:
         """
         Phase 16: Handle slash commands across all channels (WhatsApp, Playground, etc).
@@ -3217,6 +3253,8 @@ Current turn: {thread.current_turn} of {thread.max_turns}
             message_text: Full message text starting with /
             message: Original message dict
             trigger_type: Channel type (dm, group, etc.)
+            override_agent_id: If provided, use this agent instead of session lookup
+                              (used by @mention + /command pattern in groups)
 
         Returns:
             Dict with handled=True if command was executed, None otherwise
@@ -3234,19 +3272,22 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 channel = "playground"
 
             # Get agent for this user (for agent-specific commands)
-            # First, try to get from saved session
+            # Use override from @mention if provided (Phase 21)
             from models import UserAgentSession
             sender = message.get("sender", "")
 
-            agent_id = None
-            try:
-                saved_session = self.db.query(UserAgentSession).filter(
-                    UserAgentSession.user_identifier == sender_key
-                ).first()
-                if saved_session:
-                    agent_id = saved_session.agent_id
-            except Exception:
-                pass
+            agent_id = override_agent_id  # Use override from @mention if provided
+
+            # If no override, try to get from saved session
+            if not agent_id:
+                try:
+                    saved_session = self.db.query(UserAgentSession).filter(
+                        UserAgentSession.user_identifier == sender_key
+                    ).first()
+                    if saved_session:
+                        agent_id = saved_session.agent_id
+                except Exception:
+                    pass
 
             # If no saved session, try to get default agent
             if not agent_id:
@@ -3260,6 +3301,13 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
                 if agent and agent.tenant_id:
                     tenant_id = agent.tenant_id
+
+            # Feature #12: Check slash command permissions before processing
+            from services.slash_command_permission_service import SlashCommandPermissionService
+            perm_service = SlashCommandPermissionService(self.db)
+            if not perm_service.is_allowed(sender_key, tenant_id, channel):
+                self.logger.info(f"[SLASH] Permission denied for {sender_key} (tenant={tenant_id})")
+                return None  # Silently skip - message processed as normal text
 
             # Initialize slash command service
             slash_service = SlashCommandService(self.db)

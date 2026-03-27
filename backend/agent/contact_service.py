@@ -3,7 +3,7 @@ Contact Service - Handles user/agent identification and mention detection
 Phase 4.2: Contact Management System
 """
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from sqlalchemy.orm import Session
 from models import Contact
 import re
@@ -183,6 +183,40 @@ class ContactService:
         for contact in mentioned:
             if contact.role == "agent":
                 return contact
+        return None
+
+    def extract_mention_and_command(self, message_body: str) -> Optional[Tuple[Contact, str]]:
+        """
+        Extract an agent mention followed by a slash command from a message.
+
+        Supports patterns:
+          @agentname /command args
+          @agentname /tool name cmd params
+
+        Returns:
+            Tuple of (agent_contact, slash_command_text) or None
+        """
+        # Match @mention followed by /command
+        pattern = r'^@([\w+]+)\s+(/\S+.*)$'
+        match = re.match(pattern, message_body.strip(), re.DOTALL)
+        if not match:
+            return None
+
+        mention_name = match.group(1)
+        command_text = match.group(2).strip()
+
+        # Resolve mention to an agent contact using existing detection logic
+        # Use the same resolution as detect_mentions but for a single name
+        contacts = self.detect_mentions(f"@{mention_name}")
+        agent_contact = None
+        for contact in contacts:
+            if contact.role == "agent":
+                agent_contact = contact
+                break
+
+        if agent_contact:
+            return (agent_contact, command_text)
+
         return None
 
     def format_contacts_for_context(self, agent_id: Optional[int] = None) -> str:

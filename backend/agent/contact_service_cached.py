@@ -177,6 +177,12 @@ class CachedContactService:
         base_service = ContactService(self.db)
         return base_service.get_mentioned_agent(message_text)
 
+    def extract_mention_and_command(self, message_body: str):
+        """Delegate to base implementation (no caching needed)"""
+        from agent.contact_service import ContactService
+        base_service = ContactService(self.db)
+        return base_service.extract_mention_and_command(message_body)
+
     def resolve_identifier(self, identifier: str):
         """Delegate with caching"""
         return self.identify_sender(identifier)
