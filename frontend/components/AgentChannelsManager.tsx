@@ -102,12 +102,12 @@ export default function AgentChannelsManager({ agentId }: Props) {
 
   if (loading) {
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+      <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
         <div className="animate-pulse">
-          <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-1/4 mb-4"></div>
+          <div className="h-6 bg-tsushin-elevated rounded w-1/4 mb-4"></div>
           <div className="space-y-3">
-            <div className="h-12 bg-gray-200 dark:bg-gray-700 rounded"></div>
-            <div className="h-12 bg-gray-200 dark:bg-gray-700 rounded"></div>
+            <div className="h-12 bg-tsushin-elevated rounded"></div>
+            <div className="h-12 bg-tsushin-elevated rounded"></div>
           </div>
         </div>
       </div>
@@ -117,11 +117,11 @@ export default function AgentChannelsManager({ agentId }: Props) {
   return (
     <div className="space-y-6">
       {/* Channel Toggles */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+      <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+        <h2 className="text-lg font-semibold text-white mb-4">
           Enabled Channels
         </h2>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <p className="text-sm text-tsushin-slate mb-4">
           Select which channels this agent can interact through.
         </p>
 
@@ -131,24 +131,24 @@ export default function AgentChannelsManager({ agentId }: Props) {
               key={channel.id}
               className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${
                 channel.disabled
-                  ? 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 opacity-50 cursor-not-allowed'
+                  ? 'bg-tsushin-ink border-tsushin-border opacity-50 cursor-not-allowed'
                   : enabledChannels.includes(channel.id)
                     ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700'
-                    : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-blue-200 dark:hover:border-blue-800'
+                    : 'bg-tsushin-surface border-tsushin-border hover:border-blue-200 dark:hover:border-blue-800'
               }`}
             >
               <div className="flex items-center gap-3">
                 <channel.Icon size={24} />
                 <div>
-                  <div className="font-medium text-gray-900 dark:text-gray-100">
+                  <div className="font-medium text-white">
                     {channel.name}
                     {channel.disabled && (
-                      <span className="ml-2 text-xs px-2 py-0.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded-full">
+                      <span className="ml-2 text-xs px-2 py-0.5 bg-tsushin-elevated text-tsushin-slate rounded-full">
                         Coming Soon
                       </span>
                     )}
                   </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
+                  <div className="text-sm text-tsushin-muted">
                     {channel.description}
                   </div>
                 </div>
@@ -158,7 +158,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
                 checked={enabledChannels.includes(channel.id)}
                 onChange={() => handleChannelToggle(channel.id)}
                 disabled={channel.disabled}
-                className="h-5 w-5 text-blue-600 rounded focus:ring-blue-500"
+                className="h-5 w-5 text-teal-600 rounded focus:ring-teal-500"
               />
             </label>
           ))}
@@ -167,16 +167,16 @@ export default function AgentChannelsManager({ agentId }: Props) {
 
       {/* WhatsApp Integration Selection */}
       {enabledChannels.includes('whatsapp') && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+          <h2 className="text-lg font-semibold text-white mb-4">
             WhatsApp Integration
           </h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          <p className="text-sm text-tsushin-slate mb-4">
             Select which WhatsApp phone number this agent should use to send and receive messages.
           </p>
 
           {mcpInstances.length === 0 ? (
-            <div className="text-center py-6 text-gray-500 dark:text-gray-400">
+            <div className="text-center py-6 text-tsushin-muted">
               <p>No WhatsApp integrations available.</p>
               <p className="text-sm mt-1">Go to System → Integrations to create one.</p>
             </div>
@@ -188,7 +188,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
                   className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${
                     whatsappIntegrationId === instance.id
                       ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700'
-                      : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-green-200 dark:hover:border-green-800'
+                      : 'bg-tsushin-surface border-tsushin-border hover:border-green-200 dark:hover:border-green-800'
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -200,7 +200,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
                       className="h-4 w-4 text-green-600 focus:ring-green-500"
                     />
                     <div>
-                      <div className="font-medium text-gray-900 dark:text-gray-100">
+                      <div className="font-medium text-white">
                         {instance.phone_number}
                         {instance.is_group_handler && (
                           <span className="ml-2 text-xs px-2 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 rounded-full">
@@ -208,7 +208,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
                           </span>
                         )}
                       </div>
-                      <div className="text-sm text-gray-500 dark:text-gray-400">
+                      <div className="text-sm text-tsushin-muted">
                         Port {instance.mcp_port} • {instance.status}
                         {instance.health_status && ` • ${instance.health_status}`}
                       </div>
@@ -218,7 +218,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
                     instance.status === 'running'
                       ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
                       : instance.status === 'stopped'
-                        ? 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
+                        ? 'bg-tsushin-elevated text-tsushin-fog'
                         : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300'
                   }`}>
                     {instance.status}
@@ -232,16 +232,16 @@ export default function AgentChannelsManager({ agentId }: Props) {
 
       {/* Phase 10.1.1: Telegram Integration Selection */}
       {enabledChannels.includes('telegram') && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+          <h2 className="text-lg font-semibold text-white mb-4">
             Telegram Integration
           </h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          <p className="text-sm text-tsushin-slate mb-4">
             Select which Telegram bot this agent should use to send and receive messages.
           </p>
 
           {telegramInstances.length === 0 ? (
-            <div className="text-center py-6 text-gray-500 dark:text-gray-400">
+            <div className="text-center py-6 text-tsushin-muted">
               <p>No Telegram bots available.</p>
               <p className="text-sm mt-1">Go to Hub → Communication to create one.</p>
             </div>
@@ -253,7 +253,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
                   className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${
                     telegramIntegrationId === instance.id
                       ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700'
-                      : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-blue-200 dark:hover:border-blue-800'
+                      : 'bg-tsushin-surface border-tsushin-border hover:border-blue-200 dark:hover:border-blue-800'
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -262,13 +262,13 @@ export default function AgentChannelsManager({ agentId }: Props) {
                       name="telegram_integration"
                       checked={telegramIntegrationId === instance.id}
                       onChange={() => setTelegramIntegrationId(instance.id)}
-                      className="h-4 w-4 text-blue-600 focus:ring-blue-500"
+                      className="h-4 w-4 text-teal-600 focus:ring-teal-500"
                     />
                     <div>
-                      <div className="font-medium text-gray-900 dark:text-gray-100">
+                      <div className="font-medium text-white">
                         @{instance.bot_username}
                       </div>
-                      <div className="text-sm text-gray-500 dark:text-gray-400">
+                      <div className="text-sm text-tsushin-muted">
                         {instance.bot_name || 'Telegram Bot'} • {instance.status}
                       </div>
                     </div>
@@ -277,7 +277,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
                     instance.status === 'active'
                       ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
                       : instance.status === 'inactive'
-                        ? 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
+                        ? 'bg-tsushin-elevated text-tsushin-fog'
                         : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300'
                   }`}>
                     {instance.status}
@@ -291,11 +291,11 @@ export default function AgentChannelsManager({ agentId }: Props) {
 
       {/* Group Handler Configuration */}
       {enabledChannels.includes('whatsapp') && mcpInstances.length > 1 && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+          <h2 className="text-lg font-semibold text-white mb-4">
             Group Message Handler
           </h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          <p className="text-sm text-tsushin-slate mb-4">
             When multiple WhatsApp numbers are members of the same group, only one should respond to prevent duplicates.
             Select which integration should handle group messages.
           </p>
@@ -308,19 +308,19 @@ export default function AgentChannelsManager({ agentId }: Props) {
                 className={`w-full flex items-center justify-between p-3 border rounded-lg transition-colors ${
                   instance.is_group_handler
                     ? 'bg-purple-50 dark:bg-purple-900/20 border-purple-300 dark:border-purple-700'
-                    : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-purple-200 dark:hover:border-purple-800'
+                    : 'bg-tsushin-surface border-tsushin-border hover:border-purple-200 dark:hover:border-purple-800'
                 }`}
               >
                 <div className="flex items-center gap-3">
                   {instance.is_group_handler ? <CheckCircleIcon size={20} className="text-green-600" /> : <CircleIcon size={20} className="text-gray-400" />}
-                  <span className="font-medium text-gray-900 dark:text-gray-100">
+                  <span className="font-medium text-white">
                     {instance.phone_number}
                   </span>
                 </div>
                 <span className={`text-sm ${
                   instance.is_group_handler
                     ? 'text-purple-700 dark:text-purple-300 font-medium'
-                    : 'text-gray-500 dark:text-gray-400'
+                    : 'text-tsushin-muted'
                 }`}>
                   {instance.is_group_handler ? 'Handles Groups' : 'DMs Only'}
                 </span>
@@ -328,7 +328,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
             ))}
           </div>
 
-          <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+          <p className="mt-3 text-xs text-tsushin-muted">
             Only one integration can be the group handler at a time. Selecting a new one will automatically
             unset the previous one.
           </p>
@@ -342,8 +342,8 @@ export default function AgentChannelsManager({ agentId }: Props) {
           disabled={saving}
           className={`px-6 py-2.5 rounded-lg font-medium transition-colors ${
             saving
-              ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
-              : 'bg-blue-600 text-white hover:bg-blue-700'
+              ? 'bg-tsushin-elevated text-tsushin-muted cursor-not-allowed'
+              : 'btn-primary'
           }`}
         >
           {saving ? 'Saving...' : 'Save Changes'}

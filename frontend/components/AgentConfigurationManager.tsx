@@ -219,7 +219,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
 
   return (
     <div className="space-y-6">
-      <div className="bg-blue-50 dark:bg-blue-900/20 border dark:border-gray-700 border-blue-200 dark:border-blue-700 rounded-lg p-4">
+      <div className="bg-blue-50 dark:bg-blue-900/20 border border-tsushin-border border-blue-200 dark:border-blue-700 rounded-lg p-4">
         <h3 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2 flex items-center gap-1.5"><InfoIcon size={16} /> About Configuration</h3>
         <p className="text-sm text-blue-700 dark:text-blue-300">
           Configure all agent settings in one place: system prompt, personality tone, AI model, keywords, and built-in tools.
@@ -228,24 +228,24 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       </div>
 
       {/* System Prompt */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><TargetIcon size={20} /> System Prompt</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+        <p className="text-sm text-tsushin-slate mb-3">
           Define the agent's role, capabilities, and behavior guidelines. This is the core instruction set.
         </p>
         <textarea
           value={systemPrompt}
           onChange={(e) => setSystemPrompt(e.target.value)}
-          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 font-mono text-sm"
+          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface font-mono text-sm"
           rows={8}
           placeholder="You are a helpful AI assistant..."
         />
       </div>
 
       {/* Persona Configuration */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><TheaterIcon size={20} /> Agent Persona</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <p className="text-sm text-tsushin-slate mb-4">
           Select a persona that defines the agent's personality, communication style, role, and behavior guidelines.
           Personas are reusable templates that can be shared across multiple agents.
         </p>
@@ -259,7 +259,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
               const persona = personas.find(p => p.id === id)
               setSelectedPersona(persona || null)
             }}
-            className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+            className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
           >
             <option value="">Select a persona...</option>
             {personas.map((persona) => (
@@ -270,40 +270,40 @@ export default function AgentConfigurationManager({ agentId }: Props) {
           </select>
 
           {selectedPersona && (
-            <div className="bg-gray-50 dark:bg-gray-900/50 border dark:border-gray-700 rounded-lg p-4 space-y-3">
+            <div className="bg-tsushin-ink border border-tsushin-border rounded-lg p-4 space-y-3">
               <div>
-                <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1"><ClipboardIcon size={14} /> Description</h4>
-                <p className="text-sm text-gray-600 dark:text-gray-400">{selectedPersona.description}</p>
+                <h4 className="text-sm font-semibold text-tsushin-fog mb-1 flex items-center gap-1"><ClipboardIcon size={14} /> Description</h4>
+                <p className="text-sm text-tsushin-slate">{selectedPersona.description}</p>
               </div>
 
               {selectedPersona.role && (
                 <div>
-                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1"><TargetIcon size={14} /> Role</h4>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">{selectedPersona.role}</p>
+                  <h4 className="text-sm font-semibold text-tsushin-fog mb-1 flex items-center gap-1"><TargetIcon size={14} /> Role</h4>
+                  <p className="text-sm text-tsushin-slate">{selectedPersona.role}</p>
                   {selectedPersona.role_description && (
-                    <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">{selectedPersona.role_description}</p>
+                    <p className="text-xs text-tsushin-muted mt-1">{selectedPersona.role_description}</p>
                   )}
                 </div>
               )}
 
               {selectedPersona.personality_traits && (
                 <div>
-                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1"><SparklesIcon size={14} /> Personality Traits</h4>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">{selectedPersona.personality_traits}</p>
+                  <h4 className="text-sm font-semibold text-tsushin-fog mb-1 flex items-center gap-1"><SparklesIcon size={14} /> Personality Traits</h4>
+                  <p className="text-sm text-tsushin-slate">{selectedPersona.personality_traits}</p>
                 </div>
               )}
 
               {selectedPersona.guardrails && (
                 <div>
-                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1"><ScaleIcon size={14} /> Guardrails</h4>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">{selectedPersona.guardrails}</p>
+                  <h4 className="text-sm font-semibold text-tsushin-fog mb-1 flex items-center gap-1"><ScaleIcon size={14} /> Guardrails</h4>
+                  <p className="text-sm text-tsushin-slate">{selectedPersona.guardrails}</p>
                 </div>
               )}
 
-              <div className="pt-2 border-t dark:border-gray-700">
+              <div className="pt-2 border-t border-tsushin-border">
                 <a
                   href="/agents?tab=personas"
-                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                  className="text-sm text-teal-400 hover:underline"
                 >
                   → Manage Personas
                 </a>
@@ -314,7 +314,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       </div>
 
       {/* AI Model Selection */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><BotIcon size={20} /> AI Model</h3>
 
         <div className="grid grid-cols-2 gap-4">
@@ -329,7 +329,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
                   setModelName(provider.models[0])
                 }
               }}
-              className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
             >
               {MODEL_PROVIDERS.map((provider) => (
                 <option key={provider.value} value={provider.value}>
@@ -344,7 +344,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
             <select
               value={modelName}
               onChange={(e) => setModelName(e.target.value)}
-              className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
             >
               {getAvailableModels().map((model) => (
                 <option key={model} value={model}>
@@ -357,9 +357,9 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       </div>
 
       {/* Keywords */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><KeyIcon size={20} /> Trigger Keywords</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+        <p className="text-sm text-tsushin-slate mb-3">
           Keywords that will trigger this agent in group chats (e.g., @AgentName, mentions)
         </p>
 
@@ -370,11 +370,11 @@ export default function AgentConfigurationManager({ agentId }: Props) {
             onChange={(e) => setKeywordInput(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && addKeyword()}
             placeholder="Add keyword..."
-            className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+            className="flex-1 px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
           />
           <button
             onClick={addKeyword}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+            className="btn-primary px-4 py-2 rounded-md"
           >
             Add
           </button>
@@ -399,9 +399,9 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       </div>
 
       {/* Trigger Configuration */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><TargetIcon size={20} /> Trigger Configuration</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <p className="text-sm text-tsushin-slate mb-4">
           Configure when this agent should respond. Leave blank to use system defaults.
         </p>
 
@@ -416,7 +416,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
               />
               <div>
                 <div className="font-medium">Enable DM Auto-Response</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">
+                <div className="text-xs text-tsushin-muted">
                   Automatically respond to direct messages (if unchecked, uses system default)
                 </div>
               </div>
@@ -425,7 +425,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
 
           <div>
             <label className="block text-sm font-medium mb-2">Group Filters</label>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-xs text-tsushin-muted mb-2">
               Group names to monitor. If empty, uses system default groups.
             </p>
             <div className="flex gap-2 mb-3">
@@ -435,11 +435,11 @@ export default function AgentConfigurationManager({ agentId }: Props) {
                 onChange={(e) => setGroupFilterInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && addGroupFilter()}
                 placeholder="Add group name..."
-                className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                className="flex-1 px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
               />
               <button
                 onClick={addGroupFilter}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="btn-primary px-4 py-2 rounded-md"
               >
                 Add
               </button>
@@ -464,7 +464,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
 
           <div>
             <label className="block text-sm font-medium mb-2">Number Filters</label>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-xs text-tsushin-muted mb-2">
               Phone numbers to monitor. If empty, uses system default numbers.
             </p>
             <div className="flex gap-2 mb-3">
@@ -474,11 +474,11 @@ export default function AgentConfigurationManager({ agentId }: Props) {
                 onChange={(e) => setNumberFilterInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && addNumberFilter()}
                 placeholder="Add phone number..."
-                className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                className="flex-1 px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
               />
               <button
                 onClick={addNumberFilter}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="btn-primary px-4 py-2 rounded-md"
               >
                 Add
               </button>
@@ -512,14 +512,14 @@ export default function AgentConfigurationManager({ agentId }: Props) {
         </p>
         <a
           href={`/agents?tab=skills&agent=${agentId}`}
-          className="inline-block mt-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+          className="inline-block mt-2 text-sm text-teal-400 hover:underline"
         >
           → Go to Skills Configuration
         </a>
       </div>
 
       {/* Status Settings */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><SettingsIcon size={20} /> Status Settings</h3>
 
         <div className="space-y-3">
@@ -532,7 +532,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
             />
             <div>
               <div className="font-medium">Active</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+              <div className="text-xs text-tsushin-muted">
                 Agent can respond to messages when active
               </div>
             </div>
@@ -547,7 +547,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
             />
             <div>
               <div className="font-medium">Default Agent</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+              <div className="text-xs text-tsushin-muted">
                 This agent will respond to contacts without specific agent assignments
               </div>
             </div>
@@ -556,18 +556,18 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       </div>
 
       {/* Save Button */}
-      <div className="flex justify-end gap-3 pt-4 border-t dark:border-gray-700">
+      <div className="flex justify-end gap-3 pt-4 border-t border-tsushin-border">
         <button
           onClick={() => loadData()}
           disabled={saving}
-          className="px-6 py-2 border dark:border-gray-700 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          className="px-6 py-2 border border-tsushin-border rounded-md hover:bg-tsushin-surface disabled:opacity-50"
         >
           Reset
         </button>
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 font-medium"
+          className="btn-primary px-6 py-2 rounded-md disabled:opacity-50 font-medium"
         >
           {saving ? 'Saving...' : 'Save Configuration'}
         </button>

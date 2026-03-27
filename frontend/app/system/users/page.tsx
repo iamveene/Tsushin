@@ -182,7 +182,7 @@ export default function GlobalUsersPage() {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-600 dark:text-gray-400">Loading...</div>
+        <div className="text-tsushin-slate">Loading...</div>
       </div>
     )
   }
@@ -196,21 +196,21 @@ export default function GlobalUsersPage() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <div className="flex items-center space-x-3 mb-2">
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
+              <h1 className="text-3xl font-bold text-white">
                 User Management
               </h1>
               <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-900 dark:text-purple-200 text-sm font-semibold rounded-full">
                 Global Admin
               </span>
             </div>
-            <p className="text-gray-600 dark:text-gray-400">
+            <p className="text-tsushin-slate">
               Manage users across all organizations
             </p>
           </div>
 
           <button
             onClick={() => setShowCreateModal(true)}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-md transition-colors"
+            className="btn-primary px-4 py-2 font-medium rounded-md transition-colors"
           >
             + Create User
           </button>
@@ -219,43 +219,43 @@ export default function GlobalUsersPage() {
         {/* Stats */}
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-              <div className="text-sm text-gray-600 dark:text-gray-400">Total Users</div>
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats.total_users}</div>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-4">
+              <div className="text-sm text-tsushin-slate">Total Users</div>
+              <div className="text-2xl font-bold text-white">{stats.total_users}</div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-              <div className="text-sm text-gray-600 dark:text-gray-400">Active</div>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-4">
+              <div className="text-sm text-tsushin-slate">Active</div>
               <div className="text-2xl font-bold text-green-600">{stats.active_users}</div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-              <div className="text-sm text-gray-600 dark:text-gray-400">Global Admins</div>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-4">
+              <div className="text-sm text-tsushin-slate">Global Admins</div>
               <div className="text-2xl font-bold text-purple-600">{stats.global_admins}</div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-              <div className="text-sm text-gray-600 dark:text-gray-400">Google SSO</div>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-4">
+              <div className="text-sm text-tsushin-slate">Google SSO</div>
               <div className="text-2xl font-bold text-blue-600">{stats.google_sso_users}</div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-              <div className="text-sm text-gray-600 dark:text-gray-400">Local Auth</div>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-4">
+              <div className="text-sm text-tsushin-slate">Local Auth</div>
               <div className="text-2xl font-bold text-gray-600">{stats.local_users}</div>
             </div>
           </div>
         )}
 
         {/* Filters */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 mb-6">
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-4 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             <input
               type="text"
               placeholder="Search by email or name..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+              className="px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
             />
             <select
               value={tenantFilter}
               onChange={(e) => setTenantFilter(e.target.value)}
-              className="px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+              className="px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
             >
               <option value="">All Organizations</option>
               {tenants.map((t) => (
@@ -265,7 +265,7 @@ export default function GlobalUsersPage() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+              className="px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
             >
               <option value="all">All Status</option>
               <option value="active">Active</option>
@@ -274,7 +274,7 @@ export default function GlobalUsersPage() {
             <select
               value={authFilter}
               onChange={(e) => setAuthFilter(e.target.value as any)}
-              className="px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+              className="px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
             >
               <option value="">All Auth Methods</option>
               <option value="local">Local</option>
@@ -283,7 +283,7 @@ export default function GlobalUsersPage() {
             <select
               value={adminFilter}
               onChange={(e) => setAdminFilter(e.target.value as any)}
-              className="px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+              className="px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
             >
               <option value="">All Users</option>
               <option value="true">Global Admins</option>
@@ -300,29 +300,29 @@ export default function GlobalUsersPage() {
         )}
 
         {/* Users Table */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border overflow-hidden">
           {loading ? (
-            <div className="p-8 text-center text-gray-600 dark:text-gray-400">Loading users...</div>
+            <div className="p-8 text-center text-tsushin-slate">Loading users...</div>
           ) : users.length === 0 ? (
-            <div className="p-8 text-center text-gray-600 dark:text-gray-400">No users found.</div>
+            <div className="p-8 text-center text-tsushin-slate">No users found.</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">User</th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Organization</th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Role</th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Auth</th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Status</th>
-                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Actions</th>
+                  <tr className="bg-tsushin-ink border-b border-tsushin-border">
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">User</th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">Organization</th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">Role</th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">Auth</th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">Status</th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-white">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {users.map((u) => (
                     <tr
                       key={u.id}
-                      className={`border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/50 ${
+                      className={`border-b border-tsushin-border hover:bg-tsushin-surface ${
                         !u.is_active ? 'opacity-60' : ''
                       }`}
                     >
@@ -331,12 +331,12 @@ export default function GlobalUsersPage() {
                           {u.avatar_url ? (
                             <img src={u.avatar_url} alt="" className="w-8 h-8 rounded-full" />
                           ) : (
-                            <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-500 dark:text-gray-400 text-sm font-medium">
+                            <div className="w-8 h-8 rounded-full bg-tsushin-elevated flex items-center justify-center text-tsushin-muted text-sm font-medium">
                               {u.email[0].toUpperCase()}
                             </div>
                           )}
                           <div>
-                            <div className="font-medium text-gray-900 dark:text-gray-100">
+                            <div className="font-medium text-white">
                               {u.full_name || 'No name'}
                               {u.is_global_admin && (
                                 <span className="ml-2 px-1.5 py-0.5 text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-900 dark:text-purple-200 rounded">
@@ -344,21 +344,21 @@ export default function GlobalUsersPage() {
                                 </span>
                               )}
                             </div>
-                            <div className="text-sm text-gray-600 dark:text-gray-400">{u.email}</div>
+                            <div className="text-sm text-tsushin-slate">{u.email}</div>
                           </div>
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-sm text-gray-700 dark:text-gray-300">
+                      <td className="py-3 px-4 text-sm text-tsushin-fog">
                         {u.tenant_name || <span className="text-gray-400">—</span>}
                       </td>
-                      <td className="py-3 px-4 text-sm text-gray-700 dark:text-gray-300">
+                      <td className="py-3 px-4 text-sm text-tsushin-fog">
                         {u.role_display_name || <span className="text-gray-400">—</span>}
                       </td>
                       <td className="py-3 px-4">
                         <span className={`px-2 py-1 text-xs font-semibold rounded ${
                           u.auth_provider === 'google'
                             ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-900 dark:text-blue-200'
-                            : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
+                            : 'bg-tsushin-elevated text-white'
                         }`}>
                           {u.auth_provider === 'google' ? 'Google' : 'Local'}
                         </span>
@@ -376,13 +376,13 @@ export default function GlobalUsersPage() {
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => setEditingUser(u)}
-                            className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                            className="text-sm text-teal-400 hover:text-teal-300"
                           >
                             Edit
                           </button>
                           <button
                             onClick={() => handleToggleStatus(u)}
-                            className="text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400"
+                            className="text-sm text-tsushin-slate hover:text-white"
                           >
                             {u.is_active ? 'Suspend' : 'Activate'}
                           </button>
@@ -390,7 +390,7 @@ export default function GlobalUsersPage() {
                             <>
                               <button
                                 onClick={() => handleToggleAdmin(u)}
-                                className="text-sm text-purple-600 hover:text-purple-800 dark:text-purple-400"
+                                className="text-sm text-teal-400 hover:text-teal-300"
                               >
                                 Make Admin
                               </button>
@@ -421,22 +421,22 @@ export default function GlobalUsersPage() {
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
-              <div className="text-sm text-gray-600 dark:text-gray-400">
+            <div className="px-4 py-3 border-t border-tsushin-border flex items-center justify-between">
+              <div className="text-sm text-tsushin-slate">
                 Showing {(page - 1) * pageSize + 1} to {Math.min(page * pageSize, total)} of {total} users
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={() => setPage(page - 1)}
                   disabled={page === 1}
-                  className="px-3 py-1 border dark:border-gray-700 rounded text-sm disabled:opacity-50"
+                  className="px-3 py-1 border border-tsushin-border rounded text-sm disabled:opacity-50"
                 >
                   Previous
                 </button>
                 <button
                   onClick={() => setPage(page + 1)}
                   disabled={page >= totalPages}
-                  className="px-3 py-1 border dark:border-gray-700 rounded text-sm disabled:opacity-50"
+                  className="px-3 py-1 border border-tsushin-border rounded text-sm disabled:opacity-50"
                 >
                   Next
                 </button>
@@ -448,10 +448,10 @@ export default function GlobalUsersPage() {
         {/* Create User Modal */}
         {showCreateModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full">
-              <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Create User</h2>
-                <button onClick={() => setShowCreateModal(false)} className="text-gray-500 hover:text-gray-700">✕</button>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border shadow-xl max-w-md w-full">
+              <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
+                <h2 className="text-xl font-bold text-white">Create User</h2>
+                <button onClick={() => setShowCreateModal(false)} className="text-tsushin-muted hover:text-white">✕</button>
               </div>
               <div className="p-6 space-y-4">
                 {modalError && (
@@ -460,42 +460,42 @@ export default function GlobalUsersPage() {
                   </div>
                 )}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+                  <label className="block text-sm font-medium text-tsushin-fog mb-1">Email</label>
                   <input
                     type="email"
                     value={createForm.email}
                     onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
-                    className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+                    className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+                  <label className="block text-sm font-medium text-tsushin-fog mb-1">Password</label>
                   <input
                     type="password"
                     value={createForm.password}
                     onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                    className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+                    className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
                     required
                     minLength={8}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name</label>
+                  <label className="block text-sm font-medium text-tsushin-fog mb-1">Full Name</label>
                   <input
                     type="text"
                     value={createForm.full_name}
                     onChange={(e) => setCreateForm({ ...createForm, full_name: e.target.value })}
-                    className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+                    className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Organization</label>
+                  <label className="block text-sm font-medium text-tsushin-fog mb-1">Organization</label>
                   <select
                     value={createForm.tenant_id}
                     onChange={(e) => setCreateForm({ ...createForm, tenant_id: e.target.value })}
-                    className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+                    className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
                     required
                   >
                     <option value="">Select organization...</option>
@@ -505,11 +505,11 @@ export default function GlobalUsersPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
+                  <label className="block text-sm font-medium text-tsushin-fog mb-1">Role</label>
                   <select
                     value={createForm.role_name}
                     onChange={(e) => setCreateForm({ ...createForm, role_name: e.target.value })}
-                    className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+                    className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
                   >
                     <option value="owner">Owner</option>
                     <option value="admin">Admin</option>
@@ -518,17 +518,17 @@ export default function GlobalUsersPage() {
                   </select>
                 </div>
               </div>
-              <div className="flex justify-end gap-3 p-6 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex justify-end gap-3 p-6 border-t border-tsushin-border">
                 <button
                   onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md"
+                  className="px-4 py-2 bg-tsushin-elevated text-white rounded-md"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleCreate}
                   disabled={modalLoading || !createForm.email || !createForm.password || !createForm.full_name || !createForm.tenant_id}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md disabled:opacity-50"
+                  className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
                 >
                   {modalLoading ? 'Creating...' : 'Create User'}
                 </button>
@@ -585,10 +585,10 @@ function EditUserModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full">
-        <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Edit User</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button>
+      <div className="bg-tsushin-surface rounded-xl border border-tsushin-border shadow-xl max-w-md w-full">
+        <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
+          <h2 className="text-xl font-bold text-white">Edit User</h2>
+          <button onClick={onClose} className="text-tsushin-muted hover:text-white">✕</button>
         </div>
         <div className="p-6 space-y-4">
           {error && (
@@ -597,29 +597,29 @@ function EditUserModal({
             </div>
           )}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+            <label className="block text-sm font-medium text-tsushin-fog mb-1">Email</label>
             <input
               type="email"
               value={user.email}
               disabled
-              className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-500 bg-gray-100 dark:bg-gray-600"
+              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-tsushin-muted bg-tsushin-elevated"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name</label>
+            <label className="block text-sm font-medium text-tsushin-fog mb-1">Full Name</label>
             <input
               type="text"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Organization</label>
+            <label className="block text-sm font-medium text-tsushin-fog mb-1">Organization</label>
             <select
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
-              className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
             >
               <option value="">No organization</option>
               {tenants.map((t) => (
@@ -628,11 +628,11 @@ function EditUserModal({
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
+            <label className="block text-sm font-medium text-tsushin-fog mb-1">Role</label>
             <select
               value={roleName}
               onChange={(e) => setRoleName(e.target.value)}
-              className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
+              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
             >
               <option value="owner">Owner</option>
               <option value="admin">Admin</option>
@@ -648,20 +648,20 @@ function EditUserModal({
               onChange={(e) => setIsActive(e.target.checked)}
               className="rounded"
             />
-            <label htmlFor="isActive" className="text-sm text-gray-700 dark:text-gray-300">Active</label>
+            <label htmlFor="isActive" className="text-sm text-tsushin-fog">Active</label>
           </div>
         </div>
-        <div className="flex justify-end gap-3 p-6 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex justify-end gap-3 p-6 border-t border-tsushin-border">
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md"
+            className="px-4 py-2 bg-tsushin-elevated text-white rounded-md"
           >
             Cancel
           </button>
           <button
             onClick={handleSubmit}
             disabled={loading}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md disabled:opacity-50"
+            className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
           >
             {loading ? 'Saving...' : 'Save Changes'}
           </button>
