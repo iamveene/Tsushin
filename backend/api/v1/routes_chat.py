@@ -128,13 +128,14 @@ async def _process_sync(agent, agent_name, request, caller, db):
     thread_id = request.thread_id
     if not thread_id:
         thread_service = PlaygroundThreadService(db)
-        thread = thread_service.create_thread(
-            agent_id=agent.id,
-            user_id=caller.user_id or 0,
-            title=request.message[:50] + "..." if len(request.message) > 50 else request.message,
+        thread_data = await thread_service.create_thread(
             tenant_id=caller.tenant_id,
+            user_id=caller.user_id or 0,
+            agent_id=agent.id,
+            title=request.message[:50] + "..." if len(request.message) > 50 else request.message,
         )
-        thread_id = thread.id
+        thread_obj = thread_data.get("thread", {})
+        thread_id = thread_obj.get("id") if thread_obj else None
 
     try:
         result = await service.send_message(
