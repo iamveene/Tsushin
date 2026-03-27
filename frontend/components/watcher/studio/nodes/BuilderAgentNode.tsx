@@ -30,7 +30,7 @@ function BuilderAgentNode({ data, selected }: NodeProps) {
       className={`builder-node builder-node-agent px-6 py-5 rounded-xl border-2 transition-all duration-200 ${selected ? 'border-tsushin-indigo shadow-glow-sm' : 'border-tsushin-indigo/40 hover:border-tsushin-indigo/70'} bg-tsushin-surface`}>
       <Handle type="source" position={Position.Bottom} className="!bg-tsushin-indigo !border-tsushin-surface !w-3 !h-3" />
       <div className="flex items-center gap-4 mb-3">
-        <button ref={avatarRef} onClick={handleAvatarClick} className="group relative cursor-pointer" title="Click to change avatar">
+        <button ref={avatarRef} onClick={handleAvatarClick} className="nodrag nopan group relative cursor-pointer" title="Click to change avatar">
           <AgentAvatarIcon slug={d.avatar} size="lg" />
           <div className="absolute inset-0 rounded-lg bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
             <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

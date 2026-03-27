@@ -23,7 +23,8 @@ const EDGE_STYLE = { stroke: '#484F58', strokeWidth: 2 }
 const CHILD_EDGE_STYLE = { stroke: '#484F58', strokeWidth: 1.5, strokeDasharray: '6 3' }
 
 /** Spacing constants (Phase B: improved breathing room) */
-const TIER_GAP_Y = 160        // Vertical gap between tiers
+const TIER_0_1_GAP_Y = 220    // Vertical gap from agent (tier 0) to tier 1 — extra room for straight smoothstep edges
+const TIER_1_2_GAP_Y = 140    // Vertical gap from tier-1 groups to tier-2 children
 const TIER_3_GAP_Y = 100      // Smaller gap for provider sub-nodes
 const NODE_GAP_X = 50         // Horizontal gap between nodes in the same tier
 const CHILD_GAP_X = 30        // Horizontal gap between child nodes
@@ -158,8 +159,8 @@ export async function calculateDagreBuilderLayout(
   }, 0)
 
   // --- Step 2: Position tier-1 nodes and their children ---
-  const tier1Y = TIER_GAP_Y  // Y position for tier-1 nodes
-  const tier2Y = tier1Y + getNodeHeight('builder-group') + TIER_GAP_Y * 0.75 // Consistent gap below groups
+  const tier1Y = TIER_0_1_GAP_Y  // Y position for tier-1 nodes
+  const tier2Y = tier1Y + getNodeHeight('builder-group') + TIER_1_2_GAP_Y // Consistent gap below groups
   const tier3Y = tier2Y + getNodeHeight('builder-skill') + TIER_3_GAP_Y // Y position for tier-3 providers
 
   // Track skill node positions for provider placement

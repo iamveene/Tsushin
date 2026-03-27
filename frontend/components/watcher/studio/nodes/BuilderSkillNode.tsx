@@ -27,7 +27,7 @@ function BuilderSkillNode({ data, selected }: NodeProps) {
           {d.providerName && <p className="text-tsushin-muted text-2xs truncate max-w-[140px]">{d.providerName}</p>}
         </div>
         {d.hasProviders && d.onToggleExpand && (
-          <button onClick={handleToggle} className="flex-shrink-0 p-1 rounded hover:bg-teal-500/20 transition-colors" title={d.isExpanded ? 'Collapse providers' : 'Expand providers'}>
+          <button onClick={handleToggle} className="nodrag nopan flex-shrink-0 p-1 rounded hover:bg-teal-500/20 transition-colors" title={d.isExpanded ? 'Collapse providers' : 'Expand providers'}>
             <svg className={`w-3.5 h-3.5 text-teal-400 transition-transform ${d.isExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>

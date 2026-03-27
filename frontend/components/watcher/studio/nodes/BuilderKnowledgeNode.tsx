@@ -45,7 +45,7 @@ function BuilderKnowledgeNode({ data, selected }: NodeProps) {
           <span className={`text-2xs ${d.status === 'completed' ? 'text-green-400' : d.status === 'failed' ? 'text-red-400' : 'text-yellow-400'}`}>{d.status}</span>
         </div>
         {d.onToggleExpand && (
-          <button onClick={handleToggle} className="flex-shrink-0 p-1 rounded hover:bg-violet-500/20 transition-colors" title={d.isExpanded ? 'Collapse details' : 'Expand details'}>
+          <button onClick={handleToggle} className="nodrag nopan flex-shrink-0 p-1 rounded hover:bg-violet-500/20 transition-colors" title={d.isExpanded ? 'Collapse details' : 'Expand details'}>
             <svg className={`w-3.5 h-3.5 text-violet-400 transition-transform ${d.isExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
