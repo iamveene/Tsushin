@@ -2354,3 +2354,73 @@ async def export_thread_knowledge(
         raise HTTPException(status_code=400, detail=result.get("error"))
 
     return result
+
+
+# ============================================================================
+# SSE Streaming Endpoint (Feature #3: WebSocket Streaming SSE Fallback)
+# ============================================================================
+
+@router.get("/api/playground/stream")
+async def playground_sse_stream(
+    agent_id: int,
+    message: str,
+    thread_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user_required),
+    db: Session = Depends(get_db),
+):
+    """
+    SSE streaming endpoint for playground chat.
+
+    This provides an alternative to WebSocket for clients that don't support WS.
+    Returns Server-Sent Events with token-by-token streaming.
+
+    Event format:
+      data: {"type": "token", "content": "Hello"}
+      data: {"type": "thinking", "agent_id": 1}
+      data: {"type": "done", "message_id": 123, "token_usage": {...}}
+    """
+    from fastapi.responses import StreamingResponse
+    from services.playground_websocket_service import PlaygroundWebSocketService
+
+    if not message or not message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if len(message) > 10000:
+        raise HTTPException(status_code=400, detail="Message too long (max 10000 chars)")
+
+    # Verify agent exists and belongs to tenant
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == current_user.tenant_id
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+
+    ws_service = PlaygroundWebSocketService(db, current_user.id)
+
+    async def event_generator():
+        try:
+            async for chunk in ws_service.process_streaming_message(
+                agent_id=agent_id,
+                message=message,
+                websocket=None,
+                thread_id=thread_id,
+            ):
+                chunk_json = json_lib.dumps(chunk)
+                yield f"data: {chunk_json}\n\n"
+
+                if chunk.get("type") in ("done", "error"):
+                    break
+        except Exception as e:
+            logger.error(f"SSE streaming error: {e}", exc_info=True)
+            error_data = json_lib.dumps({"type": "error", "error": str(e)})
+            yield f"data: {error_data}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

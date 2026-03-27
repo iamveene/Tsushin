@@ -44,6 +44,17 @@ PROVIDER_MODELS: Dict[str, List[Dict[str, str]]] = {
         {"value": "openai/gpt-4o-mini", "label": "GPT-4o Mini via OpenRouter", "description": "OpenAI's fast model"},
         {"value": "meta-llama/llama-3.1-8b-instruct:free", "label": "Llama 3.1 8B (Free)", "description": "Free tier"},
     ],
+    "groq": [
+        {"value": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B Versatile (Recommended)", "description": "Fast & capable"},
+        {"value": "llama-3.1-8b-instant", "label": "Llama 3.1 8B Instant", "description": "Ultra-fast inference"},
+        {"value": "mixtral-8x7b-32768", "label": "Mixtral 8x7B", "description": "Long context (32K)"},
+        {"value": "gemma2-9b-it", "label": "Gemma 2 9B", "description": "Google model via Groq"},
+    ],
+    "grok": [
+        {"value": "grok-3", "label": "Grok 3 (Recommended)", "description": "xAI flagship model"},
+        {"value": "grok-3-mini", "label": "Grok 3 Mini", "description": "Fast & affordable"},
+        {"value": "grok-2", "label": "Grok 2", "description": "Previous generation"},
+    ],
 }
 
 # Provider display names for UI
@@ -52,6 +63,8 @@ PROVIDERS = [
     {"value": "anthropic", "label": "Anthropic Claude", "description": "High quality reasoning"},
     {"value": "openai", "label": "OpenAI GPT", "description": "Industry standard"},
     {"value": "openrouter", "label": "OpenRouter", "description": "Multi-provider gateway"},
+    {"value": "groq", "label": "Groq", "description": "Ultra-fast inference for open models"},
+    {"value": "grok", "label": "Grok (xAI)", "description": "xAI's frontier models"},
 ]
 
 

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from fastapi import WebSocket, HTTPException
 from datetime import datetime
 
-from models import Agent, ConversationThread
+from models import Agent, ConversationThread, Contact
 from models_rbac import User
 from services.playground_service import PlaygroundService
 
@@ -109,8 +109,15 @@ class PlaygroundWebSocketService:
             thread.updated_at = datetime.utcnow()
             self.db.commit()
 
-            # Send "thinking" indicator
-            yield {"type": "thinking", "agent_id": agent_id}
+            # Send "thinking" indicator with agent metadata
+            contact = self.db.query(Contact).filter(Contact.id == agent.contact_id).first() if agent else None
+            agent_name = contact.friendly_name if contact else f"Agent {agent_id}"
+            yield {
+                "type": "thinking",
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "avatar": getattr(agent, 'avatar', None),
+            }
 
             # Use the streaming method from PlaygroundService
             accumulated_response = ""

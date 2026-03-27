@@ -83,12 +83,17 @@ async def send_chat_message(
     agent_id: int,
     request: ChatRequest,
     async_mode: bool = Query(False, alias="async"),
+    stream: bool = Query(False),
     db: Session = Depends(get_db),
     caller: ApiCaller = Depends(require_api_permission("agents.execute")),
 ):
     """
     Send a message to an agent and get a response.
-    Synchronous by default. Use ?async=true for queue-based processing.
+
+    Modes:
+    - Default (sync): Returns full response after processing
+    - ?async=true: Enqueues and returns queue ID for polling
+    - ?stream=true: Returns SSE stream with token-by-token response
     """
     # Validate agent access
     agent = db.query(Agent).filter(
@@ -102,6 +107,10 @@ async def send_chat_message(
     # Get agent name
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
     agent_name = contact.friendly_name if contact else f"Agent {agent.id}"
+
+    # Handle streaming mode — return SSE stream
+    if stream:
+        return await _process_stream_sse(agent, agent_name, request, caller, db)
 
     # Handle async mode — enqueue and return immediately
     if async_mode:
@@ -175,6 +184,61 @@ async def _process_sync(agent, agent_name, request, caller, db):
         tool_used=result.get("tool_used"),
         execution_time_ms=execution_time_ms,
         timestamp=datetime.utcnow().isoformat() + "Z",
+    )
+
+
+async def _process_stream_sse(agent, agent_name, request, caller, db):
+    """Process a chat message with SSE streaming response."""
+    import json
+    from fastapi.responses import StreamingResponse
+
+    service = PlaygroundService(db)
+
+    # Build sender_key for API client
+    if caller.is_api_client:
+        sender_key = f"api_{caller.client_id}"
+    else:
+        sender_key = service.resolve_user_identity(caller.user_id)
+
+    # Handle thread
+    thread_id = request.thread_id
+    if not thread_id:
+        thread_service = PlaygroundThreadService(db)
+        thread_data = await thread_service.create_thread(
+            tenant_id=caller.tenant_id,
+            user_id=caller.user_id or 0,
+            agent_id=agent.id,
+            title=request.message[:50] + "..." if len(request.message) > 50 else request.message,
+        )
+        thread_obj = thread_data.get("thread", {})
+        thread_id = thread_obj.get("id") if thread_obj else None
+
+    async def event_generator():
+        try:
+            async for chunk in service.process_message_streaming(
+                user_id=caller.user_id or 0,
+                agent_id=agent.id,
+                message_text=request.message,
+                thread_id=thread_id,
+            ):
+                chunk_data = json.dumps(chunk)
+                yield f"data: {chunk_data}\n\n"
+
+                if chunk.get("type") in ("done", "error"):
+                    break
+        except Exception as e:
+            logger.error(f"API v1 SSE stream error: {e}", exc_info=True)
+            error_data = json.dumps({"type": "error", "error": str(e)})
+            yield f"data: {error_data}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

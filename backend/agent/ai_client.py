@@ -30,7 +30,7 @@ class AIClient:
         Initialize AI client with database session for API key loading.
 
         Args:
-            provider: AI provider ('anthropic', 'openai', 'gemini', 'ollama', 'openrouter')
+            provider: AI provider ('anthropic', 'openai', 'gemini', 'ollama', 'openrouter', 'groq', 'grok')
             model_name: Model identifier
             db: Database session for loading API keys (optional, falls back to env vars)
             token_tracker: TokenTracker instance for usage tracking (Phase 7.2)
@@ -108,6 +108,22 @@ class AIClient:
                 base_url="https://openrouter.ai/api/v1"
             )
             self.logger.info(f"Initialized OpenRouter client with model: {model_name}")
+        elif self.provider == "groq":
+            # Groq: Ultra-fast inference for open models (LLaMA, Mixtral, Gemma)
+            # Uses OpenAI-compatible API with custom base URL
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                base_url="https://api.groq.com/openai/v1"
+            )
+            self.logger.info(f"Initialized Groq client with model: {model_name}")
+        elif self.provider == "grok":
+            # Grok (xAI): Elon Musk's xAI models
+            # Uses OpenAI-compatible API with custom base URL
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                base_url="https://api.x.ai/v1"
+            )
+            self.logger.info(f"Initialized Grok (xAI) client with model: {model_name}")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
@@ -153,6 +169,9 @@ class AIClient:
                 result = await self._call_ollama(system_prompt, user_message, tools=tools)  # Phase 5.2
             elif self.provider == "openrouter":
                 # OpenRouter uses OpenAI-compatible API
+                result = await self._call_openai(system_prompt, user_message)
+            elif self.provider in ("groq", "grok"):
+                # Groq and Grok use OpenAI-compatible API
                 result = await self._call_openai(system_prompt, user_message)
             else:
                 raise ValueError(f"Unsupported provider: {self.provider}")
@@ -522,6 +541,10 @@ class AIClient:
                     yield chunk
             elif self.provider == "openrouter":
                 # OpenRouter uses OpenAI-compatible streaming API
+                async for chunk in self._stream_openai(system_prompt, user_message):
+                    yield chunk
+            elif self.provider in ("groq", "grok"):
+                # Groq and Grok use OpenAI-compatible streaming API
                 async for chunk in self._stream_openai(system_prompt, user_message):
                     yield chunk
             else:

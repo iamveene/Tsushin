@@ -122,6 +122,8 @@ from api.routes_model_pricing import router as model_pricing_router
 from api.routes_telegram_instances import router as telegram_instances_router
 # Phase 17: System AI Configuration
 from api.routes_system_ai import router as system_ai_router
+# Integration Test Connection endpoints (Groq, Grok, ElevenLabs, etc.)
+from api.routes_integrations import router as integrations_router
 # Phase 20: Sentinel Security Agent
 from api.routes_sentinel import router as sentinel_router, set_engine as set_sentinel_engine
 from api.routes_sentinel_exceptions import router as sentinel_exceptions_router, set_engine as set_sentinel_exceptions_engine
@@ -989,6 +991,7 @@ app.include_router(skill_integrations_router, prefix="/api")  # Skill Integratio
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
 app.include_router(system_ai_router)  # Phase 17: System AI Configuration
+app.include_router(integrations_router)  # Integration Test Connection
 app.include_router(sentinel_router, prefix="/api")  # Phase 20: Sentinel Security Agent
 app.include_router(sentinel_exceptions_router, prefix="/api")  # Phase 20 Enhancement: Sentinel Exceptions
 app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel Security Profiles
