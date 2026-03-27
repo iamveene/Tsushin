@@ -404,6 +404,69 @@ class ApiKey(Base):
     )
 
 
+class ApiClient(Base):
+    """
+    Public API v1: OAuth2 client credentials for programmatic API access.
+    Each API client belongs to a tenant and has a role-based permission scope.
+    Secret is hashed with Argon2 (same as user passwords).
+    """
+    __tablename__ = "api_client"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    client_id = Column(String(50), unique=True, nullable=False, index=True)  # tsn_ci_<random>
+    client_secret_hash = Column(String(255), nullable=False)  # Argon2 hash of tsn_cs_<random>
+    client_secret_prefix = Column(String(12), nullable=False)  # First 12 chars for display/lookup
+    role = Column(String(30), default='api_agent_only')  # api_owner, api_admin, api_member, api_readonly, api_agent_only, custom
+    custom_scopes = Column(JSON, nullable=True)  # Only when role='custom': ["agents.read", "agents.execute"]
+    is_active = Column(Boolean, default=True)
+    rate_limit_rpm = Column(Integer, default=60)  # Requests per minute
+    expires_at = Column(DateTime, nullable=True)  # Optional expiry date
+    last_used_at = Column(DateTime, nullable=True)
+    created_by = Column(Integer, ForeignKey('user.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('uq_api_client_tenant_name', 'tenant_id', 'name', unique=True),
+    )
+
+
+class ApiClientToken(Base):
+    """
+    Public API v1: Tracks issued JWT access tokens for audit and revocation.
+    Tokens are short-lived (1h TTL) and tied to a specific API client.
+    """
+    __tablename__ = "api_client_token"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    api_client_id = Column(Integer, ForeignKey('api_client.id', ondelete='CASCADE'), nullable=False, index=True)
+    token_hash = Column(String(255), nullable=False, index=True)  # SHA-256 of the JWT
+    scopes = Column(JSON, nullable=False)  # Scopes granted for this token
+    issued_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    ip_address = Column(String(45), nullable=True)  # Client IP for audit
+
+
+class ApiRequestLog(Base):
+    """
+    Public API v1: Request audit log for tracking API usage per client.
+    """
+    __tablename__ = "api_request_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    api_client_id = Column(Integer, ForeignKey('api_client.id'), nullable=False, index=True)
+    method = Column(String(10), nullable=False)  # GET, POST, PUT, DELETE
+    path = Column(String(500), nullable=False)  # /api/v1/agents
+    status_code = Column(Integer, nullable=False)
+    response_time_ms = Column(Integer, nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
 class SemanticKnowledge(Base):
     """
     Phase 4.8: Stores learned facts about users (per-agent semantic memory).
