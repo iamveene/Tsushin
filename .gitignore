@@ -244,3 +244,6 @@ backend/test-api.html
 # Root-level screenshots & dev artifacts
 /*.png
 /deployment-test-playbook.md
+
+# Methodology working docs (tracked: methodology/ itself is committed)
+BUGS.md
