@@ -94,10 +94,10 @@ function LoginContent() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-[#0a0d16] py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-lg w-full space-y-6">
         {/* Banner */}
-        <div className="relative w-full overflow-hidden rounded-xl shadow-2xl">
+        <div className="relative w-full overflow-hidden">
           <Image
             src="/images/tsushin-banner.png"
             alt="Tsushin - Think. Secure. Build."
@@ -106,7 +106,6 @@ function LoginContent() {
             priority
             className="w-full h-auto"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-gray-900/40 to-transparent pointer-events-none rounded-xl" />
         </div>
 
         {/* Login Form */}
@@ -209,7 +208,7 @@ function LoginContent() {
         </form>
 
         {/* Footer */}
-        <p className="text-center text-xs text-gray-500 dark:text-gray-400">
+        <p className="text-center text-xs text-gray-500">
           &copy; 2026 Tsushin. Think, Secure, Build.
         </p>
       </div>
@@ -219,7 +218,7 @@ function LoginContent() {
 
 function LoadingFallback() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-[#0a0d16] py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div className="animate-pulse">
           <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-48 mx-auto mb-4"></div>
