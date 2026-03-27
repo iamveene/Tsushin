@@ -294,7 +294,8 @@ class TemplateValidationResponse(BaseModel):
 @router.post("/template/validate", response_model=TemplateValidationResponse)
 def validate_template(
     request: TemplateValidationRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required)
 ):
     """
     Validate a template string for syntax errors and extract variables.
@@ -336,14 +337,15 @@ def validate_template(
         )
 
     except Exception as e:
-        logger.error(f"Template validation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Template validation error")
+        raise HTTPException(status_code=500, detail="Failed to validate template")
 
 
 @router.post("/template/render")
 def render_template(
     request: TemplateValidationRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required)
 ):
     """
     Render a template with the provided context.
@@ -380,13 +382,13 @@ def render_template(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Template render error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Template render error")
+        raise HTTPException(status_code=500, detail="Failed to render template")
 
 
 # ============= STATS ENDPOINT (must be before /{flow_id} routes) =============
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(require_permission("flows.read"))])
 def get_flow_stats(
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
@@ -400,17 +402,18 @@ def get_flow_stats(
         active_flows = flow_query.filter(FlowDefinition.is_active == True).count()
 
         run_query = db.query(FlowRun)
-        if tenant_context.tenant_id:
-            run_query = run_query.filter(FlowRun.tenant_id == tenant_context.tenant_id)
+        run_query = tenant_context.filter_by_tenant(run_query, FlowRun.tenant_id)
 
         total_runs = run_query.count()
         completed_runs = run_query.filter(FlowRun.status == 'completed').count()
         failed_runs = run_query.filter(FlowRun.status == 'failed').count()
         running_runs = run_query.filter(FlowRun.status == 'running').count()
 
-        active_threads = db.query(ConversationThread).filter(
+        thread_query = db.query(ConversationThread).filter(
             ConversationThread.status == 'active'
-        ).count()
+        )
+        thread_query = tenant_context.filter_by_tenant(thread_query, ConversationThread.tenant_id)
+        active_threads = thread_query.count()
 
         return {
             "flows": {
@@ -430,13 +433,14 @@ def get_flow_stats(
         }
 
     except Exception as e:
-        logger.error(f"Error getting flow stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error getting flow stats")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow statistics")
 
 
 # ============= CONVERSATION THREAD ENDPOINTS (must be before /{flow_id} routes) =============
 
-@router.get("/conversations/active", response_model=List[ConversationThreadResponse])
+@router.get("/conversations/active", response_model=List[ConversationThreadResponse],
+    dependencies=[Depends(require_permission("flows.read"))])
 def list_active_conversations(
     recipient: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -493,11 +497,12 @@ def list_active_conversations(
         return result
 
     except Exception as e:
-        logger.error(f"Error listing active conversations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error listing active conversations")
+        raise HTTPException(status_code=500, detail="Failed to list active conversations")
 
 
-@router.get("/conversations/{thread_id}", response_model=ConversationThreadResponse)
+@router.get("/conversations/{thread_id}", response_model=ConversationThreadResponse,
+    dependencies=[Depends(require_permission("flows.read"))])
 def get_conversation_thread(
     thread_id: int,
     db: Session = Depends(get_db),
@@ -517,8 +522,8 @@ def get_conversation_thread(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting conversation thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting conversation thread {thread_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve conversation thread")
 
 
 @router.post("/conversations/{thread_id}/reply", response_model=ConversationReplyResponse,
@@ -632,8 +637,8 @@ async def process_conversation_reply(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing reply for thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error processing reply for thread {thread_id}")
+        raise HTTPException(status_code=500, detail="Failed to process conversation reply")
 
 
 @router.post("/conversations/{thread_id}/complete", status_code=200,
@@ -671,8 +676,8 @@ def complete_conversation_thread(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error completing conversation thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error completing conversation thread {thread_id}")
+        raise HTTPException(status_code=500, detail="Failed to complete conversation thread")
 
 
 # ============= FLOW RUN ENDPOINTS =============
@@ -719,8 +724,8 @@ def list_runs(
         ) for run in runs]
 
     except Exception as e:
-        logger.error(f"Error listing flow runs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error listing flow runs")
+        raise HTTPException(status_code=500, detail="Failed to list flow runs")
 
 
 @router.get("/runs/{run_id}", response_model=LegacyFlowRunResponse,
@@ -758,8 +763,8 @@ def get_run(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting run {run_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting run {run_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow run")
 
 
 @router.get("/runs/{run_id}/steps", response_model=List[FlowNodeRunResponse],
@@ -787,8 +792,8 @@ def get_run_steps(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting step runs for run {run_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting step runs for run {run_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow run steps")
 
 
 # Alias for backward compatibility
@@ -831,8 +836,8 @@ def create_flow(
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Error creating flow definition: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error creating flow definition")
+        raise HTTPException(status_code=500, detail="Failed to create flow")
 
 
 @router.post("/create", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))])
@@ -893,8 +898,8 @@ def create_flow_v2(
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Error creating flow definition v2: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error creating flow definition v2")
+        raise HTTPException(status_code=500, detail="Failed to create flow")
 
 
 @router.get("/", response_model=List[FlowDefinitionResponse], dependencies=[Depends(require_permission("flows.read"))])
@@ -926,8 +931,8 @@ def list_flows(
         return [flow_to_response(flow, db) for flow in flows]
 
     except Exception as e:
-        logger.error(f"Error listing flows: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error listing flows")
+        raise HTTPException(status_code=500, detail="Failed to list flows")
 
 
 # ============================================================================
@@ -1113,8 +1118,8 @@ def get_tool_metadata(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching tool metadata: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch tool metadata: {str(e)}")
+        logger.exception("Error fetching tool metadata")
+        raise HTTPException(status_code=500, detail="Failed to fetch tool metadata")
 
 
 @router.get("/{flow_id}", response_model=FlowDefinitionResponse, dependencies=[Depends(require_permission("flows.read"))])
@@ -1136,8 +1141,8 @@ def get_flow(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow")
 
 
 @router.get("/{flow_id}/detail", dependencies=[Depends(require_permission("flows.read"))])
@@ -1166,8 +1171,8 @@ def get_flow_detail(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting flow detail {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting flow detail {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow details")
 
 
 @router.put("/{flow_id}", response_model=FlowDefinitionResponse, dependencies=[Depends(require_permission("flows.write"))])
@@ -1235,8 +1240,8 @@ def update_flow(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error updating flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error updating flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to update flow")
 
 
 @router.patch("/{flow_id}", response_model=FlowDefinitionResponse, dependencies=[Depends(require_permission("flows.write"))])
@@ -1314,8 +1319,8 @@ def patch_flow(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error patching flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error patching flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to update flow")
 
 
 @router.delete("/{flow_id}", status_code=204, dependencies=[Depends(require_permission("flows.delete"))])
@@ -1370,8 +1375,8 @@ def delete_flow(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error deleting flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error deleting flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to delete flow")
 
 
 # ============= FLOW STEP ENDPOINTS =============
@@ -1432,8 +1437,8 @@ def create_step(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error creating step for flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error creating step for flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to create flow step")
 
 
 # Alias for backward compatibility
@@ -1471,8 +1476,8 @@ def list_steps(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error listing steps for flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error listing steps for flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to list flow steps")
 
 
 # Alias for backward compatibility
@@ -1551,8 +1556,8 @@ def update_step(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error updating step {step_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error updating step {step_id}")
+        raise HTTPException(status_code=500, detail="Failed to update flow step")
 
 
 # Alias for backward compatibility
@@ -1599,8 +1604,8 @@ def delete_step(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error deleting step {step_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error deleting step {step_id}")
+        raise HTTPException(status_code=500, detail="Failed to delete flow step")
 
 
 # Alias for backward compatibility
@@ -1650,8 +1655,8 @@ def validate_flow(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error validating flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error validating flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to validate flow")
 
 
 # ============= FLOW EXECUTION ENDPOINTS =============
@@ -1716,8 +1721,8 @@ async def execute_flow(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error executing flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error executing flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to execute flow")
 
 
 # Alias for backward compatibility
@@ -1771,5 +1776,5 @@ def cancel_run(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error cancelling run {run_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error cancelling run {run_id}")
+        raise HTTPException(status_code=500, detail="Failed to cancel flow run")

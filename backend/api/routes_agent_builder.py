@@ -12,6 +12,7 @@ and ensuring save atomicity (no more partial-save failures).
 import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
@@ -488,14 +489,15 @@ async def get_builder_data(
         ]
 
         # Sandboxed tools
-        tools_query = db.query(SandboxedTool)
+        tools_query = db.query(SandboxedTool).filter(
+            or_(SandboxedTool.tenant_id.is_(None), SandboxedTool.tenant_id == ctx.tenant_id)
+        )
         tools_db = tools_query.all()
         global_tools = [
             BuilderSandboxedToolItem(
                 id=t.id, name=t.name, tool_type=t.tool_type, is_enabled=t.is_enabled,
             )
             for t in tools_db
-            if t.tenant_id is None or t.tenant_id == ctx.tenant_id
         ]
 
         # Sentinel profiles (include system + tenant)
@@ -739,4 +741,4 @@ async def save_builder_data(
     except Exception as e:
         logger.exception(f"Builder save failed for agent {agent_id}")
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to save builder data: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to save builder data")

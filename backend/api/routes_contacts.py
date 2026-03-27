@@ -164,7 +164,7 @@ def update_user_contact_mapping(db: Session, contact_id: int, user_id: int | Non
     if existing_user_mapping and existing_user_mapping.contact_id != contact_id:
         raise HTTPException(
             status_code=400,
-            detail=f"User is already linked to another contact (ID: {existing_user_mapping.contact_id})"
+            detail="User is already linked to another contact"
         )
 
     if existing_mapping:
@@ -204,6 +204,8 @@ class ChannelMappingCreate(BaseModel):
 
 
 class ContactCreate(BaseModel):
+    # TODO: Add HTML sanitization validator for friendly_name and notes fields
+    # to prevent stored XSS (same pattern as AgentCreateRequest in v1/routes_agents.py)
     friendly_name: str = Field(..., min_length=1, max_length=100)
     whatsapp_id: str | None = Field(None, max_length=50)
     phone_number: str | None = Field(None, max_length=20)
@@ -394,9 +396,10 @@ def update_contact(
     if not ctx.can_access_resource(db_contact.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this contact")
 
-    # Check for unique constraints
+    # Check for unique constraints (scoped to tenant)
     if contact.friendly_name and contact.friendly_name != db_contact.friendly_name:
         existing = db.query(Contact).filter(
+            Contact.tenant_id == db_contact.tenant_id,
             Contact.friendly_name == contact.friendly_name,
             Contact.id != contact_id
         ).first()
@@ -405,15 +408,17 @@ def update_contact(
 
     if contact.whatsapp_id and contact.whatsapp_id != db_contact.whatsapp_id:
         existing = db.query(Contact).filter(
+            Contact.tenant_id == db_contact.tenant_id,
             Contact.whatsapp_id == contact.whatsapp_id,
             Contact.id != contact_id
         ).first()
         if existing:
             raise HTTPException(status_code=400, detail="Contact with this WhatsApp ID already exists")
 
-    # Phase 10.1.1: Check telegram_id uniqueness
+    # Phase 10.1.1: Check telegram_id uniqueness (scoped to tenant)
     if contact.telegram_id and contact.telegram_id != db_contact.telegram_id:
         existing = db.query(Contact).filter(
+            Contact.tenant_id == db_contact.tenant_id,
             Contact.telegram_id == contact.telegram_id,
             Contact.id != contact_id
         ).first()
@@ -573,7 +578,8 @@ def add_channel_mapping(
 
         return new_mapping
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception(f"Error adding channel mapping for contact {contact_id}")
+        raise HTTPException(status_code=400, detail="Failed to add channel mapping")
 
 
 @router.delete("/{contact_id}/channels/{mapping_id}", status_code=204)
@@ -731,11 +737,11 @@ async def resolve_contact_whatsapp(
                 message="Phone number not registered on WhatsApp or no MCP instance available"
             )
     except Exception as e:
-        logger.error(f"WhatsApp resolution failed for contact {contact_id}: {e}")
+        logger.exception(f"WhatsApp resolution failed for contact {contact_id}")
         return WhatsAppResolutionResponse(
             success=False,
             contact_id=contact_id,
-            message=f"Resolution failed: {str(e)}"
+            message="Resolution failed due to an internal error"
         )
 
 
@@ -770,12 +776,12 @@ async def resolve_all_contacts_whatsapp(
             message=result.get("message") or result.get("error")
         )
     except Exception as e:
-        logger.error(f"Batch WhatsApp resolution failed: {e}")
+        logger.exception("Batch WhatsApp resolution failed")
         return BatchResolutionResponse(
             success=False,
             resolved=0,
             failed=0,
             skipped=0,
             total=0,
-            message=f"Resolution failed: {str(e)}"
+            message="Resolution failed due to an internal error"
         )
