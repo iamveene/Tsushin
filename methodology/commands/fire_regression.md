@@ -30,6 +30,7 @@ Identify the affected area(s):
 - **system** -- tenants, users (admin only)
 - **watcher** -- dashboard, messages, conversations
 - **whatsapp** -- MCP bridge, message routing, group handling
+- **api-v1** -- public API endpoints, OAuth2 auth, API clients, rate limiting
 
 ### Step 2: Smoke Test (always run)
 
@@ -72,6 +73,8 @@ Navigate to the specific area that changed using Playwright MCP:
 | settings/audit-logs | /settings/audit-logs | Audit log loads |
 | system | /system/tenants | Admin: tenant list loads |
 | system/users | /system/users | Admin: user list loads |
+| api-clients | /settings/api-clients | Client list loads, can create/revoke |
+| api-v1 | (use curl/pytest) | API v1 endpoints respond, auth works |
 
 Interact with the feature: click buttons, fill forms, verify responses.
 
@@ -85,38 +88,69 @@ Test 2-3 features that are architecturally adjacent to the changed area:
 - If **flows** changed: test agents (flow triggers), hub (flow integrations), settings (scheduler config)
 - If **hub** changed: test playground (tool usage), agents (skill integrations), settings/integrations
 - If **settings** changed: test the specific subsystem (sentinel affects agents, AI config affects playground)
-- If **database** changed: test ALL areas that use the modified tables
+- If **api-v1** changed: test auth flow (OAuth2 + X-API-Key), agent CRUD, chat, resource listing
+- If **database** changed: test ALL areas that use the modified tables (including API v1 if api_client/token tables affected)
 
 ### Step 5: API Verification
 
-Curl key endpoints related to the changed area:
+Use the **Public API v1** for fast programmatic verification. The regression test API client credentials are in `.env` (`TSN_API_CLIENT_ID` and `TSN_API_CLIENT_SECRET`).
+
+**Option A: Public API v1 (Preferred — faster, no UI login needed)**
 
 ```bash
-# Get auth token
-TOKEN=$(curl -sf -X POST http://localhost:8081/auth/login \
+# Source credentials from .env
+source /Users/vinicios/code/tsushin/.env
+
+# Health
+curl -sf http://localhost:8081/api/health | python3 -m json.tool
+
+# List agents (direct API key mode — no token exchange needed)
+curl -sf -H "X-API-Key: $TSN_API_CLIENT_SECRET" \
+  http://localhost:8081/api/v1/agents | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Agents: {d[\"meta\"][\"total\"]}')"
+
+# Chat with an agent (quick functional test)
+curl -sf -X POST -H "X-API-Key: $TSN_API_CLIENT_SECRET" \
+  -H "Content-Type: application/json" \
+  http://localhost:8081/api/v1/agents/1/chat \
+  -d '{"message":"Reply with exactly: REGRESSION_OK"}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Status: {d[\"status\"]}, Response: {d.get(\"message\",\"\")[:100]}')"
+
+# List resources
+curl -sf -H "X-API-Key: $TSN_API_CLIENT_SECRET" http://localhost:8081/api/v1/skills | python3 -c "import sys,json; print(f'Skills: {len(json.load(sys.stdin)[\"data\"])}')"
+curl -sf -H "X-API-Key: $TSN_API_CLIENT_SECRET" http://localhost:8081/api/v1/personas | python3 -c "import sys,json; print(f'Personas: {len(json.load(sys.stdin)[\"data\"])}')"
+curl -sf -H "X-API-Key: $TSN_API_CLIENT_SECRET" http://localhost:8081/api/v1/tone-presets | python3 -c "import sys,json; print(f'Tone Presets: {len(json.load(sys.stdin)[\"data\"])}')"
+
+# OAuth2 token exchange (validates auth pipeline)
+curl -sf -X POST http://localhost:8081/api/v1/oauth/token \
+  -d "grant_type=client_credentials&client_id=$TSN_API_CLIENT_ID&client_secret=$TSN_API_CLIENT_SECRET" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Token: OK ({d[\"expires_in\"]}s)')"
+```
+
+**Option B: Internal API (legacy — requires UI login token)**
+
+```bash
+# Get auth token via login
+TOKEN=$(curl -sf -X POST http://localhost:8081/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"test@example.com","password":"test123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-# Health
-curl -sf http://localhost:8081/health | python3 -m json.tool
-
-# Agents list
+# Agents list (internal endpoint)
 curl -sf http://localhost:8081/api/agents \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "tenantid: <tenant_id>" | python3 -m json.tool | head -20
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | head -20
 
 # Playground threads
 curl -sf http://localhost:8081/api/playground/threads \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "tenantid: <tenant_id>" | python3 -m json.tool | head -20
-
-# Flows list
-curl -sf http://localhost:8081/api/flows \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "tenantid: <tenant_id>" | python3 -m json.tool | head -20
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | head -20
 ```
 
-Adapt the endpoints based on what changed. Always include `tenantid` header for tenant-scoped endpoints.
+**Option C: Pytest E2E suite (comprehensive — runs all 23 tests)**
+
+```bash
+# Copy test file and run inside container
+docker cp /Users/vinicios/code/tsushin/backend/tests/test_api_v1_e2e.py tsushin-backend:/app/tests/
+docker exec tsushin-backend python -m pytest tests/test_api_v1_e2e.py -v --no-cov
+```
+
+This runs: OAuth2 exchange, agent listing (Bearer + X-API-Key), permission enforcement, resource listing, rate limit headers, agent chat, client lifecycle (create/rotate/revoke). All 23 tests must pass.
 
 ### Step 6: Service Health Check
 

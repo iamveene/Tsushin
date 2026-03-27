@@ -189,6 +189,9 @@ Using Playwright MCP (logged in):
 11. **Model Pricing** -- /settings/model-pricing
 12. **Prompts** -- /settings/prompts
 13. **Security** -- /settings/security
+14. **API Clients** -- /settings/api-clients
+   - Verify client list renders
+   - Verify create button present (for owner/admin)
 
 For each: verify the page renders without errors.
 
@@ -239,7 +242,54 @@ Log in as testadmin@example.com / admin123, then:
      -H "Authorization: Bearer $ADMIN_TOKEN" -o /dev/null -w "%{http_code}"
    ```
 
-### Phase 10: API Endpoint Sweep
+### Phase 10: Public API v1
+
+The Public API v1 provides a fast way to validate core functionality without browser automation. Credentials are in `.env`.
+
+**10a. Quick validation (X-API-Key mode):**
+
+```bash
+source /Users/vinicios/code/tsushin/.env
+
+# Auth pipeline
+curl -sf -X POST http://localhost:8081/api/v1/oauth/token \
+  -d "grant_type=client_credentials&client_id=$TSN_API_CLIENT_ID&client_secret=$TSN_API_CLIENT_SECRET" \
+  | python3 -c "import sys,json; print(f'OAuth2: OK ({json.load(sys.stdin)[\"expires_in\"]}s)')"
+
+# Agent listing
+curl -sf -H "X-API-Key: $TSN_API_CLIENT_SECRET" http://localhost:8081/api/v1/agents \
+  | python3 -c "import sys,json; print(f'Agents: {json.load(sys.stdin)[\"meta\"][\"total\"]}')"
+
+# Agent chat (functional test)
+curl -sf -X POST -H "X-API-Key: $TSN_API_CLIENT_SECRET" -H "Content-Type: application/json" \
+  http://localhost:8081/api/v1/agents/1/chat \
+  -d '{"message":"Reply with exactly: REGRESSION_OK"}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Chat: {d[\"status\"]} ({d.get(\"execution_time_ms\",0)}ms)')"
+
+# Resources
+curl -sf -H "X-API-Key: $TSN_API_CLIENT_SECRET" http://localhost:8081/api/v1/skills | python3 -c "import sys,json; print(f'Skills: {len(json.load(sys.stdin)[\"data\"])}')"
+curl -sf -H "X-API-Key: $TSN_API_CLIENT_SECRET" http://localhost:8081/api/v1/personas | python3 -c "import sys,json; print(f'Personas: {len(json.load(sys.stdin)[\"data\"])}')"
+curl -sf -H "X-API-Key: $TSN_API_CLIENT_SECRET" http://localhost:8081/api/v1/tools | python3 -c "import sys,json; print(f'Tools: {len(json.load(sys.stdin)[\"data\"])}')"
+curl -sf -H "X-API-Key: $TSN_API_CLIENT_SECRET" http://localhost:8081/api/v1/tone-presets | python3 -c "import sys,json; print(f'Presets: {len(json.load(sys.stdin)[\"data\"])}')"
+```
+
+**10b. Full E2E test suite (23 tests):**
+
+```bash
+docker cp /Users/vinicios/code/tsushin/backend/tests/test_api_v1_e2e.py tsushin-backend:/app/tests/
+docker exec tsushin-backend python -m pytest tests/test_api_v1_e2e.py -v --no-cov
+```
+
+Covers: OAuth2 exchange, agent listing (Bearer + X-API-Key), permission enforcement, resource listing, rate limit headers, sync chat, client lifecycle (create/rotate/revoke). All 23 must pass.
+
+**10c. UI: Settings > API Clients:**
+
+Using Playwright MCP:
+1. Navigate to http://localhost:3030/settings/api-clients
+2. Verify client list renders
+3. Verify create/rotate/revoke buttons present (for owner/admin)
+
+### Phase 11: API Endpoint Sweep
 
 Hit every major API endpoint and verify non-error responses:
 
@@ -270,12 +320,18 @@ ENDPOINTS=(
   "GET /api/mcp-instances"
   "GET /api/sso/config"
   "GET /api/analytics/overview"
+  "GET /api/clients"
+  "GET /api/v1/agents"
+  "GET /api/v1/skills"
+  "GET /api/v1/personas"
+  "GET /api/v1/tone-presets"
+  "GET /api/v1/tools"
 )
 ```
 
 For each endpoint, verify HTTP status is 200 or an expected non-error code (401 for unauthenticated is acceptable for protected endpoints).
 
-### Phase 11: Log Review
+### Phase 12: Log Review
 
 ```bash
 # Backend errors in last 200 lines
@@ -288,7 +344,7 @@ docker compose logs --tail=100 frontend 2>&1 | grep -i -c -E "error|failed|unhan
 docker compose logs --tail=50 postgres 2>&1 | grep -i -c -E "error|fatal|panic"
 ```
 
-### Phase 12: Report and Remediate
+### Phase 13: Report and Remediate
 
 Compile all results into the regression test report format (see /fire_regression for format).
 
