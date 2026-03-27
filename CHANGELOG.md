@@ -125,6 +125,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - HTTP->HTTPS redirect (308), WSS auto-detection
 - Backup/restore support for `caddy/` directory
 
+#### Smart UX Features (Playground)
+- Auto-save drafts to localStorage per thread with 500ms debounce, restored on thread switch
+- Smart paste: auto-detects JSON and code blocks, wraps in markdown fences on paste
+
+#### Slash Command Permissions per Contact
+- Per-contact `slash_commands_enabled` override (null = use tenant default)
+- Tenant-level `slash_commands_default_policy`: `enabled_for_known`, `enabled_for_all`, `disabled`
+- Resolution order: contact override > tenant policy > system default
+- Unknown senders denied by default; 3-state UI toggle in Contacts management
+
+#### WhatsApp Group Slash Commands via Agent Mention
+- `@agentname /tool nmap quick_scan target=x` in group chats now triggers slash command execution
+- Mention resolved to agent, slash command extracted and dispatched with agent context
+- Works across WhatsApp and Telegram groups; response sent to group thread
+
+#### Public API v1 Expansion (Flows, Hub, Studio)
+- 22 new API endpoints: Flows CRUD + execution + runs (13), Hub integrations + tools (6), Studio builder (3)
+- Flow execution returns HTTP 202 with run_id for async polling
+- Provider-agnostic Hub facade with service-factory dispatch
+- Studio agent clone endpoint for duplicating agent configurations
+- `hub.read` and `hub.write` permissions added to API role scopes
+- OpenAPI metadata: title "Tsushin Platform API", tagged endpoint groups, Swagger UI at `/docs`
+- Total v1 endpoints: 32
+
 #### Database & Infrastructure
 - PostgreSQL 16 migration from SQLite (full schema + Alembic migrations)
 - Tsushin kitsune branding: banner on README and login page
