@@ -129,6 +129,9 @@ from api.routes_sentinel_exceptions import router as sentinel_exceptions_router,
 from api.routes_sentinel_profiles import router as sentinel_profiles_router, set_engine as set_sentinel_profiles_engine
 # Message Queue System
 from api.routes_queue import router as queue_router
+from api.routes_api_clients import router as api_clients_router
+from api.v1.router import v1_router
+from middleware.rate_limiter import ApiV1RateLimitMiddleware
 from services.queue_worker import start_queue_worker, stop_queue_worker
 # MCP Health Monitor Service (auto-recovery for keepalive timeouts)
 from services.mcp_health_monitor import MCPHealthMonitorService
@@ -873,6 +876,9 @@ app.add_middleware(
     max_age=86400,  # Cache preflight for 24 hours
 )
 
+# Public API v1: Rate limiting middleware
+app.add_middleware(ApiV1RateLimitMiddleware)
+
 
 # Security headers middleware
 @app.middleware("http")
@@ -987,6 +993,8 @@ app.include_router(sentinel_router, prefix="/api")  # Phase 20: Sentinel Securit
 app.include_router(sentinel_exceptions_router, prefix="/api")  # Phase 20 Enhancement: Sentinel Exceptions
 app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel Security Profiles
 app.include_router(queue_router)  # Message Queue System
+app.include_router(api_clients_router)  # Public API v1: Client Management (UI-facing)
+app.include_router(v1_router)  # Public API v1: All /api/v1/ endpoints
 
 # Phase 6.11.2: WebSocket endpoint for real-time updates
 @app.websocket("/ws")

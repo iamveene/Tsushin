@@ -1,0 +1,499 @@
+"""
+Agent CRUD — Public API v1
+Provides agent management endpoints including create, read, update, delete,
+and profile/skill assignment.
+"""
+
+import json
+import logging
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from db import get_db
+from models import Agent, Contact, AgentSkill, AgentSandboxedTool, SandboxedTool, Persona, TonePreset
+from api.api_auth import ApiCaller, require_api_permission
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+# ============================================================================
+# Schemas
+# ============================================================================
+
+class AgentSkillInfo(BaseModel):
+    skill_type: str
+    is_enabled: bool
+    config: Optional[dict] = None
+
+
+class AgentSummary(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    model_provider: str
+    model_name: str
+    is_active: bool
+    is_default: bool
+    avatar: Optional[str] = None
+    enabled_channels: Optional[List[str]] = None
+    persona: Optional[dict] = None
+    skills: List[str] = []
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class PaginatedResponse(BaseModel):
+    data: List[AgentSummary]
+    meta: dict
+
+
+class AgentCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    system_prompt: str = Field(..., min_length=1)
+    model_provider: str = Field(default="gemini", pattern="^(openai|anthropic|gemini|ollama|openrouter|groq|grok)$")
+    model_name: str = Field(default="gemini-2.5-pro")
+    persona_id: Optional[int] = None
+    keywords: List[str] = Field(default_factory=list)
+    enabled_channels: List[str] = Field(default_factory=lambda: ["playground"])
+    avatar: Optional[str] = None
+    memory_size: Optional[int] = Field(None, ge=1, le=5000)
+    memory_isolation_mode: Optional[str] = Field(None, pattern="^(isolated|shared|channel_isolated)$")
+    trigger_dm_enabled: Optional[bool] = None
+    enable_semantic_search: Optional[bool] = None
+    is_active: bool = True
+    is_default: bool = False
+    skill_types: Optional[List[str]] = None
+    sandboxed_tool_ids: Optional[List[int]] = None
+
+
+class AgentUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    system_prompt: Optional[str] = None
+    model_provider: Optional[str] = Field(None, pattern="^(openai|anthropic|gemini|ollama|openrouter|groq|grok)$")
+    model_name: Optional[str] = None
+    persona_id: Optional[int] = None
+    keywords: Optional[List[str]] = None
+    enabled_channels: Optional[List[str]] = None
+    avatar: Optional[str] = None
+    memory_size: Optional[int] = Field(None, ge=1, le=5000)
+    memory_isolation_mode: Optional[str] = Field(None, pattern="^(isolated|shared|channel_isolated)$")
+    trigger_dm_enabled: Optional[bool] = None
+    enable_semantic_search: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class SkillAssignRequest(BaseModel):
+    skill_types: List[str]
+    replace: bool = False
+
+
+class PersonaAssignRequest(BaseModel):
+    persona_id: Optional[int]
+
+
+class SecurityProfileAssignRequest(BaseModel):
+    security_profile_id: Optional[int]
+
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+def _enrich_agent(agent: Agent, db: Session) -> dict:
+    """Build a rich agent summary from database records."""
+    contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
+    agent_name = contact.friendly_name if contact else f"Agent {agent.id}"
+
+    description = None
+    if agent.system_prompt:
+        first_line = agent.system_prompt.split('\n')[0]
+        if len(first_line) < 200:
+            description = first_line
+
+    persona_info = None
+    if agent.persona_id:
+        persona = db.query(Persona).filter(Persona.id == agent.persona_id).first()
+        if persona:
+            persona_info = {"id": persona.id, "name": persona.name}
+
+    skills = db.query(AgentSkill).filter(
+        AgentSkill.agent_id == agent.id,
+        AgentSkill.is_enabled == True,
+    ).all()
+    skill_types = [s.skill_type for s in skills]
+
+    channels = agent.enabled_channels
+    if isinstance(channels, str):
+        try:
+            channels = json.loads(channels)
+        except (json.JSONDecodeError, TypeError):
+            channels = ["playground", "whatsapp"]
+
+    return {
+        "id": agent.id,
+        "name": agent_name,
+        "description": description,
+        "model_provider": agent.model_provider,
+        "model_name": agent.model_name,
+        "is_active": agent.is_active,
+        "is_default": agent.is_default,
+        "avatar": agent.avatar,
+        "enabled_channels": channels,
+        "persona": persona_info,
+        "skills": skill_types,
+        "created_at": agent.created_at.isoformat() if agent.created_at else None,
+        "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
+    }
+
+
+def _get_agent_detail(agent: Agent, db: Session) -> dict:
+    """Build a detailed agent response including all configuration."""
+    base = _enrich_agent(agent, db)
+    base.update({
+        "system_prompt": agent.system_prompt,
+        "persona_id": agent.persona_id,
+        "tone_preset_id": agent.tone_preset_id,
+        "keywords": agent.keywords or [],
+        "memory_size": agent.memory_size,
+        "memory_isolation_mode": agent.memory_isolation_mode,
+        "trigger_dm_enabled": agent.trigger_dm_enabled,
+        "trigger_group_filters": agent.trigger_group_filters,
+        "trigger_number_filters": agent.trigger_number_filters,
+        "context_message_count": agent.context_message_count,
+        "context_char_limit": agent.context_char_limit,
+        "enable_semantic_search": agent.enable_semantic_search,
+        "semantic_search_results": agent.semantic_search_results,
+        "semantic_similarity_threshold": agent.semantic_similarity_threshold,
+        "response_template": agent.response_template,
+        "contact_id": agent.contact_id,
+        "tenant_id": agent.tenant_id,
+    })
+
+    # Add sandboxed tools
+    tool_assignments = db.query(AgentSandboxedTool).filter(
+        AgentSandboxedTool.agent_id == agent.id,
+        AgentSandboxedTool.is_enabled == True,
+    ).all()
+    tool_ids = [t.sandboxed_tool_id for t in tool_assignments]
+    base["sandboxed_tool_ids"] = tool_ids
+
+    # Add skill details
+    skills = db.query(AgentSkill).filter(AgentSkill.agent_id == agent.id).all()
+    base["skills_detail"] = [
+        {"skill_type": s.skill_type, "is_enabled": s.is_enabled, "config": s.config}
+        for s in skills
+    ]
+
+    return base
+
+
+# ============================================================================
+# Endpoints
+# ============================================================================
+
+@router.get("/api/v1/agents")
+async def list_agents(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    is_active: Optional[bool] = None,
+    search: Optional[str] = None,
+    channel: Optional[str] = None,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.read")),
+):
+    """List agents with pagination and filtering."""
+    query = db.query(Agent).filter(Agent.tenant_id == caller.tenant_id)
+
+    if is_active is not None:
+        query = query.filter(Agent.is_active == is_active)
+
+    agents = query.order_by(Agent.id).all()
+
+    # Filter by search term (name matching)
+    if search:
+        search_lower = search.lower()
+        filtered = []
+        for agent in agents:
+            contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
+            if contact and search_lower in (contact.friendly_name or "").lower():
+                filtered.append(agent)
+        agents = filtered
+
+    # Filter by channel
+    if channel:
+        filtered = []
+        for agent in agents:
+            channels = agent.enabled_channels
+            if isinstance(channels, str):
+                try:
+                    channels = json.loads(channels)
+                except (json.JSONDecodeError, TypeError):
+                    channels = []
+            if channels and channel in channels:
+                filtered.append(agent)
+        agents = filtered
+
+    total = len(agents)
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_agents = agents[start:end]
+
+    return {
+        "data": [_enrich_agent(a, db) for a in page_agents],
+        "meta": {
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+        },
+    }
+
+
+@router.get("/api/v1/agents/{agent_id}")
+async def get_agent(
+    agent_id: int,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.read")),
+):
+    """Get detailed agent configuration."""
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == caller.tenant_id,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return _get_agent_detail(agent, db)
+
+
+@router.post("/api/v1/agents", status_code=201)
+async def create_agent(
+    request: AgentCreateRequest,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.write")),
+):
+    """
+    Create a new agent. Auto-creates a Contact record.
+    """
+    # Auto-create contact for the agent
+    contact = Contact(
+        friendly_name=request.name,
+        role="agent",
+        tenant_id=caller.tenant_id,
+    )
+    db.add(contact)
+    db.commit()
+    db.refresh(contact)
+
+    # Handle default agent
+    if request.is_default:
+        db.query(Agent).filter(
+            Agent.tenant_id == caller.tenant_id,
+            Agent.is_default == True,
+        ).update({"is_default": False})
+        db.commit()
+
+    agent = Agent(
+        contact_id=contact.id,
+        system_prompt=request.system_prompt,
+        persona_id=request.persona_id,
+        keywords=request.keywords,
+        model_provider=request.model_provider,
+        model_name=request.model_name,
+        enabled_channels=request.enabled_channels,
+        avatar=request.avatar,
+        memory_size=request.memory_size,
+        memory_isolation_mode=request.memory_isolation_mode or "isolated",
+        trigger_dm_enabled=request.trigger_dm_enabled,
+        enable_semantic_search=request.enable_semantic_search if request.enable_semantic_search is not None else True,
+        is_active=request.is_active,
+        is_default=request.is_default,
+        tenant_id=caller.tenant_id,
+        user_id=caller.user_id,
+    )
+    db.add(agent)
+    db.commit()
+    db.refresh(agent)
+
+    # Add default agent_switcher skill
+    default_skill = AgentSkill(
+        agent_id=agent.id,
+        skill_type="agent_switcher",
+        is_enabled=True,
+        config={"auto_detect": True},
+    )
+    db.add(default_skill)
+
+    # Add requested skills
+    if request.skill_types:
+        for skill_type in request.skill_types:
+            if skill_type != "agent_switcher":
+                skill = AgentSkill(
+                    agent_id=agent.id,
+                    skill_type=skill_type,
+                    is_enabled=True,
+                    config={},
+                )
+                db.add(skill)
+
+    # Add sandboxed tools
+    if request.sandboxed_tool_ids:
+        for tool_id in request.sandboxed_tool_ids:
+            tool = db.query(SandboxedTool).filter(
+                SandboxedTool.id == tool_id,
+                SandboxedTool.tenant_id == caller.tenant_id,
+            ).first()
+            if tool:
+                assignment = AgentSandboxedTool(
+                    agent_id=agent.id,
+                    sandboxed_tool_id=tool_id,
+                    is_enabled=True,
+                )
+                db.add(assignment)
+
+    db.commit()
+
+    logger.info(f"API created agent '{request.name}' (id={agent.id}) for tenant={caller.tenant_id}")
+    return _get_agent_detail(agent, db)
+
+
+@router.put("/api/v1/agents/{agent_id}")
+async def update_agent(
+    agent_id: int,
+    request: AgentUpdateRequest,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.write")),
+):
+    """Update agent configuration (partial update)."""
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == caller.tenant_id,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Update contact name if name is provided
+    if request.name is not None:
+        contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
+        if contact:
+            contact.friendly_name = request.name
+
+    update_fields = request.model_dump(exclude_unset=True, exclude={"name"})
+    for field, value in update_fields.items():
+        if hasattr(agent, field):
+            setattr(agent, field, value)
+
+    agent.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(agent)
+
+    return _get_agent_detail(agent, db)
+
+
+@router.delete("/api/v1/agents/{agent_id}", status_code=204)
+async def delete_agent(
+    agent_id: int,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.delete")),
+):
+    """Soft-delete an agent (sets is_active=false)."""
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == caller.tenant_id,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    agent.is_active = False
+    agent.updated_at = datetime.utcnow()
+    db.commit()
+
+
+@router.post("/api/v1/agents/{agent_id}/skills")
+async def assign_skills(
+    agent_id: int,
+    request: SkillAssignRequest,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.write")),
+):
+    """Assign skills to an agent."""
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == caller.tenant_id,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if request.replace:
+        db.query(AgentSkill).filter(AgentSkill.agent_id == agent.id).delete()
+
+    for skill_type in request.skill_types:
+        existing = db.query(AgentSkill).filter(
+            AgentSkill.agent_id == agent.id,
+            AgentSkill.skill_type == skill_type,
+        ).first()
+        if not existing:
+            skill = AgentSkill(
+                agent_id=agent.id,
+                skill_type=skill_type,
+                is_enabled=True,
+                config={},
+            )
+            db.add(skill)
+
+    db.commit()
+    return {"status": "success", "message": f"Skills assigned to agent {agent_id}"}
+
+
+@router.delete("/api/v1/agents/{agent_id}/skills/{skill_type}", status_code=204)
+async def remove_skill(
+    agent_id: int,
+    skill_type: str,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.write")),
+):
+    """Remove a skill from an agent."""
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == caller.tenant_id,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    deleted = db.query(AgentSkill).filter(
+        AgentSkill.agent_id == agent.id,
+        AgentSkill.skill_type == skill_type,
+    ).delete()
+    db.commit()
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_type}' not found on agent")
+
+
+@router.put("/api/v1/agents/{agent_id}/persona")
+async def assign_persona(
+    agent_id: int,
+    request: PersonaAssignRequest,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.write")),
+):
+    """Assign a persona to an agent."""
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == caller.tenant_id,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if request.persona_id is not None:
+        persona = db.query(Persona).filter(Persona.id == request.persona_id).first()
+        if not persona:
+            raise HTTPException(status_code=404, detail="Persona not found")
+
+    agent.persona_id = request.persona_id
+    agent.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "success", "persona_id": request.persona_id}

@@ -139,6 +139,10 @@ def seed_rbac_defaults(session):
         ("shell.approve", "shell", "approve", "Approve high-risk shell commands"),
         # Watcher (Dashboard)
         ("watcher.read", "watcher", "read", "View watcher dashboard, messages, and agent runs"),
+        # API Clients (Public API v1)
+        ("api_clients.read", "api_clients", "read", "View API clients"),
+        ("api_clients.write", "api_clients", "write", "Create and manage API clients"),
+        ("api_clients.delete", "api_clients", "delete", "Revoke API clients"),
     ]
 
     # Create permissions
@@ -185,6 +189,7 @@ def seed_rbac_defaults(session):
             "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
+            "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
         ],
         "admin": [
             "agents.read", "agents.write", "agents.delete", "agents.execute",
@@ -202,6 +207,7 @@ def seed_rbac_defaults(session):
             "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
+            "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
         ],
         "member": [
             "agents.read", "agents.write", "agents.execute",
@@ -385,6 +391,48 @@ def ensure_rbac_permissions(session):
     if telegram_perms_added:
         session.commit()
         print("[RBAC] Telegram permissions ensured successfully")
+
+    # Public API v1: Ensure API client permissions exist
+    api_client_permissions_data = [
+        ("api_clients.read", "api_clients", "read", "View API clients"),
+        ("api_clients.write", "api_clients", "write", "Create and manage API clients"),
+        ("api_clients.delete", "api_clients", "delete", "Revoke API clients"),
+    ]
+
+    api_client_perms_added = False
+    for name, resource, action, description in api_client_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+
+            # Assign API client permissions to owner and admin only
+            roles = session.query(Role).filter(Role.name.in_(["owner", "admin"])).all()
+            for role in roles:
+                rp = RolePermission(role_id=role.id, permission_id=perm.id)
+                session.add(rp)
+                print(f"[RBAC] Assigned {name} to role: {role.name}")
+
+            api_client_perms_added = True
+        else:
+            # Ensure permission is assigned to owner and admin
+            roles = session.query(Role).filter(Role.name.in_(["owner", "admin"])).all()
+            for role in roles:
+                existing_mapping = session.query(RolePermission).filter(
+                    RolePermission.role_id == role.id,
+                    RolePermission.permission_id == existing_perm.id
+                ).first()
+                if not existing_mapping:
+                    rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                    session.add(rp)
+                    print(f"[RBAC] Assigned {name} to role: {role.name}")
+                    api_client_perms_added = True
+
+    if api_client_perms_added:
+        session.commit()
+        print("[RBAC] API client permissions ensured successfully")
 
 
 def seed_slash_commands(session):
