@@ -70,20 +70,20 @@ export default function AgentDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg text-gray-600 dark:text-gray-400">Loading agent...</div>
+      <div className="min-h-screen bg-tsushin-ink flex items-center justify-center">
+        <div className="text-lg text-tsushin-slate">Loading agent...</div>
       </div>
     )
   }
 
   if (!agent) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen bg-tsushin-ink flex items-center justify-center">
         <div className="text-center">
-          <p className="text-lg text-gray-600 dark:text-gray-400 mb-4">Agent not found</p>
+          <p className="text-lg text-tsushin-slate mb-4">Agent not found</p>
           <button
             onClick={() => router.push('/agents')}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            className="btn-primary px-4 py-2 rounded-lg"
           >
             Back to Agents
           </button>
@@ -93,37 +93,37 @@ export default function AgentDetailPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-tsushin-ink">
       {/* Header */}
-      <div className="bg-white dark:bg-gray-800 shadow-sm border-b">
+      <div className="bg-tsushin-surface/80 backdrop-blur-md border-b border-tsushin-border">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center gap-4 mb-4">
             <button
               onClick={() => router.push('/agents')}
-              className="text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 dark:text-gray-200"
+              className="text-tsushin-slate hover:text-white"
             >
               ← Back
             </button>
-            <div className="h-6 w-px bg-gray-300 dark:bg-gray-600"></div>
+            <div className="h-6 w-px bg-tsushin-border"></div>
             <div className="flex-1">
               <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">{agent.contact_name}</h1>
+                <h1 className="text-2xl font-bold text-white">{agent.contact_name}</h1>
                 {agent.is_default && (
-                  <span className="px-2 py-1 text-xs font-medium bg-yellow-100 dark:bg-yellow-800/30 text-yellow-800 dark:text-yellow-200 rounded-full inline-flex items-center gap-1">
+                  <span className="px-2 py-1 text-xs font-medium bg-tsushin-warning/20 text-yellow-200 rounded-full inline-flex items-center gap-1">
                     <StarIcon size={12} /> Default
                   </span>
                 )}
                 {agent.is_active ? (
-                  <span className="px-2 py-1 text-xs font-medium bg-green-100 dark:bg-green-800/30 text-green-800 dark:text-green-200 rounded-full">
+                  <span className="px-2 py-1 text-xs font-medium bg-green-800/30 text-green-200 rounded-full">
                     ✓ Active
                   </span>
                 ) : (
-                  <span className="px-2 py-1 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-full">
+                  <span className="px-2 py-1 text-xs font-medium bg-tsushin-surface text-tsushin-slate rounded-full">
                     ○ Inactive
                   </span>
                 )}
               </div>
-              <div className="mt-1 flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-400">
+              <div className="mt-1 flex flex-wrap gap-4 text-sm text-tsushin-slate">
                 <span className="inline-flex items-center gap-1"><TheaterIcon size={14} /> Tone: {agent.tone_preset_name || 'Custom'}</span>
                 <span className="inline-flex items-center gap-1"><BotIcon size={14} /> Model: {agent.model_name}</span>
                 <span className="inline-flex items-center gap-1"><LightningIcon size={14} /> Skills: {skillsCount}</span>
@@ -132,7 +132,7 @@ export default function AgentDetailPage() {
             </div>
             <button
               onClick={() => setActiveTab('configuration')}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              className="btn-primary px-4 py-2 rounded-lg"
             >
               <SettingsIcon size={16} /> Edit Configuration
             </button>
@@ -142,13 +142,13 @@ export default function AgentDetailPage() {
 
       <div className="max-w-7xl mx-auto px-6 py-6">
         {/* Tabs */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow mb-6">
-          <nav className="flex border-b">
+        <div className="bg-tsushin-surface border border-tsushin-border rounded-xl mb-6">
+          <nav className="flex border-b border-tsushin-border">
             <button
               onClick={() => setActiveTab('configuration')}
               className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'configuration'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 dark:text-gray-100'
+                  ? 'border-teal-500 text-teal-400'
+                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
                 }`}
             >
               <SettingsIcon size={16} /> Configuration
@@ -156,8 +156,8 @@ export default function AgentDetailPage() {
             <button
               onClick={() => setActiveTab('channels')}
               className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'channels'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 dark:text-gray-100'
+                  ? 'border-teal-500 text-teal-400'
+                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
                 }`}
             >
               <RadioIcon size={16} /> Channels
@@ -165,8 +165,8 @@ export default function AgentDetailPage() {
             <button
               onClick={() => setActiveTab('memory')}
               className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'memory'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 dark:text-gray-100'
+                  ? 'border-teal-500 text-teal-400'
+                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
                 }`}
             >
               <BrainIcon size={16} /> Memory Management
@@ -174,8 +174,8 @@ export default function AgentDetailPage() {
             <button
               onClick={() => setActiveTab('skills')}
               className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'skills'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 dark:text-gray-100'
+                  ? 'border-teal-500 text-teal-400'
+                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
                 }`}
             >
               <SparklesIcon size={16} /> Skills
@@ -183,8 +183,8 @@ export default function AgentDetailPage() {
             <button
               onClick={() => setActiveTab('knowledge')}
               className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'knowledge'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 dark:text-gray-100'
+                  ? 'border-teal-500 text-teal-400'
+                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
                 }`}
             >
               <BookOpenIcon size={16} /> Knowledge Base
@@ -192,8 +192,8 @@ export default function AgentDetailPage() {
             <button
               onClick={() => setActiveTab('shared-knowledge')}
               className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'shared-knowledge'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 dark:text-gray-100'
+                  ? 'border-teal-500 text-teal-400'
+                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
                 }`}
             >
               <LinkIcon size={16} /> Shared Knowledge
@@ -201,8 +201,8 @@ export default function AgentDetailPage() {
             <button
               onClick={() => setActiveTab('custom-tools')}
               className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'custom-tools'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 dark:text-gray-100'
+                  ? 'border-teal-500 text-teal-400'
+                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
                 }`}
             >
               <WrenchIcon size={16} /> Sandboxed Tools
@@ -211,7 +211,7 @@ export default function AgentDetailPage() {
         </div>
 
         {/* Tab Content */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <div className="bg-tsushin-surface border border-tsushin-border rounded-xl p-6">
           {activeTab === 'configuration' && (
             <AgentConfigurationManager agentId={agentId} />
           )}
