@@ -116,6 +116,8 @@ interface ExpertModeProps {
   // Phase 14.9: WebSocket streaming props
   streamingMessage?: Partial<PlaygroundMessage> | null
   connectionState?: ConnectionState
+  // Smart UX: paste handler
+  onPaste?: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void
 }
 
 interface QuickTool {
@@ -220,7 +222,9 @@ export default function ExpertMode({
   onExtractKnowledge,
   // Phase 14.9: WebSocket streaming props
   streamingMessage = null,
-  connectionState = 'disconnected'
+  connectionState = 'disconnected',
+  // Smart UX: paste handler
+  onPaste
 }: ExpertModeProps) {
   const [activeInspector, setActiveInspector] = useState<InspectorTab>('memory')
   const [leftCollapsed, setLeftCollapsed] = useState(false)
@@ -989,6 +993,7 @@ export default function ExpertMode({
                   disabled={!selectedAgentId || isSending || isRecording}
                   onChange={onInputChange}
                   onKeyDown={onKeyDown}
+                  onPaste={onPaste}
                   className="w-full bg-[var(--pg-elevated)] border border-[var(--pg-border)] rounded-lg px-4 py-3 text-[var(--pg-text)] text-sm resize-none outline-none focus:border-[var(--pg-accent)] focus:ring-2 focus:ring-[var(--pg-accent-glow)] transition-all min-h-[44px] max-h-[120px]"
                   rows={1}
                   onInput={(e) => {

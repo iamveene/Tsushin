@@ -23,6 +23,8 @@ import { getCachedProjectSession, setCachedProjectSession, clearCachedProjectSes
 import { getCachedProjects, setCachedProjects } from '@/lib/projectsCache'
 import { getCachedAgents, setCachedAgents } from '@/lib/agentsCache'
 import StreamingMessage from '@/components/playground/StreamingMessage'
+import { useDraftSave } from '@/hooks/useDraftSave'
+import { formatPastedContent } from '@/lib/smartPaste'
 import './cockpit.css'
 import './playground.css'
 
@@ -114,6 +116,14 @@ export default function PlaygroundPage() {
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId
   }, [activeThreadId])
+
+  // Smart UX: Draft auto-save hook
+  const { saveDraft, saveDraftImmediate, restoreDraft, clearDraft } = useDraftSave(activeThreadId, inputRef)
+
+  // Smart UX: Restore draft when switching threads
+  useEffect(() => {
+    restoreDraft()
+  }, [activeThreadId, restoreDraft])
 
   // Phase 14.9: WebSocket Hook for streaming - FORCE REBUILD v2
   const wsToken = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
@@ -742,6 +752,9 @@ export default function PlaygroundPage() {
   }
 
   const handleThreadSelect = async (threadId: number) => {
+    // Smart UX: Save current draft before switching threads
+    saveDraftImmediate(activeThreadId)
+
     // Cancel previous request if still pending
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
@@ -942,6 +955,9 @@ export default function PlaygroundPage() {
       inputRef.current.value = ''
       inputRef.current.style.height = '52px'
     }
+
+    // Smart UX: Clear saved draft after sending
+    clearDraft()
 
     // Close inline commands if open
     setInlineCommandsOpen(false)
@@ -1340,7 +1356,31 @@ export default function PlaygroundPage() {
       setInlineCommandsOpen(false)
       setInlineQuery('')
     }
+
+    // Smart UX: Auto-save draft on input change
+    saveDraft()
   }
+
+  // Smart UX: Handle paste with auto-formatting for JSON and code
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const text = e.clipboardData.getData('text/plain')
+    const formatted = formatPastedContent(text)
+    if (formatted !== null) {
+      e.preventDefault()
+      const textarea = e.currentTarget
+      const start = textarea.selectionStart
+      const end = textarea.selectionEnd
+      const before = textarea.value.substring(0, start)
+      const after = textarea.value.substring(end)
+      textarea.value = before + formatted + after
+      const newPos = start + formatted.length
+      textarea.selectionStart = newPos
+      textarea.selectionEnd = newPos
+      textarea.style.height = 'auto'
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px'
+      saveDraft()
+    }
+  }, [saveDraft])
 
   // Fetch available tools for the current agent
   const fetchAvailableTools = async (agentId: number) => {
@@ -1734,6 +1774,8 @@ export default function PlaygroundPage() {
         // Phase 14.5 & 14.6: Search and Knowledge props
         onOpenSearch={() => setIsSearchOpen(true)}
         onExtractKnowledge={() => setIsKnowledgePanelOpen(true)}
+        // Smart UX: paste handler
+        onPaste={handlePaste}
       />
 
       {/* Modals */}
