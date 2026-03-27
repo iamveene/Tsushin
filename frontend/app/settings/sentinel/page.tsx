@@ -15,6 +15,7 @@ import { useRequireAuth } from '@/contexts/AuthContext'
 import { api, SentinelConfig, SentinelConfigUpdate, SentinelPrompt, SentinelLLMProvider, SentinelStats, SentinelException, SentinelExceptionCreate, SentinelExceptionUpdate, Contact, SentinelProfile, SentinelProfileDetail, SentinelProfileCreate, SentinelProfileUpdate, SentinelProfileCloneRequest, DetectionConfigItem, SentinelProfileAssignment, SentinelEffectiveConfig } from '@/lib/client'
 import Link from 'next/link'
 import EffectiveSecurityConfig from '@/components/EffectiveSecurityConfig'
+import SentinelHierarchyView from '@/components/sentinel/SentinelHierarchyView'
 import {
   SettingsIcon,
   DocumentIcon,
@@ -30,9 +31,10 @@ import {
   TrashIcon,
   ShieldIcon,
   BrainIcon,
+  LayersIcon,
 } from '@/components/ui/icons'
 
-type TabType = 'general' | 'profiles' | 'memguard' | 'prompts' | 'llm' | 'stats' | 'exceptions'
+type TabType = 'general' | 'profiles' | 'memguard' | 'prompts' | 'llm' | 'stats' | 'exceptions' | 'hierarchy'
 
 type ProfileModalMode = 'create' | 'edit' | 'clone'
 type ProfileEditorSection = 'general' | 'analysis' | 'detections' | 'llm' | 'performance' | 'notifications'
@@ -529,6 +531,7 @@ export default function SentinelSettingsPage() {
             { id: 'llm', label: 'LLM Configuration', Icon: BotIcon },
             { id: 'stats', label: 'Statistics', Icon: ChartBarIcon },
             { id: 'exceptions', label: 'Exceptions', Icon: CheckCircleIcon },
+            { id: 'hierarchy', label: 'Hierarchy', Icon: LayersIcon },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -2768,6 +2771,26 @@ If you believe this is an error, please contact support."
                 >
                   {savingException ? 'Saving...' : editingException ? 'Update' : 'Create'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Hierarchy Tab */}
+        {activeTab === 'hierarchy' && (
+          <div className="space-y-6">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
+              <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  <LayersIcon size={20} />
+                  Security Hierarchy
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  Visual overview of how security profiles cascade from Tenant to Agents to Skills
+                </p>
+              </div>
+              <div className="p-6">
+                <SentinelHierarchyView />
               </div>
             </div>
           </div>

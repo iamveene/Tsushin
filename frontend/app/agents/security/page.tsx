@@ -16,6 +16,7 @@ import { usePathname } from 'next/navigation'
 import { api, Agent, SentinelConfig, SentinelLog, SentinelStats, SentinelProfile, SentinelProfileAssignment } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
 import EffectiveSecurityConfig from '@/components/EffectiveSecurityConfig'
+import SkillSecurityPanel from '@/components/sentinel/SkillSecurityPanel'
 
 interface AgentWithSecurity extends Agent {
   profileAssignment?: SentinelProfileAssignment | null
@@ -525,7 +526,7 @@ export default function SecurityPage() {
           onClick={() => setShowModal(false)}
         >
           <div
-            className="bg-tsushin-elevated rounded-xl max-w-lg w-full shadow-xl max-h-[90vh] overflow-y-auto"
+            className="bg-tsushin-elevated rounded-xl max-w-2xl w-full shadow-xl max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6 border-b border-tsushin-border/50">
@@ -605,6 +606,23 @@ export default function SecurityPage() {
                 <p className="text-sm font-medium text-gray-300 mb-1">Current Effective Configuration</p>
                 <p className="text-xs text-gray-500 mb-3">Save changes to update the effective configuration</p>
                 <EffectiveSecurityConfig agentId={selectedAgent.id} />
+              </div>
+
+              {/* Skill-Level Overrides */}
+              <div className="pt-4 border-t border-tsushin-border/50">
+                <div className="flex items-center gap-2 mb-1">
+                  <svg className="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  <p className="text-sm font-medium text-gray-300">Skill-Level Overrides</p>
+                </div>
+                <p className="text-xs text-gray-500 mb-3">Assign different security profiles per skill</p>
+                <SkillSecurityPanel
+                  agentId={selectedAgent.id}
+                  profiles={profiles}
+                  canEdit={canEdit}
+                  onAssignmentChange={loadData}
+                />
               </div>
             </div>
 
