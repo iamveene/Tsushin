@@ -39,6 +39,9 @@ const config: Config = {
           slate: '#8B929E',         // Text secondary
           muted: '#484F58',         // Muted text/borders
           border: '#30363D',        // Subtle borders
+          dark: '#0D1117',          // Alias for deep (used in playground components)
+          darker: '#080B10',        // Deeper than ink (ring offsets)
+          text: '#F6F7F9',          // Primary text on dark backgrounds (alias for fog)
         },
       },
       // Tsushin Typography - Distinctive fonts (using CSS variables for Next.js font optimization)
