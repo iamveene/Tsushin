@@ -20,6 +20,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create api_client, api_client_token, and api_request_log tables."""
+    # Skip if tables already exist (created by 0001 via metadata.create_all)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_tables = inspector.get_table_names()
+    if 'api_client' in existing_tables:
+        return
 
     # --- api_client ---
     op.create_table(

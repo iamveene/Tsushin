@@ -20,6 +20,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create message_queue table with all columns and indexes."""
+    # Skip if table already exists (created by 0001 via metadata.create_all)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if 'message_queue' in inspector.get_table_names():
+        return
+
     op.create_table(
         'message_queue',
         sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),
