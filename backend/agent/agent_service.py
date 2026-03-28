@@ -765,6 +765,26 @@ IMPORTANT: When the user asks for system information, server status, file listin
         except Exception as e:
             self.logger.warning(f"Error loading custom skill instructions: {e}")
 
+        # Phase 24: Custom Skills - Collect custom skill tool definitions
+        try:
+            custom_tool_defs = skill_manager.get_custom_skill_tool_definitions(self.db, self.agent_id)
+            if custom_tool_defs:
+                self.logger.info(f"[CUSTOM SKILLS] Found {len(custom_tool_defs)} custom skill tools for agent {self.agent_id}")
+                skill_tools.extend(custom_tool_defs)
+
+                # Build prompt section for custom skill tools
+                custom_tools_prompt = self._build_skill_tools_prompt(custom_tool_defs)
+                if custom_tools_prompt:
+                    system_prompt_with_date = f"{system_prompt_with_date}\n{custom_tools_prompt}"
+
+                # Add to ollama_tools if using Ollama
+                if ollama_tools is not None:
+                    ollama_tools.extend(custom_tool_defs)
+                elif custom_tool_defs:
+                    ollama_tools = custom_tool_defs
+        except Exception as e:
+            self.logger.warning(f"[CUSTOM SKILLS] Error collecting custom skill tools: {e}")
+
         try:
             # Call AI (Phase 7.2: Pass tracking parameters)
             result = await self.ai_client.generate(

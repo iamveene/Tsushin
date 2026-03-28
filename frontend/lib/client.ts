@@ -2323,6 +2323,102 @@ export interface ProviderInstanceCreate {
   is_default?: boolean
 }
 
+// ==================== Custom Skills (Phase 22/23) ====================
+
+export interface CustomSkill {
+  id: number
+  tenant_id: string
+  source: string
+  slug: string
+  name: string
+  description?: string | null
+  icon?: string | null
+  skill_type_variant: string   // instruction | script | mcp_server
+  execution_mode: string       // tool | hybrid | passive
+  instructions_md?: string | null
+  script_content?: string | null
+  script_entrypoint?: string | null
+  script_language?: string | null   // python | bash | nodejs
+  script_content_hash?: string | null
+  input_schema?: Record<string, any> | null
+  output_schema?: Record<string, any> | null
+  config_schema?: any[] | null
+  trigger_mode: string         // keyword | always_on | llm_decided
+  trigger_keywords?: string[] | null
+  priority: number
+  sentinel_profile_id?: number | null
+  timeout_seconds: number
+  is_enabled: boolean
+  scan_status: string          // pending | clean | rejected
+  last_scan_result?: Record<string, any> | null
+  version: string
+  created_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface CustomSkillCreate {
+  name: string
+  description?: string
+  icon?: string
+  skill_type_variant?: string
+  execution_mode?: string
+  instructions_md?: string
+  script_content?: string
+  script_entrypoint?: string
+  script_language?: string
+  trigger_mode?: string
+  trigger_keywords?: string[]
+  input_schema?: Record<string, any>
+  config_schema?: any[]
+  timeout_seconds?: number
+  priority?: number
+  sentinel_profile_id?: number | null
+}
+
+export interface CustomSkillUpdate {
+  name?: string
+  description?: string
+  icon?: string
+  skill_type_variant?: string
+  execution_mode?: string
+  instructions_md?: string
+  script_content?: string
+  script_entrypoint?: string
+  script_language?: string
+  trigger_mode?: string
+  trigger_keywords?: string[]
+  input_schema?: Record<string, any>
+  config_schema?: any[]
+  timeout_seconds?: number
+  priority?: number
+  is_enabled?: boolean
+  sentinel_profile_id?: number | null
+}
+
+export interface CustomSkillTestResult {
+  success: boolean
+  output: string
+  metadata?: Record<string, any>
+  execution_time_ms: number
+  execution_id: number
+}
+
+export interface CustomSkillExecutionRecord {
+  id: number
+  tenant_id: string
+  agent_id?: number | null
+  custom_skill_id?: number | null
+  skill_name?: string | null
+  input_json?: Record<string, any> | null
+  output?: string | null
+  error?: string | null
+  status: string
+  execution_time_ms?: number | null
+  sentinel_result?: Record<string, any> | null
+  created_at?: string | null
+}
+
 export const api = {
   async getConfig(): Promise<Config> {
     const res = await authenticatedFetch(`${API_URL}/api/config`)
@@ -5964,6 +6060,117 @@ export const api = {
     })
     if (!res.ok) await handleApiError(res, 'Failed to validate URL')
     return res.json()
+  },
+
+  // ==================== Custom Skills (Phase 22/23) ====================
+
+  async listCustomSkills(): Promise<CustomSkill[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/custom-skills`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch custom skills')
+    return res.json()
+  },
+
+  // Alias for backward compat
+  async getCustomSkills(): Promise<CustomSkill[]> {
+    return this.listCustomSkills()
+  },
+
+  async getCustomSkill(id: number): Promise<CustomSkill> {
+    const res = await authenticatedFetch(`${API_URL}/api/custom-skills/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch custom skill')
+    return res.json()
+  },
+
+  async createCustomSkill(data: CustomSkillCreate): Promise<CustomSkill> {
+    const res = await authenticatedFetch(`${API_URL}/api/custom-skills`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create custom skill')
+    return res.json()
+  },
+
+  async updateCustomSkill(id: number, data: CustomSkillUpdate): Promise<CustomSkill> {
+    const res = await authenticatedFetch(`${API_URL}/api/custom-skills/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update custom skill')
+    return res.json()
+  },
+
+  async deleteCustomSkill(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/custom-skills/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete custom skill')
+  },
+
+  async deployCustomSkill(id: number): Promise<{ success: boolean; hash?: string; path?: string; error?: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/custom-skills/${id}/deploy`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to deploy custom skill')
+    return res.json()
+  },
+
+  async scanCustomSkill(id: number): Promise<{ scan_status: string; last_scan_result?: any }> {
+    const res = await authenticatedFetch(`${API_URL}/api/custom-skills/${id}/scan`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to scan custom skill')
+    return res.json()
+  },
+
+  async testCustomSkill(id: number, data: { message?: string; arguments?: Record<string, any> }): Promise<CustomSkillTestResult> {
+    const res = await authenticatedFetch(`${API_URL}/api/custom-skills/${id}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test custom skill')
+    return res.json()
+  },
+
+  async listCustomSkillExecutions(id: number, limit = 50, offset = 0): Promise<CustomSkillExecutionRecord[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/custom-skills/${id}/executions?limit=${limit}&offset=${offset}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch skill executions')
+    return res.json()
+  },
+
+  async getAgentCustomSkills(agentId: number): Promise<any[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/custom-skills`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent custom skills')
+    return res.json()
+  },
+
+  async assignCustomSkillToAgent(agentId: number, customSkillId: number, config?: Record<string, any>): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/custom-skills`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ custom_skill_id: customSkillId, config: config || {} }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to assign custom skill')
+    return res.json()
+  },
+
+  async updateAgentCustomSkill(agentId: number, assignmentId: number, data: { is_enabled?: boolean; config?: Record<string, any> }): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/custom-skills/${assignmentId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update custom skill assignment')
+    return res.json()
+  },
+
+  async removeAgentCustomSkill(agentId: number, assignmentId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/custom-skills/${assignmentId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to remove custom skill assignment')
   },
 }
 

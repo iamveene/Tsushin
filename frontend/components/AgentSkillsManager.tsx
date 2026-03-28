@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState, useCallback, useRef } from 'react'
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { api, AgentSkill, SkillDefinition, SkillIntegration, SkillProvider, TTSProviderInfo, TTSVoice, AgentTTSConfig, SentinelProfile, SentinelProfileAssignment } from '@/lib/client'
 import { ArrayConfigInput } from './ArrayConfigInput'
 import {
@@ -70,19 +70,28 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [skillSecurityPopover, setSkillSecurityPopover] = useState<string | null>(null)
   const securityPopoverRef = useRef<HTMLDivElement>(null)
 
+  // Phase 24: Custom Skills state
+  const [customSkillAssignments, setCustomSkillAssignments] = useState<any[]>([])
+  const [availableCustomSkills, setAvailableCustomSkills] = useState<any[]>([])
+  const [showCustomSkillPicker, setShowCustomSkillPicker] = useState(false)
+
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const [available, agent, integrations, profiles, secAssignments] = await Promise.all([
+      const [available, agent, integrations, profiles, secAssignments, customAssignments, allCustomSkills] = await Promise.all([
         api.getAvailableSkills(),
         api.getAgentSkills(agentId),
         api.getAgentSkillIntegrations(agentId),
         api.getSentinelProfiles(true).catch(() => [] as SentinelProfile[]),
         api.getSentinelProfileAssignments(agentId).catch(() => [] as SentinelProfileAssignment[]),
+        api.getAgentCustomSkills(agentId).catch(() => []),
+        api.getCustomSkills().catch(() => []),
       ])
       setAvailableSkills(available)
       setAgentSkills(agent)
       setSkillIntegrations(integrations)
+      setCustomSkillAssignments(customAssignments)
+      setAvailableCustomSkills(allCustomSkills)
       setSecurityProfiles(profiles)
 
       // Build skill-level assignment map
@@ -1158,6 +1167,180 @@ export default function AgentSkillsManager({ agentId }: Props) {
           {availableSkills.map((skill) => renderStandardSkillCard(skill))}
         </div>
       </div>
+
+      {/* Phase 24: Custom Skills Section */}
+      <div>
+        <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+          <FileTextIcon size={20} /> Custom Skills
+          {customSkillAssignments.length > 0 && (
+            <span className="text-sm font-normal text-tsushin-slate ml-2">
+              {agentSkills.filter(s => s.is_enabled).length} built-in &middot; {customSkillAssignments.length} custom
+            </span>
+          )}
+        </h2>
+        <p className="text-sm text-tsushin-slate mb-4">
+          Tenant-created custom skills assigned to this agent. Create skills in the Custom Skills page, then assign them here.
+        </p>
+
+        {customSkillAssignments.length === 0 && availableCustomSkills.length === 0 ? (
+          <div className="text-tsushin-slate text-sm p-6 bg-tsushin-ink rounded-lg border border-white/5 text-center">
+            No custom skills available. Create custom skills first to assign them to this agent.
+          </div>
+        ) : customSkillAssignments.length === 0 ? (
+          <div className="text-tsushin-slate text-sm p-6 bg-tsushin-ink rounded-lg border border-white/5 text-center">
+            No custom skills assigned yet. Click &quot;+ Assign Skill&quot; to add one.
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+            {customSkillAssignments.map((assignment: any) => (
+              <div
+                key={assignment.id}
+                className={`bg-tsushin-surface/50 border rounded-lg p-4 ${
+                  assignment.is_enabled
+                    ? 'border-teal-600/30'
+                    : 'border-white/5'
+                }`}
+              >
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">{assignment.skill?.icon || '\uD83E\uDDE9'}</span>
+                    <div>
+                      <h3 className="text-sm font-semibold text-white">{assignment.skill?.name}</h3>
+                      <p className="text-xs text-tsushin-muted">{assignment.skill?.skill_type_variant} &middot; {assignment.skill?.execution_mode}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={assignment.is_enabled}
+                        onChange={async (e) => {
+                          try {
+                            await api.updateAgentCustomSkill(agentId, assignment.id, { is_enabled: e.target.checked })
+                            loadData()
+                          } catch (err) {
+                            console.error('Failed to toggle custom skill:', err)
+                          }
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-gray-200 rounded-full peer bg-tsushin-elevated peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all border-tsushin-border peer-checked:bg-teal-600"></div>
+                    </label>
+                    <button
+                      onClick={async () => {
+                        if (confirm(`Remove "${assignment.skill?.name}" from this agent?`)) {
+                          try {
+                            await api.removeAgentCustomSkill(agentId, assignment.id)
+                            loadData()
+                          } catch (err) {
+                            console.error('Failed to remove custom skill:', err)
+                          }
+                        }
+                      }}
+                      className="text-red-400 hover:text-red-300 p-1"
+                      title="Remove assignment"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                {assignment.skill?.description && (
+                  <p className="text-xs text-tsushin-slate mt-1">{assignment.skill.description}</p>
+                )}
+                {assignment.skill?.scan_status && assignment.skill.scan_status !== 'clean' && (
+                  <span className="inline-block mt-2 px-2 py-0.5 text-xs bg-yellow-800/30 text-yellow-300 rounded-full">
+                    Scan: {assignment.skill.scan_status}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Assign Skill Button */}
+        {availableCustomSkills.length > 0 && (
+          <div className="mt-4">
+            <button
+              onClick={() => setShowCustomSkillPicker(true)}
+              className="px-4 py-2 bg-teal-600 text-white text-sm rounded-lg hover:bg-teal-700 transition-colors inline-flex items-center gap-1.5"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Assign Skill
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Custom Skill Picker Modal */}
+      {showCustomSkillPicker && (() => {
+        const assignedIds = new Set(customSkillAssignments.map((a: any) => a.custom_skill_id))
+        const unassigned = availableCustomSkills.filter((s: any) => !assignedIds.has(s.id) && s.is_enabled)
+
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-tsushin-surface rounded-xl max-w-md w-full max-h-[80vh] overflow-hidden flex flex-col shadow-2xl">
+              <div className="bg-gradient-to-r from-teal-600 to-cyan-600 px-6 py-4 flex justify-between items-center">
+                <h3 className="text-lg font-semibold text-white">Assign Custom Skill</h3>
+                <button onClick={() => setShowCustomSkillPicker(false)} className="text-white/80 hover:text-white">
+                  &#x2715;
+                </button>
+              </div>
+              <div className="overflow-y-auto p-4 space-y-2 flex-1">
+                {unassigned.length === 0 ? (
+                  <p className="text-tsushin-slate text-sm text-center py-6">
+                    All custom skills are already assigned to this agent.
+                  </p>
+                ) : (
+                  unassigned.map((skill: any) => (
+                    <button
+                      key={skill.id}
+                      onClick={async () => {
+                        try {
+                          await api.assignCustomSkillToAgent(agentId, skill.id)
+                          setShowCustomSkillPicker(false)
+                          loadData()
+                        } catch (err) {
+                          console.error('Failed to assign skill:', err)
+                          alert('Failed to assign skill')
+                        }
+                      }}
+                      className="w-full text-left p-4 rounded-lg border border-tsushin-border hover:border-teal-500 hover:bg-teal-900/10 transition-all"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl">{skill.icon || '\uD83E\uDDE9'}</span>
+                        <div>
+                          <div className="font-medium text-white">{skill.name}</div>
+                          <div className="text-xs text-tsushin-muted">
+                            {skill.skill_type_variant} &middot; {skill.execution_mode}
+                            {skill.scan_status !== 'clean' && (
+                              <span className="ml-2 text-yellow-400">({skill.scan_status})</span>
+                            )}
+                          </div>
+                          {skill.description && (
+                            <div className="text-xs text-tsushin-slate mt-1">{skill.description}</div>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+              <div className="bg-tsushin-ink px-6 py-3 border-t border-tsushin-border">
+                <button
+                  onClick={() => setShowCustomSkillPicker(false)}
+                  className="w-full px-4 py-2 text-tsushin-slate hover:bg-tsushin-surface rounded-lg text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Provider Configuration Modal */}
       {configuringProvider && (

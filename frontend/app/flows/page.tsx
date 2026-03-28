@@ -145,6 +145,7 @@ export default function FlowsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [personas, setPersonas] = useState<Persona[]>([])
   const [customTools, setCustomTools] = useState<CustomTool[]>([])
+  const [customSkills, setCustomSkills] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   // Filter & Search states
@@ -180,13 +181,14 @@ export default function FlowsPage() {
   async function loadData() {
     setLoading(true)
     try {
-      const [flowsData, runsData, agentsData, contactsData, personasData, customToolsData] = await Promise.allSettled([
+      const [flowsData, runsData, agentsData, contactsData, personasData, customToolsData, customSkillsData] = await Promise.allSettled([
         api.getFlows(),
         api.getFlowRuns(undefined, 20),
         api.getAgents(true),
         api.getContacts(),
         api.getPersonas(),
-        api.getSandboxedTools()
+        api.getSandboxedTools(),
+        api.getCustomSkills()
       ])
 
       if (flowsData.status === 'fulfilled') setAllFlows(flowsData.value)
@@ -195,6 +197,7 @@ export default function FlowsPage() {
       if (contactsData.status === 'fulfilled') setContacts(contactsData.value)
       if (personasData.status === 'fulfilled') setPersonas(personasData.value.filter((p: Persona) => p.is_active))
       if (customToolsData.status === 'fulfilled') setCustomTools(customToolsData.value.filter((t: CustomTool) => t.is_enabled))
+      if (customSkillsData.status === 'fulfilled') setCustomSkills(customSkillsData.value.filter((s: any) => s.is_enabled && s.scan_status === 'clean'))
 
       // Load active conversation threads (silent catch - non-critical data)
       const threads = await api.getActiveConversationThreads().catch(() => [])
@@ -799,6 +802,7 @@ export default function FlowsPage() {
           contacts={contacts}
           personas={personas}
           customTools={customTools}
+          customSkills={customSkills}
           onClose={() => setShowCreateFlow(false)}
           onSuccess={() => {
             setShowCreateFlow(false)
@@ -815,6 +819,7 @@ export default function FlowsPage() {
           contacts={contacts}
           personas={personas}
           customTools={customTools}
+          customSkills={customSkills}
           onClose={() => setEditingFlowId(null)}
           onSuccess={() => {
             setEditingFlowId(null)
@@ -1067,11 +1072,12 @@ function RecurrenceConfigPanel({ value, onChange }: {
 
 // ==================== CREATE FLOW MODAL ====================
 
-function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onSuccess }: {
+function CreateFlowModal({ agents, contacts, personas, customTools, customSkills, onClose, onSuccess }: {
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onClose: () => void
   onSuccess: () => void
 }) {
@@ -1270,6 +1276,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
               contacts={contacts}
               personas={personas}
               customTools={customTools}
+              customSkills={customSkills}
               onChange={(steps) => setFlowData(prev => ({ ...prev, steps }))}
               flushCallbacksRef={createFlushRef}
             />
@@ -1306,12 +1313,13 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
 
 // ==================== STEP BUILDER ====================
 
-function StepBuilder({ steps, agents, contacts, personas, customTools, onChange, flushCallbacksRef }: {
+function StepBuilder({ steps, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef }: {
   steps: CreateFlowStepData[]
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onChange: (steps: CreateFlowStepData[]) => void
   flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
 }) {
@@ -1443,6 +1451,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange,
                     contacts={contacts}
                     personas={personas}
                     customTools={customTools}
+                    customSkills={customSkills}
                     onChange={(update) => updateStep(index, update)}
                     allSteps={steps}
                     flushCallbacksRef={flushCallbacksRef}
@@ -1762,12 +1771,13 @@ function ToolParameterForm({
 
 // ==================== STEP CONFIG FORM ====================
 
-function StepConfigForm({ step, agents, contacts, personas, customTools, onChange, allSteps, flushCallbacksRef, stepIndex }: {
+function StepConfigForm({ step, agents, contacts, personas, customTools, customSkills, onChange, allSteps, flushCallbacksRef, stepIndex }: {
   step: CreateFlowStepData
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onChange: (update: Partial<CreateFlowStepData>) => void
   allSteps: CreateFlowStepData[]
   flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
@@ -2159,15 +2169,28 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             >
               <option value="">Select a skill...</option>
-              {AVAILABLE_SKILLS.map(skill => (
-                <option key={skill.value} value={skill.value}>
-                  {skill.label}
-                </option>
-              ))}
+              <optgroup label="Built-in Skills">
+                {AVAILABLE_SKILLS.map(skill => (
+                  <option key={skill.value} value={skill.value}>
+                    {skill.label}
+                  </option>
+                ))}
+              </optgroup>
+              {customSkills && customSkills.length > 0 && (
+                <optgroup label="Custom Skills">
+                  {customSkills.map((s: any) => (
+                    <option key={`custom:${s.slug}`} value={`custom:${s.slug}`}>
+                      {s.icon || '\uD83E\uDDE9'} {s.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             {currentConfig?.skill_type && (
               <p className="text-xs text-slate-500 mt-1">
-                {AVAILABLE_SKILLS.find(s => s.value === currentConfig?.skill_type)?.description}
+                {AVAILABLE_SKILLS.find(s => s.value === currentConfig?.skill_type)?.description
+                  || customSkills?.find((s: any) => `custom:${s.slug}` === currentConfig?.skill_type)?.description
+                  || ''}
               </p>
             )}
           </div>
@@ -2418,6 +2441,7 @@ function EditableStepBuilder({
   contacts,
   personas,
   customTools,
+  customSkills,
   onStepsChange,
   flushCallbacksRef
 }: {
@@ -2427,6 +2451,7 @@ function EditableStepBuilder({
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onStepsChange: (steps: EditableStepData[]) => void
   flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
 }) {
@@ -2678,6 +2703,7 @@ function EditableStepBuilder({
                     contacts={contacts}
                     personas={personas}
                     customTools={customTools}
+                    customSkills={customSkills}
                     onChange={(update) => updateStep(index, update)}
                     flushCallbacksRef={flushCallbacksRef}
                     allSteps={steps}
@@ -2739,12 +2765,13 @@ function EditableStepBuilder({
 
 // ==================== EDITABLE STEP CONFIG FORM ====================
 
-function EditableStepConfigForm({ step, agents, contacts, personas, customTools, onChange, flushCallbacksRef, allSteps }: {
+function EditableStepConfigForm({ step, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef, allSteps }: {
   step: EditableStepData
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onChange: (update: Partial<EditableStepData>) => void
   flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
   allSteps: EditableStepData[]
@@ -3122,15 +3149,28 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             >
               <option value="">Select a skill...</option>
-              {AVAILABLE_SKILLS.map(skill => (
-                <option key={skill.value} value={skill.value}>
-                  {skill.label}
-                </option>
-              ))}
+              <optgroup label="Built-in Skills">
+                {AVAILABLE_SKILLS.map(skill => (
+                  <option key={skill.value} value={skill.value}>
+                    {skill.label}
+                  </option>
+                ))}
+              </optgroup>
+              {customSkills && customSkills.length > 0 && (
+                <optgroup label="Custom Skills">
+                  {customSkills.map((s: any) => (
+                    <option key={`custom:${s.slug}`} value={`custom:${s.slug}`}>
+                      {s.icon || '\uD83E\uDDE9'} {s.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             {currentConfig?.skill_type && (
               <p className="text-xs text-slate-500 mt-1">
-                {AVAILABLE_SKILLS.find(s => s.value === currentConfig?.skill_type)?.description}
+                {AVAILABLE_SKILLS.find(s => s.value === currentConfig?.skill_type)?.description
+                  || customSkills?.find((s: any) => `custom:${s.slug}` === currentConfig?.skill_type)?.description
+                  || ''}
               </p>
             )}
           </div>
@@ -3374,12 +3414,13 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
 
 // ==================== EDIT FLOW MODAL ====================
 
-function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClose, onSuccess }: {
+function EditFlowModal({ flowId, agents, contacts, personas, customTools, customSkills, onClose, onSuccess }: {
   flowId: number
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onClose: () => void
   onSuccess: () => void
 }) {
@@ -3634,6 +3675,7 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClos
               contacts={contacts}
               personas={personas}
               customTools={customTools}
+              customSkills={customSkills}
               onStepsChange={setSteps}
               flushCallbacksRef={flushCallbacksRef}
             />

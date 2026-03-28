@@ -51,6 +51,9 @@ class ContainerRuntime(ABC):
         command: Optional[List[str]] = None,
         labels: Optional[Dict[str, str]] = None,
         detach: bool = True,
+        security_opt: Optional[List[str]] = None,
+        cap_drop: Optional[List[str]] = None,
+        pids_limit: Optional[int] = None,
     ) -> Any:
         """
         Create and start a container.
@@ -69,6 +72,9 @@ class ContainerRuntime(ABC):
             command: Command to run in container
             labels: Container labels
             detach: Run in background (always True for our use cases)
+            security_opt: Security options (e.g. ["no-new-privileges:true"])
+            cap_drop: Linux capabilities to drop (e.g. ["ALL"])
+            pids_limit: Maximum number of PIDs in the container
 
         Returns:
             Container object (Docker Container or K8s Pod wrapper)
@@ -415,6 +421,9 @@ class DockerRuntime(ContainerRuntime):
         command: Optional[List[str]] = None,
         labels: Optional[Dict[str, str]] = None,
         detach: bool = True,
+        security_opt: Optional[List[str]] = None,
+        cap_drop: Optional[List[str]] = None,
+        pids_limit: Optional[int] = None,
     ) -> Any:
         import docker as docker_lib
         try:
@@ -443,6 +452,12 @@ class DockerRuntime(ContainerRuntime):
                 kwargs["command"] = command
             if labels is not None:
                 kwargs["labels"] = labels
+            if security_opt is not None:
+                kwargs["security_opt"] = security_opt
+            if cap_drop is not None:
+                kwargs["cap_drop"] = cap_drop
+            if pids_limit is not None:
+                kwargs["pids_limit"] = pids_limit
 
             container = self._client.containers.run(**kwargs)
             logger.info(f"DockerRuntime: Created container {name} (ID: {container.id})")
@@ -1044,6 +1059,9 @@ class K8sRuntime(ContainerRuntime):
         command: Optional[List[str]] = None,
         labels: Optional[Dict[str, str]] = None,
         detach: bool = True,
+        security_opt: Optional[List[str]] = None,
+        cap_drop: Optional[List[str]] = None,
+        pids_limit: Optional[int] = None,
     ) -> Any:
         k8s_client = self._k8s_client_module
         dep_name = self._sanitize_name(name)
@@ -1082,6 +1100,20 @@ class K8sRuntime(ContainerRuntime):
         # Resource limits
         resources = self._build_resource_requirements(mem_limit, cpu_quota)
 
+        # Security context for container hardening
+        security_context = None
+        if cap_drop or security_opt:
+            sc_kwargs = {}
+            if cap_drop:
+                sc_kwargs["capabilities"] = k8s_client.V1Capabilities(drop=cap_drop)
+            if security_opt:
+                # Map "no-new-privileges:true" to K8s allowPrivilegeEscalation=False
+                for opt in security_opt:
+                    if "no-new-privileges" in opt.lower():
+                        sc_kwargs["allow_privilege_escalation"] = False
+            if sc_kwargs:
+                security_context = k8s_client.V1SecurityContext(**sc_kwargs)
+
         # Container spec
         container_spec = k8s_client.V1Container(
             name=dep_name,
@@ -1092,6 +1124,7 @@ class K8sRuntime(ContainerRuntime):
             volume_mounts=k8s_mounts or None,
             resources=resources,
             command=command or None,
+            security_context=security_context,
         )
 
         # Pod spec

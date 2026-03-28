@@ -1465,7 +1465,10 @@ export default function HubPage() {
                                       {/* Three-dot menu */}
                                       <div className="relative">
                                         <button
-                                          onClick={() => setInstanceMenuOpen(instanceMenuOpen === inst.id ? null : inst.id)}
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            setInstanceMenuOpen(instanceMenuOpen === inst.id ? null : inst.id)
+                                          }}
                                           className="p-1 text-tsushin-slate hover:text-white transition-colors rounded"
                                         >
                                           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">

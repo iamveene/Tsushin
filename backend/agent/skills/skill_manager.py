@@ -1299,6 +1299,64 @@ class SkillManager:
                 self.registry[key] = adapter_class
                 logger.info(f"Registered custom skill: {key} ({record.name})")
 
+    def get_custom_skill_tool_definitions(self, db, agent_id: int) -> list:
+        """
+        Get OpenAI-format tool definitions for custom skills assigned to this agent.
+
+        Only includes custom skills that are:
+        - Assigned and enabled for this agent
+        - Globally enabled on the CustomSkill record
+        - Have clean scan status
+        - Are in 'tool' or 'hybrid' execution mode
+
+        Args:
+            db: Database session
+            agent_id: Agent ID
+
+        Returns:
+            List of OpenAI-compatible tool definitions
+        """
+        from models import AgentCustomSkill, CustomSkill
+        from agent.skills.custom_skill_adapter import CustomSkillAdapter
+
+        try:
+            assignments = db.query(AgentCustomSkill).join(
+                CustomSkill, AgentCustomSkill.custom_skill_id == CustomSkill.id
+            ).filter(
+                AgentCustomSkill.agent_id == agent_id,
+                AgentCustomSkill.is_enabled == True,
+                CustomSkill.is_enabled == True,
+                CustomSkill.scan_status == 'clean',
+                CustomSkill.execution_mode.in_(['tool', 'hybrid']),
+            ).all()
+
+            tool_defs = []
+            for assignment in assignments:
+                skill = db.query(CustomSkill).filter(
+                    CustomSkill.id == assignment.custom_skill_id
+                ).first()
+                if skill:
+                    adapter = CustomSkillAdapter(skill)
+                    tool_def = adapter.get_mcp_tool_definition()
+                    if tool_def:
+                        tool_defs.append({
+                            "type": "function",
+                            "function": {
+                                "name": tool_def["name"],
+                                "description": tool_def.get("description", ""),
+                                "parameters": tool_def.get("inputSchema", {"type": "object", "properties": {}})
+                            }
+                        })
+
+            if tool_defs:
+                logger.info(f"Collected {len(tool_defs)} custom skill tool definitions for agent {agent_id}")
+
+            return tool_defs
+
+        except Exception as e:
+            logger.error(f"Error getting custom skill tool definitions: {e}", exc_info=True)
+            return []
+
     def get_custom_skill_instructions(self, db, agent_id: int) -> str:
         """
         Get concatenated instructions from instruction-type custom skills

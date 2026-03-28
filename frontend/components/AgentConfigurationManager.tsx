@@ -337,50 +337,92 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><BotIcon size={20} /> AI Model</h3>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">Provider</label>
-            <select
-              value={modelProvider}
-              onChange={async (e) => {
-                const newVendor = e.target.value
-                setModelProvider(newVendor)
-                setProviderInstanceId(null)
-                const provider = MODEL_PROVIDERS.find(p => p.value === newVendor)
-                if (provider && provider.models.length > 0) {
-                  setModelName(provider.models[0])
-                }
-                // Fetch instances for the new vendor
-                try {
-                  const instances = await api.getProviderInstances(newVendor)
-                  setProviderInstances(instances)
-                } catch {
-                  setProviderInstances([])
-                }
-              }}
-              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
-            >
-              {MODEL_PROVIDERS.map((provider) => (
-                <option key={provider.value} value={provider.value}>
-                  {provider.label}
-                </option>
-              ))}
-            </select>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Provider</label>
+              <select
+                value={modelProvider}
+                onChange={async (e) => {
+                  const newVendor = e.target.value
+                  setModelProvider(newVendor)
+                  setProviderInstanceId(null)
+                  const provider = MODEL_PROVIDERS.find(p => p.value === newVendor)
+                  if (provider && provider.models.length > 0) {
+                    setModelName(provider.models[0])
+                  }
+                  // Fetch instances for the new vendor
+                  try {
+                    const instances = await api.getProviderInstances(newVendor)
+                    setProviderInstances(instances)
+                  } catch {
+                    setProviderInstances([])
+                  }
+                }}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+              >
+                {MODEL_PROVIDERS.map((provider) => (
+                  <option key={provider.value} value={provider.value}>
+                    {provider.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Model</label>
+              <select
+                value={modelName}
+                onChange={(e) => setModelName(e.target.value)}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+              >
+                {getAvailableModels().map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
+          {/* Provider Instance (Optional) */}
           <div>
-            <label className="block text-sm font-medium mb-2">Model</label>
-            <select
-              value={modelName}
-              onChange={(e) => setModelName(e.target.value)}
-              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
-            >
-              {getAvailableModels().map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
+            <label className="block text-sm font-medium mb-2 flex items-center gap-2">
+              <LinkIcon size={14} />
+              Provider Instance
+              <span className="text-xs text-tsushin-slate font-normal">(Optional)</span>
+            </label>
+            {providerInstances.length > 0 ? (
+              <select
+                value={providerInstanceId || ''}
+                onChange={(e) => {
+                  const id = e.target.value ? parseInt(e.target.value) : null
+                  setProviderInstanceId(id)
+                  // If instance has models, auto-select the first one
+                  if (id) {
+                    const inst = providerInstances.find(i => i.id === id)
+                    if (inst && inst.available_models.length > 0) {
+                      setModelName(inst.available_models[0])
+                    }
+                  }
+                }}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+              >
+                <option value="">No instance (use default)</option>
+                {providerInstances.map((inst) => (
+                  <option key={inst.id} value={inst.id}>
+                    {inst.instance_name}
+                    {inst.is_default ? ' (default)' : ''}
+                    {inst.health_status === 'healthy' ? '' : ` [${inst.health_status}]`}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-xs text-tsushin-slate">
+                No instances configured for {MODEL_PROVIDERS.find(p => p.value === modelProvider)?.label || modelProvider}.
+                <a href="/hub" className="text-teal-400 hover:underline ml-1">Configure in Hub &gt; AI Providers</a>
+              </div>
+            )}
           </div>
         </div>
       </div>

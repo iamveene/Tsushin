@@ -1,10 +1,15 @@
 """
-Phase 22: Custom Skills Foundation - Adapter
+Phase 22/23: Custom Skills — Adapter
 
 Wraps a CustomSkill DB record as a BaseSkill instance so that
 tenant-created skills integrate seamlessly with the existing
 SkillManager registry, tool definitions, and prompt injection pipeline.
+
+Phase 23 adds script execution support: deploys scripts to the
+tenant's toolbox container and runs them with JSON input/output.
 """
+import json
+import time
 import logging
 from typing import Dict, Optional, Any
 
@@ -63,7 +68,7 @@ class CustomSkillAdapter(BaseSkill):
         if self._record.skill_type_variant == 'instruction':
             return self._execute_instruction(arguments)
         elif self._record.skill_type_variant == 'script':
-            return SkillResult(success=False, output="Script execution not yet implemented", metadata={})
+            return await self._execute_script(arguments, config)
         else:
             return SkillResult(success=False, output=f"Unknown skill type: {self._record.skill_type_variant}", metadata={})
 
@@ -78,6 +83,115 @@ class CustomSkillAdapter(BaseSkill):
             output=output,
             metadata={"skill_type": "instruction", "skill_name": self._record.name},
         )
+
+    async def _execute_script(self, arguments: Dict, config: Dict = None) -> SkillResult:
+        """
+        Execute script in tenant's toolbox container.
+
+        The script receives input via the TSUSHIN_INPUT environment variable
+        (JSON-encoded arguments). It should print JSON to stdout with at least
+        an "output" field. Non-JSON stdout is returned as plain text.
+        """
+        from services.custom_skill_deploy_service import CustomSkillDeployService
+        from services.toolbox_container_service import get_toolbox_service
+
+        tenant_id = config.get('tenant_id') if config else None
+        if not tenant_id:
+            return SkillResult(
+                success=False,
+                output="No tenant context for script execution",
+                metadata={"skill_type": "script", "skill_name": self._record.name},
+            )
+
+        # Ensure script is deployed (check hash, redeploy if stale)
+        try:
+            db = config.get('db') if config else None
+            if db:
+                deployed = await CustomSkillDeployService.ensure_deployed(
+                    self._record, tenant_id, db
+                )
+                if not deployed:
+                    return SkillResult(
+                        success=False,
+                        output="Failed to deploy skill script to container",
+                        metadata={"skill_type": "script", "skill_name": self._record.name},
+                    )
+        except Exception as e:
+            logger.warning(f"Deploy check failed for skill {self._record.name}: {e}")
+
+        # Build the execution command
+        entrypoint = self._record.script_entrypoint or "main.py"
+        skill_dir = f"/workspace/skills/{self._record.id}"
+        language = self._record.script_language or "python"
+
+        if language == "python":
+            cmd = f"cd {skill_dir} && python {entrypoint}"
+        elif language == "bash":
+            cmd = f"cd {skill_dir} && bash {entrypoint}"
+        elif language == "nodejs":
+            cmd = f"cd {skill_dir} && node {entrypoint}"
+        else:
+            cmd = f"cd {skill_dir} && python {entrypoint}"
+
+        # Prepare input as JSON environment variable
+        input_json = json.dumps(arguments or {})
+        cmd = f'export TSUSHIN_INPUT={json.dumps(input_json)} && {cmd}'
+
+        container_service = get_toolbox_service()
+        timeout = self._record.timeout_seconds or 30
+
+        start_time = time.time()
+        try:
+            result = await container_service.execute_command(
+                tenant_id,
+                cmd,
+                timeout=timeout,
+                workdir=skill_dir,
+                db=db,
+            )
+        except Exception as e:
+            logger.error(f"Script execution failed for skill {self._record.name}: {e}")
+            return SkillResult(
+                success=False,
+                output=f"Script execution error: {e}",
+                metadata={
+                    "skill_type": "script",
+                    "skill_name": self._record.name,
+                    "execution_time_ms": int((time.time() - start_time) * 1000),
+                },
+            )
+
+        stdout = result.get('stdout', '').strip()
+        stderr = result.get('stderr', '').strip()
+        exit_code = result.get('exit_code', -1)
+        exec_time_ms = result.get('execution_time_ms', 0)
+
+        metadata = {
+            "skill_type": "script",
+            "skill_name": self._record.name,
+            "exit_code": exit_code,
+            "execution_time_ms": exec_time_ms,
+            "timed_out": result.get('timed_out', False),
+            "oom_killed": result.get('oom_killed', False),
+        }
+
+        if exit_code != 0:
+            error_msg = stderr or stdout or f"Script exited with code {exit_code}"
+            if result.get('timed_out'):
+                error_msg = f"Script timed out after {timeout}s"
+            elif result.get('oom_killed'):
+                error_msg = "Script killed (out of memory)"
+            return SkillResult(success=False, output=error_msg, metadata=metadata)
+
+        # Try to parse stdout as JSON
+        try:
+            parsed = json.loads(stdout)
+            output_text = parsed.get('output', stdout)
+            metadata.update({k: v for k, v in parsed.items() if k != 'output'})
+            return SkillResult(success=True, output=str(output_text), metadata=metadata)
+        except (json.JSONDecodeError, AttributeError):
+            # Return raw stdout as plain text
+            return SkillResult(success=True, output=stdout, metadata=metadata)
 
     def get_instructions_for_prompt(self) -> Optional[str]:
         if self._record and self._record.instructions_md:

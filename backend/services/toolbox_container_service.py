@@ -315,6 +315,10 @@ class ToolboxContainerService:
                 mem_limit='2g',
                 memswap_limit='4g',  # Allow swap for heavy scans
                 cpu_quota=100000,  # Full CPU for heavy tools
+                # Security hardening (Phase 23: C-2)
+                security_opt=["no-new-privileges:true"],
+                cap_drop=["ALL"],
+                pids_limit=256,
             )
 
             container_id = container.id if hasattr(container, 'id') else str(container)

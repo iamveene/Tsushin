@@ -790,6 +790,81 @@ class CustomSkillExecution(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class MCPServerConfig(Base):
+    """
+    Phase 22.4: MCP Server Integration
+    Stores external MCP server configurations for tenant tool providers.
+    Supports SSE, Streamable HTTP, and stdio transport types.
+    """
+    __tablename__ = "mcp_server_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    server_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    transport_type = Column(String(20), nullable=False)  # 'sse'|'streamable_http'|'stdio'
+    server_url = Column(String(500), nullable=True)  # For SSE/HTTP transports
+    auth_type = Column(String(20), default='none')  # 'none'|'bearer'|'header'|'api_key'
+    auth_token_encrypted = Column(Text, nullable=True)
+    auth_header_name = Column(String(100), nullable=True)
+    stdio_binary = Column(String(100), nullable=True)  # For stdio transport
+    stdio_args = Column(JSON, default=list)
+    trust_level = Column(String(20), default='untrusted')  # 'system'|'verified'|'untrusted'
+    connection_status = Column(String(20), default='disconnected')  # disconnected|connecting|healthy|degraded
+    max_retries = Column(Integer, default=3)
+    timeout_seconds = Column(Integer, default=30)
+    idle_timeout_seconds = Column(Integer, default=300)
+    is_active = Column(Boolean, default=True)
+    last_connected_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'server_name', name='uq_mcp_server_tenant_name'),
+    )
+
+
+class MCPDiscoveredTool(Base):
+    """
+    Phase 22.4: MCP Server Integration
+    Stores tools discovered from connected MCP servers.
+    Uses namespaced names ({server_name}__{tool_name}) to avoid collisions.
+    """
+    __tablename__ = "mcp_discovered_tool"
+
+    id = Column(Integer, primary_key=True)
+    server_id = Column(Integer, ForeignKey("mcp_server_config.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    tool_name = Column(String(200), nullable=False)
+    namespaced_name = Column(String(300), nullable=False)  # {server_name}__{tool_name}
+    description = Column(Text, nullable=True)
+    input_schema = Column(JSON, default=dict)
+    is_enabled = Column(Boolean, default=True)
+    scan_status = Column(String(20), default='pending')
+    discovered_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('server_id', 'tool_name', name='uq_mcp_tool_server_name'),
+    )
+
+
+class MCPServerHealth(Base):
+    """
+    Phase 22.4: MCP Server Integration
+    Stores health check history for MCP server connections.
+    """
+    __tablename__ = "mcp_server_health"
+
+    id = Column(Integer, primary_key=True)
+    server_id = Column(Integer, ForeignKey("mcp_server_config.id", ondelete="CASCADE"), nullable=False, index=True)
+    check_type = Column(String(20), nullable=False)  # 'ping'|'list_tools'|'manual'
+    success = Column(Boolean, nullable=False)
+    latency_ms = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)
+    checked_at = Column(DateTime, default=datetime.utcnow)
+
+
 class AgentKnowledge(Base):
     """
     Phase 5.0: Knowledge Base System
