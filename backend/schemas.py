@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
 
@@ -206,6 +206,21 @@ class FlowStepConfig(BaseModel):
     initial_prompt: Optional[str] = None
     initial_prompt_template: Optional[str] = None  # Alias for initial_prompt
     context: Optional[Dict[str, Any]] = None
+
+    # Skill-specific
+    skill_type: Optional[str] = None  # e.g. "flight_search", "weather", "scheduler"
+    prompt: Optional[str] = None  # Natural language instruction for the skill
+
+    # Summarization-specific
+    source_step: Optional[str] = None  # e.g. "step_1" or step name
+    summary_prompt: Optional[str] = None  # Custom summarization instructions
+    output_format: Optional[str] = None  # e.g. "brief", "structured", "minimal"
+    prompt_mode: Optional[str] = None  # "append" or "replace"
+    model: Optional[str] = None  # AI model for summarization
+
+    # Slash command-specific
+    command: Optional[str] = None  # e.g. "/scheduler list week"
+    command_id: Optional[Union[str, int]] = None  # For tool commands
 
     # Agent settings (can override flow-level defaults)
     agent_id: Optional[int] = None
