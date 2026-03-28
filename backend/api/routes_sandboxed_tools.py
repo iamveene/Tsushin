@@ -9,6 +9,8 @@ Provides CRUD operations for sandboxed tools and execution endpoints.
 Security: CRIT-008 fix - All endpoints now require authentication and tenant isolation.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -21,6 +23,7 @@ from agent.tools.sandboxed_tool_service import SandboxedToolService
 from agent.tools.workspace_manager import WorkspaceManager
 from auth_dependencies import get_tenant_context, TenantContext, require_permission
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Global engine (set by app.py)
@@ -476,7 +479,8 @@ async def execute_sandboxed_tool(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Execution failed: {str(e)}")
+        logger.exception(f"Execution failed: {e}")
+        raise HTTPException(status_code=500, detail="Execution failed. Check server logs for details.")
 
 
 @router.get("/custom-tools/executions/", response_model=List[SandboxedToolExecutionResponse])
@@ -550,7 +554,8 @@ def list_workspace_files(
         files = workspace.list_files(tool.name)
         return {"tool_name": tool.name, "files": files}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
+        logger.exception(f"Failed to list workspace files for tool {tool.name}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list files. Check server logs for details.")
 
 
 @router.get("/custom-tools/{tool_id}/workspace/files/{file_path:path}")
@@ -577,7 +582,8 @@ def read_workspace_file(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
+        logger.exception(f"Failed to read workspace file {file_path}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read file. Check server logs for details.")
 
 
 @router.delete("/custom-tools/{tool_id}/workspace")
@@ -601,4 +607,5 @@ def clean_workspace(
         workspace.clean_workspace(tool.name)
         return {"status": "success", "message": f"Workspace cleaned for tool '{tool.name}'"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to clean workspace: {str(e)}")
+        logger.exception(f"Failed to clean workspace for tool {tool.name}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clean workspace. Check server logs for details.")

@@ -139,7 +139,8 @@ async def get_available_agents(
         return result
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch agents: {str(e)}")
+        logger.exception(f"Failed to fetch agents: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch agents. Check server logs for details.")
 
 
 @router.post("/api/playground/chat")
@@ -401,7 +402,8 @@ async def get_conversation_history(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch history: {str(e)}")
+        logger.exception(f"Failed to fetch history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch history. Check server logs for details.")
 
 
 @router.delete("/api/playground/history/{agent_id}", response_model=ClearHistoryResponse)
@@ -444,7 +446,8 @@ async def clear_conversation_history(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to clear history: {str(e)}")
+        logger.exception(f"Failed to clear history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear history. Check server logs for details.")
 
 
 class PlaygroundAudioResponse(BaseModel):
@@ -1810,7 +1813,7 @@ async def bookmark_message(
     except Exception as e:
         print(f"[DEBUG BOOKMARK] Unexpected error: {e}")
         logger.error(f"Bookmark unexpected error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Bookmark operation failed. Check server logs for details.")
 
 
 @router.post("/api/playground/messages/branch")

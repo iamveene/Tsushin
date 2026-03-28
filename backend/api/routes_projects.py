@@ -5,6 +5,7 @@ Phase 15: Skill Projects - Added session management and agent access endpoints
 RESTful API for project management, knowledge bases, and conversations.
 """
 
+import logging
 import os
 import re
 from datetime import datetime
@@ -19,6 +20,7 @@ from auth_dependencies import get_current_user_required
 from services.project_service import ProjectService
 from services.project_command_service import ProjectCommandService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Projects"])
 
 # Security constants for file uploads
@@ -423,7 +425,8 @@ async def upload_project_document(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Failed to upload project document: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload document. Check server logs for details.")
 
 
 @router.get("/api/projects/{project_id}/knowledge", response_model=List[DocumentResponse])

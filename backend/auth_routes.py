@@ -540,7 +540,7 @@ async def setup_wizard(
         logger.error(f"Setup wizard failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Setup failed: {str(e)}"
+            detail="Setup failed. Check server logs for details."
         )
 
 

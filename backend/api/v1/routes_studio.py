@@ -590,7 +590,7 @@ async def save_builder_data(
     except Exception as e:
         db.rollback()
         logger.exception(f"Studio builder save failed for agent {agent_id}")
-        raise HTTPException(status_code=500, detail=f"Failed to save builder data: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to save builder data. Check server logs for details.")
 
 
 @router.post("/api/v1/studio/agents/{agent_id}/clone", status_code=201)
@@ -695,4 +695,4 @@ async def clone_agent(
     except Exception as e:
         db.rollback()
         logger.exception(f"Agent clone failed for agent {agent_id}")
-        raise HTTPException(status_code=500, detail=f"Failed to clone agent: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to clone agent. Check server logs for details.")

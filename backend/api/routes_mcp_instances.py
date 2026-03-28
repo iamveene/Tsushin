@@ -197,7 +197,7 @@ async def create_mcp_instance(
 
     except Exception as e:
         logger.error(f"Failed to create MCP instance: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to create MCP instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to create MCP instance. Check server logs for details.")
 
 
 @router.get("/", response_model=List[MCPInstanceResponse])
@@ -321,7 +321,7 @@ async def start_mcp_instance(
 
     except Exception as e:
         logger.error(f"Failed to start instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to start instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to start instance. Check server logs for details.")
 
 
 @router.post("/{instance_id}/stop")
@@ -356,7 +356,7 @@ async def stop_mcp_instance(
 
     except Exception as e:
         logger.error(f"Failed to stop instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to stop instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to stop instance. Check server logs for details.")
 
 
 @router.post("/{instance_id}/restart")
@@ -391,7 +391,7 @@ async def restart_mcp_instance(
 
     except Exception as e:
         logger.error(f"Failed to restart instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to restart instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to restart instance. Check server logs for details.")
 
 
 @router.post("/{instance_id}/pause")
@@ -437,7 +437,7 @@ async def pause_watcher_instance(
         raise
     except Exception as e:
         logger.error(f"Failed to pause watcher for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to pause watcher: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to pause watcher. Check server logs for details.")
 
 
 @router.post("/{instance_id}/resume")
@@ -483,7 +483,7 @@ async def resume_watcher_instance(
         raise
     except Exception as e:
         logger.error(f"Failed to resume watcher for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to resume watcher: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to resume watcher. Check server logs for details.")
 
 
 @router.get("/{instance_id}/watcher-status")
@@ -522,7 +522,7 @@ async def get_watcher_status(
 
     except Exception as e:
         logger.error(f"Failed to get watcher status for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to get watcher status: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get watcher status. Check server logs for details.")
 
 
 @router.put("/{instance_id}/group-handler")
@@ -578,7 +578,7 @@ async def set_group_handler(
 
     except Exception as e:
         logger.error(f"Failed to set group handler for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to set group handler: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to set group handler. Check server logs for details.")
 
 
 @router.put("/{instance_id}/filters", response_model=MCPInstanceResponse)
@@ -658,7 +658,7 @@ async def update_instance_filters(
     except Exception as e:
         logger.error(f"Failed to update filters for instance {instance_id}: {e}", exc_info=True)
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update filters: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update filters. Check server logs for details.")
 
 
 @router.delete("/{instance_id}")
@@ -705,7 +705,7 @@ async def delete_mcp_instance(
 
     except Exception as e:
         logger.error(f"Failed to delete instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to delete instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to delete instance. Check server logs for details.")
 
 
 @router.get("/{instance_id}/health", response_model=MCPHealthResponse)
@@ -770,7 +770,7 @@ async def get_mcp_health(
 
     except Exception as e:
         logger.error(f"Failed to check health for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to check health: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to check health. Check server logs for details.")
 
 
 @router.get("/{instance_id}/qr-code", response_model=QRCodeResponse)
@@ -812,7 +812,7 @@ async def get_qr_code(
 
     except Exception as e:
         logger.error(f"Failed to fetch QR code for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch QR code: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch QR code. Check server logs for details.")
 
 
 @router.post("/{instance_id}/logout", response_model=LogoutResponse)
@@ -880,4 +880,4 @@ async def logout_mcp_instance(
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
         logger.error(f"Logout failed for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Logout failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Logout failed. Check server logs for details.")

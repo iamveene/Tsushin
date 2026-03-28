@@ -996,8 +996,8 @@ async def cleanup_poisoned_memory(
             **stats
         )
     except Exception as e:
-        logger.error(f"Memory cleanup failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+        logger.exception(f"Memory cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail="Cleanup failed. Check server logs for details.")
 
 
 # =============================================================================

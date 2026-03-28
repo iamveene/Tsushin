@@ -801,4 +801,4 @@ async def execute_flow(
         raise
     except Exception as e:
         logger.error(f"API v1 flow execution failed for flow {flow_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Flow execution failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Flow execution failed. Check server logs for details.")

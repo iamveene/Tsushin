@@ -348,7 +348,7 @@ async def list_integration_tools(
         raise
     except Exception as e:
         logger.error(f"Failed to list tools for integration {integration_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to list tools: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to list tools. Check server logs for details.")
     finally:
         if service and hasattr(service, "close"):
             try:
@@ -401,7 +401,7 @@ async def execute_integration_tool(
         raise
     except Exception as e:
         logger.error(f"Tool execution failed on integration {integration_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Tool execution failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Tool execution failed. Check server logs for details.")
     finally:
         if service and hasattr(service, "close"):
             try:
