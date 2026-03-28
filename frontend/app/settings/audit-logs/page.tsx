@@ -92,8 +92,8 @@ export default function AuditLogsPage() {
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Audit Logs</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-2">
+          <h1 className="text-3xl font-bold text-white">Audit Logs</h1>
+          <p className="text-tsushin-slate mt-2">
             Track all activities in your organization
           </p>
         </div>
@@ -110,16 +110,16 @@ export default function AuditLogsPage() {
         </Link>
 
         {/* Filters */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 mb-6">
+        <div className="bg-tsushin-surface rounded-lg shadow-md p-6 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+              <label className="block text-sm font-medium text-white mb-2">
                 Filter by Action
               </label>
               <select
                 value={filterAction}
                 onChange={(e) => setFilterAction(e.target.value)}
-                className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                className="w-full px-3 py-2 border border-white/10 rounded-md text-white bg-tsushin-surface"
               >
                 <option value="all">All Actions</option>
                 <option value="user">User Actions</option>
@@ -132,7 +132,7 @@ export default function AuditLogsPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+              <label className="block text-sm font-medium text-white mb-2">
                 Filter by User
               </label>
               <input
@@ -140,13 +140,13 @@ export default function AuditLogsPage() {
                 value={filterUser}
                 onChange={(e) => setFilterUser(e.target.value)}
                 placeholder="Search by user name..."
-                className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-white/10 rounded-md text-white bg-tsushin-surface focus:ring-2 focus:ring-blue-500"
               />
             </div>
           </div>
 
           <div className="mt-4 flex items-center justify-between">
-            <span className="text-sm text-gray-600 dark:text-gray-400">
+            <span className="text-sm text-tsushin-slate">
               Showing {filteredLogs.length} of {total} events
             </span>
           </div>
@@ -161,21 +161,21 @@ export default function AuditLogsPage() {
 
         {/* Loading State */}
         {loading && logs.length === 0 && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-8 text-center">
-            <p className="text-gray-600 dark:text-gray-400">Loading audit logs...</p>
+          <div className="bg-tsushin-surface rounded-lg shadow-md p-8 text-center">
+            <p className="text-tsushin-slate">Loading audit logs...</p>
           </div>
         )}
 
         {/* Audit Log Entries */}
         {!loading && logs.length === 0 && !error && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-8 text-center">
-            <p className="text-gray-600 dark:text-gray-400">No audit logs found.</p>
+          <div className="bg-tsushin-surface rounded-lg shadow-md p-8 text-center">
+            <p className="text-tsushin-slate">No audit logs found.</p>
           </div>
         )}
 
         {filteredLogs.length > 0 && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md">
-            <div className="divide-y divide-gray-200 dark:divide-gray-700">
+          <div className="bg-tsushin-surface rounded-lg shadow-md">
+            <div className="divide-y divide-white/10">
               {filteredLogs.map((log) => (
                 <AuditLogEntry
                   key={log.id}
@@ -197,7 +197,7 @@ export default function AuditLogsPage() {
             <button
               onClick={() => setOffset((prev) => prev + PAGE_SIZE)}
               disabled={loading}
-              className="px-6 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 font-medium rounded-md transition-colors disabled:opacity-50"
+              className="px-6 py-2 bg-white/10 hover:bg-white/15 text-white font-medium rounded-md transition-colors disabled:opacity-50"
             >
               {loading ? 'Loading...' : 'Load More'}
             </button>
