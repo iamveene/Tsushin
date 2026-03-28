@@ -10,10 +10,8 @@
 name: GKE Build & Deploy
 
 on:
-  push:
-    branches:
-      - main
-      - develop
+  # Only triggers manually or when GCP infra is ready
+  # Remove workflow_dispatch-only restriction once GCP project is configured
   workflow_dispatch:
     inputs:
       environment:
