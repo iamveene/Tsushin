@@ -1026,6 +1026,11 @@ def set_global_engine(engine):
     _global_engine = engine
 
 
+def get_global_engine():
+    """Get the global engine (for non-dependency contexts like middleware)."""
+    return _global_engine
+
+
 def get_db():
     """
     FastAPI dependency for database sessions

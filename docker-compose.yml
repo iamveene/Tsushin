@@ -25,7 +25,7 @@ services:
     environment:
       POSTGRES_DB: tsushin
       POSTGRES_USER: tsushin
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tsushin_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     volumes:
       - tsushin-postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -45,7 +45,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: tsushin-backend
-    # Run as root for Docker socket access (required on macOS Docker Desktop)
+    # SECURITY: Runs as root for Docker socket access (MCP container management).
+    # In production, use docker-socket-proxy and remove root override.
+    # See: docker-compose.ssl.yml for production hardening.
     user: root
     ports:
       - "${TSN_APP_PORT:-8081}:8081"
@@ -64,6 +66,7 @@ services:
       - tsushin-images:/tmp/tsushin_images:z
     security_opt:
       - label:disable
+      - no-new-privileges:true
     environment:
       # Application
       - TSN_APP_HOST=0.0.0.0
@@ -77,7 +80,7 @@ services:
       - TSN_GOOGLE_OAUTH_REDIRECT_URI=${TSN_GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8081/api/hub/google/oauth/callback}
 
       # Database
-      - DATABASE_URL=postgresql://tsushin:${POSTGRES_PASSWORD:-tsushin_dev}@postgres:5432/tsushin
+      - DATABASE_URL=postgresql://tsushin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/tsushin
       # Legacy SQLite path (kept for MCP reader and rollback)
       - INTERNAL_DB_PATH=/app/data/agent.db
       - TSN_CHROMA_DIR=/app/data/chroma

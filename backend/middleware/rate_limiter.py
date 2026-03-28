@@ -2,6 +2,11 @@
 API Rate Limiter — Public API v1
 In-memory sliding window rate limiter for /api/v1/ endpoints.
 Per-client rate limiting based on API client configuration.
+
+BUG-057 FIX: Middleware runs before FastAPI route dependencies, so
+request.state.rate_limit_rpm was never set when the middleware checked it.
+Now resolves per-client rate_limit_rpm directly from the database via the
+API key prefix, with an in-memory cache to avoid per-request DB lookups.
 """
 
 import time
@@ -9,12 +14,19 @@ import uuid
 import logging
 from collections import defaultdict
 from threading import Lock
+from typing import Optional
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
+
+# Default rate limit when client cannot be resolved
+DEFAULT_RATE_LIMIT_RPM = 60
+
+# Cache TTL for per-client rate limits (seconds)
+_CLIENT_RPM_CACHE_TTL = 300  # 5 minutes
 
 
 class SlidingWindowRateLimiter:
@@ -52,6 +64,52 @@ class SlidingWindowRateLimiter:
 # Global rate limiter instance
 api_rate_limiter = SlidingWindowRateLimiter()
 
+# In-memory cache: api_key_prefix -> (rate_limit_rpm, cached_at)
+_client_rpm_cache: dict[str, tuple[int, float]] = {}
+_client_rpm_cache_lock = Lock()
+
+
+def _resolve_client_rate_limit(api_key_prefix: str) -> Optional[int]:
+    """
+    Look up the per-client rate_limit_rpm from the database by API key prefix.
+    Uses an in-memory cache with TTL to avoid per-request DB queries.
+    Returns None if the client cannot be resolved (auth layer will reject later).
+    """
+    now = time.time()
+
+    # Check cache first
+    with _client_rpm_cache_lock:
+        cached = _client_rpm_cache.get(api_key_prefix)
+        if cached and (now - cached[1]) < _CLIENT_RPM_CACHE_TTL:
+            return cached[0]
+
+    # Cache miss — query the database
+    try:
+        from db import get_global_engine
+        from sqlalchemy.orm import Session as SaSession
+        from models import ApiClient
+
+        engine = get_global_engine()
+        if not engine:
+            return None
+
+        with SaSession(engine) as db:
+            client = db.query(ApiClient.rate_limit_rpm).filter(
+                ApiClient.client_secret_prefix == api_key_prefix,
+                ApiClient.is_active == True,
+            ).first()
+
+            if client:
+                rpm = client.rate_limit_rpm or DEFAULT_RATE_LIMIT_RPM
+                with _client_rpm_cache_lock:
+                    _client_rpm_cache[api_key_prefix] = (rpm, now)
+                return rpm
+
+    except Exception as exc:
+        logger.debug(f"Could not resolve client rate limit for prefix {api_key_prefix}: {exc}")
+
+    return None
+
 
 class ApiV1RateLimitMiddleware(BaseHTTPMiddleware):
     """
@@ -72,13 +130,16 @@ class ApiV1RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Try to identify the client for rate limiting
         rate_key = None
-        # Check if auth layer set a per-client rate limit
-        rate_limit = getattr(request.state, 'rate_limit_rpm', 60)
+        rate_limit = DEFAULT_RATE_LIMIT_RPM
 
-        # Check X-API-Key header
+        # Check X-API-Key header — resolve per-client rate limit from DB
         api_key = request.headers.get("x-api-key")
         if api_key and api_key.startswith("tsn_cs_"):
-            rate_key = f"apikey:{api_key[:12]}"
+            prefix = api_key[:12]
+            rate_key = f"apikey:{prefix}"
+            client_rpm = _resolve_client_rate_limit(prefix)
+            if client_rpm is not None:
+                rate_limit = client_rpm
 
         # Check Bearer token
         if not rate_key:
@@ -87,6 +148,10 @@ class ApiV1RateLimitMiddleware(BaseHTTPMiddleware):
                 token = auth_header[7:]
                 # Use first 16 chars of token as rate key (good enough for uniqueness)
                 rate_key = f"bearer:{token[:16]}"
+                # Bearer tokens from UI users get a higher default; exact limit
+                # is enforced by the auth layer via request.state.rate_limit_rpm
+                # after call_next. For pre-auth gating we use a generous ceiling.
+                rate_limit = 120
 
         # Apply rate limiting if we identified a client
         if rate_key:
@@ -112,6 +177,12 @@ class ApiV1RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Process request
         response = await call_next(request)
+
+        # After auth layer runs, check if it set a more specific rate limit
+        # (e.g. from JWT-based API client auth or user auth)
+        auth_rpm = getattr(request.state, 'rate_limit_rpm', None)
+        if auth_rpm is not None:
+            rate_limit = auth_rpm
 
         # Add standard headers to all /api/v1/ responses
         response.headers["X-Request-Id"] = request_id
