@@ -1,40 +1,41 @@
 # Tsushin Bug Tracker
-**Open:** 5 | **In Progress:** 0 | **Resolved:** 45
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 50
 **Source:** v0.6.0 Comprehensive Platform Audit (2026-03-27)
 
-## Open Issues (Lower Priority)
-
-### BUG-042: enabled_channels always null in internal agent listing
-- **Status:** Open
-- **Severity:** Medium
-- **Found:** 2026-03-27
-- **Details:** `GET /api/agents` (internal) returns `enabled_channels: null` for all agents, while the public API correctly returns channel arrays.
-
-### BUG-043: No validation on enabled_channels values
-- **Status:** Open
-- **Severity:** Medium
-- **Found:** 2026-03-27
-- **Details:** Arbitrary strings accepted in `enabled_channels` array. Only "playground", "whatsapp", "telegram" should be valid.
-
-### BUG-044: Duplicate nuclei tool commands (data quality)
-- **Status:** Open
-- **Severity:** Medium
-- **Found:** 2026-03-27
-- **Details:** The `nuclei` tool has two `severity_scan` commands (IDs 22/24). Command ID 22 has duplicate parameters.
-
-### BUG-045: Resource existence oracle via 403/404 differential
-- **Status:** Open
-- **Severity:** Low
-- **Found:** 2026-03-27
-- **Details:** GET-by-ID endpoints return 403 for existing cross-tenant resources and 404 for non-existing, allowing ID enumeration.
-
-### BUG-046: CORS allows all origins (production concern)
-- **Status:** Open
-- **Severity:** Low
-- **Found:** 2026-03-27
-- **Details:** `Access-Control-Allow-Origin: *` acceptable for dev but needs restriction for production.
+## Open Issues
+(none)
 
 ## Closed Issues
+
+### BUG-042: enabled_channels always null in internal agent listing
+- **Status:** Resolved
+- **Severity:** Medium
+- **Resolved:** 2026-03-27
+- **Resolution:** Added enabled_channels, whatsapp_integration_id, telegram_integration_id to list_agents agent_dict in routes_agents.py with JSON parsing logic.
+
+### BUG-043: No validation on enabled_channels values
+- **Status:** Resolved
+- **Severity:** Medium
+- **Resolved:** 2026-03-27
+- **Resolution:** Added field_validator on enabled_channels in all 4 Pydantic models (v1 and internal create/update). Only playground, whatsapp, telegram accepted. Invalid values return clear error. Deduplication applied.
+
+### BUG-044: Duplicate nuclei tool commands
+- **Status:** Resolved
+- **Severity:** Medium
+- **Resolved:** 2026-03-27
+- **Resolution:** Added deduplicate_tool_commands() to startup, UniqueConstraint on (tool_id, command_name) and (command_id, parameter_name). Rewrote update_existing_tools() to handle duplicates and orphans.
+
+### BUG-045: Resource existence oracle via 403/404 differential
+- **Status:** Resolved
+- **Severity:** Low
+- **Resolved:** 2026-03-27
+- **Resolution:** Changed all cross-tenant access denied responses from 403 to 404 across 23 route files. Global admin access preserved via can_access_resource(). Legitimate business rule 403s kept.
+
+### BUG-046: CORS allows all origins
+- **Status:** Resolved
+- **Severity:** Low
+- **Resolved:** 2026-03-27
+- **Resolution:** Made CORS configurable via TSN_CORS_ORIGINS env var. Default * for dev, comma-separated origins for production. Handles allow_credentials correctly per CORS spec. Added to docker-compose.yml and env.docker.example.
 
 ### BUG-029: Async queue dead-letters all API channel messages
 - **Status:** Resolved
