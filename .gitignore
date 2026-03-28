@@ -258,5 +258,11 @@ backend/test-api.html
 /*.png
 /deployment-test-playbook.md
 
-# Methodology working docs (tracked: methodology/ itself is committed)
+# Local-only directories (QA artifacts, test data, methodology docs, brand assets)
+qa-screenshots/
+test-evidence/
+sample_data/
+test_documents/
+methodology/
+brand/
 BUGS.md
