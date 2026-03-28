@@ -231,7 +231,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
               {/* Refresh button */}
               <RefreshButton />
 
-              {/* System status toggle — doubles as emergency stop */}
+              {/* System status toggle switch */}
               <button
                 onClick={handleEmergencyToggle}
                 disabled={checkingEmergencyStop}
@@ -239,36 +239,45 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                   ? 'STOPPED — Click to resume message processing'
                   : 'Online — Click for emergency stop'
                 }
-                className={`flex items-center space-x-2 px-3 py-1.5 rounded-full transition-all duration-300 cursor-pointer ${
-                  emergencyStop
-                    ? 'bg-red-500/15 border border-red-500/40 hover:bg-red-500/25'
-                    : 'glass-card hover:bg-tsushin-surface/60'
-                } ${checkingEmergencyStop ? 'opacity-60' : ''}`}
+                role="switch"
+                aria-checked={!emergencyStop}
+                aria-label="System status"
+                className="flex items-center gap-2 group"
               >
-                {checkingEmergencyStop ? (
-                  <>
-                    <span className="relative flex h-2 w-2">
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400 animate-pulse"></span>
-                    </span>
-                    <span className="text-xs font-medium text-amber-400">...</span>
-                  </>
-                ) : emergencyStop ? (
-                  <>
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-                    </span>
-                    <span className="text-xs font-bold text-red-400">STOPPED</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-tsushin-success opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-tsushin-success"></span>
-                    </span>
-                    <span className="text-xs font-medium text-tsushin-success">Online</span>
-                  </>
-                )}
+                {/* Label */}
+                <span className={`text-xs font-semibold tracking-wide transition-colors duration-300 hidden sm:inline ${
+                  checkingEmergencyStop ? 'text-amber-400' :
+                  emergencyStop ? 'text-red-400' : 'text-tsushin-success'
+                }`}>
+                  {checkingEmergencyStop ? '...' : emergencyStop ? 'Emergency Stop' : 'Online'}
+                </span>
+
+                {/* Toggle track */}
+                <div className={`relative w-9 h-5 rounded-full transition-all duration-300 ${
+                  checkingEmergencyStop
+                    ? 'bg-amber-500/30 border border-amber-500/40'
+                    : emergencyStop
+                      ? 'bg-red-500/30 border border-red-500/50'
+                      : 'bg-emerald-500/30 border border-emerald-500/50 group-hover:bg-emerald-500/40'
+                }`}>
+                  {/* Toggle knob */}
+                  <div className={`absolute top-0.5 w-4 h-4 rounded-full shadow-md transition-all duration-300 ${
+                    checkingEmergencyStop
+                      ? 'left-0.5 bg-amber-400 animate-pulse'
+                      : emergencyStop
+                        ? 'left-0.5 bg-red-400'
+                        : 'left-[18px] bg-emerald-400'
+                  }`}>
+                    {/* Pulse glow when online */}
+                    {!emergencyStop && !checkingEmergencyStop && (
+                      <span className="absolute inset-0 rounded-full bg-emerald-400 animate-ping opacity-40"></span>
+                    )}
+                    {/* Pulse glow when stopped */}
+                    {emergencyStop && !checkingEmergencyStop && (
+                      <span className="absolute inset-0 rounded-full bg-red-400 animate-ping opacity-40"></span>
+                    )}
+                  </div>
+                </div>
               </button>
 
               {/* Divider */}
