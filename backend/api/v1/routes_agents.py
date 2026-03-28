@@ -21,6 +21,8 @@ from api.sanitizers import strip_html_tags, sanitize_text_field
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+VALID_CHANNELS = {"playground", "whatsapp", "telegram"}
+
 
 # ============================================================================
 # Schemas
@@ -89,6 +91,18 @@ class AgentCreateRequest(BaseModel):
             return v
         return strip_html_tags(v).strip() or None
 
+    @field_validator("enabled_channels")
+    @classmethod
+    def validate_enabled_channels(cls, v: List[str]) -> List[str]:
+        """Validate that each channel is allowed and deduplicate."""
+        invalid = set(v) - VALID_CHANNELS
+        if invalid:
+            raise ValueError(
+                f"Invalid channel(s): {', '.join(sorted(invalid))}. "
+                f"Allowed: {', '.join(sorted(VALID_CHANNELS))}"
+            )
+        return list(dict.fromkeys(v))
+
 
 class AgentUpdateRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
@@ -124,6 +138,20 @@ class AgentUpdateRequest(BaseModel):
         if v is None:
             return v
         return strip_html_tags(v).strip() or None
+
+    @field_validator("enabled_channels")
+    @classmethod
+    def validate_enabled_channels(cls, v: List[str] | None) -> List[str] | None:
+        """Validate that each channel is allowed and deduplicate."""
+        if v is None:
+            return v
+        invalid = set(v) - VALID_CHANNELS
+        if invalid:
+            raise ValueError(
+                f"Invalid channel(s): {', '.join(sorted(invalid))}. "
+                f"Allowed: {', '.join(sorted(VALID_CHANNELS))}"
+            )
+        return list(dict.fromkeys(v))
 
 
 class SkillAssignRequest(BaseModel):

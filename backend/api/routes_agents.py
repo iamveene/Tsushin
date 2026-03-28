@@ -20,6 +20,8 @@ from api.sanitizers import strip_html_tags, sanitize_text_field
 
 router = APIRouter()
 
+VALID_CHANNELS = {"playground", "whatsapp", "telegram"}
+
 # Global engine reference (set by main routes.py)
 _engine = None
 
@@ -153,6 +155,20 @@ class AgentCreate(BaseModel):
     # Note: Agent name comes from Contact.friendly_name (set via routes_contacts.py),
     # so XSS sanitization for names must also be applied there.
 
+    @field_validator("enabled_channels")
+    @classmethod
+    def validate_enabled_channels(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """Validate that each channel is allowed and deduplicate."""
+        if v is None:
+            return v
+        invalid = set(v) - VALID_CHANNELS
+        if invalid:
+            raise ValueError(
+                f"Invalid channel(s): {', '.join(sorted(invalid))}. "
+                f"Allowed: {', '.join(sorted(VALID_CHANNELS))}"
+            )
+        return list(dict.fromkeys(v))
+
 
 class AgentUpdate(BaseModel):
     contact_id: Optional[int] = None
@@ -186,6 +202,20 @@ class AgentUpdate(BaseModel):
 
     # TODO: Add HTML sanitization for response_template and custom_tone fields
     # once agent name sanitization is validated in production.
+
+    @field_validator("enabled_channels")
+    @classmethod
+    def validate_enabled_channels(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """Validate that each channel is allowed and deduplicate."""
+        if v is None:
+            return v
+        invalid = set(v) - VALID_CHANNELS
+        if invalid:
+            raise ValueError(
+                f"Invalid channel(s): {', '.join(sorted(invalid))}. "
+                f"Allowed: {', '.join(sorted(VALID_CHANNELS))}"
+            )
+        return list(dict.fromkeys(v))
 
 
 # ==================== Tone Preset Routes ====================
@@ -225,7 +255,7 @@ def get_tone_preset(
         raise HTTPException(status_code=404, detail="Tone preset not found")
 
     if not ctx.can_access_resource(tone.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
+        raise HTTPException(status_code=404, detail="Tone preset not found")
 
     return tone
 
@@ -277,7 +307,7 @@ def update_tone_preset(
         raise HTTPException(status_code=404, detail="Tone preset not found")
 
     if not ctx.can_access_resource(db_tone.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
+        raise HTTPException(status_code=404, detail="Tone preset not found")
 
     # System tones cannot be modified
     if db_tone.is_system:
@@ -450,6 +480,13 @@ def list_agents(
             "is_active": agent.is_active,
             "is_default": agent.is_default,
             "skills_count": skills_count,
+            # Phase 10: Channel Configuration
+            "enabled_channels": agent.enabled_channels if isinstance(agent.enabled_channels, list) else (
+                json.loads(agent.enabled_channels) if agent.enabled_channels else ["playground", "whatsapp"]
+            ),
+            "whatsapp_integration_id": agent.whatsapp_integration_id,
+            "telegram_integration_id": agent.telegram_integration_id,
+
             "created_at": agent.created_at,
             "updated_at": agent.updated_at
         }
