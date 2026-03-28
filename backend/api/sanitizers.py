@@ -1,57 +1,38 @@
 """
-Input sanitization utilities for API routes.
-
-Provides functions to strip HTML/script tags from user-supplied text fields
-to prevent stored XSS attacks.
-
-NOTE: This currently covers agent name/description fields.
-TODO: Apply similar sanitization to other entities:
-  - Contacts (friendly_name) in routes_contacts.py
-  - Personas (name, description) in routes_personas.py
-  - Tone Presets (name, description) in routes_agents.py
-  - Projects (name, description) in routes_projects.py
-  - Flows (name, description) in routes_flows.py
-  - API Clients (name) in routes_api_clients.py
-  - Knowledge Base entries in routes_knowledge_base.py
+HTML sanitization utilities for user-supplied input.
 """
 
 import re
 
 
-# Pattern matches HTML tags including self-closing, comments, and script blocks
-_HTML_TAG_RE = re.compile(r"<[^>]+>", re.DOTALL)
-
-
-def strip_html_tags(value: str) -> str:
+def strip_html_tags(text: str) -> str:
     """
     Remove all HTML tags from a string.
 
-    This is a defense-in-depth measure against stored XSS.  The frontend
-    should also sanitize on render, but stripping tags on input ensures
-    malicious payloads are never persisted.
+    This is a simple tag-stripping function suitable for plain-text fields
+    (names, descriptions) where no HTML is expected or allowed.
 
-    Examples:
-        >>> strip_html_tags('<script>alert(1)</script>')
-        'alert(1)'
-        >>> strip_html_tags('Hello <b>world</b>')
-        'Hello world'
-        >>> strip_html_tags('plain text')
-        'plain text'
-        >>> strip_html_tags('<img src=x onerror=alert(1)>')
-        ''
+    Args:
+        text: Input string potentially containing HTML tags.
+
+    Returns:
+        String with all HTML tags removed.
     """
-    if not value:
-        return value
-    return _HTML_TAG_RE.sub("", value)
+    if not text:
+        return text
+    return re.sub(r'<[^>]*>', '', text)
 
 
-def sanitize_text_field(value: str | None) -> str | None:
+def sanitize_text_field(text: str) -> str:
     """
-    Sanitize an optional text field: strip HTML tags and trim whitespace.
+    Strip HTML tags and trim whitespace from a text field.
 
-    Returns None unchanged if the input is None.
+    Args:
+        text: Input string potentially containing HTML tags.
+
+    Returns:
+        Sanitized and trimmed string, or None if input is None.
     """
-    if value is None:
+    if text is None:
         return None
-    cleaned = strip_html_tags(value)
-    return cleaned.strip() if cleaned else cleaned
+    return strip_html_tags(text).strip()

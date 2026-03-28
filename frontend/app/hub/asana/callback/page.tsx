@@ -58,7 +58,10 @@ export default function AsanaCallbackPage() {
 
       // Redirect to Hub page after 2 seconds
       setTimeout(() => {
-        window.location.href = data.redirect_url || '/hub'
+        // Validate redirect URL is a safe relative path (prevent open redirect)
+        const redirectUrl = data.redirect_url || '/hub'
+        const isSafeRedirect = redirectUrl.startsWith('/') && !redirectUrl.startsWith('//') && !redirectUrl.includes('@')
+        window.location.href = isSafeRedirect ? redirectUrl : '/hub'
       }, 2000)
     } catch (error) {
       console.error('OAuth callback error:', error)

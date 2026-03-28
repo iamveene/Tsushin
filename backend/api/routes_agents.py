@@ -6,6 +6,7 @@ Provides CRUD operations for agents and tone presets.
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
@@ -13,14 +14,11 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models import Agent, TonePreset, Contact, ContactAgentMapping, Config, AgentSkill, SandboxedTool, AgentSandboxedTool
+from models import Agent, TonePreset, Contact, ContactAgentMapping, Config, AgentSkill, SandboxedTool, AgentSandboxedTool, Persona
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
-from api.sanitizers import strip_html_tags, sanitize_text_field
 
 router = APIRouter()
-
-VALID_CHANNELS = {"playground", "whatsapp", "telegram"}
 
 # Global engine reference (set by main routes.py)
 _engine = None
@@ -61,16 +59,46 @@ class TonePresetCreate(BaseModel):
     description: str = Field(..., min_length=1)
     is_system: bool = Field(default=False)
 
-    # TODO: Add HTML sanitization validators for tone preset name/description
-    # once agent sanitization is validated in production
+    @field_validator('name')
+    @classmethod
+    def sanitize_name(cls, v):
+        from api.sanitizers import strip_html_tags
+        if v:
+            v = strip_html_tags(v).strip()
+            if not v:
+                raise ValueError('Name must not be empty after sanitization')
+        return v
+
+    @field_validator('description')
+    @classmethod
+    def sanitize_description(cls, v):
+        from api.sanitizers import strip_html_tags
+        if v:
+            v = strip_html_tags(v).strip()
+        return v
 
 
 class TonePresetUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=50)
     description: Optional[str] = Field(None, min_length=1)
 
-    # TODO: Add HTML sanitization validators for tone preset name/description
-    # once agent sanitization is validated in production
+    @field_validator('name')
+    @classmethod
+    def sanitize_name(cls, v):
+        from api.sanitizers import strip_html_tags
+        if v:
+            v = strip_html_tags(v).strip()
+            if not v:
+                raise ValueError('Name must not be empty after sanitization')
+        return v
+
+    @field_validator('description')
+    @classmethod
+    def sanitize_description(cls, v):
+        from api.sanitizers import strip_html_tags
+        if v:
+            v = strip_html_tags(v).strip()
+        return v
 
 
 # ==================== Agent Schemas ====================
@@ -93,7 +121,6 @@ class AgentResponse(BaseModel):
 
     # Per-agent configuration (Item 10)
     memory_size: Optional[int]  # Messages per sender (1-50)
-    memory_isolation_mode: Optional[str] = None  # isolated | shared | channel_isolated
     trigger_dm_enabled: Optional[bool]  # Enable DM auto-response
     trigger_group_filters: Optional[List[str]]  # Group names to monitor
     trigger_number_filters: Optional[List[str]]  # Phone numbers to monitor
@@ -102,8 +129,6 @@ class AgentResponse(BaseModel):
     enable_semantic_search: Optional[bool]  # Semantic search enabled
     semantic_search_results: Optional[int]  # Number of semantic results (1-50)
     semantic_similarity_threshold: Optional[float]  # Similarity threshold (0.0-1.0)
-
-    avatar: Optional[str] = None  # Agent avatar slug
 
     is_active: bool
     is_default: bool
@@ -150,25 +175,6 @@ class AgentCreate(BaseModel):
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
 
-    # TODO: Add HTML sanitization for response_template and custom_tone fields
-    # once agent name sanitization is validated in production.
-    # Note: Agent name comes from Contact.friendly_name (set via routes_contacts.py),
-    # so XSS sanitization for names must also be applied there.
-
-    @field_validator("enabled_channels")
-    @classmethod
-    def validate_enabled_channels(cls, v: Optional[List[str]]) -> Optional[List[str]]:
-        """Validate that each channel is allowed and deduplicate."""
-        if v is None:
-            return v
-        invalid = set(v) - VALID_CHANNELS
-        if invalid:
-            raise ValueError(
-                f"Invalid channel(s): {', '.join(sorted(invalid))}. "
-                f"Allowed: {', '.join(sorted(VALID_CHANNELS))}"
-            )
-        return list(dict.fromkeys(v))
-
 
 class AgentUpdate(BaseModel):
     contact_id: Optional[int] = None
@@ -184,13 +190,12 @@ class AgentUpdate(BaseModel):
 
     # Per-agent configuration (Item 10)
     memory_size: Optional[int] = Field(None, ge=1, le=5000, description="Messages per sender (1-5000), null uses system default")
-    memory_isolation_mode: Optional[str] = Field(None, pattern="^(isolated|shared|channel_isolated)$", description="Memory isolation mode")
-    enable_semantic_search: Optional[bool] = Field(None, description="Enable semantic memory search")
     trigger_dm_enabled: Optional[bool] = Field(None, description="Enable DM auto-response, null uses system default")
     trigger_group_filters: Optional[List[str]] = Field(None, description="Group names to monitor, null uses system default")
     trigger_number_filters: Optional[List[str]] = Field(None, description="Phone numbers to monitor, null uses system default")
     context_message_count: Optional[int] = Field(None, ge=1, le=5000, description="Group context messages (1-5000), null uses system default")
     context_char_limit: Optional[int] = Field(None, ge=100, le=100000, description="Context character limit (100-100000), null uses system default")
+    # Note: enable_semantic_search is managed via AgentSkill table (/api/agent-skills endpoint)
 
     # Phase 10: Channel Configuration
     enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram")
@@ -199,23 +204,6 @@ class AgentUpdate(BaseModel):
 
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
-
-    # TODO: Add HTML sanitization for response_template and custom_tone fields
-    # once agent name sanitization is validated in production.
-
-    @field_validator("enabled_channels")
-    @classmethod
-    def validate_enabled_channels(cls, v: Optional[List[str]]) -> Optional[List[str]]:
-        """Validate that each channel is allowed and deduplicate."""
-        if v is None:
-            return v
-        invalid = set(v) - VALID_CHANNELS
-        if invalid:
-            raise ValueError(
-                f"Invalid channel(s): {', '.join(sorted(invalid))}. "
-                f"Allowed: {', '.join(sorted(VALID_CHANNELS))}"
-            )
-        return list(dict.fromkeys(v))
 
 
 # ==================== Tone Preset Routes ====================
@@ -233,7 +221,7 @@ def list_tone_presets(
     Phase 7.9.2: Returns presets for user's tenant AND shared (NULL tenant_id) presets.
     """
     query = db.query(TonePreset)
-    query = ctx.filter_by_tenant(query, TonePreset.tenant_id, include_shared=True)
+    query = ctx.filter_by_tenant(query, TonePreset.tenant_id)
     tones = query.order_by(TonePreset.is_system.desc(), TonePreset.name).all()
     return tones
 
@@ -255,7 +243,7 @@ def get_tone_preset(
         raise HTTPException(status_code=404, detail="Tone preset not found")
 
     if not ctx.can_access_resource(tone.tenant_id):
-        raise HTTPException(status_code=404, detail="Tone preset not found")
+        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
 
     return tone
 
@@ -307,7 +295,7 @@ def update_tone_preset(
         raise HTTPException(status_code=404, detail="Tone preset not found")
 
     if not ctx.can_access_resource(db_tone.tenant_id):
-        raise HTTPException(status_code=404, detail="Tone preset not found")
+        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
 
     # System tones cannot be modified
     if db_tone.is_system:
@@ -352,7 +340,7 @@ def delete_tone_preset(
         raise HTTPException(status_code=404, detail="Tone preset not found")
 
     if not ctx.can_access_resource(tone.tenant_id):
-        raise HTTPException(status_code=404, detail="Tone preset not found")
+        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
 
     # System tones cannot be deleted
     if tone.is_system:
@@ -465,7 +453,6 @@ def list_agents(
 
             # Per-agent configuration (Item 10)
             "memory_size": agent.memory_size,
-            "memory_isolation_mode": agent.memory_isolation_mode,
             "trigger_dm_enabled": agent.trigger_dm_enabled,
             "trigger_group_filters": trigger_group_filters,
             "trigger_number_filters": trigger_number_filters,
@@ -475,18 +462,9 @@ def list_agents(
             "semantic_search_results": agent.semantic_search_results,
             "semantic_similarity_threshold": agent.semantic_similarity_threshold,
 
-            "avatar": agent.avatar,
-
             "is_active": agent.is_active,
             "is_default": agent.is_default,
             "skills_count": skills_count,
-            # Phase 10: Channel Configuration
-            "enabled_channels": agent.enabled_channels if isinstance(agent.enabled_channels, list) else (
-                json.loads(agent.enabled_channels) if agent.enabled_channels else ["playground", "whatsapp"]
-            ),
-            "whatsapp_integration_id": agent.whatsapp_integration_id,
-            "telegram_integration_id": agent.telegram_integration_id,
-
             "created_at": agent.created_at,
             "updated_at": agent.updated_at
         }
@@ -513,7 +491,7 @@ def get_agent(
 
     # Verify tenant access
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
 
     # Enrich with contact, tone preset, and persona names
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -588,7 +566,6 @@ def get_agent(
 
         # Per-agent configuration (Item 10)
         "memory_size": agent.memory_size,
-        "memory_isolation_mode": agent.memory_isolation_mode,
         "trigger_dm_enabled": agent.trigger_dm_enabled,
         "trigger_group_filters": trigger_group_filters,
         "trigger_number_filters": trigger_number_filters,
@@ -597,8 +574,6 @@ def get_agent(
         "enable_semantic_search": agent.enable_semantic_search,
         "semantic_search_results": agent.semantic_search_results,
         "semantic_similarity_threshold": agent.semantic_similarity_threshold,
-
-        "avatar": agent.avatar,
 
         "is_active": agent.is_active,
         "is_default": agent.is_default,
@@ -634,7 +609,7 @@ def create_agent(
 
     # Verify user can access this contact (tenant isolation)
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=404, detail="Contact not found")
+        raise HTTPException(status_code=403, detail="Access denied to this contact")
 
     # Check if agent for this contact already exists (within tenant)
     query = ctx.filter_by_tenant(db.query(Agent), Agent.tenant_id)
@@ -642,25 +617,24 @@ def create_agent(
     if existing:
         raise HTTPException(status_code=400, detail="Agent for this contact already exists")
 
-    # Validate persona if provided (tenant isolation)
-    if agent.persona_id:
-        from models import Persona
-        persona = db.query(Persona).filter(
-            Persona.id == agent.persona_id,
-            (Persona.is_system == True) | (Persona.tenant_id == ctx.tenant_id) | (Persona.tenant_id.is_(None)),
-        ).first()
-        if not persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
-
     # Validate tone preset if provided
     if agent.tone_preset_id:
         tone = db.query(TonePreset).filter(TonePreset.id == agent.tone_preset_id).first()
         if not tone:
             raise HTTPException(status_code=404, detail="Tone preset not found")
 
-    # If setting as default, unset other defaults (scoped to tenant)
+    # Validate persona belongs to caller's tenant (or is a system persona)
+    if agent.persona_id is not None:
+        persona = db.query(Persona).filter(
+            Persona.id == agent.persona_id,
+            or_(Persona.is_system == True, Persona.tenant_id == ctx.tenant_id, Persona.tenant_id.is_(None))
+        ).first()
+        if not persona:
+            raise HTTPException(status_code=404, detail="Persona not found")
+
+    # If setting as default, unset other defaults
     if agent.is_default:
-        db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).update({"is_default": False})
+        db.query(Agent).update({"is_default": False})
 
     # IMPORTANT: Get model config from Config table to respect user settings
     # Never use hardcoded defaults from Pydantic schema
@@ -716,7 +690,7 @@ def update_agent(
 
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(db_agent.tenant_id):
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
 
     # Validate contact if being changed
     if agent.contact_id and agent.contact_id != db_agent.contact_id:
@@ -726,24 +700,13 @@ def update_agent(
         if contact.role != "agent":
             raise HTTPException(status_code=400, detail="Contact must have role='agent'")
 
-        # Check if another agent already uses this contact (scoped to tenant)
+        # Check if another agent already uses this contact
         existing = db.query(Agent).filter(
             Agent.contact_id == agent.contact_id,
-            Agent.id != agent_id,
-            Agent.tenant_id == ctx.tenant_id
+            Agent.id != agent_id
         ).first()
         if existing:
             raise HTTPException(status_code=400, detail="Agent for this contact already exists")
-
-    # Validate persona if provided (tenant isolation)
-    if agent.persona_id:
-        from models import Persona
-        persona = db.query(Persona).filter(
-            Persona.id == agent.persona_id,
-            (Persona.is_system == True) | (Persona.tenant_id == ctx.tenant_id) | (Persona.tenant_id.is_(None)),
-        ).first()
-        if not persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
 
     # Validate tone preset if provided
     if agent.tone_preset_id:
@@ -751,9 +714,18 @@ def update_agent(
         if not tone:
             raise HTTPException(status_code=404, detail="Tone preset not found")
 
-    # If setting as default, unset other defaults (scoped to tenant)
+    # Validate persona belongs to caller's tenant (or is a system persona)
+    if agent.persona_id is not None:
+        persona = db.query(Persona).filter(
+            Persona.id == agent.persona_id,
+            or_(Persona.is_system == True, Persona.tenant_id == ctx.tenant_id, Persona.tenant_id.is_(None))
+        ).first()
+        if not persona:
+            raise HTTPException(status_code=404, detail="Persona not found")
+
+    # If setting as default, unset other defaults
     if agent.is_default:
-        db.query(Agent).filter(Agent.id != agent_id, Agent.tenant_id == ctx.tenant_id).update({"is_default": False})
+        db.query(Agent).filter(Agent.id != agent_id).update({"is_default": False})
 
     # Update fields
     update_data = agent.model_dump(exclude_unset=True)
@@ -785,16 +757,16 @@ def delete_agent(
 
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
 
-    # Cannot delete default agent if it's the only one (scoped to tenant)
+    # Cannot delete default agent if it's the only one
     if agent.is_default:
-        total_agents = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).count()
+        total_agents = db.query(Agent).count()
         if total_agents == 1:
             raise HTTPException(status_code=400, detail="Cannot delete the only agent")
 
-        # Set another agent as default (scoped to tenant)
-        next_agent = db.query(Agent).filter(Agent.id != agent_id, Agent.tenant_id == ctx.tenant_id).first()
+        # Set another agent as default
+        next_agent = db.query(Agent).filter(Agent.id != agent_id).first()
         if next_agent:
             next_agent.is_default = True
 
@@ -873,7 +845,7 @@ def get_contact_agent_mapping(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=404, detail="Contact not found")
+        raise HTTPException(status_code=403, detail="Access denied to this contact")
 
     mapping = db.query(ContactAgentMapping).filter(
         ContactAgentMapping.contact_id == contact_id
@@ -916,7 +888,7 @@ def create_contact_agent_mapping(
 
     # Verify contact belongs to user's tenant
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=404, detail="Contact not found")
+        raise HTTPException(status_code=403, detail="Access denied to this contact")
 
     # Validate agent exists and is active
     agent = db.query(Agent).filter(Agent.id == mapping.agent_id).first()
@@ -927,7 +899,7 @@ def create_contact_agent_mapping(
 
     # Verify agent belongs to user's tenant (prevent cross-tenant mapping)
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
 
     # Check if mapping already exists
     existing = db.query(ContactAgentMapping).filter(
@@ -988,7 +960,7 @@ def delete_contact_agent_mapping(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=404, detail="Contact not found")
+        raise HTTPException(status_code=403, detail="Access denied to this contact")
 
     mapping = db.query(ContactAgentMapping).filter(
         ContactAgentMapping.contact_id == contact_id
@@ -1044,7 +1016,7 @@ def get_agent_custom_tools(
 
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
 
     # Get all mappings with tool details
     mappings = db.query(AgentSandboxedTool).filter(
@@ -1084,7 +1056,7 @@ def add_agent_custom_tool(
 
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
 
     tool = db.query(SandboxedTool).filter(SandboxedTool.id == data.sandboxed_tool_id).first()
     if not tool:
@@ -1092,7 +1064,7 @@ def add_agent_custom_tool(
 
     # Verify tool belongs to user's tenant (prevent cross-tenant tool binding)
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=404, detail="Custom tool not found")
+        raise HTTPException(status_code=403, detail="Access denied to this custom tool")
 
     # Check if mapping already exists
     existing = db.query(AgentSandboxedTool).filter(
@@ -1141,7 +1113,7 @@ def update_agent_custom_tool(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,
@@ -1184,7 +1156,7 @@ def delete_agent_custom_tool(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,

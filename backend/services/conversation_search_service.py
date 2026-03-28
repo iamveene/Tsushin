@@ -5,6 +5,7 @@ Provides full-text and semantic search across playground conversations.
 
 import logging
 import json
+import html
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -28,28 +29,9 @@ class ConversationSearchService:
         self.db = db
         self.logger = logging.getLogger(__name__)
         self._fts5_available = None
-        self._dialect = None
-
-    def _get_dialect(self) -> str:
-        """Return 'postgresql' or 'sqlite' based on engine URL."""
-        if self._dialect is None:
-            try:
-                # SQLAlchemy 2.x: use get_bind() instead of .bind
-                bind = self.db.get_bind()
-                self._dialect = bind.dialect.name
-            except Exception:
-                try:
-                    # Fallback for older SQLAlchemy or edge cases
-                    url = str(self.db.bind.url) if self.db.bind else ""
-                    self._dialect = "postgresql" if "postgresql" in url else "sqlite"
-                except Exception:
-                    self._dialect = "sqlite"
-        return self._dialect
 
     def _check_fts5_available(self) -> bool:
-        """Check if FTS5 is available (SQLite only)."""
-        if self._get_dialect() == "postgresql":
-            return False
+        """Check if FTS5 is available in SQLite."""
         if self._fts5_available is None:
             try:
                 result = self.db.execute(text("PRAGMA compile_options;")).fetchall()
@@ -93,29 +75,16 @@ class ConversationSearchService:
         """
         try:
             result = None
-            dialect = self._get_dialect()
 
-            if dialect == "postgresql":
-                # PostgreSQL: use tsvector full-text search
-                result = self._search_fulltext_pg(
-                    query, tenant_id, user_id, agent_id, thread_id,
-                    date_from, date_to, role, limit, offset
-                )
-                # Fall back to LIKE if PG FTS returns no results
-                if result.get("total", 0) == 0:
-                    result = self._search_like(
-                        query, tenant_id, user_id, agent_id, thread_id,
-                        date_from, date_to, role, limit, offset
-                    )
-                    if result.get("total", 0) > 0:
-                        result["search_mode"] = "like_fallback"
-            elif self._check_fts5_available():
-                # SQLite: try FTS5 first
+            # Try FTS5 first if available
+            if self._check_fts5_available():
                 result = self._search_fts5(
                     query, tenant_id, user_id, agent_id, thread_id,
                     date_from, date_to, role, limit, offset
                 )
 
+                # Fall back to LIKE search if FTS5 returns no results
+                # This handles cases where FTS5 table exists but isn't populated
                 if result.get("total", 0) == 0:
                     self.logger.debug("FTS5 returned no results, falling back to LIKE search")
                     result = self._search_like(
@@ -304,7 +273,7 @@ class ConversationSearchService:
                 "content": row[3],
                 "timestamp": row[4],
                 "agent_id": row[5],
-                "snippet": row[6],
+                "snippet": self._sanitize_sql_snippet(row[6]),
                 "rank": row[7]
             })
 
@@ -318,98 +287,6 @@ class ConversationSearchService:
             "limit": limit,
             "offset": offset,
             "search_mode": "full_text"
-        }
-
-    def _search_fulltext_pg(
-        self,
-        query: str,
-        tenant_id: str,
-        user_id: int,
-        agent_id: Optional[int],
-        thread_id: Optional[int],
-        date_from: Optional[str],
-        date_to: Optional[str],
-        role: Optional[str],
-        limit: int,
-        offset: int
-    ) -> Dict[str, Any]:
-        """Search using PostgreSQL tsvector full-text search."""
-
-        where_parts = ["tenant_id = :tenant_id", "user_id = :user_id"]
-        params: Dict[str, Any] = {"query": query, "tenant_id": tenant_id, "user_id": user_id}
-
-        if agent_id:
-            where_parts.append("agent_id = :agent_id")
-            params["agent_id"] = agent_id
-        if thread_id:
-            where_parts.append("thread_id = :thread_id")
-            params["thread_id"] = thread_id
-        if date_from:
-            where_parts.append("timestamp >= :date_from")
-            params["date_from"] = date_from
-        if date_to:
-            where_parts.append("timestamp <= :date_to")
-            params["date_to"] = date_to
-        if role:
-            where_parts.append("role = :role")
-            params["role"] = role
-
-        where_clause = " AND ".join(where_parts)
-
-        # Use websearch_to_tsquery for natural search syntax (AND, OR, quotes, negation)
-        # Pre-compute the tsquery once via CTE for performance
-        count_sql = text(f"""
-            WITH q AS (SELECT websearch_to_tsquery('english', :query) AS tsq)
-            SELECT COUNT(*)
-            FROM conversation_search_fts, q
-            WHERE content_tsv @@ q.tsq AND {where_clause}
-        """)
-        total = self.db.execute(count_sql, params).scalar() or 0
-
-        search_sql = text(f"""
-            WITH q AS (SELECT websearch_to_tsquery('english', :query) AS tsq)
-            SELECT
-                thread_id,
-                message_id,
-                role,
-                content,
-                timestamp,
-                agent_id,
-                ts_headline('english', content, q.tsq,
-                    'StartSel=<mark>, StopSel=</mark>, MaxWords=64, MinWords=10') as snippet,
-                ts_rank(content_tsv, q.tsq) as rank
-            FROM conversation_search_fts, q
-            WHERE content_tsv @@ q.tsq AND {where_clause}
-            ORDER BY rank DESC
-            LIMIT :limit OFFSET :offset
-        """)
-        params["limit"] = limit
-        params["offset"] = offset
-
-        results = self.db.execute(search_sql, params).fetchall()
-
-        formatted_results = []
-        for row in results:
-            formatted_results.append({
-                "thread_id": row[0],
-                "message_id": row[1],
-                "role": row[2],
-                "content": row[3],
-                "timestamp": row[4],
-                "agent_id": row[5],
-                "snippet": row[6],
-                "rank": float(row[7]) if row[7] else 0.0
-            })
-
-        formatted_results = self._enrich_results_with_thread_info(formatted_results)
-
-        return {
-            "status": "success",
-            "results": formatted_results,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "search_mode": "full_text_pg"
         }
 
     def _search_like(
@@ -428,16 +305,12 @@ class ConversationSearchService:
         """Fallback search using LIKE queries."""
 
         # Search in Memory table (messages stored as JSON)
-        # Note: Memory model has no tenant_id/user_id columns, so we join
-        # through Agent for tenant isolation and filter by sender_key pattern
-        # for user isolation (playground keys follow: playground_u{user_id}_...)
         from models import Memory, Agent, ConversationThread
 
-        query_obj = self.db.query(Memory).join(
-            Agent, Memory.agent_id == Agent.id
-        ).filter(
-            Agent.tenant_id == tenant_id,
-            Memory.sender_key.like(f'playground_u{user_id}_%')
+        query_obj = self.db.query(Memory).filter(
+            Memory.tenant_id == tenant_id,
+            Memory.user_id == user_id,
+            Memory.sender_key.like('playground_%')
         )
 
         if agent_id:
@@ -523,12 +396,7 @@ class ConversationSearchService:
         }
 
     def _create_snippet(self, content: str, query: str, context_length: int = 64) -> str:
-        """Create highlighted snippet around query match.
-
-        HTML-escapes the content before adding <mark> tags to prevent stored XSS
-        when snippets are rendered with dangerouslySetInnerHTML in the frontend.
-        """
-        import html
+        """Create highlighted snippet around query match."""
         import re
 
         query_lower = query.lower()
@@ -536,7 +404,8 @@ class ConversationSearchService:
 
         idx = content_lower.find(query_lower)
         if idx == -1:
-            return html.escape(content[:context_length]) + "..."
+            snippet = content[:context_length] + "..."
+            return html.escape(snippet)
 
         # Get context around match
         start = max(0, idx - context_length // 2)
@@ -550,14 +419,38 @@ class ConversationSearchService:
         if end < len(content):
             snippet = snippet + "..."
 
-        # HTML-escape the snippet BEFORE adding <mark> tags
-        escaped = html.escape(snippet)
+        # HTML-escape the snippet content FIRST to prevent XSS
+        snippet = html.escape(snippet)
 
-        # Highlight the query on the escaped content
-        pattern = re.compile(re.escape(html.escape(query)), re.IGNORECASE)
-        escaped = pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", escaped)
+        # THEN highlight the query (on the escaped text)
+        escaped_query = html.escape(query)
+        pattern = re.compile(re.escape(escaped_query), re.IGNORECASE)
+        snippet = pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", snippet)
 
-        return escaped
+        return snippet
+
+    @staticmethod
+    def _sanitize_sql_snippet(snippet: str) -> str:
+        """
+        Sanitize a snippet generated by SQL snippet()/ts_headline() functions.
+
+        These SQL functions insert <mark>...</mark> around matches but do NOT
+        HTML-escape the surrounding content. This method preserves <mark> tags
+        while escaping everything else.
+        """
+        import re
+        if not snippet:
+            return snippet
+
+        # Split on <mark> and </mark> tags, preserving them
+        parts = re.split(r'(<mark>|</mark>)', snippet)
+        sanitized_parts = []
+        for part in parts:
+            if part in ('<mark>', '</mark>'):
+                sanitized_parts.append(part)
+            else:
+                sanitized_parts.append(html.escape(part))
+        return ''.join(sanitized_parts)
 
     def search_semantic(
         self,
