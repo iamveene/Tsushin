@@ -13,6 +13,7 @@ from sqlalchemy import and_
 from models_rbac import User, Tenant, Role, UserRole, PasswordResetToken, UserInvitation
 from auth_utils import (
     hash_password,
+    hash_token,
     verify_password,
     create_access_token,
     decode_access_token,
@@ -46,14 +47,17 @@ class AuthService:
         Raises:
             AuthenticationError: If credentials are invalid
         """
-        # Find user by email
-        user = self.db.query(User).filter(User.email == email).first()
+        # Find user by email (BUG-072 FIX: exclude soft-deleted users)
+        user = self.db.query(User).filter(
+            User.email == email,
+            User.deleted_at.is_(None)
+        ).first()
 
         if not user:
             raise AuthenticationError("Invalid credentials")
 
-        # Verify password
-        if not verify_password(password, user.password_hash):
+        # BUG-073 FIX: Guard against SSO users with no password hash
+        if not user.password_hash or not verify_password(password, user.password_hash):
             raise AuthenticationError("Invalid credentials")
 
         # Check if user is active
@@ -195,10 +199,10 @@ class AuthService:
         token = generate_reset_token()
         expires_at = datetime.utcnow() + timedelta(hours=24)  # 24 hour expiry
 
-        # Save token
+        # BUG-071 FIX: Store SHA-256 hash of token, not plaintext
         reset_token = PasswordResetToken(
             user_id=user.id,
-            token=token,
+            token=hash_token(token),
             expires_at=expires_at
         )
         self.db.add(reset_token)
@@ -220,9 +224,9 @@ class AuthService:
         Raises:
             AuthenticationError: If token is invalid or expired
         """
-        # Find token
+        # BUG-071 FIX: Hash token for lookup (stored as SHA-256)
         reset_token = self.db.query(PasswordResetToken).filter(
-            PasswordResetToken.token == token
+            PasswordResetToken.token == hash_token(token)
         ).first()
 
         if not reset_token:
@@ -277,7 +281,11 @@ class AuthService:
         Returns:
             User object if found, None otherwise
         """
-        return self.db.query(User).filter(User.id == user_id).first()
+        # BUG-072 FIX: exclude soft-deleted users
+        return self.db.query(User).filter(
+            User.id == user_id,
+            User.deleted_at.is_(None)
+        ).first()
 
     def get_user_permissions(self, user_id: int) -> list:
         """

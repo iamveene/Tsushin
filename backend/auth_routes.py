@@ -28,7 +28,7 @@ from db import get_db
 from auth_service import AuthService, AuthenticationError
 from models_rbac import User, UserInvitation, UserRole, Role, Tenant, TenantSSOConfig
 from models import GoogleOAuthCredentials, OAuthState
-from auth_utils import hash_password, create_access_token
+from auth_utils import hash_password, hash_token, create_access_token
 from auth_google import GoogleSSOService, GoogleSSOError, get_google_sso_service
 import settings
 
@@ -146,6 +146,13 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
+        )
+
+    # BUG-076 FIX: Check is_active (matching auth_dependencies.get_current_user_required)
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled"
         )
 
     return user
@@ -658,8 +665,9 @@ async def get_invitation_info(token: str, db: Session = Depends(get_db)):
     Returns information about the invitation for display on the accept page.
     Does not require authentication.
     """
+    # BUG-071 FIX: Hash token for lookup (stored as SHA-256)
     invitation = db.query(UserInvitation).filter(
-        UserInvitation.invitation_token == token
+        UserInvitation.invitation_token == hash_token(token)
     ).first()
 
     if not invitation:
@@ -706,8 +714,9 @@ async def accept_invitation(
     Creates a new user account with the invitation's role and tenant.
     Returns JWT access token for immediate login.
     """
+    # BUG-071 FIX: Hash token for lookup (stored as SHA-256)
     invitation = db.query(UserInvitation).filter(
-        UserInvitation.invitation_token == token
+        UserInvitation.invitation_token == hash_token(token)
     ).first()
 
     if not invitation:

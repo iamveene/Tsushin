@@ -5,6 +5,7 @@ Phase 7.6.3 - JWT and Password Hashing
 Provides JWT token generation/validation and password hashing utilities.
 """
 
+import hashlib
 import logging
 import secrets
 import warnings
@@ -37,6 +38,19 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
 # Password hashing configuration (using Argon2 - more secure than bcrypt)
 password_hasher = PasswordHasher()
+
+
+def hash_token(token: str) -> str:
+    """
+    Hash a high-entropy token using SHA-256 for secure storage.
+    BUG-071 FIX: Used for password reset tokens and invitation tokens.
+
+    SHA-256 is appropriate here (vs Argon2) because:
+    - Tokens are cryptographically random (not guessable)
+    - We need deterministic lookup (no salt)
+    - OWASP recommends SHA-256 for high-entropy tokens
+    """
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def hash_password(password: str) -> str:

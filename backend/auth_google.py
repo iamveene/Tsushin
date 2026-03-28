@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 import settings
 from models_rbac import User, Tenant, TenantSSOConfig, UserRole, Role
 from models import GoogleOAuthCredentials
-from auth_utils import create_access_token
+from auth_utils import create_access_token, hash_token
 from hub.security import TokenEncryption, OAuthStateManager
 
 logger = logging.getLogger(__name__)
@@ -421,8 +421,9 @@ class GoogleSSOService:
         # Handle invitation
         if invitation_token:
             from models_rbac import UserInvitation
+            # BUG-071 FIX: Hash token for lookup (stored as SHA-256)
             invitation = self.db.query(UserInvitation).filter(
-                UserInvitation.invitation_token == invitation_token,
+                UserInvitation.invitation_token == hash_token(invitation_token),
                 UserInvitation.accepted_at.is_(None),
                 UserInvitation.expires_at > datetime.utcnow(),
             ).first()

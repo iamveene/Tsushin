@@ -23,7 +23,7 @@ from auth_dependencies import (
     TenantContext,
     get_tenant_context
 )
-from auth_utils import generate_invitation_token
+from auth_utils import generate_invitation_token, hash_token
 from services.email_service import send_invitation
 
 router = APIRouter(prefix="/api/team", tags=["team"])
@@ -348,13 +348,16 @@ async def invite_team_member(
             detail="Only owners can invite admins or owners"
         )
 
+    # BUG-071 FIX: Generate raw token for email, store hash in DB
+    raw_invitation_token = generate_invitation_token()
+
     # Create invitation
     invitation = UserInvitation(
         tenant_id=ctx.tenant_id,
         email=request.email,
         role_id=role.id,
         invited_by=ctx.user.id,
-        invitation_token=generate_invitation_token(),
+        invitation_token=hash_token(raw_invitation_token),
         expires_at=datetime.utcnow() + timedelta(days=7),
     )
     ctx.db.add(invitation)
@@ -365,13 +368,13 @@ async def invite_team_member(
     tenant = ctx.db.query(Tenant).filter(Tenant.id == ctx.tenant_id).first()
     tenant_name = tenant.name if tenant else "the organization"
 
-    # Send invitation email
+    # Send invitation email (use raw token, not hash)
     send_invitation(
         to_email=request.email,
         inviter_name=ctx.user.full_name or ctx.user.email,
         tenant_name=tenant_name,
         role_name=role.display_name,
-        invitation_token=invitation.invitation_token,
+        invitation_token=raw_invitation_token,
         personal_message=request.message,
     )
 
@@ -428,8 +431,9 @@ async def resend_invitation(
             detail="Invitation not found"
         )
 
-    # Regenerate token and extend expiry
-    invitation.invitation_token = generate_invitation_token()
+    # BUG-071 FIX: Regenerate token — store hash, use raw for email
+    raw_resend_token = generate_invitation_token()
+    invitation.invitation_token = hash_token(raw_resend_token)
     invitation.expires_at = datetime.utcnow() + timedelta(days=7)
 
     ctx.db.commit()

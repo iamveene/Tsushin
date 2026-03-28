@@ -632,9 +632,9 @@ def create_agent(
         if not persona:
             raise HTTPException(status_code=404, detail="Persona not found")
 
-    # If setting as default, unset other defaults
+    # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
-        db.query(Agent).update({"is_default": False})
+        db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).update({"is_default": False})
 
     # IMPORTANT: Get model config from Config table to respect user settings
     # Never use hardcoded defaults from Pydantic schema
@@ -723,9 +723,9 @@ def update_agent(
         if not persona:
             raise HTTPException(status_code=404, detail="Persona not found")
 
-    # If setting as default, unset other defaults
+    # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
-        db.query(Agent).filter(Agent.id != agent_id).update({"is_default": False})
+        db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id, Agent.id != agent_id).update({"is_default": False})
 
     # Update fields
     update_data = agent.model_dump(exclude_unset=True)
@@ -759,14 +759,14 @@ def delete_agent(
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
 
-    # Cannot delete default agent if it's the only one
+    # BUG-069 FIX: Scope count/promotion to caller's tenant only
     if agent.is_default:
-        total_agents = db.query(Agent).count()
+        total_agents = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).count()
         if total_agents == 1:
             raise HTTPException(status_code=400, detail="Cannot delete the only agent")
 
-        # Set another agent as default
-        next_agent = db.query(Agent).filter(Agent.id != agent_id).first()
+        # Set another agent from the SAME tenant as default
+        next_agent = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id, Agent.id != agent_id).first()
         if next_agent:
             next_agent.is_default = True
 
