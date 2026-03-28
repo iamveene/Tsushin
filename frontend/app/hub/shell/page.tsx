@@ -564,6 +564,17 @@ export default function ShellDashboardPage() {
     )
   }
 
+  if (!hasPermission('shell.read')) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="bg-red-900/20 border border-red-800 rounded-lg p-6">
+          <h3 className="text-lg font-semibold text-red-100 mb-2">Access Denied</h3>
+          <p className="text-sm text-red-200">You do not have permission to view this page.</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">

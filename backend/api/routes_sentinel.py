@@ -452,6 +452,7 @@ async def update_sentinel_config(
 @router.get("/config/agent/{agent_id}", response_model=Optional[SentinelAgentConfigResponse])
 async def get_agent_sentinel_config(
     agent_id: int,
+    current_user: User = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -571,6 +572,7 @@ async def get_sentinel_logs(
     detection_type: Optional[str] = Query(None),
     analysis_type: Optional[str] = Query(None, description="Filter by analysis type: prompt, tool, shell"),
     agent_id: Optional[int] = Query(None),
+    current_user: User = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -615,6 +617,7 @@ async def get_sentinel_logs(
 @router.get("/stats", response_model=SentinelStatsResponse)
 async def get_sentinel_stats(
     days: int = Query(7, ge=1, le=90),
+    current_user: User = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):

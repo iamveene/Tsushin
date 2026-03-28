@@ -163,6 +163,16 @@ def update_config(
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
 
+    # BUG-067 FIX: Restrict global-scoped URL fields to global admin only
+    GLOBAL_ADMIN_ONLY_FIELDS = {"ollama_base_url"}
+    update_data = update.model_dump(exclude_unset=True)
+    restricted_fields = GLOBAL_ADMIN_ONLY_FIELDS & set(update_data.keys())
+    if restricted_fields and not getattr(current_user, 'is_global_admin', False):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Only global admins can modify: {', '.join(restricted_fields)}"
+        )
+
     # Track if filter-related fields changed
     filter_fields_changed = False
     delay_changed = False

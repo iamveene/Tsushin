@@ -15,7 +15,7 @@ from datetime import datetime
 import logging
 
 from db import get_db
-from models_rbac import User, Tenant, UserRole, Role
+from models_rbac import User, Tenant, UserRole, Role, PasswordResetToken, UserInvitation, GlobalAdminAuditLog
 from auth_dependencies import (
     get_current_user_required,
     require_global_admin,
@@ -534,8 +534,17 @@ async def delete_user(
         )
 
     if hard_delete:
-        # Delete user roles first
+        # BUG-080 FIX: Clear all FK references before deletion
         db.query(UserRole).filter(UserRole.user_id == user.id).delete()
+        db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
+        db.query(UserInvitation).filter(UserInvitation.invited_by == user.id).delete()
+        db.query(GlobalAdminAuditLog).filter(GlobalAdminAuditLog.global_admin_id == user.id).delete()
+
+        # SET NULL on nullable audit FK references
+        db.query(UserRole).filter(UserRole.assigned_by == user.id).update(
+            {UserRole.assigned_by: None}, synchronize_session=False
+        )
+
         # Hard delete
         db.delete(user)
     else:

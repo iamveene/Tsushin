@@ -115,7 +115,7 @@ const PRE_INSTALLED_TOOLS: AvailableTool[] = [
 ]
 
 export default function CustomToolsPage() {
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
   const [activeTab, setActiveTab] = useState<SubTabType>('tools')
 
   // Container state
@@ -629,6 +629,17 @@ export default function CustomToolsPage() {
       error: 'bg-red-500/20 text-red-400 border-red-500/50',
     }
     return `px-2 py-1 text-xs font-medium border rounded-full ${colors[status] || colors.stopped}`
+  }
+
+  if (!hasPermission('tools.read')) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="bg-red-900/20 border border-red-800 rounded-lg p-6">
+          <h3 className="text-lg font-semibold text-red-100 mb-2">Access Denied</h3>
+          <p className="text-sm text-red-200">You do not have permission to view this page.</p>
+        </div>
+      </div>
+    )
   }
 
   return (
