@@ -138,6 +138,15 @@ SERVICE_VERSION = "0.5.0"
 # Observability — Prometheus
 METRICS_ENABLED = get_env("TSN_METRICS_ENABLED", None, "true").lower() in ("true", "1", "yes")
 
+# GCP Secret Manager (when TSN_SECRET_BACKEND=gcp)
+GCP_PROJECT_ID = os.environ.get("TSN_GCP_PROJECT_ID", "")
+GCP_SECRET_PREFIX = os.environ.get("TSN_GCP_SECRET_PREFIX", "tsushin")
+GCP_SECRET_CACHE_TTL = int(os.environ.get("TSN_GCP_SECRET_CACHE_TTL", "300"))
+
+# Kubernetes Runtime (Phase GKE — only used when TSN_CONTAINER_RUNTIME=kubernetes)
+K8S_NAMESPACE = get_env("TSN_K8S_NAMESPACE", None, "tsushin")
+K8S_IMAGE_PULL_POLICY = get_env("TSN_K8S_IMAGE_PULL_POLICY", None, "IfNotPresent")
+
 
 def get_log_config() -> dict:
     """

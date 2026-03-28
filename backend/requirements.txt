@@ -45,11 +45,11 @@ slowapi>=0.1.9  # MED-004: Rate limiting for auth endpoints
 docker>=7.0.0  # Phase 8: Multi-tenant MCP containerization
 mcp>=1.0.0  # Model Context Protocol client
 
-# Kubernetes (optional — only needed when TSN_CONTAINER_RUNTIME=kubernetes)
-# kubernetes>=28.1.0
+# Kubernetes (only needed when TSN_CONTAINER_RUNTIME=kubernetes)
+kubernetes>=28.1.0
 
 # GCP Secret Manager (optional — only needed when TSN_SECRET_BACKEND=gcp)
-# google-cloud-secret-manager>=2.18.0
+google-cloud-secret-manager>=2.18.0
 
 # Browser Automation (Phase 14.5)
 playwright>=1.48.0  # Browser automation for web tasks
