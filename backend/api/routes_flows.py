@@ -82,6 +82,7 @@ class FlowDefinitionResponse(BaseModel):
     execution_method: Optional[str] = "immediate"
     scheduled_at: Optional[datetime] = None
     flow_type: Optional[str] = "workflow"
+    default_agent_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -246,7 +247,8 @@ def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionRespons
         node_count=count_flow_nodes(db, flow.id),
         execution_method=flow.execution_method or "immediate",
         scheduled_at=flow.scheduled_at,
-        flow_type=flow.flow_type or "workflow"
+        flow_type=flow.flow_type or "workflow",
+        default_agent_id=flow.default_agent_id
     )
 
 
@@ -1272,7 +1274,8 @@ def patch_flow(
         if flow.flow_type is not None:
             db_flow.flow_type = flow.flow_type.value
         if flow.default_agent_id is not None:
-            db_flow.default_agent_id = flow.default_agent_id
+            # 0 or negative means "clear the default agent"
+            db_flow.default_agent_id = flow.default_agent_id if flow.default_agent_id > 0 else None
         if flow.is_active is not None:
             # CRITICAL FIX 2026-01-08: Close active conversation threads when flow is deactivated
             if flow.is_active == False and db_flow.is_active == True:
@@ -1573,6 +1576,68 @@ def update_node(
 ):
     """Update node configuration (alias for update_step)."""
     return update_step(flow_id, node_id, node, db, tenant_context)
+
+
+@router.post("/{flow_id}/steps/reorder", dependencies=[Depends(require_permission("flows.write"))])
+def reorder_steps(
+    flow_id: int,
+    positions: list[dict],
+    db: Session = Depends(get_db),
+    tenant_context: TenantContext = Depends(get_tenant_context)
+):
+    """Atomically reorder steps by updating all positions in a single transaction.
+
+    Accepts a list of {step_id, position} dicts. Uses a two-phase approach:
+    first sets all positions to negative temporaries (to avoid unique constraint),
+    then sets final positions.
+    """
+    try:
+        flow_query = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id)
+        flow_query = tenant_context.filter_by_tenant(flow_query, FlowDefinition.tenant_id)
+        if not flow_query.first():
+            raise HTTPException(status_code=404, detail="Flow not found")
+
+        # Validate all steps exist
+        step_ids = [p["step_id"] for p in positions]
+        steps = db.query(FlowNode).filter(
+            FlowNode.flow_definition_id == flow_id,
+            FlowNode.id.in_(step_ids)
+        ).all()
+        if len(steps) != len(step_ids):
+            raise HTTPException(status_code=400, detail="One or more steps not found")
+
+        # Phase 1: Set all affected positions to negative temporaries
+        for i, p in enumerate(positions):
+            db.query(FlowNode).filter(FlowNode.id == p["step_id"]).update(
+                {"position": -(i + 1)}, synchronize_session="fetch"
+            )
+        db.flush()
+
+        # Phase 2: Set final positions and optionally update names
+        for p in positions:
+            update_fields = {"position": p["position"], "updated_at": datetime.utcnow()}
+            if "name" in p and p["name"] is not None:
+                update_fields["name"] = p["name"]
+            db.query(FlowNode).filter(FlowNode.id == p["step_id"]).update(
+                update_fields, synchronize_session="fetch"
+            )
+
+        db.commit()
+        logger.info(f"Reordered {len(positions)} steps for flow {flow_id}")
+
+        # Return updated steps
+        updated = db.query(FlowNode).filter(
+            FlowNode.flow_definition_id == flow_id
+        ).order_by(FlowNode.position).all()
+
+        return [node_to_response(s) for s in updated]
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception(f"Error reordering steps for flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to reorder steps")
 
 
 @router.delete("/{flow_id}/steps/{step_id}", status_code=204, dependencies=[Depends(require_permission("flows.write"))])

@@ -1436,8 +1436,13 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
     const newSteps = [...steps]
     const targetIndex = direction === 'up' ? index - 1 : index + 1
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
-    // Update positions
-    newSteps.forEach((step, i) => step.position = i + 1)
+    // Update positions and auto-rename "Step N" names to match new position
+    newSteps.forEach((step, i) => {
+      step.position = i + 1
+      if (/^Step \d+$/.test(step.name)) {
+        step.name = `Step ${i + 1}`
+      }
+    })
     onChange(newSteps)
   }
 
@@ -2513,28 +2518,36 @@ function EditableStepBuilder({
     const newSteps = [...steps]
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
 
-    // Update positions
-    newSteps.forEach((step, i) => step.position = i + 1)
+    // Update positions and auto-rename "Step N" names to match new position
+    newSteps.forEach((step, i) => {
+      step.position = i + 1
+      if (/^Step \d+$/.test(step.name)) {
+        step.name = `Step ${i + 1}`
+      }
+    })
     onStepsChange(newSteps)
 
-    // Update positions in backend
-    const step1 = newSteps[index]
-    const step2 = newSteps[targetIndex]
+    // Use atomic reorder endpoint to avoid unique constraint issues
+    const reorderPayload = newSteps
+      .filter(s => s.id)
+      .map(s => ({ step_id: s.id!, position: s.position, name: s.name }))
 
-    try {
-      if (step1.id) {
-        await api.updateFlowStep(flowId, step1.id, { position: step1.position })
+    if (reorderPayload.length > 0) {
+      try {
+        await api.reorderFlowSteps(flowId, reorderPayload)
+      } catch (error) {
+        console.error('Failed to reorder steps:', error)
+        // Restore original order on error
+        const restored = [...newSteps]
+          ;[restored[index], restored[targetIndex]] = [restored[targetIndex], restored[index]]
+        restored.forEach((step, i) => {
+          step.position = i + 1
+          if (/^Step \d+$/.test(step.name)) {
+            step.name = `Step ${i + 1}`
+          }
+        })
+        onStepsChange(restored)
       }
-      if (step2.id) {
-        await api.updateFlowStep(flowId, step2.id, { position: step2.position })
-      }
-    } catch (error) {
-      console.error('Failed to reorder steps:', error)
-      // Restore original order on error
-      const restored = [...newSteps]
-        ;[restored[index], restored[targetIndex]] = [restored[targetIndex], restored[index]]
-      restored.forEach((step, i) => step.position = i + 1)
-      onStepsChange(restored)
     }
   }
 
@@ -3368,6 +3381,7 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClos
         execution_method: flow.execution_method as any,
         scheduled_at: flow.scheduled_at,
         recurrence_rule: flow.recurrence_rule as any,
+        default_agent_id: flow.default_agent_id ?? 0,
       })
       onSuccess()
     } catch (error) {
@@ -3506,6 +3520,22 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClos
                   />
                 </div>
               )}
+
+              <div className="col-span-2">
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Default Agent</label>
+                <select
+                  value={flow.default_agent_id || ''}
+                  onChange={(e) => setFlow(prev => prev ? { ...prev, default_agent_id: e.target.value ? parseInt(e.target.value) : null } : null)}
+                  className="w-full px-4 py-2.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                >
+                  <option value="">Select an agent...</option>
+                  {agents.map(agent => (
+                    <option key={agent.id} value={agent.id}>{agent.contact_name}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-500 mt-1">Used for steps that don&apos;t have a specific agent assigned</p>
+              </div>
             </div>
           </div>
 

@@ -3585,6 +3585,16 @@ export const api = {
     if (!res.ok) throw new Error('Failed to delete flow step')
   },
 
+  async reorderFlowSteps(flowId: number, positions: { step_id: number; position: number; name?: string }[]): Promise<FlowNode[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/flows/${flowId}/steps/reorder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(positions),
+    })
+    if (!res.ok) throw new Error('Failed to reorder flow steps')
+    return res.json()
+  },
+
   // Phase 8.0: Conversation Threads
   async getActiveConversationThreads(recipient?: string): Promise<ConversationThread[]> {
     const params = new URLSearchParams()
