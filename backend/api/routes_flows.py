@@ -1363,8 +1363,10 @@ def delete_flow(
                         'goal_summary': 'Flow was deleted'
                     }, synchronize_session=False)
 
-            # Delete related runs
-            db.query(FlowRun).filter(FlowRun.flow_definition_id == flow_id).delete()
+            # Delete related node runs first (FK to FlowRun), then runs
+            if run_ids:
+                db.query(FlowNodeRun).filter(FlowNodeRun.flow_run_id.in_(run_ids)).delete(synchronize_session=False)
+            db.query(FlowRun).filter(FlowRun.flow_definition_id == flow_id).delete(synchronize_session=False)
 
         db.delete(flow)
         db.commit()

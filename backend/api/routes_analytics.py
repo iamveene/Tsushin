@@ -373,7 +373,7 @@ async def get_recent_token_usage(
     # Get tenant's agent IDs
     tenant_agent_ids = get_tenant_agent_ids(db, ctx)
 
-    query = db.query(TokenUsage).order_by(desc(TokenUsage.created_at)).limit(limit)
+    query = db.query(TokenUsage).order_by(desc(TokenUsage.created_at))
 
     if agent_id:
         query = query.filter(TokenUsage.agent_id == agent_id)
@@ -387,7 +387,7 @@ async def get_recent_token_usage(
             )
         )
 
-    usages = query.all()
+    usages = query.limit(limit).all()
 
     records = []
     for u in usages:

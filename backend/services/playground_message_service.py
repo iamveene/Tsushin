@@ -64,6 +64,43 @@ class PlaygroundMessageService:
 
         return memory
 
+    def get_thread_messages(
+        self,
+        thread_id: int,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict]:
+        """
+        Get messages for a thread from memory storage.
+
+        Args:
+            thread_id: Thread ID
+            limit: Max messages to return
+            offset: Number of messages to skip
+
+        Returns:
+            List of message dicts with role, content, timestamp, message_id
+        """
+        thread = self.db.query(ConversationThread).filter(
+            ConversationThread.id == thread_id
+        ).first()
+        if not thread:
+            return []
+
+        memory = self._get_thread_memory(thread.agent_id, thread)
+        if not memory or not memory.messages_json:
+            return []
+
+        messages = memory.messages_json
+
+        # Assign message_ids if not present
+        for idx, msg in enumerate(messages):
+            if not msg.get("message_id"):
+                msg["message_id"] = f"msg_{thread_id}_{idx}"
+
+        # Apply pagination
+        return messages[offset:offset + limit]
+
     def _find_message_by_id(
         self,
         messages: List[Dict],
