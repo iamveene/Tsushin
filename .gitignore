@@ -218,25 +218,8 @@ backend/test_results.md
 backend/final_validation.txt
 backend/fix_agent_phone.py
 
-# E2E tests with hardcoded test data (development-only)
-backend/tests/comprehensive_e2e.py
-backend/tests/e2e_skills_test.py
-backend/tests/full_e2e_agent_test.py
-backend/tests/monitor_and_verify.py
-backend/tests/real_e2e_tests.py
-backend/tests/run_all_tests.py
-backend/tests/skills_regression_test.py
-backend/tests/test_agent_name_prefix.py
-backend/tests/test_all_skills.sh
-backend/tests/test_cross_channel_memory.py
-backend/tests/test_flight_and_nmap.py
-backend/tests/test_flight_only.py
-backend/tests/test_group_sender_resolver.py
-backend/tests/test_inject_clear_whatsapp.py
-backend/tests/test_mcp_container_manager.py
-backend/tests/test_routes_mcp_instances.py
-backend/tests/test_scheduler_now.py
-backend/tests/test_vector_store.py
+# Test infrastructure — all tests are local-only, not shipped to remote
+backend/tests/
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py
 backend/test-api.html
