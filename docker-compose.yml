@@ -108,6 +108,7 @@ services:
 
       # Security
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
+      - TSN_CORS_ORIGINS=${TSN_CORS_ORIGINS:-*}
 
       # Integrations
       - ASANA_ENCRYPTION_KEY=${ASANA_ENCRYPTION_KEY:-}

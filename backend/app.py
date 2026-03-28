@@ -882,12 +882,23 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS - Allow all origins for development
-# Using wildcard for simplicity - credentials sent via Authorization header
+# CORS - Configurable origins via TSN_CORS_ORIGINS env var
+# Default: "*" (allow all) for backward compatibility / development
+# Production: set TSN_CORS_ORIGINS=https://app.example.com,https://admin.example.com
+_cors_origins_str = os.getenv("TSN_CORS_ORIGINS", "*")
+if _cors_origins_str.strip() == "*":
+    _cors_origins = ["*"]
+    _cors_allow_credentials = False  # Must be False when using wildcard per CORS spec
+else:
+    _cors_origins = [origin.strip() for origin in _cors_origins_str.split(",") if origin.strip()]
+    _cors_allow_credentials = True  # Safe to allow credentials with explicit origins
+
+logger.info(f"CORS origins: {_cors_origins} (credentials={_cors_allow_credentials})")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,  # Must be False when using wildcard
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     max_age=86400,  # Cache preflight for 24 hours
@@ -922,6 +933,27 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' wss: https:; frame-ancestors 'none'"
     return response
 
+# CORS headers for exception handlers — must match the middleware config above
+def _cors_headers_for_request(request: Request) -> dict:
+    """Build CORS headers consistent with the configured origins."""
+    origin = request.headers.get("origin", "")
+    if _cors_origins == ["*"]:
+        return {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    # Only reflect the origin if it's in the allowed list
+    if origin in _cors_origins:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    # Origin not allowed — omit CORS headers entirely
+    return {}
+
 # Custom exception handlers to ensure CORS headers are always present
 # This fixes issues where HTTPException responses don't include CORS headers
 @app.exception_handler(StarletteHTTPException)
@@ -930,11 +962,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
+        headers=_cors_headers_for_request(request),
     )
 
 @app.exception_handler(RequestValidationError)
@@ -950,11 +978,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(
         status_code=422,
         content={"detail": errors},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
+        headers=_cors_headers_for_request(request),
     )
 
 @app.exception_handler(Exception)
@@ -964,11 +988,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
+        headers=_cors_headers_for_request(request),
     )
 
 # Include routers
