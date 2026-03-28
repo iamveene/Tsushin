@@ -1481,6 +1481,88 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
   )
 }
 
+// ==================== CURSOR-SAFE INPUT HELPERS ====================
+// These components hold their own local state so that the cursor position
+// is never lost when the parent re-renders and passes a new value prop.
+
+function CursorSafeInput({
+  value: externalValue,
+  onValueChange,
+  onFocus: externalOnFocus,
+  onBlur: externalOnBlur,
+  ...restProps
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> & {
+  value: string
+  onValueChange: (value: string) => void
+}) {
+  const [localValue, setLocalValue] = useState(externalValue)
+  const isFocusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      setLocalValue(externalValue)
+    }
+  }, [externalValue])
+
+  return (
+    <input
+      {...restProps}
+      value={localValue}
+      onFocus={(e) => {
+        isFocusedRef.current = true
+        externalOnFocus?.(e)
+      }}
+      onBlur={(e) => {
+        isFocusedRef.current = false
+        externalOnBlur?.(e)
+      }}
+      onChange={(e) => {
+        setLocalValue(e.target.value)
+        onValueChange(e.target.value)
+      }}
+    />
+  )
+}
+
+function CursorSafeTextarea({
+  value: externalValue,
+  onValueChange,
+  onFocus: externalOnFocus,
+  onBlur: externalOnBlur,
+  ...restProps
+}: Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'onChange' | 'value'> & {
+  value: string
+  onValueChange: (value: string) => void
+}) {
+  const [localValue, setLocalValue] = useState(externalValue)
+  const isFocusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      setLocalValue(externalValue)
+    }
+  }, [externalValue])
+
+  return (
+    <textarea
+      {...restProps}
+      value={localValue}
+      onFocus={(e) => {
+        isFocusedRef.current = true
+        externalOnFocus?.(e)
+      }}
+      onBlur={(e) => {
+        isFocusedRef.current = false
+        externalOnBlur?.(e)
+      }}
+      onChange={(e) => {
+        setLocalValue(e.target.value)
+        onValueChange(e.target.value)
+      }}
+    />
+  )
+}
+
 // ==================== TOOL PARAMETER FORM ====================
 
 function ToolParameterForm({
@@ -1634,10 +1716,10 @@ function ToolParameterForm({
                     {param.name}
                     {param.required && <span className="text-red-400 ml-1">*</span>}
                   </label>
-                  <input
+                  <CursorSafeInput
                     type="text"
                     value={parameters[param.name] || ''}
-                    onChange={(e) => onChange({ ...parameters, [param.name]: e.target.value })}
+                    onValueChange={(v) => onChange({ ...parameters, [param.name]: v })}
                     placeholder={param.description || `Enter ${param.name}`}
                     className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                                focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -1740,10 +1822,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
       {/* Step Name */}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1.5">Step Name</label>
-        <input
+        <CursorSafeInput
           type="text"
-          value={currentStep.name}
-          onChange={(e) => debouncedSave({ name: e.target.value })}
+          value={currentStep.name || ''}
+          onValueChange={(v) => debouncedSave({ name: v })}
           className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
@@ -1838,9 +1920,9 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
           <label className="block text-sm font-medium text-slate-300 mb-1.5">
             {step.type === 'notification' ? 'Notification Text' : 'Message Template'}
           </label>
-          <textarea
+          <CursorSafeTextarea
             value={currentConfig?.message_template || currentConfig?.content || ''}
-            onChange={(e) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', e.target.value)}
+            onValueChange={(v) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', v)}
             rows={3}
             placeholder={step.type === 'notification'
               ? 'What to notify about? Use {{step_1.field}} to inject previous step outputs'
@@ -1860,13 +1942,12 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <textarea
+            <CursorSafeTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
-              onChange={(e) => {
-                const value = e.target.value
+              onValueChange={(v) => {
                 debouncedSave(prev => ({
-                  conversation_objective: value,
-                  config: { ...step.config, ...prev.config, objective: value }
+                  conversation_objective: v,
+                  config: { ...step.config, ...prev.config, objective: v }
                 }))
               }}
               rows={2}
@@ -1878,9 +1959,9 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.initial_prompt || ''}
-              onChange={(e) => updateConfig('initial_prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('initial_prompt', v)}
               rows={2}
               placeholder="First message to send..."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
@@ -1919,10 +2000,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. conversation_result"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2008,10 +2089,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. scan_results"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2053,9 +2134,9 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.prompt || ''}
-              onChange={(e) => updateConfig('prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
@@ -2098,10 +2179,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. flight_results"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2118,10 +2199,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.source_step || ''}
-              onChange={(e) => updateConfig('source_step', e.target.value)}
+              onValueChange={(v) => updateConfig('source_step', v)}
               placeholder="step_1 or step name"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2174,9 +2255,9 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
                 {step.config?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.summary_prompt || ''}
-              onChange={(e) => updateConfig('summary_prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
               placeholder={currentConfig?.prompt_mode === 'replace'
                 ? 'Enter your complete summarization instructions...\n\nExample:\nExtract only:\n📍 Status: [value]\n📅 Date: [value]'
@@ -2217,10 +2298,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.command || ''}
-              onChange={(e) => updateConfig('command', e.target.value)}
+              onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
@@ -2687,10 +2768,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
       {/* Step Name */}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1.5">Step Name</label>
-        <input
+        <CursorSafeInput
           type="text"
           value={currentStep.name || ''}
-          onChange={(e) => debouncedSave({ name: e.target.value })}
+          onValueChange={(v) => debouncedSave({ name: v })}
           className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
@@ -2785,9 +2866,9 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
           <label className="block text-sm font-medium text-slate-300 mb-1.5">
             {step.type === 'notification' ? 'Notification Text' : 'Message Template'}
           </label>
-          <textarea
+          <CursorSafeTextarea
             value={currentConfig?.message_template || currentConfig?.content || ''}
-            onChange={(e) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', e.target.value)}
+            onValueChange={(v) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', v)}
             rows={3}
             placeholder={step.type === 'notification'
               ? 'What to notify about? Use {{step_1.field}} to inject previous step outputs'
@@ -2806,13 +2887,12 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <textarea
+            <CursorSafeTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
-              onChange={(e) => {
-                const value = e.target.value
+              onValueChange={(v) => {
                 debouncedSave(prev => ({
-                  conversation_objective: value,
-                  config: { ...step.config, ...prev.config, objective: value }
+                  conversation_objective: v,
+                  config: { ...step.config, ...prev.config, objective: v }
                 }))
               }}
               rows={2}
@@ -2824,9 +2904,9 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.initial_prompt || ''}
-              onChange={(e) => updateConfig('initial_prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('initial_prompt', v)}
               rows={2}
               placeholder="First message to send..."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
@@ -2865,10 +2945,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. conversation_result"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2942,10 +3022,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. scan_results"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2984,9 +3064,9 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.prompt || ''}
-              onChange={(e) => updateConfig('prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
@@ -3029,10 +3109,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. flight_results"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -3049,10 +3129,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.source_step || ''}
-              onChange={(e) => updateConfig('source_step', e.target.value)}
+              onValueChange={(v) => updateConfig('source_step', v)}
               placeholder="step_1 or step name"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -3105,9 +3185,9 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 {currentConfig?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.summary_prompt || ''}
-              onChange={(e) => updateConfig('summary_prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
               placeholder={currentConfig?.prompt_mode === 'replace'
                 ? 'Enter your complete summarization instructions...\n\nExample:\nExtract only:\n📍 Status: [value]\n📅 Date: [value]'
@@ -3148,10 +3228,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.command || ''}
-              onChange={(e) => updateConfig('command', e.target.value)}
+              onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
