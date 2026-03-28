@@ -2,7 +2,7 @@
 
 /**
  * Custom Skills Management Page (Phase 22/23)
- * Settings > Custom Skills
+ * Studio > Custom Skills
  *
  * List, create, edit, delete, deploy, scan, and test tenant-authored custom skills.
  * Supports instruction-based and script-based skill types.
@@ -320,8 +320,8 @@ export default function CustomSkillsPage() {
       <div className="max-w-6xl mx-auto">
         {/* Breadcrumb */}
         <div className="mb-6">
-          <Link href="/settings" className="text-tsushin-slate hover:text-white transition-colors text-sm">
-            Settings
+          <Link href="/agents" className="text-tsushin-slate hover:text-white transition-colors text-sm">
+            Studio
           </Link>
           <span className="text-tsushin-slate/50 mx-2">/</span>
           <span className="text-white text-sm">Custom Skills</span>
