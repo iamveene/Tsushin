@@ -72,7 +72,8 @@ class ApiV1RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Try to identify the client for rate limiting
         rate_key = None
-        rate_limit = 60  # Default RPM
+        # Check if auth layer set a per-client rate limit
+        rate_limit = getattr(request.state, 'rate_limit_rpm', 60)
 
         # Check X-API-Key header
         api_key = request.headers.get("x-api-key")

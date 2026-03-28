@@ -5,6 +5,7 @@ Phase 7.6.3 - JWT and Password Hashing
 Provides JWT token generation/validation and password hashing utilities.
 """
 
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta
@@ -13,10 +14,18 @@ import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
+logger = logging.getLogger(__name__)
+
 # JWT Configuration
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32))
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
+if not JWT_SECRET_KEY or len(JWT_SECRET_KEY) < 32:
+    JWT_SECRET_KEY = secrets.token_urlsafe(32)
+    logger.critical(
+        "JWT_SECRET_KEY is not set or too short! Using ephemeral key — "
+        "sessions will be lost on restart. Set JWT_SECRET_KEY in .env (min 32 chars)."
+    )
 JWT_ALGORITHM = "HS256"
-JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
 # Password hashing configuration (using Argon2 - more secure than bcrypt)
 password_hasher = PasswordHasher()

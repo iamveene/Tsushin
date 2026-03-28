@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional, Set, List
 
-from fastapi import Depends, HTTPException, Header, status
+from fastapi import Depends, HTTPException, Header, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -43,6 +43,7 @@ class ApiCaller:
 
 
 def get_api_caller(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     db: Session = Depends(get_db),
@@ -52,7 +53,10 @@ def get_api_caller(
     1. Bearer JWT (from OAuth2 token exchange OR regular UI login)
     2. X-API-Key header (direct API key mode)
     Returns an ApiCaller object for unified permission checking.
+    Sets request.state.rate_limit_rpm for the rate limiter middleware.
     """
+    caller: Optional[ApiCaller] = None
+
     # Priority 1: Bearer token
     if credentials:
         token = credentials.credentials
@@ -68,21 +72,27 @@ def get_api_caller(
 
         # API client JWT (from OAuth2 token exchange)
         if token_type == "api_client":
-            return _resolve_api_client_jwt(payload, db)
-
-        # Regular user JWT (from UI login) — also works on /api/v1/ for convenience
-        return _resolve_user_jwt(payload, db)
+            caller = _resolve_api_client_jwt(payload, db)
+        else:
+            # Regular user JWT (from UI login) — also works on /api/v1/ for convenience
+            caller = _resolve_user_jwt(payload, db)
 
     # Priority 2: X-API-Key direct mode
-    if x_api_key:
-        return _resolve_api_key(x_api_key, db)
+    elif x_api_key:
+        caller = _resolve_api_key(x_api_key, db)
 
-    # No auth provided
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required. Provide Bearer token or X-API-Key header.",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    if caller is None:
+        # No auth provided
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Provide Bearer token or X-API-Key header.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Propagate per-client rate limit to middleware
+    request.state.rate_limit_rpm = caller.rate_limit_rpm
+
+    return caller
 
 
 def _resolve_api_client_jwt(payload: dict, db: Session) -> ApiCaller:
