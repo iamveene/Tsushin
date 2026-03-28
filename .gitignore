@@ -244,3 +244,11 @@ backend/test-api.html
 # Root-level screenshots & dev artifacts
 /*.png
 /deployment-test-playbook.md
+
+# Local-only directories (QA artifacts, test data, methodology docs, brand assets)
+qa-screenshots/
+test-evidence/
+sample_data/
+test_documents/
+methodology/
+brand/
