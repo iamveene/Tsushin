@@ -216,7 +216,8 @@ class WatcherManager:
                 contact_mappings=contact_mappings,
                 db_session=db,
                 starting_timestamp=starting_timestamp,
-                whatsapp_conversation_delay_seconds=delay_seconds
+                whatsapp_conversation_delay_seconds=delay_seconds,
+                max_catchup_seconds=settings.WATCHER_MAX_CATCHUP_SECONDS
             )
 
             # Start watcher task
