@@ -1,11 +1,12 @@
 # Tsushin Bug Tracker
-**Open:** 37 | **In Progress:** 0 | **Resolved:** 62
+**Open:** 16 | **In Progress:** 0 | **Resolved:** 83
 **Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit (2026-03-28)
 
 ## Open Issues
 
 ### BUG-065: SSRF via ollama_base_url — zero URL validation on user-controlled endpoint
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-28
 - **Severity:** Critical
 - **Category:** Server-Side Request Forgery (CWE-918)
 - **Found:** 2026-03-28 (URL Rebase security design review)
@@ -15,7 +16,8 @@
 - **Remediation:** Add a Pydantic field validator on `ConfigUpdate.ollama_base_url` that: (1) parses with `urllib.parse.urlparse`, (2) enforces `http`/`https` scheme, (3) resolves hostname via `socket.getaddrinfo`, (4) rejects resolved IPs in RFC1918, loopback, link-local, and cloud metadata ranges using Python `ipaddress` stdlib. Implement as a reusable `ssrf_validator.py` module. **Blocks:** v0.7.0 OpenAI URL Rebase feature.
 
 ### BUG-066: Scraper and Playwright SSRF blocklists bypassable via DNS rebinding
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-28
 - **Severity:** Critical
 - **Category:** Server-Side Request Forgery (CWE-918)
 - **Found:** 2026-03-28 (URL Rebase security design review)
@@ -25,7 +27,8 @@
 - **Remediation:** Replace string prefix checks with post-DNS-resolution IP validation using Python `ipaddress.ip_address(resolved_ip).is_private`, `.is_loopback`, `.is_link_local`, plus explicit `169.254.169.254` / `fd00:ec2::254` checks. Use the same `ssrf_validator.py` module from BUG-065 remediation.
 
 ### BUG-067: Config table is global singleton — ollama_base_url affects all tenants
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-28
 - **Severity:** High
 - **Category:** Broken Access Control / Multi-Tenancy Isolation (CWE-284)
 - **Found:** 2026-03-28 (URL Rebase security design review)
@@ -35,7 +38,8 @@
 - **Remediation:** Move `ollama_base_url` (and any future provider URL fields) to per-tenant storage. The planned `provider_instance` table (v0.7.0) addresses this by storing base URLs scoped to `tenant_id`. As an interim fix, add tenant_id scoping to the Ollama URL config or restrict `PUT /api/config` for URL fields to global admin only.
 
 ### BUG-068: Sentinel SSRF detection only covers 2 tool names — misses provider URL paths
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-28
 - **Severity:** Medium
 - **Category:** Insufficient Security Controls (CWE-693)
 - **Found:** 2026-03-28 (URL Rebase security design review)
@@ -45,7 +49,8 @@
 - **Remediation:** (1) Extend Sentinel's sensitive pattern list to include all RFC1918 ranges, IPv6 private ranges, and Docker service names. (2) For the URL Rebase feature, SSRF protection must be implemented at the service layer (`ssrf_validator.py`) rather than relying on Sentinel, since URLs are stored in DB config, not passed as tool arguments. Sentinel should remain as a defense-in-depth layer, not the primary control.
 
 ### BUG-063: Command injection in toolbox install_package via unsanitized package_name
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-28
 - **Severity:** Critical
 - **Category:** Command Injection (CWE-78)
 - **Found:** 2026-03-28 (GKE readiness security review)
@@ -55,7 +60,8 @@
 - **Remediation:** Validate `package_name` against strict regex `^[a-zA-Z0-9._-]+(==[\d.]+)?$` before building the command, or use list-style exec (`cmd=["pip", "install", "--user", package_name]`) to bypass shell interpretation entirely.
 
 ### BUG-064: Workspace directories created with 0o777 permissions
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-28
 - **Severity:** Medium
 - **Category:** Insecure File Permissions (CWE-732)
 - **Found:** 2026-03-28 (GKE readiness security review)
@@ -65,7 +71,8 @@
 - **Remediation:** Replace `0o777` with `0o750` and ensure `chown toolbox:toolbox /workspace` is used instead of `chmod 777`.
 
 ### BUG-069: REGRESSION — Cross-tenant default agent operations (internal API)
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-28
 - **Severity:** Critical
 - **Category:** Broken Object Level Authorization / Cross-Tenant Data Corruption (CWE-284)
 - **Found:** 2026-03-28 (RBAC & Multi-Tenancy Audit)
@@ -79,7 +86,8 @@
 - **Remediation:** Add `Agent.tenant_id == ctx.tenant_id` filter to all three queries. The v1 API routes (`v1/routes_agents.py:365`) already have the correct pattern.
 
 ### BUG-070: API client custom scope allows privilege escalation beyond creator's permissions
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-28
 - **Severity:** Critical
 - **Category:** Privilege Escalation (CWE-269)
 - **Found:** 2026-03-28 (RBAC & Multi-Tenancy Audit)
@@ -89,7 +97,8 @@
 - **Remediation:** Validate that `custom_scopes` (or the predefined role's scopes) are a subset of the creating user's own permissions. Alternatively, restrict `api_admin`/`api_owner` client creation to `owner` role users only.
 
 ### BUG-071: Password reset tokens stored in plaintext in database
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-28
 - **Severity:** Critical
 - **Category:** Sensitive Data Exposure (CWE-312)
 - **Found:** 2026-03-28 (Security Vulnerability Audit)

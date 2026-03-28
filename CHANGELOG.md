@@ -176,7 +176,40 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-#### Security
+#### Security (v0.6.1 Audit — 21 bugs resolved)
+
+##### SSRF & Input Validation
+- BUG-065: Added SSRF validation for `ollama_base_url` with DNS-resolution-based IP checking via new shared `ssrf_validator.py` module
+- BUG-066: Replaced string-prefix SSRF checks in scraper, Playwright, and MCP browser providers with post-DNS-resolution validation — fixes DNS rebinding, incorrect 172.x range, and missing IPv6/metadata checks
+- BUG-063: Added package name regex validation and `shlex.quote` to toolbox `install_package` — prevents shell command injection
+- BUG-064: Changed workspace directory permissions from `0o777` to `0o750` with proper `chown`
+- BUG-068: Expanded Sentinel SSRF detection from 2 tools/5 patterns to 12 tools/34 patterns with defense-in-depth URL argument checking
+
+##### Authentication & Authorization
+- BUG-072: Added `deleted_at` filter to login and `get_user_by_id` queries — soft-deleted users can no longer authenticate
+- BUG-073: Added null-guard for `password_hash` before `verify_password` — SSO users no longer cause 500 on password login
+- BUG-076: Added `is_active` check to `auth_routes.get_current_user` — disabled accounts blocked from `/me` and `/logout`
+- BUG-071: Password reset and invitation tokens now stored as SHA-256 hashes instead of plaintext
+- BUG-070: API client creation validates that requested scopes are a subset of creator's permissions — prevents privilege escalation
+- BUG-074: Replaced wildcard `ProxyHeadersMiddleware(trusted_hosts=["*"])` with configurable `TSN_TRUSTED_PROXY_HOSTS` (default `127.0.0.1,::1`)
+
+##### Multi-Tenancy Isolation
+- BUG-069: Scoped default agent create/update/delete operations to caller's tenant — prevents cross-tenant data corruption
+- BUG-082: Removed `Agent.tenant_id.is_(None)` from analytics queries — tenants no longer see NULL-tenant agents
+- BUG-083: Rewrote `conversation_search_service` to join through Agent table — fixes non-existent `Memory.tenant_id` column reference
+- BUG-067: Restricted global-scoped URL config fields to global admin only (interim fix for Config singleton)
+
+##### RBAC Permission Gates
+- BUG-075: Added `require_permission("org.settings.read")` to Sentinel GET /config/agent/{id}, GET /logs, GET /stats
+- BUG-077: Added `shell.read` permission gate to Hub Shell page
+- BUG-078: Added `tools.read` permission gate to Hub Sandboxed Tools page
+- BUG-079: Added `org.settings.read` permission gates to 5 settings pages (Sentinel, Security, AI Configuration, Model Pricing, Integrations)
+
+##### Data Integrity
+- BUG-080: Hard user delete now clears FK references (UserInvitation, GlobalAdminAuditLog, PasswordResetToken) before deletion
+- BUG-081: Fixed inverted tenant_id logic in SSO config endpoints — uses `tenant_context.tenant_id` consistently
+
+##### Previous Security Fixes
 - Reduced Sentinel false positives for educational shell queries and language preferences
 - MemGuard false positive reduction: long token regex 20->32, negative lookahead for common words
 - Fixed `warn_only` mode handling in MemGuard
