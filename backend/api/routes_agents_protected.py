@@ -309,10 +309,7 @@ async def get_agent_protected(
 
     # Check tenant access
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have access to this agent"
-        )
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     return {
         "id": agent.id,
@@ -363,10 +360,7 @@ async def delete_agent_protected(
 
     # Check tenant access
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have access to this agent"
-        )
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # In real implementation, would delete the agent
     # For now, just demonstrate the pattern
@@ -416,7 +410,7 @@ async def get_agent_skill_integrations(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Get all skill integrations for this agent
     skill_configs = ctx.db.query(AgentSkillIntegration).filter(
@@ -480,7 +474,7 @@ async def set_agent_skill_integration(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Validate integration_id if provided
     if data.integration_id:
@@ -492,7 +486,7 @@ async def set_agent_skill_integration(
             raise HTTPException(status_code=404, detail="Integration not found")
 
         if not ctx.can_access_resource(integration.tenant_id):
-            raise HTTPException(status_code=403, detail="Integration access denied")
+            raise HTTPException(status_code=404, detail="Integration not found")
 
     # Validate scheduler_provider
     valid_providers = ['flows', 'google_calendar', 'asana']
@@ -548,7 +542,7 @@ async def delete_agent_skill_integration(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Delete config
     deleted = ctx.db.query(AgentSkillIntegration).filter(
@@ -582,7 +576,7 @@ async def get_available_integrations_for_skill(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     if skill_type == 'gmail':
         # Return Gmail integrations
@@ -721,7 +715,7 @@ async def get_agent_expand_data(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Skills to exclude from Graph View (internal/system skills)
     EXCLUDED_SKILL_TYPES = {"automation"}  # Multi-Step Automation is internal

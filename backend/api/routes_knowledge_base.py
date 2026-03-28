@@ -173,7 +173,7 @@ async def upload_knowledge(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Sanitize filename to prevent path traversal attacks
     safe_filename = secure_filename(file.filename or "document")
@@ -255,7 +255,7 @@ def list_knowledge(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge_list = service.get_agent_knowledge(agent_id)
@@ -275,7 +275,7 @@ def get_knowledge_stats(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     return service.get_knowledge_stats(agent_id)
@@ -294,7 +294,7 @@ def get_knowledge_detail(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -303,7 +303,7 @@ def get_knowledge_detail(
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
     if knowledge.agent_id != agent_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Knowledge not found")
 
     return KnowledgeResponse.from_orm(knowledge)
 
@@ -321,7 +321,7 @@ def get_knowledge_chunks(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -330,7 +330,7 @@ def get_knowledge_chunks(
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
     if knowledge.agent_id != agent_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Knowledge not found")
 
     chunks = service.get_knowledge_chunks(knowledge_id)
     return [KnowledgeChunkResponse.from_orm(c) for c in chunks]
@@ -349,7 +349,7 @@ def delete_knowledge(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -358,7 +358,7 @@ def delete_knowledge(
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
     if knowledge.agent_id != agent_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Knowledge not found")
 
     success = service.delete_knowledge(knowledge_id)
 
@@ -385,7 +385,7 @@ def search_knowledge(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     results = service.search_knowledge(
@@ -412,7 +412,7 @@ def reprocess_knowledge(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -421,7 +421,7 @@ def reprocess_knowledge(
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
     if knowledge.agent_id != agent_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Knowledge not found")
 
     # Delete existing chunks
     chunks = service.get_knowledge_chunks(knowledge_id)

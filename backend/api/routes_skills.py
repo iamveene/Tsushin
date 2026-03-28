@@ -82,7 +82,7 @@ def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     return agent
 
 

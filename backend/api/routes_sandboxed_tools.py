@@ -176,7 +176,7 @@ def get_sandboxed_tool(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     return tool
 
@@ -239,7 +239,7 @@ def update_sandboxed_tool(
 
     # Verify tenant access
     if not ctx.can_access_resource(existing.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Custom tool not found")
 
     if tool.name is not None:
         existing.name = tool.name
@@ -272,7 +272,7 @@ def delete_sandboxed_tool(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     db.delete(tool)
     db.commit()
@@ -297,7 +297,7 @@ def list_tool_commands(
         raise HTTPException(status_code=404, detail="Tool not found")
 
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     commands = db.query(SandboxedToolCommand).filter_by(tool_id=tool_id).all()
     return commands
@@ -317,7 +317,7 @@ def create_tool_command(
         raise HTTPException(status_code=404, detail="Tool not found")
 
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     new_command = SandboxedToolCommand(
         tool_id=command.tool_id,
@@ -347,7 +347,7 @@ def delete_tool_command(
     # Verify access through the parent tool
     tool = db.query(SandboxedTool).filter_by(id=command.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this command")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     db.delete(command)
     db.commit()
@@ -373,7 +373,7 @@ def list_command_parameters(
 
     tool = db.query(SandboxedTool).filter_by(id=command.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this command")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     parameters = db.query(SandboxedToolParameter).filter_by(command_id=command_id).all()
     return parameters
@@ -395,7 +395,7 @@ def create_command_parameter(
     # Verify tenant access through parent tool
     tool = db.query(SandboxedTool).filter_by(id=command.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this command")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     new_param = SandboxedToolParameter(
         command_id=parameter.command_id,
@@ -425,11 +425,11 @@ def delete_command_parameter(
     # Verify access through command -> tool chain
     command = db.query(SandboxedToolCommand).filter_by(id=parameter.command_id).first()
     if not command:
-        raise HTTPException(status_code=403, detail="Access denied to this parameter")
+        raise HTTPException(status_code=404, detail="Parameter not found")
 
     tool = db.query(SandboxedTool).filter_by(id=command.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this parameter")
+        raise HTTPException(status_code=404, detail="Parameter not found")
 
     db.delete(parameter)
     db.commit()
@@ -459,7 +459,7 @@ async def execute_sandboxed_tool(
         raise HTTPException(status_code=404, detail="Tool not found")
 
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     # Pass tenant_id for container execution support
     service = SandboxedToolService(db, tenant_id=ctx.tenant_id if ctx else None)
@@ -520,7 +520,7 @@ def get_execution(
     # Verify access through the parent tool
     tool = db.query(SandboxedTool).filter_by(id=execution.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this execution")
+        raise HTTPException(status_code=404, detail="Execution not found")
 
     return execution
 
@@ -543,7 +543,7 @@ def list_workspace_files(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     workspace = WorkspaceManager()
     try:
@@ -568,7 +568,7 @@ def read_workspace_file(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     workspace = WorkspaceManager()
     try:
@@ -594,7 +594,7 @@ def clean_workspace(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     workspace = WorkspaceManager()
     try:

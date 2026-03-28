@@ -106,7 +106,7 @@ def verify_integration_access(
 ) -> None:
     """Verify user can access an integration (tenant check)."""
     if not ctx.can_access_resource(integration.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this integration")
+        raise HTTPException(status_code=404, detail="Integration not found")
 
 
 # ============================================================================
@@ -1098,7 +1098,7 @@ async def get_command(
         raise HTTPException(status_code=404, detail="Command not found")
 
     if not ctx.can_access_resource(command.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     return CommandResponse(
         id=command.id,
@@ -1239,7 +1239,7 @@ async def cancel_command(
         raise HTTPException(status_code=404, detail="Command not found")
 
     if not ctx.can_access_resource(command.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     if command.status != "queued":
         raise HTTPException(
@@ -1487,7 +1487,7 @@ async def update_security_pattern(
 
     # Tenant patterns - check access
     if not ctx.can_access_resource(pattern.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Pattern not found")
 
     # Apply updates
     if request.pattern is not None:
@@ -1554,7 +1554,7 @@ async def delete_security_pattern(
         )
 
     if not ctx.can_access_resource(pattern.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Pattern not found")
 
     db.delete(pattern)
     db.commit()

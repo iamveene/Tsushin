@@ -352,7 +352,7 @@ def delete_tone_preset(
         raise HTTPException(status_code=404, detail="Tone preset not found")
 
     if not ctx.can_access_resource(tone.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
+        raise HTTPException(status_code=404, detail="Tone preset not found")
 
     # System tones cannot be deleted
     if tone.is_system:
@@ -513,7 +513,7 @@ def get_agent(
 
     # Verify tenant access
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Enrich with contact, tone preset, and persona names
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -634,7 +634,7 @@ def create_agent(
 
     # Verify user can access this contact (tenant isolation)
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Check if agent for this contact already exists (within tenant)
     query = ctx.filter_by_tenant(db.query(Agent), Agent.tenant_id)
@@ -706,7 +706,7 @@ def update_agent(
 
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(db_agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Validate contact if being changed
     if agent.contact_id and agent.contact_id != db_agent.contact_id:
@@ -765,7 +765,7 @@ def delete_agent(
 
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Cannot delete default agent if it's the only one (scoped to tenant)
     if agent.is_default:
@@ -853,7 +853,7 @@ def get_contact_agent_mapping(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     mapping = db.query(ContactAgentMapping).filter(
         ContactAgentMapping.contact_id == contact_id
@@ -896,7 +896,7 @@ def create_contact_agent_mapping(
 
     # Verify contact belongs to user's tenant
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Validate agent exists and is active
     agent = db.query(Agent).filter(Agent.id == mapping.agent_id).first()
@@ -907,7 +907,7 @@ def create_contact_agent_mapping(
 
     # Verify agent belongs to user's tenant (prevent cross-tenant mapping)
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Check if mapping already exists
     existing = db.query(ContactAgentMapping).filter(
@@ -968,7 +968,7 @@ def delete_contact_agent_mapping(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     mapping = db.query(ContactAgentMapping).filter(
         ContactAgentMapping.contact_id == contact_id
@@ -1024,7 +1024,7 @@ def get_agent_custom_tools(
 
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Get all mappings with tool details
     mappings = db.query(AgentSandboxedTool).filter(
@@ -1064,7 +1064,7 @@ def add_agent_custom_tool(
 
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     tool = db.query(SandboxedTool).filter(SandboxedTool.id == data.sandboxed_tool_id).first()
     if not tool:
@@ -1072,7 +1072,7 @@ def add_agent_custom_tool(
 
     # Verify tool belongs to user's tenant (prevent cross-tenant tool binding)
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this custom tool")
+        raise HTTPException(status_code=404, detail="Custom tool not found")
 
     # Check if mapping already exists
     existing = db.query(AgentSandboxedTool).filter(
@@ -1121,7 +1121,7 @@ def update_agent_custom_tool(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,
@@ -1164,7 +1164,7 @@ def delete_agent_custom_tool(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,

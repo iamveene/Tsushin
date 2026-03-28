@@ -424,7 +424,7 @@ async def assign_profile(
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
         if not ctx.can_access_resource(agent.tenant_id):
-            raise HTTPException(status_code=403, detail="Access denied to this agent")
+            raise HTTPException(status_code=404, detail="Agent not found")
 
     try:
         assignment = service.assign_profile(
@@ -476,7 +476,7 @@ async def get_effective_config(
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
         if not ctx.can_access_resource(agent.tenant_id):
-            raise HTTPException(status_code=403, detail="Access denied to this agent")
+            raise HTTPException(status_code=404, detail="Agent not found")
 
     effective = service.get_effective_config(agent_id=agent_id, skill_type=skill_type)
 

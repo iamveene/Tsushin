@@ -243,7 +243,7 @@ async def get_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     return MCPInstanceResponse.model_validate(instance)
 
@@ -268,7 +268,7 @@ async def start_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         manager = MCPContainerManager()
@@ -344,7 +344,7 @@ async def stop_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         manager = MCPContainerManager()
@@ -379,7 +379,7 @@ async def restart_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         manager = MCPContainerManager()
@@ -416,7 +416,7 @@ async def pause_watcher_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Get watcher manager from app state
@@ -462,7 +462,7 @@ async def resume_watcher_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Get watcher manager from app state
@@ -508,7 +508,7 @@ async def get_watcher_status(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Get watcher manager from app state
@@ -551,7 +551,7 @@ async def set_group_handler(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # If setting as group handler, unset all other instances in this tenant
@@ -613,7 +613,7 @@ async def update_instance_filters(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Update only provided fields
@@ -687,7 +687,7 @@ async def delete_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Stop watcher BEFORE deleting instance
@@ -734,7 +734,7 @@ async def get_mcp_health(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         manager = MCPContainerManager()
@@ -796,7 +796,7 @@ async def get_qr_code(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         manager = MCPContainerManager()
@@ -864,7 +864,7 @@ async def logout_mcp_instance(
 
     # 2. Verify tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     # 3. Call service layer
     try:

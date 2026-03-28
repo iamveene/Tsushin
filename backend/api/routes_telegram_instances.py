@@ -147,7 +147,7 @@ async def get_telegram_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     return TelegramInstanceResponse.model_validate(instance)
 
@@ -169,7 +169,7 @@ async def start_telegram_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     try:
         service = TelegramBotService(db)
@@ -200,7 +200,7 @@ async def stop_telegram_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     try:
         service = TelegramBotService(db)
@@ -231,7 +231,7 @@ async def delete_telegram_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     try:
         # Stop watcher first
@@ -262,7 +262,7 @@ async def get_telegram_health(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     try:
         service = TelegramBotService(db)

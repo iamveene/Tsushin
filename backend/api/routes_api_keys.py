@@ -265,7 +265,7 @@ def get_api_key_route(
 
     # Verify user can access this resource
     if not ctx.can_access_resource(key.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this API key")
+        raise HTTPException(status_code=404, detail="API key not found")
 
     return to_api_key_response(key, db)
 
@@ -367,7 +367,7 @@ def update_api_key(
 
     # Verify access
     if not ctx.can_access_resource(key.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this API key")
+        raise HTTPException(status_code=404, detail="API key not found")
 
     plaintext_key_for_sync = None
     if data.api_key is not None:
@@ -427,7 +427,7 @@ def delete_api_key(
 
     # Verify access
     if not ctx.can_access_resource(key.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this API key")
+        raise HTTPException(status_code=404, detail="API key not found")
 
     db.delete(key)
     db.commit()

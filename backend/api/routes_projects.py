@@ -390,7 +390,7 @@ async def upload_project_document(
 
         # Verify tenant access (unless global admin)
         if not current_user.is_global_admin and project.tenant_id != current_user.tenant_id:
-            raise HTTPException(status_code=403, detail="Access denied to this project")
+            raise HTTPException(status_code=404, detail="Project not found")
 
         # Read file with size validation
         file_data = await file.read()

@@ -462,7 +462,7 @@ async def get_agent_sentinel_config(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     override = db.query(SentinelAgentConfig).filter(
         SentinelAgentConfig.agent_id == agent_id
@@ -499,7 +499,7 @@ async def update_agent_sentinel_config(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Get or create agent override
     override = db.query(SentinelAgentConfig).filter(
@@ -548,7 +548,7 @@ async def delete_agent_sentinel_config(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     deleted = db.query(SentinelAgentConfig).filter(
         SentinelAgentConfig.agent_id == agent_id

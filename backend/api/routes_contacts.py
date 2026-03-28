@@ -394,7 +394,7 @@ def update_contact(
 
     # Verify user can access this contact (tenant isolation)
     if not ctx.can_access_resource(db_contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Check for unique constraints (scoped to tenant)
     if contact.friendly_name and contact.friendly_name != db_contact.friendly_name:
@@ -483,7 +483,7 @@ def delete_contact(
 
     # Verify user can access this contact (tenant isolation)
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Delete any user-contact mapping first
     existing_mapping = db.query(UserContactMapping).filter(
@@ -557,7 +557,7 @@ def add_channel_mapping(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Add the mapping
     mapping_service = ContactChannelMappingService(db)
@@ -599,7 +599,7 @@ def remove_channel_mapping(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Verify mapping belongs to this contact
     mapping_service = ContactChannelMappingService(db)
@@ -630,7 +630,7 @@ def update_channel_mapping_metadata(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Verify mapping belongs to this contact
     mapping_service = ContactChannelMappingService(db)
@@ -696,7 +696,7 @@ async def resolve_contact_whatsapp(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Check if contact has phone number
     if not contact.phone_number:

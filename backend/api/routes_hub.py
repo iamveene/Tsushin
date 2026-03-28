@@ -228,7 +228,7 @@ def verify_integration_access(
     Phase 7.9.2: Checks tenant isolation.
     """
     if not ctx.can_access_resource(integration.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this integration")
+        raise HTTPException(status_code=404, detail="Integration not found")
 
 
 # ============================================================================

@@ -174,7 +174,7 @@ def get_persona(
 
     # Verify user can access this persona
     if not ctx.can_access_resource(persona.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this persona")
+        raise HTTPException(status_code=404, detail="Persona not found")
 
     return to_persona_response(persona, db)
 
@@ -272,7 +272,7 @@ def update_persona(
 
     # Verify user can access this persona
     if not ctx.can_access_resource(persona.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this persona")
+        raise HTTPException(status_code=404, detail="Persona not found")
 
     # System personas cannot be modified (only deactivated)
     if persona.is_system and persona_data.name:
@@ -366,7 +366,7 @@ def delete_persona(
 
     # Verify user can access this persona
     if not ctx.can_access_resource(persona.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this persona")
+        raise HTTPException(status_code=404, detail="Persona not found")
 
     if persona.is_system:
         raise HTTPException(status_code=403, detail="Cannot delete system persona")

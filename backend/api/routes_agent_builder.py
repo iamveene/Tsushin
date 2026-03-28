@@ -354,7 +354,7 @@ async def get_builder_data(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
     contact_name = contact.friendly_name if contact else "Unknown"
@@ -559,7 +559,7 @@ async def save_builder_data(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     try:
         # --- Step 1: Agent core fields ---
