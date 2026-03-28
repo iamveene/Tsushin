@@ -757,9 +757,7 @@ IMPORTANT: When the user asks for system information, server status, file listin
 
         # Phase 22: Custom Skills - Inject instruction-type custom skill content
         try:
-            from agent.skills.skill_manager import get_skill_manager
-            skill_mgr = get_skill_manager()
-            custom_instructions = skill_mgr.get_custom_skill_instructions(self.db, self.agent_id)
+            custom_instructions = skill_manager.get_custom_skill_instructions(self.db, self.agent_id)
             if custom_instructions:
                 system_prompt_with_date = f"{system_prompt_with_date}\n\n{custom_instructions}"
         except Exception as e:
