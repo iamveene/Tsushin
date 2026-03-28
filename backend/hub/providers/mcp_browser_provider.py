@@ -288,6 +288,12 @@ class MCPBrowserProvider(BrowserAutomationProvider):
         Raises:
             SecurityError: If URL is blocked
         """
+        from utils.ssrf_validator import validate_url, SSRFValidationError
+        try:
+            validate_url(url)
+        except SSRFValidationError as e:
+            raise SecurityError(str(e))
+
         try:
             parsed = urlparse(url)
             hostname = parsed.hostname or ""

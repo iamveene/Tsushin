@@ -456,6 +456,12 @@ async def check_ollama_health(db: Session = Depends(get_db)):
     if config and config.ollama_api_key:
         ollama_api_key = config.ollama_api_key
 
+    from utils.ssrf_validator import validate_ollama_url, SSRFValidationError
+    try:
+        ollama_base_url = validate_ollama_url(ollama_base_url)
+    except SSRFValidationError as e:
+        return {"status": "error", "base_url": ollama_base_url, "available": False, "error": f"SSRF blocked: {e}"}
+
     try:
         headers = {}
         if ollama_api_key:

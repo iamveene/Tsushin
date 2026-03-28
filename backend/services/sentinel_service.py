@@ -516,23 +516,59 @@ class SentinelService:
                     )
                     return shell_result
 
-        # Browser automation tools - check for sensitive URL patterns
-        if tool_name in ["browser_navigate", "scrape_webpage"]:
+        # BUG-068 FIX: Expanded SSRF protection for URL-bearing tools
+        URL_BEARING_TOOLS = {
+            "browser_navigate", "scrape_webpage", "navigate", "navigate_to",
+            "browse", "fetch_url", "http_request", "open_url", "web_request",
+            "browser_go", "curl", "wget",
+        }
+        sensitive_patterns = [
+            # Scheme attacks
+            "file://", "gopher://", "ftp://", "dict://", "ldap://",
+            # Loopback
+            "localhost", "127.0.0.1", "0.0.0.0", "[::1]", "[::ffff:",
+            # Cloud metadata endpoints
+            "169.254.169.254", "169.254.", "metadata.google",
+            "100.100.100.200",
+            # Docker/K8s internal
+            "host.docker.internal", "gateway.docker.internal",
+            "kubernetes.default",
+            # Private networks (RFC 1918)
+            "10.0.", "10.1.", "10.2.", "10.10.", "10.100.",
+            "192.168.",
+            # 172.16-31 range
+            "172.16.", "172.17.", "172.18.", "172.19.",
+            "172.20.", "172.21.", "172.22.", "172.23.",
+            "172.24.", "172.25.", "172.26.", "172.27.",
+            "172.28.", "172.29.", "172.30.", "172.31.",
+            # Hex/octal encoding tricks
+            "0x7f", "0177.", "2130706433",
+        ]
+        if tool_name in URL_BEARING_TOOLS:
             url = arguments.get("url", "")
             if url:
-                sensitive_patterns = [
-                    "file://",  # Local file access
-                    "localhost",  # Internal services
-                    "127.0.0.1",
-                    "169.254.",  # AWS metadata
-                    "metadata.google",  # GCP metadata
-                ]
                 for pattern in sensitive_patterns:
                     if pattern in url.lower():
                         return SentinelAnalysisResult(
                             is_threat_detected=True,
                             threat_score=0.9,
                             threat_reason=f"Attempt to access sensitive URL pattern: {pattern}",
+                            action="blocked",
+                            detection_type="ssrf_attempt",
+                            analysis_type="tool",
+                            response_time_ms=int((time.time() - start_time) * 1000),
+                        )
+
+        # Also check URL-like arguments in any tool call (defense in depth)
+        if tool_name not in URL_BEARING_TOOLS:
+            any_url = arguments.get("url", "") or arguments.get("target_url", "") or arguments.get("endpoint", "") or arguments.get("base_url", "")
+            if any_url:
+                for pattern in sensitive_patterns:
+                    if pattern in any_url.lower():
+                        return SentinelAnalysisResult(
+                            is_threat_detected=True,
+                            threat_score=0.9,
+                            threat_reason=f"SSRF attempt via {tool_name} argument: {pattern}",
                             action="blocked",
                             detection_type="ssrf_attempt",
                             analysis_type="tool",

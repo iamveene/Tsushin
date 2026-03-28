@@ -89,6 +89,14 @@ class AIClient:
             self.ollama_base_url = ollama_base_url
             self.ollama_api_key = ollama_api_key
 
+            if self.ollama_base_url:
+                from utils.ssrf_validator import validate_ollama_url, SSRFValidationError
+                try:
+                    self.ollama_base_url = validate_ollama_url(self.ollama_base_url)
+                except SSRFValidationError as e:
+                    logger.warning(f"Invalid Ollama base URL '{self.ollama_base_url}': {e}. Using default.")
+                    self.ollama_base_url = "http://host.docker.internal:11434"
+
             # Extended timeout for CPU inference (first load can be slow)
             headers = {}
             if ollama_api_key:

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
@@ -73,6 +73,14 @@ class ConfigUpdate(BaseModel):
     ollama_api_key: Optional[str] = None
     # Phase 18: Global WhatsApp conversation delay
     whatsapp_conversation_delay_seconds: Optional[float] = None
+
+    @field_validator('ollama_base_url')
+    @classmethod
+    def validate_ollama_base_url(cls, v):
+        if v is None:
+            return None
+        from utils.ssrf_validator import validate_ollama_url
+        return validate_ollama_url(v)
 
 
 class MessageResponse(BaseModel):

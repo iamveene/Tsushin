@@ -8,6 +8,7 @@ Supports dynamic package installation and image commits.
 """
 
 import os
+import re
 import time
 import shlex
 import asyncio
@@ -26,6 +27,10 @@ from services.container_runtime import (
 )
 
 logger = logging.getLogger(__name__)
+
+# BUG-063 FIX: Package name validation patterns to prevent command injection
+SAFE_PIP_PACKAGE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*((\[[\w,]+\])?(==|>=|<=|!=|~=|>|<)[\d.*]+)?$')
+SAFE_APT_PACKAGE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._+-]*(=[\d.:~+-]+)?$')
 
 
 class ToolboxContainerService:
@@ -58,19 +63,19 @@ class ToolboxContainerService:
         # Ensure base workspace directory exists with proper permissions
         workspace_base.mkdir(parents=True, exist_ok=True)
 
-        # Fix permissions on base workspace directory (needed for Docker-in-Docker)
+        # BUG-064 FIX: Use restrictive permissions (750) instead of world-writable (777)
         try:
-            os.chmod(workspace_base, 0o777)
+            os.chmod(workspace_base, 0o750)
         except OSError as e:
             logger.warning(f"Could not chmod base workspace dir: {e}")
 
         # Create tenant workspace directory
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
-        # Fix permissions for container user (UID 1000, GID 1000)
+        # BUG-064 FIX: Use restrictive permissions (750) instead of world-writable (777)
         # Toolbox container runs as non-root 'toolbox' user for security
         try:
-            os.chmod(workspace_dir, 0o777)
+            os.chmod(workspace_dir, 0o750)
             # Also try to set ownership to UID 1000 (toolbox user) if running as root
             if os.geteuid() == 0:
                 os.chown(workspace_dir, 1000, 1000)
@@ -214,15 +219,24 @@ class ToolboxContainerService:
             True if permissions were fixed successfully
         """
         try:
-            # Run chmod as root to fix workspace permissions
+            # BUG-064 FIX: Use restrictive permissions (750) instead of world-writable (777)
             exec_result = self.runtime.exec_run(
                 container_name,
-                cmd=["chmod", "777", "/workspace"],
+                cmd=["chmod", "750", "/workspace"],
                 user="root",
                 workdir="/workspace",
             )
             if exec_result.exit_code == 0:
-                logger.info("Fixed workspace permissions (chmod 777)")
+                logger.info("Fixed workspace permissions (chmod 750)")
+                # Also set proper ownership for toolbox user
+                chown_result = self.runtime.exec_run(
+                    container_name,
+                    cmd=["chown", "-R", "1000:1000", "/workspace"],
+                    user="root",
+                    workdir="/",
+                )
+                if chown_result.exit_code != 0:
+                    logger.warning(f"Failed to chown workspace: {chown_result.output}")
                 return True
             else:
                 logger.warning(f"Failed to fix workspace permissions: {exec_result.output}")
@@ -681,13 +695,29 @@ class ToolboxContainerService:
         Returns:
             Installation result dict
         """
+        # BUG-063 FIX: Validate package name to prevent command injection
+        if package_type == 'pip' and not SAFE_PIP_PACKAGE.match(package_name):
+            raise ValueError(
+                f"Invalid pip package name '{package_name}'. "
+                "Only letters, numbers, dots, hyphens, underscores allowed, "
+                "optionally with version specifier (e.g., ==1.0.0)."
+            )
+        elif package_type == 'apt' and not SAFE_APT_PACKAGE.match(package_name):
+            raise ValueError(
+                f"Invalid apt package name '{package_name}'. "
+                "Only letters, numbers, dots, hyphens, plus signs allowed."
+            )
+
+        if len(package_name) > 200:
+            raise ValueError("Package name too long (max 200 characters)")
+
         # Determine command and user based on package type
         if package_type == 'pip':
-            command = f"pip install --user {package_name}"
+            command = f"pip install --user {shlex.quote(package_name)}"
             user = None  # Use default user
         elif package_type == 'apt':
             # apt requires root privileges
-            command = f"apt-get update && apt-get install -y {package_name}"
+            command = f"apt-get update && apt-get install -y {shlex.quote(package_name)}"
             user = "root"  # Run as root for system package installation
         else:
             raise ValueError(f"Unknown package type: {package_type}")

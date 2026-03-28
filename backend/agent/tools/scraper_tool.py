@@ -66,38 +66,13 @@ class ScraperTool:
         self.last_request_time[domain] = time.time()
 
     def _is_safe_url(self, url: str) -> tuple[bool, str]:
-        """
-        Check if URL is safe to scrape
-
-        Args:
-            url: URL to validate
-
-        Returns:
-            Tuple of (is_safe, error_message)
-        """
+        """Check if URL is safe to scrape using SSRF validator."""
         try:
-            parsed = urlparse(url)
-
-            # Check scheme
-            if parsed.scheme not in ('http', 'https'):
-                return False, "Only HTTP and HTTPS URLs are allowed"
-
-            # Block localhost and private IPs
-            hostname = parsed.hostname
-            if not hostname:
-                return False, "Invalid URL"
-
-            if hostname in ('localhost', '127.0.0.1', '0.0.0.0'):
-                return False, "Cannot scrape localhost"
-
-            # Block private IP ranges
-            if hostname.startswith('192.168.') or hostname.startswith('10.') or hostname.startswith('172.'):
-                return False, "Cannot scrape private IP addresses"
-
+            from utils.ssrf_validator import validate_url
+            validate_url(url)
             return True, ""
-
         except Exception as e:
-            return False, f"Invalid URL: {str(e)}"
+            return False, str(e)
 
     def fetch_url(self, url: str) -> Dict:
         """

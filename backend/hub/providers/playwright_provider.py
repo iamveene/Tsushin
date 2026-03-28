@@ -169,43 +169,19 @@ class PlaywrightProvider(BrowserAutomationProvider):
             raise BrowserInitializationError(f"Could not launch browser: {str(e)}")
 
     def _validate_url(self, url: str) -> None:
-        """
-        Validate URL for security (SSRF prevention).
-
-        Args:
-            url: URL to validate
-
-        Raises:
-            SecurityError: If URL targets blocked resources
-        """
+        """Validate URL against SSRF using shared validator."""
+        from utils.ssrf_validator import validate_url, SSRFValidationError
         try:
-            parsed = urlparse(url)
-            hostname = parsed.hostname or ""
+            validate_url(url)
+        except SSRFValidationError as e:
+            raise SecurityError(str(e))
 
-            # Check for blocked IP ranges
-            for blocked in self.BLOCKED_IP_RANGES:
-                if hostname.lower().startswith(blocked.lower()) or hostname.lower() == blocked.lower():
-                    raise SecurityError(
-                        f"Navigation to private/local addresses is blocked: {hostname}"
-                    )
-
-            # Check blocked domains from config
-            for blocked_domain in self.config.blocked_domains:
-                if blocked_domain.lower() in hostname.lower():
-                    raise SecurityError(
-                        f"Navigation to blocked domain: {blocked_domain}"
-                    )
-
-            # Ensure valid scheme
-            if parsed.scheme not in ("http", "https"):
-                raise SecurityError(
-                    f"Only HTTP/HTTPS URLs are allowed, got: {parsed.scheme}"
-                )
-
-        except SecurityError:
-            raise
-        except Exception as e:
-            raise NavigationError(f"Invalid URL: {url} - {str(e)}")
+        # Keep existing blocked domains check
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        for blocked in self.config.blocked_domains:
+            if blocked.lower() in hostname:
+                raise SecurityError(f"Navigation to blocked domain: {blocked}")
 
     async def navigate(self, url: str, wait_until: str = "load") -> BrowserResult:
         """
