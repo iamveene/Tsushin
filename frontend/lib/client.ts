@@ -2609,42 +2609,7 @@ export const api = {
     return res.json()
   },
 
-  async getTonePresets(search?: string): Promise<TonePreset[]> {
-    const params = new URLSearchParams()
-    if (search) params.append('search', search)
-    const res = await authenticatedFetch(`${API_URL}/api/prompts/tone-presets?${params}`)
-    if (!res.ok) await handleApiError(res, 'Failed to fetch tone presets')
-    return res.json()
-  },
-
-  async createTonePreset(preset: { name: string; description: string }): Promise<TonePreset> {
-    const res = await authenticatedFetch(`${API_URL}/api/prompts/tone-presets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(preset),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to create tone preset')
-    return res.json()
-  },
-
-  async updateTonePreset(id: number, preset: Partial<{ name: string; description: string }>): Promise<TonePreset> {
-    const res = await authenticatedFetch(`${API_URL}/api/prompts/tone-presets/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(preset),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to update tone preset')
-    return res.json()
-  },
-
-  async deleteTonePreset(id: number): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/prompts/tone-presets/${id}`, {
-      method: 'DELETE',
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to delete tone preset')
-  },
-
-  async getSlashCommands(filters?: { search?: string; category?: string; is_active?: boolean }): Promise<SlashCommandDetail[]> {
+  async getSlashCommandsPrompts(filters?: { search?: string; category?: string; is_active?: boolean }): Promise<SlashCommandDetail[]> {
     const params = new URLSearchParams()
     if (filters?.search) params.append('search', filters.search)
     if (filters?.category) params.append('category', filters.category)
