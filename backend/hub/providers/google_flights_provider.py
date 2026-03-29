@@ -108,6 +108,10 @@ class GoogleFlightsProvider(FlightSearchProvider):
                                                                 # Let's assume prefer_direct means "Nonstop" -> stops=1
             }
 
+            # Sort order: 1 = Best (default), 2 = Price (cheapest first)
+            sort_map = {"best": "1", "cheapest": "2"}
+            params["sort_by"] = sort_map.get(request.sort_by, "1")
+
             # SerpApi is sensitive to locale on some routes (e.g., VIX ↔ FCO round-trip).
             # Use Brazil locale when currency or language indicates PT/BR.
             currency = request.currency or self.currency
@@ -300,6 +304,7 @@ class GoogleFlightsProvider(FlightSearchProvider):
         """Fetch return flight options using the departure_token from outbound search."""
         try:
             # SerpApi requires base parameters + departure_token for return flights
+            sort_map = {"best": "1", "cheapest": "2"}
             params = {
                 "engine": "google_flights",
                 "api_key": self.api_key,
@@ -312,6 +317,7 @@ class GoogleFlightsProvider(FlightSearchProvider):
                 "hl": self.hl,
                 "type": "1",  # Round trip
                 "adults": request.adults,
+                "sort_by": sort_map.get(request.sort_by, "1"),
             }
 
             logger.debug(f"Fetching return flights with token: {departure_token[:50]}...")

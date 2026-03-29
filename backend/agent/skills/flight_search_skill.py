@@ -167,6 +167,7 @@ class FlightSearchSkill(BaseSkill):
                 adults=parameters.get('adults', 1),
                 currency=parameters.get('currency', provider_settings.get('default_currency', 'BRL')),
                 max_results=provider_settings.get('max_results', 5),
+                sort_by=parameters.get('sort_by', 'best'),
                 provider_name=provider_name
             )
 
@@ -209,6 +210,7 @@ class FlightSearchSkill(BaseSkill):
         adults: int = 1,
         currency: str = "BRL",
         max_results: int = 5,
+        sort_by: str = "best",
         provider_name: Optional[str] = None
     ) -> Dict:
         """
@@ -260,7 +262,8 @@ class FlightSearchSkill(BaseSkill):
                 return_date=return_date,
                 adults=adults,
                 currency=currency,
-                max_results=max_results
+                max_results=max_results,
+                sort_by=sort_by
             )
 
             # Execute search
@@ -333,7 +336,8 @@ Return ONLY a JSON object with these fields (no other text):
     "departure_date": "YYYY-MM-DD",
     "return_date": "YYYY-MM-DD or null for one-way trips",
     "adults": number of passengers (1-9, default 1 if not specified),
-    "currency": "3-letter currency code"
+    "currency": "3-letter currency code",
+    "sort_by": "'best' or 'cheapest' (default 'best')"
 }}
 
 Common airport codes:
@@ -347,27 +351,31 @@ Passenger count patterns (Portuguese):
 - "para mim e minha esposa" / "eu e mais uma pessoa" → adults: 2
 - No mention of passengers → adults: 1 (default)
 
+Sort preference patterns:
+- "cheapest" / "lowest price" / "mais barato" / "mais baratos" / "menor preço" → sort_by: "cheapest"
+- "best" / "melhor" / "melhores" / no mention of sort preference → sort_by: "best"
+
 Examples:
 
 1. One-way, 1 passenger (English):
    "Flights from London to New York on Feb 28"
-   → {{"origin": "LHR", "destination": "JFK", "departure_date": "2026-02-28", "return_date": null, "adults": 1, "currency": "USD"}}
+   → {{"origin": "LHR", "destination": "JFK", "departure_date": "2026-02-28", "return_date": null, "adults": 1, "currency": "USD", "sort_by": "best"}}
 
 2. Round-trip, 1 passenger (Portuguese):
    "Voos de São Paulo para Buenos Aires dia 15/03, volta dia 20/03"
-   → {{"origin": "GRU", "destination": "EZE", "departure_date": "2026-03-15", "return_date": "2026-03-20", "adults": 1, "currency": "BRL"}}
+   → {{"origin": "GRU", "destination": "EZE", "departure_date": "2026-03-15", "return_date": "2026-03-20", "adults": 1, "currency": "BRL", "sort_by": "best"}}
 
 3. Round-trip, 2 passengers (Portuguese):
    "busque voos para dois passageiros saindo de VIX para FCO dia 4 de Junho de 2026 volta dia 22 de Junho de 2026 em BRL"
-   → {{"origin": "VIX", "destination": "FCO", "departure_date": "2026-06-04", "return_date": "2026-06-22", "adults": 2, "currency": "BRL"}}
+   → {{"origin": "VIX", "destination": "FCO", "departure_date": "2026-06-04", "return_date": "2026-06-22", "adults": 2, "currency": "BRL", "sort_by": "best"}}
 
-4. One-way, 1 passenger (Portuguese):
-   "busque voos saindo de VIX para FCO dia 4 de Junho de 2026 em BRL"
-   → {{"origin": "VIX", "destination": "FCO", "departure_date": "2026-06-04", "return_date": null, "adults": 1, "currency": "BRL"}}
+4. One-way, cheapest (Portuguese):
+   "busque os voos mais baratos saindo de VIX para FCO dia 4 de Junho de 2026 em BRL"
+   → {{"origin": "VIX", "destination": "FCO", "departure_date": "2026-06-04", "return_date": null, "adults": 1, "currency": "BRL", "sort_by": "cheapest"}}
 
-5. Round-trip, 3 passengers (English):
-   "Find flights for 3 adults from NYC to LAX on March 10 returning March 17"
-   → {{"origin": "JFK", "destination": "LAX", "departure_date": "2026-03-10", "return_date": "2026-03-17", "adults": 3, "currency": "USD"}}
+5. Round-trip, cheapest (English):
+   "Find the cheapest flights for 3 adults from NYC to LAX on March 10 returning March 17"
+   → {{"origin": "JFK", "destination": "LAX", "departure_date": "2026-03-10", "return_date": "2026-03-17", "adults": 3, "currency": "USD", "sort_by": "cheapest"}}
 
 Current date: {datetime.now().strftime('%Y-%m-%d')}
 
@@ -494,6 +502,12 @@ Return JSON only:"""
                         "type": "string",
                         "description": "Currency code for prices (e.g., 'USD', 'BRL', 'EUR')",
                         "default": "BRL"
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["best", "cheapest"],
+                        "description": "Sort order: 'best' (Google's algorithm balancing price, duration, stops) or 'cheapest' (lowest price first)",
+                        "default": "best"
                     }
                 },
                 "required": ["origin", "destination", "departure_date"]
@@ -537,6 +551,7 @@ Return JSON only:"""
         return_date = arguments.get("return_date")
         passengers = arguments.get("passengers", 1)
         currency = arguments.get("currency", config.get("settings", {}).get("default_currency", "BRL"))
+        sort_by = arguments.get("sort_by", "best")
 
         # Validate required arguments
         if not origin:
@@ -599,6 +614,7 @@ Return JSON only:"""
                 adults=passengers,
                 currency=currency,
                 max_results=max_results,
+                sort_by=sort_by,
                 provider_name=provider_name
             )
 
