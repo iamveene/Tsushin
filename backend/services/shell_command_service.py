@@ -1270,6 +1270,18 @@ class ShellCommandService:
                     logger.warning(
                         f"SENTINEL: Shell command blocked - {sentinel_result.detection_type}: {sentinel_result.threat_reason}"
                     )
+                    # Audit log the security block
+                    try:
+                        from services.audit_service import log_tenant_event, TenantAuditActions
+                        log_tenant_event(self.db, tenant_id, None,
+                            TenantAuditActions.SECURITY_SENTINEL_BLOCK, "shell_command", None,
+                            {"detection_type": sentinel_result.detection_type,
+                             "threat_score": sentinel_result.threat_score,
+                             "reason": sentinel_result.threat_reason,
+                             "agent_id": agent_id},
+                            severity="warning")
+                    except Exception:
+                        pass
                     # Log the blocked attempt
                     blocked_cmd = self._log_blocked_command(
                         commands, shell.id, tenant_id, initiated_by,

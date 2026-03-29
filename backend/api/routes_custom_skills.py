@@ -447,6 +447,12 @@ async def create_custom_skill(
     db.refresh(skill)
 
     log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.SKILL_CREATE, "skill", str(skill.id), {"name": skill.name}, request)
+    # Audit log auto-scan result on creation
+    if skill.scan_status and skill.scan_status != 'pending':
+        scan_severity = "warning" if skill.scan_status == "rejected" else "info"
+        log_tenant_event(db, ctx.tenant_id, current_user.id,
+            TenantAuditActions.SECURITY_SKILL_SCAN, "skill", str(skill.id),
+            {"name": skill.name, "scan_status": skill.scan_status, "trigger": "auto_create"}, request, severity=scan_severity)
     logger.info(f"Custom skill created: {skill.name} (slug={skill.slug}, tenant={tenant_id})")
     return _to_response(skill)
 
@@ -558,6 +564,12 @@ async def update_custom_skill(
     db.refresh(skill)
 
     log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.SKILL_UPDATE, "skill", str(skill_id), {"name": skill.name}, request)
+    # Audit log auto-scan result on update (if instructions changed)
+    if instructions_changed and skill.scan_status and skill.scan_status != 'pending':
+        scan_severity = "warning" if skill.scan_status == "rejected" else "info"
+        log_tenant_event(db, ctx.tenant_id, current_user.id,
+            TenantAuditActions.SECURITY_SKILL_SCAN, "skill", str(skill_id),
+            {"name": skill.name, "scan_status": skill.scan_status, "trigger": "auto_update"}, request, severity=scan_severity)
     logger.info(f"Custom skill updated: {skill.name} (id={skill.id}, version={skill.version})")
     return _to_response(skill)
 
@@ -677,6 +689,15 @@ async def scan_custom_skill(
     skill.scan_status = scan_result["scan_status"]
     skill.last_scan_result = scan_result.get("last_scan_result")
     db.commit()
+
+    # Audit log the scan result (both clean and rejected)
+    scan_details = {"name": skill.name, "scan_status": skill.scan_status}
+    if skill.last_scan_result:
+        scan_details.update({k: v for k, v in skill.last_scan_result.items() if k in ("reason", "detection_type", "threat_score", "profile_name")})
+    severity = "warning" if skill.scan_status == "rejected" else "info"
+    log_tenant_event(db, ctx.tenant_id, current_user.id,
+        TenantAuditActions.SECURITY_SKILL_SCAN, "skill", str(skill_id),
+        scan_details, severity=severity)
 
     logger.info(f"Skill {skill_id} re-scanned: {skill.scan_status}")
     return {"scan_status": skill.scan_status, "last_scan_result": skill.last_scan_result}

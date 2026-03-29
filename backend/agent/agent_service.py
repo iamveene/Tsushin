@@ -426,6 +426,19 @@ class AgentService:
                     self.logger.warning(
                         f"🛡️ SENTINEL: Message blocked - {sentinel_result.detection_type}: {sentinel_result.threat_reason}"
                     )
+                    # Audit log the security block
+                    if self.db and self.tenant_id:
+                        try:
+                            from services.audit_service import log_tenant_event, TenantAuditActions
+                            log_tenant_event(self.db, self.tenant_id, self.user_id,
+                                TenantAuditActions.SECURITY_SENTINEL_BLOCK, "message", None,
+                                {"detection_type": sentinel_result.detection_type,
+                                 "threat_score": sentinel_result.threat_score,
+                                 "reason": sentinel_result.threat_reason,
+                                 "channel": "playground", "agent_id": self.agent_id},
+                                severity="warning")
+                        except Exception:
+                            pass
                     # Send notification to the user who sent the blocked message
                     try:
                         config = sentinel.get_effective_config(self.agent_id)

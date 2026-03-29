@@ -138,6 +138,17 @@ def require_permission(permission: str):
         from rbac_middleware import check_permission
 
         if not check_permission(current_user, permission, db):
+            # Audit log the permission denial
+            try:
+                from services.audit_service import log_tenant_event, TenantAuditActions
+                tenant_id = getattr(current_user, 'tenant_id', None)
+                if tenant_id:
+                    log_tenant_event(db, tenant_id, current_user.id,
+                        TenantAuditActions.SECURITY_PERMISSION_DENIED, "permission", None,
+                        {"required_permission": permission, "user_email": current_user.email},
+                        severity="warning")
+            except Exception:
+                pass
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Permission denied. Required: {permission}"

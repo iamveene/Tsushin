@@ -13,6 +13,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+#### Security Event Audit Trail Hardening
+- Wired `SECURITY_SENTINEL_BLOCK` audit events on Sentinel prompt blocks (agent_service.py, router.py) and shell command blocks (shell_command_service.py)
+- Wired `SECURITY_MEMGUARD_BLOCK` audit events on MemGuard memory poisoning blocks (router.py)
+- Wired `SECURITY_SKILL_SCAN` audit events on all custom skill scan results — manual re-scan, auto-scan on create, auto-scan on update (routes_custom_skills.py)
+- Wired `SECURITY_PERMISSION_DENIED` audit events on RBAC 403 failures (auth_dependencies.py)
+- Added new `TenantAuditActions`: `SECURITY_MEMGUARD_BLOCK`, `SECURITY_SKILL_SCAN`
+- All security audit events include severity field (warning for blocks/rejections, info for clean scans)
+- Details include: detection_type, threat_score, reason, channel, agent_id, sender context
+
 #### Dedicated Custom Skill Scan Profile (Sentinel)
 - New "Custom Skill Scan" system Sentinel profile optimized for scanning admin-authored skill instructions
 - Context-aware LLM analysis prompt (`SKILL_SCAN_UNIFIED_PROMPT`) that understands skill instructions are meant to modify agent behavior — won't flag "act as X" or "always recommend Y" as threats

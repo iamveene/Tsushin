@@ -258,7 +258,9 @@ class TenantAuditActions:
 
     # Security
     SECURITY_SENTINEL_BLOCK = "security.sentinel_block"
+    SECURITY_MEMGUARD_BLOCK = "security.memguard_block"
     SECURITY_PERMISSION_DENIED = "security.permission_denied"
+    SECURITY_SKILL_SCAN = "security.skill_scan"
 
     # API Clients
     API_CLIENT_CREATE = "api_client.create"

@@ -1622,6 +1622,19 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         f"🛡️ SENTINEL (WhatsApp/Telegram): Blocking message BEFORE memory storage - "
                         f"{sentinel_result.detection_type}: {sentinel_result.threat_reason}"
                     )
+                    # Audit log the security block
+                    try:
+                        from services.audit_service import log_tenant_event, TenantAuditActions
+                        log_tenant_event(self.db, tenant_id, None,
+                            TenantAuditActions.SECURITY_SENTINEL_BLOCK, "message", None,
+                            {"detection_type": sentinel_result.detection_type,
+                             "threat_score": sentinel_result.threat_score,
+                             "reason": sentinel_result.threat_reason,
+                             "sender": sender_key, "channel": message.get("channel", "whatsapp"),
+                             "agent_id": agent_id},
+                            severity="warning")
+                    except Exception:
+                        pass
                     # Send blocked response and return early (no memory storage = no poisoning)
                     blocked_response = sentinel_result.threat_reason or "Message blocked for security reasons."
                     recipient = message.get("chat_id") or message.get("sender")
@@ -1671,6 +1684,18 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                             f"🛡️ MEMGUARD: Blocking message BEFORE memory storage - "
                             f"Memory poisoning detected: {memguard_result.reason}"
                         )
+                        # Audit log the MemGuard block
+                        try:
+                            from services.audit_service import log_tenant_event, TenantAuditActions
+                            log_tenant_event(self.db, tenant_id, None,
+                                TenantAuditActions.SECURITY_MEMGUARD_BLOCK, "message", None,
+                                {"reason": memguard_result.reason,
+                                 "threat_score": getattr(memguard_result, 'threat_score', None),
+                                 "sender": sender_key, "channel": message.get("channel", "whatsapp"),
+                                 "agent_id": agent_id},
+                                severity="warning")
+                        except Exception:
+                            pass
                         blocked_response = "Message blocked: memory poisoning attempt detected."
                         recipient = message.get("chat_id") or message.get("sender")
                         channel = message.get("channel", "whatsapp")
