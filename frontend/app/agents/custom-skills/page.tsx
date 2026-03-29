@@ -57,6 +57,13 @@ function formatDate(dateStr: string | null | undefined): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+function formatDateTime(dateStr: string | null | undefined): string {
+  if (!dateStr) return '--'
+  const d = new Date(dateStr)
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+    ' at ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+}
+
 // ==================== Page ====================
 
 function CustomSkillsPageContent() {
@@ -354,7 +361,9 @@ function CustomSkillsPageContent() {
       } else {
         setSuccess(`Skill "${skill.name}" passed security scan`)
       }
-      fetchSkills()
+      await fetchSkills()
+      // Auto-open scan detail popover so user sees the result immediately
+      setScanDetailSkillId(skill.id)
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -562,14 +571,20 @@ function CustomSkillsPageContent() {
                           >
                             {skill.scan_status}
                           </button>
-                          {scanDetailSkillId === skill.id && skill.last_scan_result && (
-                            <div className="absolute top-full left-0 mt-2 z-50 w-80 bg-tsushin-surface border border-white/15 rounded-xl shadow-2xl p-4 space-y-3">
-                              <div className="flex items-center justify-between">
-                                <h4 className="text-sm font-semibold text-white flex items-center gap-1.5">
-                                  <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          {scanDetailSkillId === skill.id && (
+                            <div onClick={(e) => e.stopPropagation()} className="absolute top-full left-0 mt-2 z-50 w-96 bg-tsushin-surface border border-white/15 rounded-xl shadow-2xl overflow-hidden">
+                              {/* Header */}
+                              <div className={`px-4 py-3 flex items-center justify-between ${
+                                skill.scan_status === 'rejected' ? 'bg-red-500/10 border-b border-red-500/20' :
+                                skill.scan_status === 'clean' ? 'bg-emerald-500/10 border-b border-emerald-500/20' :
+                                'bg-amber-500/10 border-b border-amber-500/20'
+                              }`}>
+                                <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                                  <svg className={`w-4 h-4 ${skill.scan_status === 'rejected' ? 'text-red-400' : skill.scan_status === 'clean' ? 'text-emerald-400' : 'text-amber-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                                   </svg>
-                                  Scan Details
+                                  Sentinel Scan Result
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${scanBadge(skill.scan_status)}`}>{skill.scan_status}</span>
                                 </h4>
                                 <button
                                   onClick={(e) => { e.stopPropagation(); setScanDetailSkillId(null) }}
@@ -578,63 +593,114 @@ function CustomSkillsPageContent() {
                                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                                 </button>
                               </div>
-                              {skill.last_scan_result.reason && (
-                                <div>
-                                  <p className="text-xs text-tsushin-slate mb-1">Reason</p>
-                                  <p className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2">
-                                    {skill.last_scan_result.reason}
-                                  </p>
+
+                              {!skill.last_scan_result ? (
+                                /* No scan data yet */
+                                <div className="p-4 text-center space-y-3">
+                                  <p className="text-sm text-tsushin-slate">No scan data available.</p>
+                                  <p className="text-xs text-tsushin-slate/60">Click the shield button to run a Sentinel scan on this skill.</p>
                                 </div>
-                              )}
-                              {skill.last_scan_result.detection_type && (
-                                <div>
-                                  <p className="text-xs text-tsushin-slate mb-1">Detection Type</p>
-                                  <p className="text-sm text-white">{skill.last_scan_result.detection_type.replace(/_/g, ' ')}</p>
-                                </div>
-                              )}
-                              {skill.last_scan_result.threat_score != null && (
-                                <div>
-                                  <p className="text-xs text-tsushin-slate mb-1">Threat Score</p>
-                                  <div className="flex items-center gap-2">
-                                    <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                                      <div
-                                        className={`h-full rounded-full ${skill.last_scan_result.threat_score > 0.7 ? 'bg-red-500' : skill.last_scan_result.threat_score > 0.4 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                                        style={{ width: `${Math.round(skill.last_scan_result.threat_score * 100)}%` }}
-                                      />
+                              ) : (
+                                <div className="p-4 space-y-3">
+                                  {/* Rejection reason */}
+                                  {skill.last_scan_result.reason && (
+                                    <div>
+                                      <p className="text-xs font-medium text-tsushin-slate mb-1.5">Rejection Reason</p>
+                                      <p className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2.5 leading-relaxed">
+                                        {skill.last_scan_result.reason}
+                                      </p>
                                     </div>
-                                    <span className="text-xs text-tsushin-slate">{Math.round(skill.last_scan_result.threat_score * 100)}%</span>
-                                  </div>
-                                </div>
-                              )}
-                              {skill.last_scan_result.profile_name && (
-                                <div>
-                                  <p className="text-xs text-tsushin-slate mb-1">Sentinel Profile</p>
-                                  <p className="text-sm text-white">
-                                    {skill.last_scan_result.profile_name}
-                                    {skill.last_scan_result.profile_source && (
-                                      <span className="text-xs text-tsushin-slate ml-1.5">({skill.last_scan_result.profile_source})</span>
+                                  )}
+
+                                  {/* Detection info row */}
+                                  {(skill.last_scan_result.detection_type || skill.last_scan_result.threat_score != null) && (
+                                    <div className="flex gap-4">
+                                      {skill.last_scan_result.detection_type && (
+                                        <div className="flex-1">
+                                          <p className="text-xs font-medium text-tsushin-slate mb-1">Detection Type</p>
+                                          <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/30">
+                                            {skill.last_scan_result.detection_type.replace(/_/g, ' ')}
+                                          </span>
+                                        </div>
+                                      )}
+                                      {skill.last_scan_result.threat_score != null && (
+                                        <div className="flex-1">
+                                          <p className="text-xs font-medium text-tsushin-slate mb-1">Threat Score</p>
+                                          <div className="flex items-center gap-2">
+                                            <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                                              <div
+                                                className={`h-full rounded-full transition-all ${skill.last_scan_result.threat_score > 0.7 ? 'bg-red-500' : skill.last_scan_result.threat_score > 0.4 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                                style={{ width: `${Math.round(skill.last_scan_result.threat_score * 100)}%` }}
+                                              />
+                                            </div>
+                                            <span className={`text-xs font-medium ${skill.last_scan_result.threat_score > 0.7 ? 'text-red-300' : skill.last_scan_result.threat_score > 0.4 ? 'text-amber-300' : 'text-emerald-300'}`}>
+                                              {Math.round(skill.last_scan_result.threat_score * 100)}%
+                                            </span>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Divider */}
+                                  <div className="border-t border-white/5" />
+
+                                  {/* Profile + Mode row */}
+                                  <div>
+                                    <p className="text-xs font-medium text-tsushin-slate mb-1.5">Sentinel Profile</p>
+                                    {skill.last_scan_result.profile_name ? (
+                                      <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-sm text-white font-medium">{skill.last_scan_result.profile_name}</span>
+                                          {skill.last_scan_result.profile_source && (
+                                            <span className="text-xs px-1.5 py-0.5 rounded bg-white/5 text-tsushin-slate border border-white/10">
+                                              {skill.last_scan_result.profile_source}
+                                            </span>
+                                          )}
+                                          {skill.last_scan_result.detection_mode && (
+                                            <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                              skill.last_scan_result.detection_mode === 'block'
+                                                ? 'bg-red-500/15 text-red-300 border border-red-500/30'
+                                                : skill.last_scan_result.detection_mode === 'detect_only'
+                                                ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                                : 'bg-white/5 text-tsushin-slate border border-white/10'
+                                            }`}>
+                                              {skill.last_scan_result.detection_mode.replace(/_/g, ' ')}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <Link
+                                          href="/settings/sentinel"
+                                          className="text-xs text-tsushin-accent hover:text-tsushin-accent/80 transition-colors flex items-center gap-1"
+                                          title="Open Sentinel settings to customize this profile"
+                                        >
+                                          Configure
+                                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                                        </Link>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-sm text-tsushin-slate">Default (system)</span>
+                                        <Link
+                                          href="/settings/sentinel"
+                                          className="text-xs text-tsushin-accent hover:text-tsushin-accent/80 transition-colors flex items-center gap-1"
+                                          title="Open Sentinel settings to customize scan profiles"
+                                        >
+                                          Configure
+                                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                                        </Link>
+                                      </div>
                                     )}
-                                  </p>
-                                </div>
-                              )}
-                              {skill.last_scan_result.detection_mode && (
-                                <div>
-                                  <p className="text-xs text-tsushin-slate mb-1">Detection Mode</p>
-                                  <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                    skill.last_scan_result.detection_mode === 'block'
-                                      ? 'bg-red-500/15 text-red-300 border border-red-500/30'
-                                      : skill.last_scan_result.detection_mode === 'detect_only'
-                                      ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                                      : 'bg-white/5 text-tsushin-slate border border-white/10'
-                                  }`}>
-                                    {skill.last_scan_result.detection_mode.replace(/_/g, ' ')}
-                                  </span>
-                                </div>
-                              )}
-                              {skill.last_scan_result.scanned_at && (
-                                <div>
-                                  <p className="text-xs text-tsushin-slate mb-1">Scanned At</p>
-                                  <p className="text-xs text-tsushin-slate">{formatDate(skill.last_scan_result.scanned_at)}</p>
+                                  </div>
+
+                                  {/* Scanned at */}
+                                  {skill.last_scan_result.scanned_at && (
+                                    <div className="pt-1">
+                                      <p className="text-xs text-tsushin-slate/60">
+                                        Scanned {formatDateTime(skill.last_scan_result.scanned_at)}
+                                      </p>
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -650,7 +716,10 @@ function CustomSkillsPageContent() {
                         {skill.description || 'No description'}
                       </p>
                       <p className="text-xs text-tsushin-slate/60 mt-1">
-                        v{skill.version} &middot; {skill.execution_mode} &middot; {skill.trigger_mode} &middot; Updated {formatDate(skill.updated_at)}
+                        v{skill.version} &middot; {skill.execution_mode} &middot; {skill.trigger_mode} &middot; Updated {formatDateTime(skill.updated_at)}
+                        {skill.last_scan_result?.scanned_at && (
+                          <> &middot; Scanned {formatDateTime(skill.last_scan_result.scanned_at)}</>
+                        )}
                       </p>
                     </div>
                   </div>
