@@ -736,12 +736,38 @@ export default function HubPage() {
     setKokoroActionLoading(true)
     try {
       const result = await api.startKokoro()
-      if (result.success) {
-        toast.success(result.message)
-      } else {
+      if (!result.success) {
         toast.error(result.message)
+        setKokoroActionLoading(false)
+        return
       }
-      await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
+      toast.success('Kokoro container started — waiting for service to initialize...')
+      // Update container status immediately
+      await fetchKokoroContainerStatus()
+      // Poll health with retries (Kokoro needs time to load models)
+      const maxRetries = 20
+      const retryInterval = 3000 // 3 seconds
+      for (let i = 0; i < maxRetries; i++) {
+        await new Promise(r => setTimeout(r, retryInterval))
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+        try {
+          const resp = await fetch(`${apiUrl}/api/tts-providers/kokoro/status`, {
+            headers: getAuthHeaders()
+          })
+          if (resp.ok) {
+            const data = await resp.json()
+            if (data.available) {
+              setKokoroHealth(data)
+              toast.success('Kokoro TTS is ready!')
+              setKokoroActionLoading(false)
+              return
+            }
+          }
+        } catch { /* keep retrying */ }
+      }
+      // Final fetch even if not healthy yet
+      await fetchKokoroHealth()
+      toast.error('Kokoro container is running but service is still initializing. Click "Refresh Status" to check again.')
     } catch (err: any) {
       toast.error(err.message || 'Failed to start Kokoro')
     } finally {
@@ -765,6 +791,20 @@ export default function HubPage() {
       setKokoroActionLoading(false)
     }
   }
+
+  // Auto-poll Kokoro health when container is running but service not yet available
+  useEffect(() => {
+    if (
+      kokoroContainerStatus?.status === 'running' &&
+      !kokoroHealth?.available &&
+      !kokoroActionLoading
+    ) {
+      const interval = setInterval(async () => {
+        await fetchKokoroHealth()
+      }, 5000) // poll every 5s
+      return () => clearInterval(interval)
+    }
+  }, [kokoroContainerStatus?.status, kokoroHealth?.available, kokoroActionLoading])
 
   // ==================== Ollama Instance Management ====================
 
@@ -2056,22 +2096,26 @@ export default function HubPage() {
                           {/* Status indicator with color-coded dot */}
                           <div className="flex items-center gap-1.5">
                             <div className={`w-2 h-2 rounded-full ${
-                              kokoroContainerStatus?.status === 'running'
+                              kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
                                 ? 'bg-tsushin-success animate-pulse'
-                                : kokoroContainerStatus?.status === 'not_installed' || kokoroContainerStatus?.status === 'error'
-                                  ? 'bg-tsushin-vermilion'
-                                  : 'bg-tsushin-slate'
+                                : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
+                                  ? 'bg-yellow-400 animate-pulse'
+                                  : kokoroContainerStatus?.status === 'not_installed' || kokoroContainerStatus?.status === 'error'
+                                    ? 'bg-tsushin-vermilion'
+                                    : 'bg-tsushin-slate'
                             }`} />
                             <span className="text-[11px] text-tsushin-slate capitalize">
-                              {kokoroContainerStatus?.status === 'running'
+                              {kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
                                 ? 'Running'
-                                : kokoroContainerStatus?.status === 'exited'
-                                  ? 'Stopped'
-                                  : kokoroContainerStatus?.status === 'not_installed'
-                                    ? 'Not Installed'
-                                    : kokoroContainerStatus?.status === 'error'
-                                      ? 'Error'
-                                      : kokoroHealth?.available ? 'Online' : 'Offline'}
+                                : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
+                                  ? 'Initializing...'
+                                  : kokoroContainerStatus?.status === 'exited'
+                                    ? 'Stopped'
+                                    : kokoroContainerStatus?.status === 'not_installed'
+                                      ? 'Not Installed'
+                                      : kokoroContainerStatus?.status === 'error'
+                                        ? 'Error'
+                                        : kokoroHealth?.available ? 'Online' : 'Offline'}
                             </span>
                           </div>
                           {/* Enable/Disable Toggle */}
@@ -2101,6 +2145,13 @@ export default function HubPage() {
                               <p className="text-xs text-green-400">Latency: {kokoroHealth.latency_ms}ms</p>
                             )}
                             <p className="text-xs text-green-400 flex items-center gap-1"><CreditCardIcon size={12} className="text-green-400" /> 100% FREE - No API costs!</p>
+                          </>
+                        ) : kokoroContainerStatus?.status === 'running' ? (
+                          <>
+                            <p className="text-xs text-yellow-400">Container is running — loading TTS models, please wait...</p>
+                            {kokoroContainerStatus?.name && (
+                              <p className="text-xs font-mono text-tsushin-slate">Container: {kokoroContainerStatus.name}</p>
+                            )}
                           </>
                         ) : (
                           <>
