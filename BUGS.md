@@ -1,8 +1,17 @@
 # Tsushin Bug Tracker
-**Open:** 0 | **In Progress:** 0 | **Resolved:** 108
-**Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening (2026-03-29)
+**Open:** 1 | **In Progress:** 0 | **Resolved:** 108
+**Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression (2026-03-29)
 
 ## Open Issues
+
+### BUG-109: Hub Edit Provider Instance modal renders behind main content (z-index)
+- **Status:** Open
+- **Severity:** Low
+- **Category:** UI/UX
+- **Found:** 2026-03-29 (QA Regression)
+- **Files:** `frontend/app/hub/page.tsx`
+- **Description:** When clicking "Edit" on a Provider Instance in Hub > AI Providers, the modal overlay appears behind the content area instead of on top. The modal content is in the DOM and functional but visually obscured. Likely a z-index issue — the modal's overlay container needs a higher `z-index` or the parent container has `overflow: hidden` blocking the backdrop.
+- **Impact:** Users cannot visually interact with the edit modal. Workaround: use keyboard navigation or inspect element.
 
 ### BUG-108: Kokoro TTS health check fails when /health endpoint is temporarily unavailable
 - **Status:** Resolved

@@ -169,6 +169,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - OpenAPI metadata: title "Tsushin Platform API", tagged endpoint groups, Swagger UI at `/docs`
 - Total v1 endpoints: 32
 
+#### Platform Hardening (2026-03-29)
+- Flow Agentic Summarization for raw text — SummarizationStepHandler now supports summarizing `raw_output` from tool/skill steps (Path B), not just `ConversationThread` objects. Enables flows like "Nmap scan -> AI summary -> Notification" to work end-to-end.
+- MCP Server Auto-Connect on startup — active MCP servers automatically connect when the backend starts, eliminating manual reconnection after container restarts
+- Kokoro TTS health check fallback — falls back to `/v1/audio/voices` when `/health` returns ConnectError
+- Playground thread LIKE-based fallback — sender_key resolution now uses LIKE patterns when exact matches fail, improving thread loading for older conversations
+- Google OAuth HTTPS — redirect URI updated to `https://localhost/api/hub/google/oauth/callback` via Caddy proxy; app published to production mode (tokens no longer expire every 7 days)
+- Telegram agent linking — default agent linked to Telegram bot instance with `telegram` added to `enabled_channels`
+
 #### Database & Infrastructure
 - PostgreSQL 16 migration from SQLite (full schema + Alembic migrations)
 - Tsushin kitsune branding: banner on README and login page
@@ -250,6 +258,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Showed all skill nodes in security graph with expand/collapse
 - Hidden inactive agents in security graph by default
 - Removed duplicated sentinel settings from MemGuard tab
+
+#### Platform Hardening (BUG-105 to BUG-108)
+- BUG-105: Fixed flow SummarizationStepHandler nested dict lookup — `input_data.get("step_1.thread_id")` changed to proper `input_data.get("step_1", {}).get("thread_id")`. Template `{{step_2.summary}}` now resolves correctly.
+- BUG-106: Fixed playground "Failed to Load Conversation" — threads with sender_key format mismatches now return empty messages with warning instead of error
+- BUG-107: Fixed MCP servers always showing "disconnected" — added auto-connect background task on startup
+- BUG-108: Fixed Kokoro TTS "Cannot connect" false positive — added `/v1/audio/voices` fallback endpoint
 
 #### Backend
 - Fixed shadowed local `Contact` import causing `UnboundLocalError` in WebSocket streaming
