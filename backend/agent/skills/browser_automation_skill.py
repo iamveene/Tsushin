@@ -4,7 +4,7 @@ Browser Automation Skill - AI-powered web browser control
 Phase 14.5: Browser Automation Skill
 
 Allows agents to control web browsers via natural language commands.
-Supports both container mode (isolated) and host mode (authenticated sessions).
+Uses Playwright in container mode for secure, isolated browser automation.
 
 Actions supported:
 - Navigate to URLs
@@ -39,13 +39,12 @@ class BrowserAutomationSkill(BaseSkill):
     Browser Automation skill for AI-powered web interaction.
 
     Parses natural language commands into browser actions and executes them
-    via the configured provider (Playwright for container mode, MCP Browser for host mode).
+    via Playwright in container mode.
 
     Features:
     - Natural language to action parsing
     - Multi-step command execution
     - Screenshot capture with auto-upload capability
-    - Host mode authorization (whitelist-based)
     - Token tracking for cost monitoring
 
     Skills-as-Tools (Phase 4):
@@ -166,10 +165,9 @@ class BrowserAutomationSkill(BaseSkill):
         Process browser automation request.
 
         Steps:
-        1. Check host mode authorization (if applicable)
-        2. Parse natural language into actions
-        3. Execute actions via provider
-        4. Format and return results
+        1. Parse natural language into actions
+        2. Execute actions via Playwright provider
+        3. Format and return results
 
         Args:
             message: Inbound message with browser command
@@ -181,26 +179,7 @@ class BrowserAutomationSkill(BaseSkill):
         try:
             logger.info(f"BrowserAutomationSkill: Processing message: {message.body[:100]}...")
 
-            # Get mode and provider settings
-            mode = config.get('mode', 'container')
             provider_type = config.get('provider_type', 'playwright')
-
-            # TODO: Re-enable when host mode is implemented
-            # Host mode authorization check
-            # if mode == 'host':
-            #     allowed_users = config.get('allowed_user_keys', [])
-            #     if allowed_users and message.sender_key not in allowed_users:
-            #         logger.warning(
-            #             f"BrowserAutomationSkill: Unauthorized host mode access attempt "
-            #             f"by {message.sender_key}"
-            #         )
-            #         return SkillResult(
-            #             success=False,
-            #             output="You don't have permission to use host browser mode. "
-            #                    "Contact the admin to be added to the whitelist.",
-            #             metadata={'error': 'unauthorized', 'mode': 'host'}
-            #         )
-            #     logger.info(f"BrowserAutomationSkill: Host mode access granted to {message.sender_key}")
 
             # Parse natural language into actions
             actions = await self._parse_intent(message.body, config)
@@ -699,7 +678,7 @@ Return JSON array only:"""
                 },
                 "provider_type": {
                     "type": "string",
-                    "enum": ["playwright", "mcp_browser"],
+                    "enum": ["playwright"],
                     "description": "Browser automation provider",
                     "default": "playwright"
                 },
@@ -809,8 +788,8 @@ Return JSON array only:"""
                     },
                     "mode": {
                         "type": "string",
-                        "enum": ["container", "host"],
-                        "description": "container=isolated browser (default), host=user's authenticated browser",
+                        "enum": ["container"],
+                        "description": "container=isolated Playwright browser (default)",
                         "default": "container"
                     },
                     "wait_until": {
@@ -908,27 +887,9 @@ Return JSON array only:"""
                 metadata={"error": "missing_action", "skip_ai": True}
             )
 
-        # Get mode from arguments or config
-        mode = arguments.get("mode", config.get("mode", "container"))
         provider_type = config.get("provider_type", "playwright")
 
-        # Host mode authorization check
-        if mode == "host":
-            allowed_users = config.get("allowed_user_keys", [])
-            if allowed_users and message.sender_key not in allowed_users:
-                logger.warning(
-                    f"BrowserAutomationSkill.execute_tool: Unauthorized host mode access attempt "
-                    f"by {message.sender_key}"
-                )
-                return SkillResult(
-                    success=False,
-                    output="You don't have permission to use host browser mode. "
-                           "Contact the admin to be added to the whitelist.",
-                    metadata={"error": "unauthorized", "mode": "host", "skip_ai": True}
-                )
-            logger.info(f"BrowserAutomationSkill.execute_tool: Host mode access granted to {message.sender_key}")
-
-        logger.info(f"BrowserAutomationSkill.execute_tool: action={action}, mode={mode}, provider={provider_type}")
+        logger.info(f"BrowserAutomationSkill.execute_tool: action={action}, provider={provider_type}")
 
         try:
             # Get provider
@@ -1021,12 +982,10 @@ Return JSON array only:"""
             # Add common metadata
             if result.metadata:
                 result.metadata["provider"] = provider_type
-                result.metadata["mode"] = mode
                 result.metadata["action"] = action
             else:
                 result.metadata = {
                     "provider": provider_type,
-                    "mode": mode,
                     "action": action,
                     "skip_ai": True
                 }

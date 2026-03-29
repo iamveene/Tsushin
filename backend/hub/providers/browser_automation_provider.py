@@ -188,7 +188,7 @@ class BrowserConfig:
     Extracted from BrowserAutomationIntegration model for provider initialization.
     """
     provider_type: str = "playwright"
-    mode: str = "container"  # "container" or "host"
+    mode: str = "container"
     browser_type: str = "chromium"  # "chromium", "firefox", or "webkit"
     headless: bool = True
     timeout_seconds: int = 30
@@ -197,10 +197,6 @@ class BrowserConfig:
     max_concurrent_sessions: int = 3
     user_agent: Optional[str] = None
     proxy_url: Optional[str] = None
-
-    # Host mode settings (Phase 8)
-    allowed_user_keys: List[str] = field(default_factory=list)
-    require_approval_per_action: bool = False
 
     # Security settings
     blocked_domains: List[str] = field(default_factory=list)
@@ -213,13 +209,6 @@ class BrowserConfig:
     def from_integration(cls, integration) -> 'BrowserConfig':
         """Create config from BrowserAutomationIntegration model."""
         import json
-
-        allowed_keys = []
-        if hasattr(integration, 'allowed_user_keys_json') and integration.allowed_user_keys_json:
-            try:
-                allowed_keys = json.loads(integration.allowed_user_keys_json)
-            except (json.JSONDecodeError, TypeError):
-                allowed_keys = []
 
         blocked = []
         if hasattr(integration, 'blocked_domains_json') and integration.blocked_domains_json:
@@ -239,8 +228,6 @@ class BrowserConfig:
             max_concurrent_sessions=getattr(integration, 'max_concurrent_sessions', 3),
             user_agent=getattr(integration, 'user_agent', None),
             proxy_url=getattr(integration, 'proxy_url', None),
-            allowed_user_keys=allowed_keys,
-            require_approval_per_action=getattr(integration, 'require_approval_per_action', False),
             blocked_domains=blocked,
             session_persistence=getattr(integration, 'session_persistence', False),
             session_ttl_seconds=getattr(integration, 'session_ttl_seconds', 300),
@@ -255,7 +242,7 @@ class BrowserAutomationProvider(ABC):
     Providers are instantiated per-request and must handle cleanup properly.
 
     Class Attributes:
-        provider_type: Unique identifier for this provider (e.g., "playwright", "mcp_browser")
+        provider_type: Unique identifier for this provider (e.g., "playwright")
         provider_name: Human-readable name for display
 
     Usage:

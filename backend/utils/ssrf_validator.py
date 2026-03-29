@@ -3,7 +3,7 @@ SSRF Validation Module (BUG-065, BUG-066)
 
 Provides URL validation with DNS-resolution-based IP checking to prevent
 Server-Side Request Forgery attacks. Replaces fragmented string-prefix
-checks across scraper_tool.py, playwright_provider.py, and mcp_browser_provider.py.
+checks across scraper_tool.py and playwright_provider.py.
 
 Usage:
     from utils.ssrf_validator import validate_url, validate_ollama_url, SSRFValidationError

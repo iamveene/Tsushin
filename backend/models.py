@@ -2941,23 +2941,23 @@ class BrowserAutomationIntegration(HubIntegration):
     Browser Automation Integration.
 
     Phase 14.5: Browser Automation Skill
+    Phase 35:   Session persistence, rich actions, multi-tab, error recovery
 
-    Stores configuration for browser automation providers (Playwright, MCP Browser).
-    Supports both container mode (isolated browser) and host mode (user's browser).
+    Stores Playwright browser automation configuration per tenant.
 
     Features:
-        - Container mode: Secure, isolated browser for public websites
-        - Host mode: Access user's authenticated sessions (Phase 8)
-        - Configurable viewport, timeout, user agent
-        - Multi-tenant support with per-user access control
+        - Headless Chromium/Firefox/WebKit in Docker container
+        - Configurable viewport, timeout, user agent, proxy
+        - Session persistence with idle timeout (Phase 35a)
+        - Multi-tenant support
     """
     __tablename__ = "browser_automation_integration"
 
     id = Column(Integer, ForeignKey("hub_integration.id"), primary_key=True)
 
     # Provider settings
-    provider_type = Column(String(50), default="playwright")  # "playwright" or "mcp_browser"
-    mode = Column(String(20), default="container")  # "container" or "host"
+    provider_type = Column(String(50), default="playwright")
+    mode = Column(String(20), default="container")
 
     # Browser configuration
     browser_type = Column(String(20), default="chromium")  # "chromium", "firefox", "webkit"
@@ -2969,10 +2969,8 @@ class BrowserAutomationIntegration(HubIntegration):
     user_agent = Column(Text, nullable=True)
     proxy_url = Column(Text, nullable=True)
 
-    # Host mode settings (Phase 8)
-    allowed_user_keys_json = Column(Text, nullable=True)  # JSON array of WhatsApp numbers
-    require_approval_per_action = Column(Boolean, default=False)
-    blocked_domains_json = Column(Text, nullable=True)  # JSON array of blocked domains
+    # Domain blocklist (JSON array)
+    blocked_domains_json = Column(Text, nullable=True)
 
     # Session persistence (Phase 35a)
     session_persistence = Column(Boolean, default=False)
@@ -3115,60 +3113,6 @@ class ConversationLink(Base):
     )
 
 
-# ============================================================================
-# Phase 8 (Browser Automation): Host Browser Audit Logging
-# ============================================================================
-
-class HostBrowserAuditLog(Base):
-    """
-    Audit log for host browser automation actions (security compliance).
-
-    Phase 8: Security audit logging for host mode browser operations.
-
-    All host mode browser actions MUST be logged for:
-    - Tracking actions on user's authenticated sessions
-    - Security investigation and incident response
-    - Compliance with data protection policies
-
-    Note: Container mode actions are NOT logged here (isolated environment).
-    """
-    __tablename__ = "host_browser_audit_log"
-
-    id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    # Multi-tenancy and user context
-    tenant_id = Column(String(50), nullable=False)
-    user_key = Column(String(100), nullable=False)  # WhatsApp number or user identifier
-    agent_id = Column(Integer, ForeignKey('agent.id'), nullable=True)
-
-    # Action details
-    action = Column(String(50), nullable=False)  # navigate, click, fill, extract, screenshot, execute_script
-    url = Column(Text, nullable=True)  # Sanitized (sensitive query params redacted)
-    target_element = Column(String(255), nullable=True)  # CSS selector or element reference
-
-    # MCP details
-    mcp_tool = Column(String(100), nullable=False)  # Full MCP tool name used
-    mcp_params_hash = Column(String(64), nullable=True)  # SHA256 of params (privacy)
-
-    # Execution result
-    success = Column(Boolean, nullable=False)
-    error_message = Column(Text, nullable=True)
-    duration_ms = Column(Integer, nullable=True)
-
-    # Security context
-    session_id = Column(String(100), nullable=True)  # Browser session identifier
-    ip_address = Column(String(45), nullable=True)  # Client IP (IPv4 or IPv6)
-
-    # Relationships
-    agent = relationship("Agent", backref="host_browser_audit_logs")
-
-    __table_args__ = (
-        Index("idx_host_browser_audit_timestamp", "timestamp"),
-        Index("idx_host_browser_audit_tenant", "tenant_id"),
-        Index("idx_host_browser_audit_user", "user_key"),
-        Index("idx_host_browser_audit_action", "action"),
-    )
 
 
 # ============================================================================
