@@ -33,6 +33,36 @@ SUPPORTED_VENDORS = list(VENDOR_DEFAULT_BASE_URLS.keys()) + ["custom"]
 class ProviderInstanceService:
 
     @staticmethod
+    def ensure_ollama_instance(tenant_id: str, db: Session) -> ProviderInstance:
+        """Ensure a default Ollama provider instance exists for the tenant.
+
+        If an active Ollama instance already exists, returns it.
+        Otherwise, creates a new default instance using the Ollama base URL
+        from the Config table (or the standard default).
+        """
+        existing = db.query(ProviderInstance).filter(
+            ProviderInstance.tenant_id == tenant_id,
+            ProviderInstance.vendor == 'ollama',
+            ProviderInstance.is_active == True,
+        ).first()
+        if existing:
+            return existing
+
+        # Derive base_url from Config table
+        from models import Config
+        config = db.query(Config).first()
+        base_url = config.ollama_base_url if config and config.ollama_base_url else "http://host.docker.internal:11434"
+
+        return ProviderInstanceService.create_instance(
+            tenant_id=tenant_id,
+            vendor='ollama',
+            instance_name='Ollama (Local)',
+            db=db,
+            base_url=base_url,
+            is_default=True,
+        )
+
+    @staticmethod
     def list_instances(tenant_id: str, db: Session, vendor: str = None, active_only: bool = True) -> List[ProviderInstance]:
         """List provider instances for a tenant, optionally filtered by vendor."""
         query = db.query(ProviderInstance).filter(ProviderInstance.tenant_id == tenant_id)

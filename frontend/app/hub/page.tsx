@@ -244,6 +244,17 @@ export default function HubPage() {
   const [selectedVendor, setSelectedVendor] = useState<string>('')
   const [instanceMenuOpen, setInstanceMenuOpen] = useState<number | null>(null)
 
+  // Local Services state (Ollama & Kokoro management)
+  const [kokoroContainerStatus, setKokoroContainerStatus] = useState<{ status: string; name?: string; image?: string; message?: string } | null>(null)
+  const [kokoroActionLoading, setKokoroActionLoading] = useState(false)
+  const [ollamaEnabled, setOllamaEnabled] = useState(false)
+  const [ollamaToggleLoading, setOllamaToggleLoading] = useState(false)
+  const [ollamaUrlEditing, setOllamaUrlEditing] = useState(false)
+  const [ollamaUrlValue, setOllamaUrlValue] = useState('')
+  const [ollamaUrlSaving, setOllamaUrlSaving] = useState(false)
+  const [ollamaTestResult, setOllamaTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [ollamaTestLoading, setOllamaTestLoading] = useState(false)
+
   // MCP Servers state (Phase 26)
   const [mcpServers, setMcpServers] = useState<any[]>([])
   const [mcpServersLoading, setMcpServersLoading] = useState(false)
@@ -459,6 +470,7 @@ export default function HubPage() {
         fetchAPIKeys(),
         fetchOllamaHealth(),
         fetchKokoroHealth(),
+        fetchKokoroContainerStatus(),
         loadHubIntegrations(),
         loadMcpInstances(),
         loadTelegramInstances(),  // Phase 10.1.1
@@ -679,6 +691,132 @@ export default function HubPage() {
         available: false,
         details: { hint: 'Start with: docker compose --profile tts up -d' }
       })
+    }
+  }
+
+  // ==================== Kokoro Container Management ====================
+
+  const fetchKokoroContainerStatus = async () => {
+    try {
+      const data = await api.getKokoroStatus()
+      setKokoroContainerStatus(data)
+    } catch (error) {
+      setKokoroContainerStatus({ status: 'error', message: 'Cannot reach backend' })
+    }
+  }
+
+  const handleStartKokoro = async () => {
+    setKokoroActionLoading(true)
+    try {
+      const result = await api.startKokoro()
+      if (result.success) {
+        toast.success(result.message)
+      } else {
+        toast.error(result.message)
+      }
+      await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to start Kokoro')
+    } finally {
+      setKokoroActionLoading(false)
+    }
+  }
+
+  const handleStopKokoro = async () => {
+    setKokoroActionLoading(true)
+    try {
+      const result = await api.stopKokoro()
+      if (result.success) {
+        toast.success(result.message)
+      } else {
+        toast.error(result.message)
+      }
+      await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to stop Kokoro')
+    } finally {
+      setKokoroActionLoading(false)
+    }
+  }
+
+  // ==================== Ollama Instance Management ====================
+
+  // Derive Ollama enabled state from provider instances
+  useEffect(() => {
+    const ollamaInstance = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    setOllamaEnabled(!!ollamaInstance)
+    if (ollamaInstance?.base_url) {
+      setOllamaUrlValue(ollamaInstance.base_url)
+    } else if (ollamaHealth?.base_url) {
+      setOllamaUrlValue(ollamaHealth.base_url)
+    }
+  }, [providerInstances, ollamaHealth])
+
+  const handleOllamaToggle = async () => {
+    setOllamaToggleLoading(true)
+    try {
+      if (ollamaEnabled) {
+        // Disable: soft-delete the Ollama instance
+        const ollamaInstance = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+        if (ollamaInstance) {
+          await api.deleteProviderInstance(ollamaInstance.id)
+          toast.success('Ollama disabled')
+        }
+      } else {
+        // Enable: ensure an Ollama instance exists
+        await api.ensureOllamaInstance()
+        toast.success('Ollama enabled')
+      }
+      await fetchProviderInstances()
+      await fetchOllamaHealth()
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to toggle Ollama')
+    } finally {
+      setOllamaToggleLoading(false)
+    }
+  }
+
+  const handleOllamaUrlSave = async () => {
+    const ollamaInstance = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!ollamaInstance) return
+
+    setOllamaUrlSaving(true)
+    try {
+      await api.updateProviderInstance(ollamaInstance.id, { base_url: ollamaUrlValue })
+      toast.success('Ollama URL updated')
+      setOllamaUrlEditing(false)
+      await Promise.all([fetchProviderInstances(), fetchOllamaHealth()])
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update URL')
+    } finally {
+      setOllamaUrlSaving(false)
+    }
+  }
+
+  const handleOllamaTest = async () => {
+    const ollamaInstance = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!ollamaInstance) {
+      // If no instance, just refresh the health check
+      await fetchOllamaHealth()
+      return
+    }
+
+    setOllamaTestLoading(true)
+    setOllamaTestResult(null)
+    try {
+      const result = await api.testProviderConnection(ollamaInstance.id)
+      setOllamaTestResult(result)
+      if (result.success) {
+        toast.success(`Connected (${result.latency_ms}ms)`)
+      } else {
+        toast.error(result.message)
+      }
+      await fetchProviderInstances()
+    } catch (err: any) {
+      setOllamaTestResult({ success: false, message: err.message || 'Test failed' })
+      toast.error(err.message || 'Test failed')
+    } finally {
+      setOllamaTestLoading(false)
     }
   }
 
@@ -1744,7 +1882,7 @@ export default function HubPage() {
                 <div className="pt-2">
                   <h3 className="text-sm font-semibold text-tsushin-fog mb-3">Local Services</h3>
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {/* Ollama Card (Special - Local) */}
+                    {/* Ollama Card (Enhanced - Local LLM) */}
                     <div className="card p-5 hover-glow group">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-3">
@@ -1753,36 +1891,125 @@ export default function HubPage() {
                           </div>
                           <h3 className="font-semibold text-white">Ollama (Local)</h3>
                         </div>
-                        <span className={ollamaHealth?.available ? 'badge badge-success' : 'badge badge-neutral'}>
-                          {ollamaHealth?.available ? 'Online' : 'Offline'}
-                        </span>
+                        <div className="flex items-center gap-3">
+                          {/* Status indicator */}
+                          <div className="flex items-center gap-1.5">
+                            <div className={`w-2 h-2 rounded-full ${ollamaHealth?.available ? 'bg-tsushin-success animate-pulse' : 'bg-tsushin-slate'}`} />
+                            <span className="text-[11px] text-tsushin-slate">{ollamaHealth?.available ? 'Healthy' : 'Offline'}</span>
+                          </div>
+                          {/* Enable/Disable Toggle */}
+                          {canEditSettings && (
+                            <button
+                              onClick={handleOllamaToggle}
+                              disabled={ollamaToggleLoading}
+                              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                ollamaEnabled ? 'bg-tsushin-success' : 'bg-tsushin-slate/40'
+                              } ${ollamaToggleLoading ? 'opacity-50 cursor-wait' : ''}`}
+                              title={ollamaEnabled ? 'Disable Ollama' : 'Enable Ollama'}
+                            >
+                              <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                ollamaEnabled ? 'translate-x-4' : 'translate-x-0'
+                              }`} />
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <p className="text-xs text-tsushin-slate mb-3">Run LLMs locally - no API key needed</p>
-                      <div className="text-sm text-tsushin-slate">
+                      <div className="text-sm text-tsushin-slate space-y-2">
                         {ollamaHealth?.available ? (
                           <>
-                            <p className="text-xs mb-2">{ollamaHealth.models_count || 0} models available</p>
-                            <p className="text-xs font-mono text-tsushin-accent mb-2">{ollamaHealth.base_url}</p>
+                            <p className="text-xs">{ollamaHealth.models_count || 0} models available</p>
+                            {/* Inline URL editor */}
+                            {ollamaUrlEditing ? (
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  value={ollamaUrlValue}
+                                  onChange={(e) => setOllamaUrlValue(e.target.value)}
+                                  className="bg-tsushin-ink border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm font-mono flex-1 min-w-0"
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleOllamaUrlSave()
+                                    if (e.key === 'Escape') setOllamaUrlEditing(false)
+                                  }}
+                                />
+                                <button
+                                  onClick={handleOllamaUrlSave}
+                                  disabled={ollamaUrlSaving}
+                                  className="bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-2.5 py-1.5 text-xs shrink-0"
+                                >
+                                  {ollamaUrlSaving ? '...' : 'Save'}
+                                </button>
+                                <button
+                                  onClick={() => setOllamaUrlEditing(false)}
+                                  className="text-tsushin-slate hover:text-white px-1.5 py-1.5 text-xs shrink-0"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <p
+                                className="text-xs font-mono text-tsushin-accent cursor-pointer hover:text-white transition-colors"
+                                onClick={() => canEditSettings && setOllamaUrlEditing(true)}
+                                title={canEditSettings ? 'Click to edit URL' : ''}
+                              >
+                                {ollamaHealth.base_url}
+                                {canEditSettings && (
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="inline ml-1.5 opacity-50">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                    <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                                  </svg>
+                                )}
+                              </p>
+                            )}
                             {ollamaHealth.models?.slice(0, 3).map((m, i) => (
                               <p key={i} className="text-xs text-tsushin-muted">- {m.name}</p>
                             ))}
+                            {(ollamaHealth.models_count || 0) > 3 && (
+                              <p className="text-xs text-tsushin-slate">... and {(ollamaHealth.models_count || 0) - 3} more</p>
+                            )}
                           </>
                         ) : (
                           <>
-                            <p className="text-xs text-tsushin-vermilion mb-2">{ollamaHealth?.error || 'Not running'}</p>
+                            <p className="text-xs text-tsushin-vermilion">{ollamaHealth?.error || 'Not running'}</p>
                             <p className="text-xs">Start with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">ollama serve</code></p>
                           </>
                         )}
+                        {/* Test result display */}
+                        {ollamaTestResult && (
+                          <p className={`text-xs ${ollamaTestResult.success ? 'text-tsushin-success' : 'text-tsushin-vermilion'}`}>
+                            {ollamaTestResult.success ? 'Connection successful' : ollamaTestResult.message}
+                          </p>
+                        )}
                       </div>
-                      <button
-                        onClick={fetchOllamaHealth}
-                        className="w-full mt-4 btn-secondary py-2 text-sm"
-                      >
-                        Refresh Status
-                      </button>
+                      {/* Action buttons */}
+                      <div className="flex gap-2 mt-4">
+                        <button
+                          onClick={handleOllamaTest}
+                          disabled={ollamaTestLoading}
+                          className="flex-1 bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
+                        >
+                          {ollamaTestLoading ? 'Testing...' : 'Test Connection'}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await fetchOllamaHealth()
+                            const ollamaInst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+                            if (ollamaInst) {
+                              try {
+                                const models = await api.discoverProviderModels(ollamaInst.id)
+                                toast.success(`Discovered ${models.length} model${models.length !== 1 ? 's' : ''}`)
+                                await fetchProviderInstances()
+                              } catch { /* ignore */ }
+                            }
+                          }}
+                          className="flex-1 btn-secondary py-1.5 text-sm"
+                        >
+                          Refresh Models
+                        </button>
+                      </div>
                     </div>
 
-                    {/* Kokoro TTS Card (Special - Free Local TTS) */}
+                    {/* Kokoro TTS Card (Enhanced - Container Management) */}
                     <div className="card p-5 hover-glow group border-green-700/30">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-3">
@@ -1791,34 +2018,88 @@ export default function HubPage() {
                           </div>
                           <h3 className="font-semibold text-white">Kokoro TTS (Free)</h3>
                         </div>
-                        <span className={kokoroHealth?.available ? 'badge badge-success' : 'badge badge-neutral'}>
-                          {kokoroHealth?.available ? 'Online' : 'Offline'}
-                        </span>
+                        {/* Status indicator with color-coded dot */}
+                        <div className="flex items-center gap-1.5">
+                          <div className={`w-2 h-2 rounded-full ${
+                            kokoroContainerStatus?.status === 'running'
+                              ? 'bg-tsushin-success animate-pulse'
+                              : kokoroContainerStatus?.status === 'not_installed' || kokoroContainerStatus?.status === 'error'
+                                ? 'bg-tsushin-vermilion'
+                                : 'bg-tsushin-slate'
+                          }`} />
+                          <span className="text-[11px] text-tsushin-slate capitalize">
+                            {kokoroContainerStatus?.status === 'running'
+                              ? 'Running'
+                              : kokoroContainerStatus?.status === 'exited'
+                                ? 'Stopped'
+                                : kokoroContainerStatus?.status === 'not_installed'
+                                  ? 'Not Installed'
+                                  : kokoroContainerStatus?.status === 'error'
+                                    ? 'Error'
+                                    : kokoroHealth?.available ? 'Online' : 'Offline'}
+                          </span>
+                        </div>
                       </div>
                       <p className="text-xs text-tsushin-slate mb-3">Free text-to-speech with PTBR support</p>
-                      <div className="text-sm text-tsushin-slate">
+                      <div className="text-sm text-tsushin-slate space-y-2">
                         {kokoroHealth?.available ? (
                           <>
-                            <p className="text-xs mb-2">{kokoroHealth.details?.voices || 15} voices available</p>
-                            <p className="text-xs font-mono text-tsushin-accent mb-2">{kokoroHealth.details?.service_url || 'http://localhost:8880'}</p>
+                            <p className="text-xs">{kokoroHealth.details?.voices || 15} voices available</p>
+                            <p className="text-xs font-mono text-tsushin-accent">{kokoroHealth.details?.service_url || 'http://localhost:8880'}</p>
                             {kokoroHealth.latency_ms && (
                               <p className="text-xs text-green-400">Latency: {kokoroHealth.latency_ms}ms</p>
                             )}
-                            <p className="text-xs text-green-400 mt-1 flex items-center gap-1"><CreditCardIcon size={12} className="text-green-400" /> 100% FREE - No API costs!</p>
+                            <p className="text-xs text-green-400 flex items-center gap-1"><CreditCardIcon size={12} className="text-green-400" /> 100% FREE - No API costs!</p>
                           </>
                         ) : (
                           <>
-                            <p className="text-xs text-tsushin-vermilion mb-2">{kokoroHealth?.message || 'Service not running'}</p>
-                            <p className="text-xs">Start with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">docker compose --profile tts up -d</code></p>
+                            <p className="text-xs text-tsushin-vermilion">{kokoroHealth?.message || kokoroContainerStatus?.message || 'Service not running'}</p>
+                            {kokoroContainerStatus?.status === 'not_installed' && (
+                              <p className="text-xs">Install with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">docker compose --profile tts up -d</code></p>
+                            )}
+                            {kokoroContainerStatus?.name && (
+                              <p className="text-xs font-mono text-tsushin-slate">Container: {kokoroContainerStatus.name}</p>
+                            )}
                           </>
                         )}
                       </div>
-                      <button
-                        onClick={fetchKokoroHealth}
-                        className="w-full mt-4 btn-secondary py-2 text-sm"
-                      >
-                        Refresh Status
-                      </button>
+                      {/* Container management buttons */}
+                      <div className="flex gap-2 mt-4">
+                        {kokoroContainerStatus?.status === 'running' ? (
+                          <button
+                            onClick={handleStopKokoro}
+                            disabled={kokoroActionLoading}
+                            className="flex-1 bg-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/30 rounded-lg px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
+                          >
+                            {kokoroActionLoading ? 'Stopping...' : 'Stop'}
+                          </button>
+                        ) : kokoroContainerStatus?.status === 'not_installed' || kokoroContainerStatus?.status === 'error' ? (
+                          <button
+                            onClick={async () => {
+                              await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
+                            }}
+                            className="flex-1 btn-secondary py-1.5 text-sm"
+                          >
+                            Refresh Status
+                          </button>
+                        ) : (
+                          <button
+                            onClick={handleStartKokoro}
+                            disabled={kokoroActionLoading}
+                            className="flex-1 bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
+                          >
+                            {kokoroActionLoading ? 'Starting...' : 'Start'}
+                          </button>
+                        )}
+                        <button
+                          onClick={async () => {
+                            await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
+                          }}
+                          className="flex-1 btn-secondary py-1.5 text-sm"
+                        >
+                          Refresh Status
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>

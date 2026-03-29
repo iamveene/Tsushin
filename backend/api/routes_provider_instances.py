@@ -270,6 +270,25 @@ def create_provider_instance(
     return _to_response(instance, db)
 
 
+@router.post("/provider-instances/ensure-ollama", response_model=ProviderInstanceResponse)
+def ensure_ollama_instance(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Ensure a default Ollama provider instance exists for the current tenant.
+    Returns the existing instance if one is already active, or creates a new one.
+    """
+    from services.provider_instance_service import ProviderInstanceService
+    try:
+        instance = ProviderInstanceService.ensure_ollama_instance(ctx.tenant_id, db)
+        return _to_response(instance, db)
+    except Exception as e:
+        logger.error(f"Failed to ensure Ollama instance for tenant {ctx.tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/provider-instances/{instance_id}", response_model=ProviderInstanceResponse)
 def get_provider_instance(
     instance_id: int,
