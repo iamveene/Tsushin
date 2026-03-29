@@ -1268,19 +1268,25 @@ class SummarizationStepHandler(FlowStepHandler):
     """
     Phase 17: Agentic Summarization Step Handler
 
-    Generates AI-powered summaries of conversation transcripts.
-    Useful for multi-step flows where conversation output needs to be
-    condensed before being sent to recipients.
+    Generates AI-powered summaries of:
+    1. Conversation transcripts (via thread_id from conversation steps)
+    2. Raw text output (via source_step from tool/skill steps)
 
     Config schema:
     {
-        "source_step": "step_1",      # Step name/position to get thread_id from
-        "thread_id": 123,              # Or explicit thread_id
+        "source_step": "step_1",      # Step name/position to get content from
+        "thread_id": 123,              # Or explicit thread_id (for conversation steps)
         "summary_prompt": "...",       # Custom summarization instructions
         "output_format": "brief|detailed|structured|minimal",  # Output style
         "prompt_mode": "append|replace",  # How to use summary_prompt
         "model": "gemini-2.5-flash"    # Optional: AI model to use
     }
+
+    Resolution priority:
+    1. Explicit thread_id in config
+    2. thread_id from source_step output (conversation steps)
+    3. raw_output from source_step output (tool/skill steps)
+    4. previous_step fallback (if no source_step specified)
 
     Output formats:
     - "brief": Concise 2-3 sentence summary (default)
@@ -1302,24 +1308,58 @@ class SummarizationStepHandler(FlowStepHandler):
         flow_run: FlowRun,
         step_run: FlowNodeRun
     ) -> Dict[str, Any]:
-        """Generate AI summary of conversation transcript."""
+        """Generate AI summary of conversation transcript or raw text output."""
         config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
 
         # Get thread_id from previous step or explicit config
         thread_id = config.get("thread_id")
         source_step = config.get("source_step")
+        source_text = None  # Raw text from source step (for tool/skill outputs)
 
         if not thread_id and source_step:
-            # Try to get thread_id from previous step's output
-            thread_id = input_data.get(f"{source_step}.thread_id") or input_data.get("thread_id")
+            # Use proper nested dict access (source_step is a context key like "step_1")
+            source_data = input_data.get(source_step, {})
+            if isinstance(source_data, dict):
+                thread_id = source_data.get("thread_id")
 
-        if not thread_id:
+            # Fallback: check root-level thread_id (backward compat)
+            if not thread_id:
+                thread_id = input_data.get("thread_id")
+
+            # If still no thread_id, try to get raw text from source step
+            if not thread_id and isinstance(source_data, dict):
+                source_text = (
+                    source_data.get("raw_output")
+                    or source_data.get("summary")
+                    or source_data.get("search_results")
+                    or source_data.get("error")
+                )
+
+        # If no source_step and no thread_id, try previous_step as fallback
+        if not thread_id and not source_text:
+            prev = input_data.get("previous_step", {})
+            if isinstance(prev, dict):
+                thread_id = prev.get("thread_id")
+                if not thread_id:
+                    source_text = (
+                        prev.get("raw_output")
+                        or prev.get("summary")
+                        or prev.get("search_results")
+                        or prev.get("error")
+                    )
+
+        if not thread_id and not source_text:
             return {
                 "status": "failed",
-                "error": "No thread_id found. Specify 'thread_id' or 'source_step' in config.",
+                "error": "No thread_id or source text found. Specify 'thread_id', 'source_step' (with raw_output), or provide text to summarize.",
                 "summary": ""
             }
 
+        # === Path B: Raw text summarization (for tool/skill outputs) ===
+        if not thread_id and source_text:
+            return await self._summarize_raw_text(source_text, config, source_step)
+
+        # === Path A: Thread-based summarization (for conversation steps) ===
         try:
             # Fetch conversation thread
             thread = self.db.query(ConversationThread).filter(
@@ -1516,6 +1556,135 @@ Summary:"""
                 "error": str(e),
                 "summary": "",
                 "thread_id": thread_id
+            }
+
+    async def _summarize_raw_text(
+        self,
+        source_text: str,
+        config: Dict[str, Any],
+        source_step: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Summarize raw text output from tool/skill steps using AI."""
+        try:
+            # Convert structured data to string
+            if isinstance(source_text, (dict, list)):
+                transcript = json.dumps(source_text, ensure_ascii=False, indent=2)
+            else:
+                transcript = str(source_text)
+
+            if not transcript.strip():
+                return {
+                    "status": "failed",
+                    "error": "Source text is empty",
+                    "summary": "",
+                    "source_step": source_step
+                }
+
+            output_format = config.get("output_format", "brief")
+            custom_prompt = config.get("summary_prompt", "")
+            prompt_mode = config.get("prompt_mode", "append")
+
+            model = config.get("model")
+            model_provider = config.get("model_provider")
+
+            if not model:
+                model = "gemini-2.5-flash"
+            if not model_provider:
+                if model.startswith("gpt-") or model.startswith("o1") or model.startswith("o3"):
+                    model_provider = "openai"
+                elif model.startswith("claude"):
+                    model_provider = "anthropic"
+                else:
+                    model_provider = "gemini"
+                logger.warning(f"Model provider not configured, inferred '{model_provider}' for model '{model}'")
+
+            # Build prompt
+            if prompt_mode == "replace" or (custom_prompt and custom_prompt.startswith("OVERRIDE:")):
+                prompt_text = custom_prompt[9:].strip() if custom_prompt.startswith("OVERRIDE:") else custom_prompt
+                base_prompt = f"""{prompt_text}
+
+Text to summarize:
+{transcript}"""
+            else:
+                format_instructions = {
+                    "brief": "Provide a concise 2-3 sentence summary.",
+                    "detailed": "Provide a comprehensive summary with key points and outcomes.",
+                    "structured": "Provide a structured summary with sections: Objective, Key Points, Outcome, Next Steps.",
+                    "minimal": "Extract ONLY the essential data points (status, dates, numbers, outcomes). No analysis, no narrative. Maximum 3-5 lines."
+                }
+                format_instruction = format_instructions.get(output_format, format_instructions["brief"])
+
+                if output_format == "minimal":
+                    base_prompt = f"""{format_instruction}
+
+Text to summarize:
+{transcript}
+
+{custom_prompt}"""
+                else:
+                    base_prompt = f"""Analyze the following text output and provide a summary.
+
+{format_instruction}
+
+Focus on:
+- Key findings and results
+- Important data points, numbers, or identifiers
+- Status and outcome
+- Any errors or warnings
+
+Text to summarize:
+{transcript}
+
+{custom_prompt}
+
+Summary:"""
+
+            from agent.ai_client import AIClient
+
+            ai_client = AIClient(
+                provider=model_provider,
+                model_name=model,
+                db=self.db,
+                token_tracker=self.token_tracker
+            )
+
+            source_label = source_step or "previous_step"
+            logger.info(f"Generating summary for raw text from '{source_label}' using {model_provider}/{model}...")
+
+            response = await ai_client.generate(
+                system_prompt="You are a helpful assistant that summarizes text output and technical results.",
+                user_message=base_prompt,
+                operation_type="text_summarization"
+            )
+
+            if response.get('error'):
+                return {
+                    "status": "failed",
+                    "error": f"AI generation error: {response['error']}",
+                    "summary": "",
+                    "source_step": source_label
+                }
+
+            summary = response.get('answer', '').strip()
+            logger.info(f"Generated summary ({len(summary)} chars) from raw text of '{source_label}'")
+
+            return {
+                "status": "completed",
+                "summary": summary,
+                "transcript": transcript,
+                "source_step": source_label,
+                "source_type": "raw_text",
+                "model_used": f"{model_provider}/{model}",
+                "output_format": output_format
+            }
+
+        except Exception as e:
+            logger.error(f"Raw text summarization failed: {e}", exc_info=True)
+            return {
+                "status": "failed",
+                "error": str(e),
+                "summary": "",
+                "source_step": source_step
             }
 
 

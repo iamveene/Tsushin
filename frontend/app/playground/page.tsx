@@ -778,9 +778,17 @@ export default function PlaygroundPage() {
       // Check if request was aborted
       if (signal.aborted) return
 
-      // Check for error code from backend
+      // Check for warning from backend (empty thread with no message history)
+      if ((threadData as any).warning) {
+        setThreadLoadError(null)
+        setMessages([])
+        setIsLoadingThread(false)
+        return
+      }
+
+      // Legacy: check for error code from backend
       if ((threadData as any).error_code === 'NO_MESSAGES_FOUND') {
-        setThreadLoadError((threadData as any).error_message || 'Failed to load conversation history')
+        setThreadLoadError(null)
         setMessages([])
         setIsLoadingThread(false)
         return

@@ -534,6 +534,27 @@ class KokoroTTSProvider(TTSProvider):
                         )
 
                 except httpx.ConnectError:
+                    # Retry with voices endpoint as fallback
+                    try:
+                        fallback_start = time.time()
+                        fallback_response = await client.get(f"{self.service_url}/v1/audio/voices")
+                        fallback_latency = int((time.time() - fallback_start) * 1000)
+                        if fallback_response.status_code == 200:
+                            return ProviderStatus(
+                                provider=self.provider_name,
+                                status="healthy",
+                                message="Kokoro TTS is available (via voices endpoint)",
+                                available=True,
+                                latency_ms=fallback_latency,
+                                details={
+                                    "service_url": self.service_url,
+                                    "voices": len(self.VOICES),
+                                    "languages": self.SUPPORTED_LANGUAGES,
+                                    "is_free": True,
+                                }
+                            )
+                    except Exception:
+                        pass
                     return ProviderStatus(
                         provider=self.provider_name,
                         status="unavailable",

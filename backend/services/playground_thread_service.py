@@ -332,6 +332,23 @@ class PlaygroundThreadService:
                     else:
                         self.logger.debug(f"✗ No messages with key: {key}")
 
+                # LIKE-based fallback: try partial matches on sender_key
+                if not memory or not memory.messages_json:
+                    self.logger.info(f"[get_thread] Exact keys failed, trying LIKE patterns for agent {thread.agent_id}")
+                    like_patterns = [
+                        f"sender_playground%u{user_id}%a{thread.agent_id}%",
+                        f"sender_playground_user_{user_id}",
+                        f"playground_user_{user_id}",
+                    ]
+                    for pattern in like_patterns:
+                        memory = self.db.query(Memory).filter(
+                            Memory.agent_id == thread.agent_id,
+                            Memory.sender_key.like(pattern)
+                        ).first()
+                        if memory and memory.messages_json:
+                            self.logger.info(f"✓ Found {len(memory.messages_json)} messages via LIKE pattern: {pattern}")
+                            break
+
                 # Ultimate fallback: scan all Memory records for this agent
                 if not memory or not memory.messages_json:
                     self.logger.warning(f"[get_thread] All sender_keys failed, scanning all Memory for agent {thread.agent_id}")
@@ -360,9 +377,8 @@ class PlaygroundThreadService:
                     messages = thread.conversation_history
                     self.logger.info(f"[get_thread] Using conversation_history fallback: {len(messages)} messages")
                 else:
-                    # No messages found after all fallbacks - return error indicator
-                    self.logger.error(f"NO MESSAGES FOUND for thread {thread_id} after all fallbacks")
-                    self.logger.error(f"Tried {len(memory_sender_keys)} sender_keys, full Memory scan, and conversation_history")
+                    # No messages found - return empty thread with warning instead of error
+                    self.logger.warning(f"[get_thread] No messages found for thread {thread_id} after all fallbacks")
 
                     return {
                         "id": thread.id,
@@ -372,8 +388,7 @@ class PlaygroundThreadService:
                         "is_archived": thread.is_archived,
                         "agent_id": thread.agent_id,
                         "messages": [],
-                        "error_code": "NO_MESSAGES_FOUND",
-                        "error_message": f"Could not locate messages for thread {thread_id}. Tried {len(memory_sender_keys)} sender_keys and full Memory scan.",
+                        "warning": "This conversation has no message history. It may have been created before the current storage format.",
                         "created_at": thread.created_at.isoformat() if thread.created_at else None,
                         "updated_at": thread.updated_at.isoformat() if thread.updated_at else None
                     }

@@ -801,6 +801,36 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error starting Message Queue Worker: {e}", exc_info=True)
 
+    # Phase 22.4: Auto-connect active MCP servers on startup
+    async def _auto_connect_mcp_servers():
+        await asyncio.sleep(5)  # Wait for full startup
+        try:
+            from hub.mcp.connection_manager import MCPConnectionManager
+            from models import MCPServerConfig
+            manager = MCPConnectionManager.get_instance()
+            AutoConnectSession = sessionmaker(bind=engine)
+            db = AutoConnectSession()
+            try:
+                servers = db.query(MCPServerConfig).filter(
+                    MCPServerConfig.is_active == True
+                ).all()
+                connected = 0
+                for server in servers:
+                    try:
+                        await manager.get_or_connect(server.id, db)
+                        logging.info(f"Auto-connected MCP server: {server.server_name} (id={server.id})")
+                        connected += 1
+                    except Exception as e:
+                        logging.warning(f"Failed to auto-connect MCP server {server.server_name}: {e}")
+                if servers:
+                    logging.info(f"MCP auto-connect: {connected}/{len(servers)} servers connected")
+            finally:
+                db.close()
+        except Exception as e:
+            logging.error(f"MCP auto-connect failed: {e}", exc_info=True)
+
+    asyncio.create_task(_auto_connect_mcp_servers())
+
     yield
 
     # Shutdown

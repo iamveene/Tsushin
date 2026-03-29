@@ -5264,7 +5264,7 @@ export const api = {
     return res.json()
   },
 
-  async getThread(threadId: number, options?: { signal?: AbortSignal }): Promise<{ id: number; title: string | null; folder: string | null; status: string; is_archived: boolean; agent_id: number; messages: PlaygroundMessage[]; created_at: string | null; updated_at: string | null; error_code?: string; error_message?: string }> {
+  async getThread(threadId: number, options?: { signal?: AbortSignal }): Promise<{ id: number; title: string | null; folder: string | null; status: string; is_archived: boolean; agent_id: number; messages: PlaygroundMessage[]; created_at: string | null; updated_at: string | null; error_code?: string; error_message?: string; warning?: string }> {
     const res = await authenticatedFetch(`${API_URL}/api/playground/threads/${threadId}`, {
       signal: options?.signal
     })
