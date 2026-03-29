@@ -1695,8 +1695,8 @@ export default function HubPage() {
 
                   const allVendors = Array.from(new Set([
                     ...Object.keys(vendorGroups),
-                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'openrouter', 'ollama',
-                  ])).sort()
+                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'openrouter',
+                  ])).filter(v => v !== 'ollama').sort()
 
                   return (
                     <div className="space-y-6">
