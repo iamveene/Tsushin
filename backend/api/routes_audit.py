@@ -79,8 +79,11 @@ async def get_audit_events(
     Requires audit.read permission.
     """
     # Parse date strings
-    parsed_from = datetime.fromisoformat(from_date) if from_date else None
-    parsed_to = datetime.fromisoformat(to_date) if to_date else None
+    try:
+        parsed_from = datetime.fromisoformat(from_date) if from_date else None
+        parsed_to = datetime.fromisoformat(to_date) if to_date else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use ISO 8601 (e.g. 2026-01-15)")
 
     service = TenantAuditService(ctx.db)
     events = service.get_events(
@@ -113,7 +116,7 @@ async def get_audit_events(
         user_name = None
         if e.user_id:
             if e.user_id not in user_cache:
-                user = ctx.db.query(User).filter(User.id == e.user_id).first()
+                user = ctx.db.query(User).filter(User.id == e.user_id, User.tenant_id == ctx.tenant_id).first()
                 user_cache[e.user_id] = (user.full_name or user.email) if user else f"User #{e.user_id}"
             user_name = user_cache[e.user_id]
 
@@ -164,8 +167,11 @@ async def export_audit_events(
     Export tenant audit events as CSV.
     Requires audit.read permission.
     """
-    parsed_from = datetime.fromisoformat(from_date) if from_date else None
-    parsed_to = datetime.fromisoformat(to_date) if to_date else None
+    try:
+        parsed_from = datetime.fromisoformat(from_date) if from_date else None
+        parsed_to = datetime.fromisoformat(to_date) if to_date else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use ISO 8601 (e.g. 2026-01-15)")
 
     service = TenantAuditService(ctx.db)
     csv_generator = service.export_events_csv(

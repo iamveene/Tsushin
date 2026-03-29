@@ -316,7 +316,7 @@ class TenantAuditService:
             severity=severity,
         )
         self.db.add(event)
-        self.db.commit()
+        self.db.flush()
         return event
 
     def get_events(
@@ -511,7 +511,7 @@ def log_tenant_event(
             user_agent = request.headers.get("user-agent", "")[:500]
 
         service = TenantAuditService(db)
-        return service.log_event(
+        event = service.log_event(
             tenant_id=tenant_id,
             user_id=user_id,
             action=action,
@@ -523,6 +523,8 @@ def log_tenant_event(
             channel=channel,
             severity=severity,
         )
+        db.commit()  # Commit the flushed audit event
+        return event
     except Exception as e:
         logger.error(f"Failed to log audit event {action}: {e}")
         return None
