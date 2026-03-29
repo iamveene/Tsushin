@@ -295,8 +295,8 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
     except AuthenticationError as e:
         # Audit: failed login (only if user exists — password mismatch)
         failed_user = db.query(User).filter(User.email == login_request.email, User.deleted_at.is_(None)).first()
-        if failed_user:
-            log_tenant_event(db, failed_user.tenant_id or '', None, TenantAuditActions.AUTH_FAILED_LOGIN, "user", None, {"email": login_request.email}, request, severity="warning")
+        if failed_user and failed_user.tenant_id:
+            log_tenant_event(db, failed_user.tenant_id, None, TenantAuditActions.AUTH_FAILED_LOGIN, "user", None, {"email": login_request.email}, request, severity="warning")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e)
@@ -602,7 +602,16 @@ async def confirm_password_reset(request: Request, confirm_request: PasswordRese
     try:
         auth_service.reset_password(confirm_request.token, confirm_request.new_password)
 
-        log_tenant_event(db, '', None, TenantAuditActions.AUTH_PASSWORD_RESET, "user", None, {}, request)
+        # Resolve user from token for audit logging
+        from auth_utils import hash_token
+        from models_rbac import PasswordResetToken
+        reset_record = db.query(PasswordResetToken).filter(
+            PasswordResetToken.token == hash_token(confirm_request.token)
+        ).first()
+        if reset_record:
+            reset_user = db.query(User).filter(User.id == reset_record.user_id).first()
+            if reset_user and reset_user.tenant_id:
+                log_tenant_event(db, reset_user.tenant_id, reset_user.id, TenantAuditActions.AUTH_PASSWORD_RESET, "user", str(reset_user.id), {"email": reset_user.email}, request)
 
         return MessageResponse(
             message="Password has been reset successfully. You can now log in with your new password."
@@ -693,7 +702,8 @@ async def change_password(
 
     current_user.password_hash = hash_password(payload.new_password)
     db.commit()
-    log_tenant_event(db, current_user.tenant_id or '', current_user.id, TenantAuditActions.AUTH_PASSWORD_CHANGE, "user", str(current_user.id), {"email": current_user.email}, request)
+    if current_user.tenant_id:
+        log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.AUTH_PASSWORD_CHANGE, "user", str(current_user.id), {"email": current_user.email}, request)
     return MessageResponse(message="Password changed successfully")
 
 
@@ -705,7 +715,8 @@ async def logout(request: Request, current_user: User = Depends(get_current_user
     In JWT implementation, logout is handled client-side by deleting the token.
     This endpoint exists for compatibility and can be extended for token blacklisting.
     """
-    log_tenant_event(db, current_user.tenant_id or '', current_user.id, TenantAuditActions.AUTH_LOGOUT, "user", str(current_user.id), {"email": current_user.email}, request)
+    if current_user.tenant_id:
+        log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.AUTH_LOGOUT, "user", str(current_user.id), {"email": current_user.email}, request)
     return MessageResponse(
         message="Logged out successfully"
     )

@@ -28,15 +28,18 @@ def _run_purge_cycle(SessionFactory):
         total_purged = 0
 
         for tenant in tenants:
-            retention_days = tenant.audit_retention_days or 90
-            if retention_days <= 0:
-                continue
+            try:
+                retention_days = tenant.audit_retention_days or 90
+                if retention_days <= 0:
+                    continue
 
-            service = TenantAuditService(session)
-            purged = service.purge_expired(tenant.id, retention_days)
-            if purged > 0:
-                total_purged += purged
-                logger.info(f"[AuditRetention] Purged {purged} expired events for tenant {tenant.id} (retention={retention_days}d)")
+                service = TenantAuditService(session)
+                purged = service.purge_expired(tenant.id, retention_days)
+                if purged > 0:
+                    total_purged += purged
+                    logger.info(f"[AuditRetention] Purged {purged} expired events for tenant {tenant.id} (retention={retention_days}d)")
+            except Exception as e:
+                logger.error(f"[AuditRetention] Failed to purge tenant {tenant.id}: {e}")
 
         if total_purged > 0:
             logger.info(f"[AuditRetention] Total purged: {total_purged} events across {len(tenants)} tenants")

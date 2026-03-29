@@ -160,12 +160,12 @@ async def export_audit_events(
     channel: Optional[str] = Query(None),
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
-    current_user: User = Depends(require_permission("audit.read")),
+    current_user: User = Depends(require_permission("audit.export")),
     ctx: TenantContext = Depends(get_tenant_context),
 ):
     """
     Export tenant audit events as CSV.
-    Requires audit.read permission.
+    Requires audit.export permission.
     """
     try:
         parsed_from = datetime.fromisoformat(from_date) if from_date else None

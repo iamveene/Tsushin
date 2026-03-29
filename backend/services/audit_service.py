@@ -413,7 +413,7 @@ class TenantAuditService:
 
         top_actors = []
         for user_id, count in top_actors_q:
-            user = self.db.query(User).filter(User.id == user_id).first() if user_id else None
+            user = self.db.query(User).filter(User.id == user_id, User.tenant_id == tenant_id).first() if user_id else None
             top_actors.append({
                 "user_id": user_id,
                 "user_name": user.full_name or user.email if user else "System",
