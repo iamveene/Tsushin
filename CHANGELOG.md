@@ -130,6 +130,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Trust-level-aware: system/verified servers skip scan, untrusted servers get full analysis
 - Description length capped at 1000 characters (Security C-3)
 
+#### BUG-116: OAuth2 Token Response Missing Scope
+- Added `scope` field to `TokenResponse` Pydantic model per OAuth2 RFC 6749 §5.1
+
+#### BUG-117: API v1 X-Request-Id Overwritten by Generic Middleware
+- Generic `RequestIdMiddleware` now skips `/api/v1/` paths, preserving `req_`-prefixed IDs from rate limiter
+
+#### Test Infrastructure: SQLite to PostgreSQL Migration
+- Migrated 9 test files from SQLite in-memory databases to PostgreSQL with transactional rollback
+- Fixed SQLAlchemy mapper initialization: `models_rbac` imported before `models` in sentinel tests
+- Fixed FK constraint violations: sentinel tests create real agent records, auth tests cascade-delete all child tables
+- Fixed MemGuard test mocking: bypasses SQLAlchemy mapper chain with lightweight mock class
+- **Result: 218/218 tests passing across 10 test suites (0 failures, 0 errors)**
+
 ### Changed
 
 #### Skills Section — Built-in vs Custom Separation & Sandboxed Tools Migration

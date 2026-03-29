@@ -27,6 +27,8 @@ from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from models import SentinelAnalysisLog
+
 logger = logging.getLogger(__name__)
 
 
@@ -446,8 +448,6 @@ class MemGuardService:
     ) -> None:
         """Log a MemGuard Layer A analysis to SentinelAnalysisLog."""
         try:
-            from models import SentinelAnalysisLog
-
             input_content = content[:500] if content else ""
             input_hash = hashlib.sha256(content.encode()).hexdigest() if content else ""
 
@@ -486,8 +486,6 @@ class MemGuardService:
     ) -> None:
         """Log a MemGuard Layer B fact detection to SentinelAnalysisLog."""
         try:
-            from models import SentinelAnalysisLog
-
             action = "blocked" if detection_mode == "block" else "detected"
             fact_repr = f"[{fact.get('topic', '?')}/{fact.get('key', '?')}] = {str(fact.get('value', ''))[:200]}"
             input_hash = hashlib.sha256(fact_repr.encode()).hexdigest()

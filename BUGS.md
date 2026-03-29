@@ -1,53 +1,58 @@
 # Tsushin Bug Tracker
-**Open:** 5 | **In Progress:** 0 | **Resolved:** 115
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 121
 **Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression (2026-03-29)
 
 ## Open Issues
 
 ### BUG-116: API v1 OAuth2 token response missing `scope` field
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Low
 - **Category:** API v1
 - **Found:** 2026-03-29 (v0.6.0 Regression Test)
-- **Files:** `backend/api/routes_api_v1.py`
-- **Description:** The `POST /api/v1/oauth/token` response returns `{access_token, token_type, expires_in}` but does not include a `scope` field. The `test_api_v1_e2e.py::TestOAuth2TokenExchange::test_valid_exchange` test expects `scope` in the response dict. Either the test expectation is wrong or the endpoint needs to return the granted scopes.
-- **Impact:** Test assertion failure only. API v1 OAuth2 flow works correctly for authentication.
+- **Files:** `backend/api/v1/schemas.py`
+- **Description:** The `TokenResponse` Pydantic model was missing a `scope` field, causing FastAPI to strip it from the response even though the service layer returned it.
+- **Resolution:** Added `scope: str` field to `TokenResponse` schema per OAuth2 RFC 6749 §5.1.
 
 ### BUG-117: API v1 X-Request-Id uses UUID format instead of `req_` prefix
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Low
 - **Category:** API v1
 - **Found:** 2026-03-29 (v0.6.0 Regression Test)
-- **Files:** `backend/middleware/request_id.py`
-- **Description:** The `X-Request-Id` header returns a standard UUID (e.g., `51469fb6-3ea2-45ae-a702-68d00fb07bdd`) but `test_api_v1_e2e.py::TestRateLimitHeaders::test_request_id_header` expects the format to start with `req_`. Either the test or the middleware format needs alignment.
-- **Impact:** Test assertion failure only. Request IDs work correctly for correlation and debugging.
+- **Files:** `backend/services/logging_service.py`
+- **Description:** Generic `RequestIdMiddleware` (added last in LIFO stack) overwrote the `req_`-prefixed ID from `ApiV1RateLimitMiddleware` with a plain UUID.
+- **Resolution:** Added guard so `RequestIdMiddleware` skips setting `X-Request-Id` on `/api/v1/` paths, deferring to the rate limiter's `req_`-prefixed ID.
 
 ### BUG-118: API v1 agent description search doesn't find recently created agents
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Low
 - **Category:** API v1
 - **Found:** 2026-03-29 (v0.6.0 Regression Test)
-- **Files:** `backend/api/routes_api_v1.py`
-- **Description:** `test_api_v1_e2e.py::TestAgentDescription::test_list_agents_shows_description` creates an agent with a description and immediately lists agents to find it, but the search returns None. Possible pagination or tenant scoping issue causing the newly created agent not to appear in the filtered list.
-- **Impact:** Test assertion failure. Agent CRUD and description storage work correctly.
+- **Files:** `backend/tests/test_api_v1_e2e.py`
+- **Description:** Test created an agent (highest ID) then listed with default pagination (page 1, per_page=20). With 20+ agents in the DB, the new agent fell on page 2.
+- **Resolution:** Test now uses `?per_page=100` to ensure all agents are returned.
 
 ### BUG-119: MemGuard detect_only mode doesn't trigger audit logging mock
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Low
 - **Category:** Security / MemGuard
 - **Found:** 2026-03-29 (v0.6.0 Regression Test)
-- **Files:** `backend/services/memguard_service.py`, `backend/tests/test_memguard.py`
-- **Description:** `TestLayerBDetectOnlyMode::test_detect_only_logs_as_detected` and `test_block_mode_logs_as_blocked` fail because `mock.add` is not being called. The mock expectation may not match the actual audit logging path, or the MemGuard service's audit logging was refactored without updating the test mocks.
-- **Impact:** Test assertion failure only. MemGuard detection and blocking work correctly in production.
+- **Files:** `backend/tests/test_memguard.py`
+- **Description:** `SentinelAnalysisLog()` constructor failed in test env due to SQLAlchemy mapper initialization chain (ShellSecurityPattern→User), silently caught by try/except, so `db.add()` was never called.
+- **Resolution:** Added mock `_MockSentinelAnalysisLog` class in test file that accepts kwargs as attributes, bypassing SQLAlchemy mapper chain.
 
 ### BUG-120: MemGuard threat score extraction returns None for certain patterns
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Low
 - **Category:** Security / MemGuard
 - **Found:** 2026-03-29 (v0.6.0 Regression Test)
-- **Files:** `backend/services/memguard_service.py`, `backend/tests/test_memguard.py`
-- **Description:** `TestThreatScoreVariability` tests fail with `TypeError: 'NoneType' object is not subscriptable`, indicating that the threat score extraction function returns None instead of a dict for certain poisoning patterns (credentials, command instructions, suspicious overrides). The Layer B scan may not be returning structured results for all pattern types.
-- **Impact:** Test assertion failure. The detection itself works (threats are caught), but the score metadata is not always populated.
+- **Files:** `backend/tests/test_memguard.py`
+- **Description:** Same root cause as BUG-119 — `SentinelAnalysisLog()` constructor failure meant `db.add()` never fired, so `mock_db.add.call_args` was None. Tests then subscripted None.
+- **Resolution:** Same fix as BUG-119 — mock `SentinelAnalysisLog` in tests.
 
 ### BUG-110: 13 AIClient call sites missing token_tracker — LLM costs silently untracked
 - **Status:** Resolved

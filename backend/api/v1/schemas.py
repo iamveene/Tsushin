@@ -66,6 +66,7 @@ class TokenResponse(BaseModel):
     access_token: str = Field(description="JWT access token")
     token_type: str = Field("bearer", description="Token type (always 'bearer')")
     expires_in: int = Field(description="Token lifetime in seconds", example=3600)
+    scope: str = Field(description="Space-separated list of granted scopes")
 
 
 class OAuthErrorResponse(BaseModel):

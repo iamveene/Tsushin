@@ -61,7 +61,10 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         token = request_id_ctx.set(rid)
         try:
             response = await call_next(request)
-            response.headers["X-Request-Id"] = rid
+            # Don't overwrite X-Request-Id for /api/v1/ paths — the
+            # ApiV1RateLimitMiddleware already sets a req_-prefixed ID.
+            if not request.url.path.startswith("/api/v1/"):
+                response.headers["X-Request-Id"] = rid
             return response
         finally:
             request_id_ctx.reset(token)
