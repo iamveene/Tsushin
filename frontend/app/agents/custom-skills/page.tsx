@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
+import StudioTabs from '@/components/studio/StudioTabs'
 import { useAuth } from '@/contexts/AuthContext'
 import { api, CustomSkill, CustomSkillCreate, CustomSkillUpdate } from '@/lib/client'
 
@@ -24,9 +25,22 @@ function scanBadge(status: string) {
       return 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
     case 'rejected':
       return 'bg-red-500/15 text-red-300 border border-red-500/30'
+    case 'unknown':
+      return 'bg-white/5 text-tsushin-slate border border-white/10'
     default:
       return 'bg-white/5 text-tsushin-slate border border-white/10'
   }
+}
+
+/** Resolve display status: if no scan data exists, treat as 'unknown' */
+function effectiveScanStatus(skill: CustomSkill): string {
+  if (!skill.last_scan_result || Object.keys(skill.last_scan_result).length === 0) {
+    // No enriched scan data — old skill or never scanned with metadata
+    if (skill.scan_status === 'pending') return 'pending'
+    if (skill.scan_status === 'rejected') return 'rejected'
+    return 'unknown'
+  }
+  return skill.scan_status
 }
 
 function typeBadge(variant: string) {
@@ -435,28 +449,13 @@ function CustomSkillsPageContent() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8" onClick={() => scanDetailSkillId && setScanDetailSkillId(null)}>
-      <div className="max-w-6xl mx-auto">
-        {/* Back + Breadcrumb */}
-        <div className="flex items-center gap-3 mb-6">
-          <Link href="/agents" className="text-tsushin-slate hover:text-white transition-colors">
-            ← Back
-          </Link>
-          <div className="h-4 w-px bg-tsushin-border"></div>
-          <Link href="/agents" className="text-tsushin-slate hover:text-white transition-colors text-sm">
-            Studio
-          </Link>
-          <span className="text-tsushin-slate/50">/</span>
-          <span className="text-white text-sm">Custom Skills</span>
-        </div>
-
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+    <div className="min-h-screen" onClick={() => scanDetailSkillId && setScanDetailSkillId(null)}>
+      {/* Header */}
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-8 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white">Custom Skills</h1>
-            <p className="text-tsushin-slate mt-1">
-              Create and manage tenant-authored skills for your agents
-            </p>
+            <h1 className="text-3xl font-display font-bold text-white mb-2">Agent Studio</h1>
+            <p className="text-tsushin-slate">Create and manage tenant-authored custom skills</p>
           </div>
           {canCreate && (
             <button
@@ -470,6 +469,11 @@ function CustomSkillsPageContent() {
             </button>
           )}
         </div>
+      </div>
+
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-0 space-y-6">
+        {/* Sub Navigation */}
+        <StudioTabs />
 
         {/* Alerts */}
         {error && (
@@ -563,28 +567,32 @@ function CustomSkillsPageContent() {
                           {typeLabel(skill.skill_type_variant)}
                         </span>
                         <span className="relative">
+                          {(() => { const displayStatus = effectiveScanStatus(skill); return (
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); setScanDetailSkillId(scanDetailSkillId === skill.id ? null : skill.id) }}
-                            className={`text-xs px-2 py-0.5 rounded-full cursor-pointer hover:opacity-80 transition-opacity ${scanBadge(skill.scan_status)}`}
+                            className={`text-xs px-2 py-0.5 rounded-full cursor-pointer hover:opacity-80 transition-opacity ${scanBadge(displayStatus)}`}
                             title="Click for scan details"
                           >
-                            {skill.scan_status}
+                            {displayStatus}
                           </button>
-                          {scanDetailSkillId === skill.id && (
+                          ) })()}
+                          {scanDetailSkillId === skill.id &&
+                            (() => { const popoverStatus = effectiveScanStatus(skill); return (
                             <div onClick={(e) => e.stopPropagation()} className="absolute top-full left-0 mt-2 z-50 w-96 bg-tsushin-surface border border-white/15 rounded-xl shadow-2xl overflow-hidden">
                               {/* Header */}
                               <div className={`px-4 py-3 flex items-center justify-between ${
-                                skill.scan_status === 'rejected' ? 'bg-red-500/10 border-b border-red-500/20' :
-                                skill.scan_status === 'clean' ? 'bg-emerald-500/10 border-b border-emerald-500/20' :
+                                popoverStatus === 'rejected' ? 'bg-red-500/10 border-b border-red-500/20' :
+                                popoverStatus === 'clean' ? 'bg-emerald-500/10 border-b border-emerald-500/20' :
+                                popoverStatus === 'unknown' ? 'bg-white/5 border-b border-white/10' :
                                 'bg-amber-500/10 border-b border-amber-500/20'
                               }`}>
                                 <h4 className="text-sm font-semibold text-white flex items-center gap-2">
-                                  <svg className={`w-4 h-4 ${skill.scan_status === 'rejected' ? 'text-red-400' : skill.scan_status === 'clean' ? 'text-emerald-400' : 'text-amber-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <svg className={`w-4 h-4 ${popoverStatus === 'rejected' ? 'text-red-400' : popoverStatus === 'clean' ? 'text-emerald-400' : popoverStatus === 'unknown' ? 'text-tsushin-slate' : 'text-amber-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                                   </svg>
                                   Sentinel Scan Result
-                                  <span className={`text-xs px-1.5 py-0.5 rounded ${scanBadge(skill.scan_status)}`}>{skill.scan_status}</span>
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${scanBadge(popoverStatus)}`}>{popoverStatus}</span>
                                 </h4>
                                 <button
                                   onClick={(e) => { e.stopPropagation(); setScanDetailSkillId(null) }}
@@ -704,7 +712,8 @@ function CustomSkillsPageContent() {
                                 </div>
                               )}
                             </div>
-                          )}
+                          ) })()
+                          }
                         </span>
                         {!skill.is_enabled && (
                           <span className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-tsushin-slate border border-white/10">

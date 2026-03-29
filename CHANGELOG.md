@@ -11,6 +11,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **Theme:** Security, Streaming, Providers, Public API & UX
 
+### Added
+
+#### Custom Skill Scan Detail Popover
+- Clickable scan status badge on every custom skill card opens a detailed popover
+- Popover shows: rejection reason, detection type, threat score (visual bar), Sentinel profile name/scope/mode, and scan timestamp
+- "Configure" link in popover navigates directly to Settings > Sentinel for profile customization
+- Skills without scan data show "No scan data available" with guidance to run a scan
+- Auto-opens popover after re-scan so user sees the result immediately
+- Backend enriches `last_scan_result` with profile metadata (name, source, detection mode, scan timestamp)
+- Passes `tenant_id` to `SentinelService` for correct hierarchical profile resolution
+
+### Changed
+
+#### Custom Skills UI/UX Improvements
+- Scan status badge now shows gray "unknown" for skills without scan data instead of misleading green "clean"
+- All timestamps (Updated, Scanned) now show full date + time (e.g., "Mar 29, 2026 at 01:09 PM")
+- Separate "Scanned" timestamp displayed in card metadata line alongside "Updated"
+- Popover header is color-tinted by status (red for rejected, green for clean, gray for unknown)
+- Removed "Icon (emoji)" field from the custom skill create/edit modal
+
 ### Removed
 
 #### Weather Skill Deprecation
