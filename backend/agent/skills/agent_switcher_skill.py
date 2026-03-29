@@ -39,7 +39,7 @@ class AgentSwitcherSkill(BaseSkill):
     skill_type = "agent_switcher"
     skill_name = "Agent Switcher"
     skill_description = "Allows users to switch their default agent for direct messages via natural language commands"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     def __init__(self):
         super().__init__()

@@ -50,7 +50,7 @@ class SearchSkill(BaseSkill):
     skill_type = "web_search"
     skill_name = "Web Search"
     skill_description = "Search the web using Brave Search (default provider)"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     def __init__(self, db: Optional[Session] = None, token_tracker=None):
         """

@@ -30,7 +30,7 @@ class WebScrapingSkill(BaseSkill):
     skill_type = "web_scraping"
     skill_name = "Web Scraping"
     skill_description = "Extract content from web pages"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     def __init__(self, db: Optional[Session] = None):
         """

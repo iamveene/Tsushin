@@ -56,7 +56,7 @@ class BrowserAutomationSkill(BaseSkill):
     skill_type = "browser_automation"
     skill_name = "Browser Automation"
     skill_description = "Control web browsers, navigate websites, click elements, fill forms, extract content, and capture screenshots"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     def __init__(self, db: Optional[Session] = None, token_tracker=None):
         """
@@ -82,14 +82,15 @@ class BrowserAutomationSkill(BaseSkill):
         Returns:
             True if message requests browser automation
         """
+        config = getattr(self, '_config', {}) or self.get_default_config()
+        if not self.is_legacy_enabled(config):
+            return False
+
         # Skip if message has media (audio, image, etc.)
         if message.media_type:
             return False
 
         text = message.body.lower()
-
-        # Get configuration
-        config = getattr(self, '_config', {}) or self.get_default_config()
         keywords = config.get('keywords', self.get_default_config()['keywords'])
         use_ai_fallback = config.get('use_ai_fallback', True)
 

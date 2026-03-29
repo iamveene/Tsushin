@@ -40,7 +40,7 @@ class SchedulerSkill(BaseSkill):
     skill_type = "scheduler"
     skill_name = "Scheduler"
     skill_description = "Schedule reminders and AI-driven conversations via natural language"
-    execution_mode = "hybrid"  # Supports both keywords and AI tool calls
+    execution_mode = "tool"
 
     @classmethod
     def get_mcp_tool_definition(cls) -> Dict[str, Any]:
@@ -150,6 +150,10 @@ class SchedulerSkill(BaseSkill):
         - Message is routed to Agendador agent (ID 7) - ALL messages to @agendador are scheduling requests
         - Message contains scheduling keywords (for other agents)
         """
+        config = getattr(self, '_config', {}) or {}
+        if not self.is_legacy_enabled(config):
+            return False
+
         body_lower = message.body.lower()
 
         # Phase 6.11.4: Removed special handling for Agendador agent

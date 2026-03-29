@@ -62,7 +62,7 @@ class FlowsSkill(BaseSkill):
     skill_type = "flows"
     skill_name = "Flows"
     skill_description = "Schedule reminders, AI-driven conversations, and manage scheduled events"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     def __init__(self):
         """Initialize with wrapped skills and provider support"""
@@ -1124,6 +1124,8 @@ Return ONLY a valid JSON object, no other text."""
         """
         # Get agent-specific config
         config = getattr(self, '_config', {}) or {}
+        if not self.is_legacy_enabled(config):
+            return False
         capabilities = config.get('capabilities', {})
         body_lower = message.body.lower()
 

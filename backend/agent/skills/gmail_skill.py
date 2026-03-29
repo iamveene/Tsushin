@@ -47,7 +47,7 @@ class GmailSkill(BaseSkill):
     skill_type = "gmail"
     skill_name = "Gmail"
     skill_description = "Read and search emails from connected Gmail accounts"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     # Keywords that trigger this skill
     EMAIL_KEYWORDS = [

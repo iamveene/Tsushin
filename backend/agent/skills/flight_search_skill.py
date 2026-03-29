@@ -42,7 +42,7 @@ class FlightSearchSkill(BaseSkill):
     skill_type = "flight_search"
     skill_name = "Flight Search"
     skill_description = "Search for flights using configured provider (Amadeus, Skyscanner, etc.)"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     def __init__(self, db: Optional[Session] = None, provider_name: str = "amadeus"):
         """

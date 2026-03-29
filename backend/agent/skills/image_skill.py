@@ -47,7 +47,7 @@ class ImageSkill(BaseSkill):
     skill_type = "image"
     skill_name = "Image Generation & Editing"
     skill_description = "Generate new images from text prompts or edit existing images using AI"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     SUPPORTED_IMAGE_FORMATS = {
         "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
