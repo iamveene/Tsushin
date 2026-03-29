@@ -139,7 +139,8 @@ class AgentSwitcherSkill(BaseSkill):
                 entity_type="agent name",
                 available_options=agent_names,
                 model=ai_model,
-                db=self.db_session  # Phase 7.4: Pass db for API key loading
+                db=self.db_session,  # Phase 7.4: Pass db for API key loading
+                token_tracker=self._token_tracker  # Phase 0.6.0: Track entity extraction costs
             )
 
             if not agent_name:

@@ -116,7 +116,10 @@ class SchedulerWorker:
             logger.info("Getting database session...")
             with get_session(self.engine) as db:
                 logger.info("Creating SchedulerService...")
-                service = SchedulerService(db)
+                # Phase 0.6.0: Create TokenTracker for background worker cost monitoring
+                from analytics.token_tracker import TokenTracker
+                token_tracker = TokenTracker(db)
+                service = SchedulerService(db, token_tracker=token_tracker)
 
                 # Get events that are due for execution
                 logger.info("Querying for due events...")

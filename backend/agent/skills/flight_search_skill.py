@@ -318,7 +318,8 @@ class FlightSearchSkill(BaseSkill):
             ai_client = AIClient(
                 provider=skill_config.get('model_provider', 'gemini'),
                 model_name=skill_config.get('model_name', 'gemini-2.5-flash'),
-                db=self._db_session
+                db=self._db_session,
+                token_tracker=self._token_tracker
             )
 
             system_prompt = """You are a flight search parameter extractor. Parse flight requests and return ONLY valid JSON."""

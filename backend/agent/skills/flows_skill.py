@@ -251,7 +251,7 @@ class FlowsSkill(BaseSkill):
                 provider = "gemini"
 
             logger.info(f"FlowsSkill: Using provider={provider}, model={ai_model} for intent detection")
-            ai_client = AIClient(provider=provider, model_name=ai_model, db=self._db_session)  # Phase 7.4: Pass db for API key loading
+            ai_client = AIClient(provider=provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker)
 
             system_prompt = """You are an operation classifier for Flows/Scheduler system.
 
@@ -769,7 +769,7 @@ Answer:"""
             else:
                 ai_provider = "gemini"
 
-            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session)
+            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker)
 
             system_prompt = """You are helping identify which calendar event the user wants to delete.
 Given a list of events and the user's message, return the ID of the matching event.
@@ -848,7 +848,7 @@ Answer:"""
             else:
                 ai_provider = "gemini"
 
-            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session)
+            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker)
 
             # Get current time context
             brazil_tz = pytz.timezone('America/Sao_Paulo')
@@ -946,7 +946,7 @@ Answer (JSON only):"""
             else:
                 ai_provider = "gemini"
 
-            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session)
+            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker)
 
             # Get current time in Brazil timezone for context
             brazil_tz = pytz.timezone('America/Sao_Paulo')

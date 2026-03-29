@@ -243,7 +243,8 @@ class SearchSkill(BaseSkill):
             ai_client = AIClient(
                 provider=provider,
                 model_name=model,
-                db=self._db_session
+                db=self._db_session,
+                token_tracker=self._token_tracker
             )
 
             system_prompt = """You are a search query extractor. Parse user requests and return ONLY the search query, nothing else."""

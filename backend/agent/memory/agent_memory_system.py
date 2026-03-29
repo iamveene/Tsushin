@@ -35,7 +35,8 @@ class AgentMemorySystem:
         agent_id: int,
         db_session: Session,
         config: Dict,
-        persist_directory: str
+        persist_directory: str,
+        token_tracker=None
     ):
         """
         Initialize agent memory system.
@@ -66,7 +67,8 @@ class AgentMemorySystem:
         self.fact_extractor = FactExtractor(
             provider=config.get("model_provider"),
             model_name=config.get("model_name"),
-            db=db_session
+            db=db_session,
+            token_tracker=token_tracker
         )
 
         # Layer 4: Shared Memory Pool (cross-agent knowledge)

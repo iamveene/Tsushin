@@ -550,6 +550,9 @@ class SkillManager:
             skill_instance._config = config
             skill_instance.set_db_session(db)
             skill_instance._agent_id = agent_id
+            # Phase 0.6.0: Propagate token tracker for cost monitoring
+            if hasattr(skill_instance, 'set_token_tracker') and self.token_tracker:
+                skill_instance.set_token_tracker(self.token_tracker)
 
             # Create synthetic message if not provided
             if message is None:
@@ -964,6 +967,10 @@ class SkillManager:
                 # Phase 7.4: Set database session for all skills (for API key loading in AI classification)
                 if hasattr(skill_instance, 'set_db_session'):
                     skill_instance.set_db_session(db)
+
+                # Phase 0.6.0: Set token tracker for all skills (for LLM cost monitoring)
+                if hasattr(skill_instance, 'set_token_tracker') and self.token_tracker:
+                    skill_instance.set_token_tracker(self.token_tracker)
 
                 # Phase 6.11.4: Pass agent_id to all skills for Agendador detection
                 skill_instance._agent_id = agent_id

@@ -46,17 +46,19 @@ COMPLETION_PHRASES = [
 class SchedulerService:
     """Service for managing scheduled events with conversation support."""
 
-    def __init__(self, db: Session, memory_manager=None):
+    def __init__(self, db: Session, memory_manager=None, token_tracker=None):
         """
         Initialize SchedulerService.
 
         Args:
             db: Database session
             memory_manager: Optional MultiAgentMemoryManager for semantic memory integration (Item 11)
+            token_tracker: Optional TokenTracker for LLM cost monitoring (Phase 0.6.0)
         """
         self.db = db
         self.contact_service = ContactService(db)
         self.memory_manager = memory_manager  # Item 11: For semantic memory in conversations
+        self.token_tracker = token_tracker  # Phase 0.6.0: Track background LLM costs
 
     def _sanitize_ai_reply(self, agent_id: int, reply: str) -> str:
         if not reply:
@@ -1127,7 +1129,8 @@ Important:
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker
             )
 
             # Get analysis (AWAIT the async method)
@@ -1351,7 +1354,8 @@ Generate your reply to continue working towards the objective.""")
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker
             )
 
             # Generate reply (AWAIT and use correct parameters)
@@ -1576,7 +1580,8 @@ Generate ONLY the message text - no quotes, no explanations."""
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker
             )
 
             # Generate opening (AWAIT the coroutine)
@@ -1667,7 +1672,8 @@ Generate a brief, professional closing message. Thank them and confirm completio
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker
             )
 
             # Generate closing (AWAIT the async method)
@@ -1791,7 +1797,8 @@ Generate a message to get the conversation back on track towards the objective, 
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker
             )
 
             response = await ai_client.generate(

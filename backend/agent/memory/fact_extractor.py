@@ -117,7 +117,7 @@ Example responses:
 Conversation to analyze:
 """
 
-    def __init__(self, ai_client=None, provider: str = None, model_name: str = None, db=None):
+    def __init__(self, ai_client=None, provider: str = None, model_name: str = None, db=None, token_tracker=None):
         """
         Initialize fact extractor.
 
@@ -126,9 +126,11 @@ Conversation to analyze:
             provider: AI provider to use (REQUIRED: should be agent's model_provider)
             model_name: Model name to use (REQUIRED: should be agent's model_name)
             db: Database session for loading API keys (optional)
+            token_tracker: TokenTracker for LLM cost monitoring (Phase 0.6.0)
         """
         self.logger = logging.getLogger(__name__)
         self.ai_client = ai_client
+        self.token_tracker = token_tracker
 
         # Warn if using fallback instead of agent's configured LLM
         if not provider or not model_name:
@@ -151,7 +153,8 @@ Conversation to analyze:
             self.ai_client = AIClient(
                 provider=self.provider,
                 model_name=self.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker
             )
         return self.ai_client
 

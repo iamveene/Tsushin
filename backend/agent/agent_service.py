@@ -394,7 +394,7 @@ class AgentService:
             try:
                 from services.sentinel_service import SentinelService
                 from services.skill_context_service import SkillContextService
-                sentinel = SentinelService(self.db, self.tenant_id)
+                sentinel = SentinelService(self.db, self.tenant_id, token_tracker=self.token_tracker)
 
                 # Phase 20: Get skill context for this agent
                 # This provides Sentinel with information about expected behaviors

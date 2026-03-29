@@ -1244,7 +1244,8 @@ class PlaygroundService:
             fact_extractor = FactExtractor(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker
             )
             if not fact_extractor.should_extract_facts(conversation, min_user_messages=1):
                 return

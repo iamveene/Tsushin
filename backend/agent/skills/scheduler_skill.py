@@ -243,7 +243,7 @@ class SchedulerSkill(BaseSkill):
             db.close()
 
         # Create AI client (Phase 7.4: Pass db for API key loading)
-        ai_client = AIClient(provider=provider, model_name=model, db=self._db_session)
+        ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker)
 
         # Intent detection prompt
         prompt = f"""Analyze this user request and determine their intent.
@@ -314,7 +314,7 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
             db = SessionLocal()
 
             try:
-                scheduler_service = SchedulerService(db)
+                scheduler_service = SchedulerService(db, token_tracker=self._token_tracker)
 
                 # Create scheduled event in scheduled_events table
                 event = scheduler_service.create_event(
@@ -686,7 +686,7 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
                 db.close()
 
             # Create AI client
-            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session)
+            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker)
 
             # Get current time in Brazil timezone for context
             now_brazil = datetime.now(BRAZIL_TZ)
@@ -808,7 +808,7 @@ If you cannot determine the date/time, respond with: {{"error": "cannot parse"}}
                 db.close()
 
             # Create AI client (Phase 7.4: Pass db for API key loading)
-            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session)
+            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker)
 
             # Get current time in Brazil timezone for context
             now_brazil = datetime.now(BRAZIL_TZ)

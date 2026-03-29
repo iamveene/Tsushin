@@ -100,7 +100,8 @@ class AgentRouter:
         self.memory_manager = MultiAgentMemoryManager(
             db_session=db_session,
             config=config,
-            base_chroma_dir="./data/chroma"
+            base_chroma_dir="./data/chroma",
+            token_tracker=self.token_tracker
         )
         self.logger.info("Multi-Agent Memory Manager initialized")
 
@@ -149,7 +150,7 @@ class AgentRouter:
 
         # Phase 6.4 Week 3: Initialize SchedulerService for conversation detection
         # Item 11.4: Pass memory_manager to SchedulerService for semantic memory in conversations
-        self.scheduler_service = SchedulerService(db_session, memory_manager=self.memory_manager)
+        self.scheduler_service = SchedulerService(db_session, memory_manager=self.memory_manager, token_tracker=self.token_tracker)
         self.logger.info("SchedulerService initialized for conversation routing with memory integration")
 
         # Phase 4.8: Ring buffer memory loading deprecated
@@ -1596,7 +1597,7 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
         if tenant_id:
             try:
                 from services.sentinel_service import SentinelService
-                sentinel = SentinelService(self.db, tenant_id)
+                sentinel = SentinelService(self.db, tenant_id, token_tracker=self.token_tracker)
 
                 # Load skill context so Sentinel knows what behaviors are expected
                 skill_context_str = None
@@ -1649,7 +1650,7 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                 # Reuse Sentinel's effective config for detection settings
                 if not sentinel:
                     from services.sentinel_service import SentinelService
-                    sentinel = SentinelService(self.db, tenant_id)
+                    sentinel = SentinelService(self.db, tenant_id, token_tracker=self.token_tracker)
 
                 effective_config = sentinel.get_effective_config(agent_id)
                 memguard_enabled = effective_config.detection_config.get(

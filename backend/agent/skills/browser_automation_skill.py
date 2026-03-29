@@ -333,7 +333,8 @@ class BrowserAutomationSkill(BaseSkill):
             ai_client = AIClient(
                 provider=config.get('model_provider', 'gemini'),
                 model_name=config.get('model_name', 'gemini-2.5-flash'),
-                db=self._db
+                db=self._db,
+                token_tracker=self._token_tracker
             )
 
             system_prompt = """You are a browser automation command parser. Convert natural language into structured browser actions.

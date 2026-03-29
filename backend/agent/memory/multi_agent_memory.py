@@ -36,7 +36,8 @@ class MultiAgentMemoryManager:
         self,
         db_session: Session,
         config: Dict,
-        base_chroma_dir: str = "./data/chroma"
+        base_chroma_dir: str = "./data/chroma",
+        token_tracker=None
     ):
         """
         Initialize multi-agent memory manager.
@@ -45,11 +46,13 @@ class MultiAgentMemoryManager:
             db_session: Database session for persistence
             config: Configuration dictionary with memory settings
             base_chroma_dir: Base directory for ChromaDB collections
+            token_tracker: Optional TokenTracker for LLM cost monitoring (Phase 0.6.0)
         """
         self.logger = logging.getLogger(__name__)
         self.db = db_session
         self.config = config
         self.base_chroma_dir = base_chroma_dir
+        self.token_tracker = token_tracker
 
         # Agent memory instances (lazy loaded)
         # Phase 4.8 Week 3: Using AgentMemorySystem for full 4-layer memory
@@ -118,7 +121,8 @@ class MultiAgentMemoryManager:
                 agent_id=agent_id,
                 db_session=self.db,
                 config=config_to_use,
-                persist_directory=persist_dir
+                persist_directory=persist_dir,
+                token_tracker=self.token_tracker
             )
 
             self.agent_memories[agent_id] = memory

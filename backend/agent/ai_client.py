@@ -46,6 +46,8 @@ class AIClient:
         self.db = db
         self.token_tracker = token_tracker
         self.tenant_id = tenant_id
+        if token_tracker is None:
+            self.logger.debug(f"AIClient({provider}/{model_name}): no token_tracker — costs will not be tracked")
         # Model settings - configurable via playground settings
         self.temperature = temperature if temperature is not None else 0.7
         # BUG FIX 2026-01-17: Increased from 2048 to 16384 to prevent truncation of long responses
@@ -375,25 +377,27 @@ class AIClient:
                 self.logger.error("Could not extract text from multi-part Gemini response")
                 answer = ""
 
-        # Gemini token usage: The current SDK (google.generativeai) doesn't expose token counts
-        # Token tracking will work for OpenAI, Anthropic, and Ollama models
-        # For Gemini, we estimate based on text length as a workaround
-        token_usage = {
-            "prompt": 0,
-            "completion": 0,
-            "total": 0
-        }
-
-        # Rough estimation for Gemini (since SDK doesn't provide counts)
-        # ~4 characters per token on average
-        estimated_prompt = len(full_prompt) // 4
-        estimated_completion = len(answer) // 4
-        token_usage = {
-            "prompt": estimated_prompt,
-            "completion": estimated_completion,
-            "total": estimated_prompt + estimated_completion
-        }
-        self.logger.info(f"Gemini token usage (estimated): {token_usage}")
+        # Gemini token usage: Try usage_metadata first, fall back to estimation
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0) or 0
+            completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0) or 0
+            total_tokens = getattr(response.usage_metadata, 'total_token_count', 0) or (prompt_tokens + completion_tokens)
+            token_usage = {
+                "prompt": prompt_tokens,
+                "completion": completion_tokens,
+                "total": total_tokens
+            }
+            self.logger.info(f"Gemini token usage (actual): {token_usage}")
+        else:
+            # Fallback: estimate based on text length (~4 chars per token)
+            estimated_prompt = len(full_prompt) // 4
+            estimated_completion = len(answer) // 4
+            token_usage = {
+                "prompt": estimated_prompt,
+                "completion": estimated_completion,
+                "total": estimated_prompt + estimated_completion
+            }
+            self.logger.info(f"Gemini token usage (estimated): {token_usage}")
 
         return {
             "answer": answer,

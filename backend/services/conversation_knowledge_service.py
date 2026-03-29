@@ -25,9 +25,10 @@ class ConversationKnowledgeService:
     - Knowledge export
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, token_tracker=None):
         self.db = db
         self.logger = logging.getLogger(__name__)
+        self.token_tracker = token_tracker
 
     async def extract_knowledge(
         self,
@@ -425,7 +426,9 @@ Do not include any explanation, only the JSON array."""
 
             client = AIClient(
                 provider=agent.model_provider,
-                model_name=agent.model_name
+                model_name=agent.model_name,
+                db=self.db,
+                token_tracker=self.token_tracker
             )
 
             # Call LLM with simple prompt

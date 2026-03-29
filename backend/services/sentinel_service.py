@@ -93,16 +93,18 @@ class SentinelService:
         "memory_context",          # Conversation memory context
     ]
 
-    def __init__(self, db: Session, tenant_id: Optional[str] = None):
+    def __init__(self, db: Session, tenant_id: Optional[str] = None, token_tracker=None):
         """
         Initialize Sentinel service.
 
         Args:
             db: Database session
             tenant_id: Tenant ID for multi-tenancy (None for system-level)
+            token_tracker: Optional TokenTracker for LLM cost monitoring (Phase 0.6.0)
         """
         self.db = db
         self.tenant_id = tenant_id
+        self.token_tracker = token_tracker
         self.logger = logging.getLogger(__name__)
 
     # =========================================================================
@@ -910,6 +912,7 @@ class SentinelService:
             temperature=config.llm_temperature,
             max_tokens=config.llm_max_tokens,
             tenant_id=self.tenant_id,
+            token_tracker=self.token_tracker,
         )
 
         result = await client.generate(

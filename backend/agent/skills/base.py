@@ -81,6 +81,19 @@ class BaseSkill(ABC):
         """Initialize the skill."""
         self._config: Dict[str, Any] = {}  # Set by skill manager during initialization
         self._db_session = None  # Database session for API key loading (optional)
+        self._token_tracker = None  # Token tracker for cost monitoring (optional)
+
+    def set_token_tracker(self, token_tracker):
+        """
+        Set token tracker for LLM cost monitoring.
+
+        Automatically called by SkillManager after skill instantiation.
+        Skills should pass self._token_tracker to AIClient instances.
+
+        Args:
+            token_tracker: TokenTracker instance for recording usage
+        """
+        self._token_tracker = token_tracker
 
     def set_db_session(self, db):
         """
@@ -520,7 +533,8 @@ class BaseSkill(ABC):
             skill_name=self.skill_name,
             skill_description=self.skill_description,
             model=ai_model,  # None = use system AI config
-            db=self._db_session  # Pass database session for API key loading and system config
+            db=self._db_session,  # Pass database session for API key loading and system config
+            token_tracker=self._token_tracker  # Phase 0.6.0: Track classification costs
         )
 
     def __repr__(self) -> str:
