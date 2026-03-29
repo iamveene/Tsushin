@@ -1,8 +1,28 @@
 # Tsushin Bug Tracker
-**Open:** 1 | **In Progress:** 0 | **Resolved:** 108
+**Open:** 1 | **In Progress:** 0 | **Resolved:** 110
 **Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression (2026-03-29)
 
 ## Open Issues
+
+### BUG-110: 13 AIClient call sites missing token_tracker — LLM costs silently untracked
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
+- **Severity:** High
+- **Category:** Billing / Analytics
+- **Found:** 2026-03-29 (Billing Structure Audit for v0.6.0)
+- **Files:** `backend/agent/skills/base.py`, `backend/agent/skills/skill_manager.py`, `backend/agent/skills/ai_classifier.py`, `backend/agent/skills/flows_skill.py`, `backend/agent/skills/scheduler_skill.py`, `backend/agent/skills/search_skill.py`, `backend/agent/skills/browser_automation_skill.py`, `backend/agent/skills/flight_search_skill.py`, `backend/scheduler/scheduler_service.py`, `backend/agent/memory/fact_extractor.py`, `backend/services/conversation_knowledge_service.py`, `backend/agent/ai_summary_service.py`, `backend/services/sentinel_service.py`, `backend/agent/ai_client.py`
+- **Description:** Multiple AIClient instantiations across skills and services did not pass `token_tracker`, causing their LLM costs (skill classification, flow intent parsing, scheduler operations, fact extraction, security analysis) to be invisible in analytics. Affected: AI Classifier (2 sites), FlowsSkill (4), SchedulerSkill (3), SearchSkill (1), BrowserAutomationSkill (1), FlightSearchSkill (1), SchedulerService (5), FactExtractor (1), ConversationKnowledgeService (1), AISummaryService (1), SentinelService (1).
+- **Resolution:** Added `set_token_tracker()` to BaseSkill with auto-propagation in SkillManager. Passed `token_tracker` to all 13 AIClient call sites. Fixed Gemini token estimation to use actual `usage_metadata` instead of `len(text)//4`. Added debug log guardrail in AIClient when created without tracker.
+
+### BUG-111: Gemini token usage estimated via len(text)//4 instead of actual usage_metadata
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
+- **Severity:** Medium
+- **Category:** Billing / Analytics
+- **Found:** 2026-03-29 (Billing Structure Audit for v0.6.0)
+- **Files:** `backend/agent/ai_client.py`
+- **Description:** The `_call_gemini()` method in AIClient estimated token counts using `len(text) // 4` (roughly 4 chars per token). The Gemini SDK provides actual token counts via `response.usage_metadata` but this was not being used.
+- **Resolution:** Added check for `response.usage_metadata` with `prompt_token_count` and `candidates_token_count` fields. Falls back to estimation only when metadata is unavailable.
 
 ### BUG-109: Hub Edit Provider Instance modal renders behind main content (z-index)
 - **Status:** Open

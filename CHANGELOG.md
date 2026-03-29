@@ -259,6 +259,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Hidden inactive agents in security graph by default
 - Removed duplicated sentinel settings from MemGuard tab
 
+#### Billing & Cost Tracking (BUG-110, BUG-111)
+- BUG-110: Fixed 13 AIClient call sites silently dropping `token_tracker` — skill classification, flow intent parsing, scheduler operations, fact extraction, search/browser/flight parsing, sentinel analysis, and persona summaries now properly tracked in TokenUsage table
+- BUG-111: Fixed Gemini token estimation using `len(text)//4` — now reads actual `response.usage_metadata` (prompt_token_count, candidates_token_count) when available
+- Added `set_token_tracker()` to BaseSkill with automatic propagation via SkillManager to all skills
+- Added debug-level guardrail log in AIClient when instantiated without `token_tracker` for future gap detection
+- SchedulerService background worker now creates TokenTracker for cost tracking of unattended scheduled conversations
+- MultiAgentMemoryManager and FactExtractor now receive and propagate token_tracker through the full memory pipeline
+
 #### Platform Hardening (BUG-105 to BUG-108)
 - BUG-105: Fixed flow SummarizationStepHandler nested dict lookup — `input_data.get("step_1.thread_id")` changed to proper `input_data.get("step_1", {}).get("thread_id")`. Template `{{step_2.summary}}` now resolves correctly.
 - BUG-106: Fixed playground "Failed to Load Conversation" — threads with sender_key format mismatches now return empty messages with warning instead of error
