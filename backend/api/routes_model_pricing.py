@@ -311,17 +311,31 @@ def _get_provider_from_model(model_name: str) -> str:
     """Determine provider from model name."""
     model_lower = model_name.lower()
 
-    if model_lower.startswith("gpt-") or model_lower.startswith("whisper") or model_lower.startswith("tts-"):
+    # OpenRouter-style prefixed models
+    if "/" in model_lower:
+        prefix = model_lower.split("/")[0]
+        provider_map = {
+            "openai": "openai", "anthropic": "anthropic", "google": "gemini",
+            "meta-llama": "openrouter", "deepseek": "openrouter",
+            "qwen": "openrouter", "mistralai": "openrouter", "x-ai": "xai",
+        }
+        return provider_map.get(prefix, "openrouter")
+
+    if model_lower.startswith(("gpt-", "whisper", "tts-", "o1", "o3", "o4")):
         return "openai"
     elif model_lower.startswith("claude-"):
         return "anthropic"
     elif model_lower.startswith("gemini"):
         return "gemini"
+    elif model_lower.startswith("grok-"):
+        return "xai"
+    elif model_lower.startswith("deepseek"):
+        return "deepseek"
     elif model_lower in ["kokoro"]:
         return "kokoro"
     elif model_lower in ["elevenlabs"]:
         return "elevenlabs"
-    elif model_lower in ["llama3.2", "llama3.1", "llama3", "mistral", "mixtral", "qwen2.5", "codellama"]:
+    elif model_lower in ["llama3.2", "llama3.1", "llama3", "mistral", "mixtral", "qwen2.5", "codellama", "deepseek-r1"]:
         return "ollama"
     else:
         return "unknown"
@@ -334,17 +348,45 @@ def _format_display_name(model_name: str) -> str:
 
     # Specific model name formatting
     display_map = {
-        # OpenAI LLMs
+        # OpenAI - GPT-5 series
+        "gpt-5": "GPT-5",
+        "gpt-5.3": "GPT-5.3",
+        "gpt-5.4": "GPT-5.4",
+        "gpt-5.4-pro": "GPT-5.4 Pro",
+        "gpt-5-mini": "GPT-5 Mini",
+        "gpt-5-nano": "GPT-5 Nano",
+        # OpenAI - GPT-4.1 series
+        "gpt-4.1": "GPT-4.1",
+        "gpt-4.1-mini": "GPT-4.1 Mini",
+        "gpt-4.1-nano": "GPT-4.1 Nano",
+        # OpenAI - GPT-4o series
         "gpt-4o": "GPT-4o",
         "gpt-4o-mini": "GPT-4o Mini",
         "gpt-4": "GPT-4",
         "gpt-4-turbo": "GPT-4 Turbo",
         "gpt-3.5-turbo": "GPT-3.5 Turbo",
+        # OpenAI - O-series reasoning
+        "o1": "O1",
+        "o3": "O3",
+        "o3-mini": "O3 Mini",
+        "o4-mini": "O4 Mini",
         # OpenAI Audio
         "whisper-1": "Whisper (Audio Transcription)",
         "tts-1": "OpenAI TTS Standard",
         "tts-1-hd": "OpenAI TTS HD",
-        # Anthropic
+        # Anthropic - Claude 4.6
+        "claude-opus-4-6": "Claude Opus 4.6",
+        "claude-opus-4-6-latest": "Claude Opus 4.6 (Latest)",
+        "claude-sonnet-4-6": "Claude Sonnet 4.6",
+        "claude-sonnet-4-6-latest": "Claude Sonnet 4.6 (Latest)",
+        # Anthropic - Claude 4.5 / 4
+        "claude-opus-4-5-20251101": "Claude Opus 4.5",
+        "claude-opus-4-5-latest": "Claude Opus 4.5 (Latest)",
+        "claude-sonnet-4-20250514": "Claude Sonnet 4",
+        "claude-sonnet-4-latest": "Claude Sonnet 4 (Latest)",
+        "claude-haiku-4-5-20251022": "Claude Haiku 4.5",
+        "claude-haiku-4-5-latest": "Claude Haiku 4.5 (Latest)",
+        # Anthropic - Claude 3.5 / 3 (legacy)
         "claude-3-5-sonnet-20241022": "Claude 3.5 Sonnet",
         "claude-3-5-sonnet-latest": "Claude 3.5 Sonnet (Latest)",
         "claude-3-5-haiku-20241022": "Claude 3.5 Haiku",
@@ -352,12 +394,23 @@ def _format_display_name(model_name: str) -> str:
         "claude-3-opus-latest": "Claude 3 Opus (Latest)",
         "claude-3-sonnet-20240229": "Claude 3 Sonnet",
         "claude-3-haiku-20240307": "Claude 3 Haiku",
+        # xAI Grok
+        "grok-3": "Grok 3",
+        "grok-3-fast": "Grok 3 Fast",
+        "grok-4": "Grok 4",
+        "grok-4-fast": "Grok 4 Fast",
+        "grok-4.1-fast": "Grok 4.1 Fast",
+        "grok-4.20-beta": "Grok 4.20 Beta",
         # Google Gemini
         "gemini-2.5-pro": "Gemini 2.5 Pro",
         "gemini-2.5-flash": "Gemini 2.5 Flash",
+        "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
         "gemini-2.0-flash": "Gemini 2.0 Flash",
         "gemini-1.5-pro": "Gemini 1.5 Pro",
         "gemini-1.5-flash": "Gemini 1.5 Flash",
+        # DeepSeek
+        "deepseek-chat": "DeepSeek Chat",
+        "deepseek-reasoner": "DeepSeek Reasoner",
         # TTS Providers
         "kokoro": "Kokoro TTS (Free)",
         "elevenlabs": "ElevenLabs TTS",

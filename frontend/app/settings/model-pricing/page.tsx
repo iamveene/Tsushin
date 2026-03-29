@@ -32,7 +32,10 @@ interface PricingResponse {
 const PROVIDER_CONFIG: Record<string, { name: string; color: string; bgColor: string }> = {
   openai: { name: 'OpenAI', color: 'text-emerald-400', bgColor: 'bg-emerald-500/10' },
   anthropic: { name: 'Anthropic', color: 'text-orange-400', bgColor: 'bg-orange-500/10' },
+  xai: { name: 'xAI', color: 'text-red-400', bgColor: 'bg-red-500/10' },
   gemini: { name: 'Google', color: 'text-blue-400', bgColor: 'bg-blue-500/10' },
+  deepseek: { name: 'DeepSeek', color: 'text-indigo-400', bgColor: 'bg-indigo-500/10' },
+  openrouter: { name: 'OpenRouter', color: 'text-yellow-400', bgColor: 'bg-yellow-500/10' },
   kokoro: { name: 'Kokoro', color: 'text-pink-400', bgColor: 'bg-pink-500/10' },
   elevenlabs: { name: 'ElevenLabs', color: 'text-cyan-400', bgColor: 'bg-cyan-500/10' },
   ollama: { name: 'Ollama (Local)', color: 'text-purple-400', bgColor: 'bg-purple-500/10' },
