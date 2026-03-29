@@ -4037,7 +4037,7 @@ export const api = {
 
   // Phase 10.1.1: Telegram Bot Integration
   async getTelegramInstances(): Promise<TelegramBotInstance[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/telegram/instances`)
+    const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/`)
     if (!res.ok) throw new Error('Failed to fetch Telegram instances')
     return res.json()
   },
@@ -4049,7 +4049,7 @@ export const api = {
   },
 
   async createTelegramInstance(bot_token: string): Promise<TelegramBotInstance> {
-    const res = await authenticatedFetch(`${API_URL}/api/telegram/instances`, {
+    const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bot_token }),
