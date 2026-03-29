@@ -130,10 +130,10 @@ export default function SettingsHubPage() {
     },
     {
       title: 'Audit Logs',
-      description: 'Track all activities and changes in your organization',
+      description: 'Track all activities and changes across your organization',
       icon: icons.audit,
       href: '/settings/audit-logs',
-      permission: 'users.read',
+      permission: 'audit.read',
     },
     {
       title: 'Model Pricing',

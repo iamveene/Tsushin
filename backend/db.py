@@ -129,6 +129,7 @@ def seed_rbac_defaults(session):
         ("analytics.read", "analytics", "read", "View analytics and reports"),
         # Audit logs
         ("audit.read", "audit", "read", "View audit logs"),
+        ("audit.export", "audit", "export", "Export audit logs to CSV"),
         # Custom Tools (Phase 9.3)
         ("tools.manage", "tools", "manage", "Manage custom tools (create, update, delete)"),
         ("tools.execute", "tools", "execute", "Execute custom tools"),
@@ -185,7 +186,7 @@ def seed_rbac_defaults(session):
             "users.read", "users.invite", "users.manage", "users.remove",
             "org.settings.read", "org.settings.write",
             "billing.read", "billing.write",
-            "analytics.read", "audit.read",
+            "analytics.read", "audit.read", "audit.export",
             "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
@@ -203,7 +204,7 @@ def seed_rbac_defaults(session):
             "users.read", "users.invite", "users.manage", "users.remove",
             "org.settings.read", "org.settings.write",
             "billing.read",  # View only
-            "analytics.read", "audit.read",
+            "analytics.read", "audit.read", "audit.export",
             "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
@@ -484,6 +485,38 @@ def ensure_rbac_permissions(session):
     if custom_skill_perms_added:
         session.commit()
         print("[RBAC] Custom skill permissions ensured successfully")
+
+    # v0.6.0: Ensure audit.export permission exists
+    audit_export_perm = session.query(Permission).filter(Permission.name == "audit.export").first()
+    if not audit_export_perm:
+        print("[RBAC] Adding missing audit.export permission...")
+        audit_export_perm = Permission(name="audit.export", resource="audit", action="export", description="Export audit logs to CSV")
+        session.add(audit_export_perm)
+        session.flush()
+
+        roles = session.query(Role).filter(Role.name.in_(["owner", "admin"])).all()
+        for role in roles:
+            rp = RolePermission(role_id=role.id, permission_id=audit_export_perm.id)
+            session.add(rp)
+            print(f"[RBAC] Assigned audit.export to role: {role.name}")
+
+        session.commit()
+        print("[RBAC] audit.export permission added successfully")
+    else:
+        roles = session.query(Role).filter(Role.name.in_(["owner", "admin"])).all()
+        perms_added = False
+        for role in roles:
+            existing_mapping = session.query(RolePermission).filter(
+                RolePermission.role_id == role.id,
+                RolePermission.permission_id == audit_export_perm.id
+            ).first()
+            if not existing_mapping:
+                rp = RolePermission(role_id=role.id, permission_id=audit_export_perm.id)
+                session.add(rp)
+                print(f"[RBAC] Assigned audit.export to role: {role.name}")
+                perms_added = True
+        if perms_added:
+            session.commit()
 
 
 def seed_slash_commands(session):

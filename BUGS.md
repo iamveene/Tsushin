@@ -1,5 +1,5 @@
 # Tsushin Bug Tracker
-**Open:** 1 | **In Progress:** 0 | **Resolved:** 110
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 111
 **Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression (2026-03-29)
 
 ## Open Issues
@@ -25,13 +25,15 @@
 - **Resolution:** Added check for `response.usage_metadata` with `prompt_token_count` and `candidates_token_count` fields. Falls back to estimation only when metadata is unavailable.
 
 ### BUG-109: Hub Edit Provider Instance modal renders behind main content (z-index)
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Low
 - **Category:** UI/UX
 - **Found:** 2026-03-29 (QA Regression)
-- **Files:** `frontend/app/hub/page.tsx`
-- **Description:** When clicking "Edit" on a Provider Instance in Hub > AI Providers, the modal overlay appears behind the content area instead of on top. The modal content is in the DOM and functional but visually obscured. Likely a z-index issue — the modal's overlay container needs a higher `z-index` or the parent container has `overflow: hidden` blocking the backdrop.
+- **Files:** `frontend/components/ui/Modal.tsx`
+- **Description:** When clicking "Edit" on a Provider Instance in Hub > AI Providers, the modal overlay appears behind the content area instead of on top. The `glass-card` CSS class applies `backdrop-filter: blur(12px)` which creates a new CSS stacking context, trapping the modal's z-index inside it.
 - **Impact:** Users cannot visually interact with the edit modal. Workaround: use keyboard navigation or inspect element.
+- **Resolution:** Converted Modal.tsx to use React Portal (`createPortal(jsx, document.body)`) to escape all CSS stacking contexts. Added SSR safety with `useState(false)` for `mounted` state. Fix applies universally to all modal consumers (ProviderInstanceModal, TelegramBotModal, QR modals, etc.).
 
 ### BUG-108: Kokoro TTS health check fails when /health endpoint is temporarily unavailable
 - **Status:** Resolved

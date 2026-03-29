@@ -4691,6 +4691,80 @@ export const api = {
     return res.json()
   },
 
+  // v0.6.0: Enhanced tenant-scoped audit events
+  async getAuditEvents(params?: {
+    limit?: number
+    offset?: number
+    action?: string
+    resource_type?: string
+    user_id?: number
+    severity?: string
+    channel?: string
+    from_date?: string
+    to_date?: string
+  }): Promise<{
+    events: Array<{
+      id: number
+      action: string
+      user_id: number | null
+      user_name: string | null
+      resource_type: string | null
+      resource_id: string | null
+      details: Record<string, unknown> | null
+      ip_address: string | null
+      channel: string | null
+      severity: string
+      created_at: string
+    }>
+    total: number
+  }> {
+    const searchParams = new URLSearchParams()
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+    if (params?.action) searchParams.append('action', params.action)
+    if (params?.resource_type) searchParams.append('resource_type', params.resource_type)
+    if (params?.user_id) searchParams.append('user_id', params.user_id.toString())
+    if (params?.severity) searchParams.append('severity', params.severity)
+    if (params?.channel) searchParams.append('channel', params.channel)
+    if (params?.from_date) searchParams.append('from_date', params.from_date)
+    if (params?.to_date) searchParams.append('to_date', params.to_date)
+    const res = await authenticatedFetch(`${API_URL}/api/audit-logs?${searchParams}`)
+    if (!res.ok) throw new Error('Failed to fetch audit events')
+    return res.json()
+  },
+
+  async getAuditLogStats(): Promise<{
+    events_today: number
+    events_this_week: number
+    critical_count: number
+    top_actors: Array<{ user_id: number | null; user_name: string; event_count: number }>
+    by_category: Record<string, number>
+  }> {
+    const res = await authenticatedFetch(`${API_URL}/api/audit-logs/stats`)
+    if (!res.ok) throw new Error('Failed to fetch audit stats')
+    return res.json()
+  },
+
+  async exportAuditLogs(params?: {
+    action?: string
+    resource_type?: string
+    severity?: string
+    channel?: string
+    from_date?: string
+    to_date?: string
+  }): Promise<Blob> {
+    const searchParams = new URLSearchParams()
+    if (params?.action) searchParams.append('action', params.action)
+    if (params?.resource_type) searchParams.append('resource_type', params.resource_type)
+    if (params?.severity) searchParams.append('severity', params.severity)
+    if (params?.channel) searchParams.append('channel', params.channel)
+    if (params?.from_date) searchParams.append('from_date', params.from_date)
+    if (params?.to_date) searchParams.append('to_date', params.to_date)
+    const res = await authenticatedFetch(`${API_URL}/api/audit-logs/export?${searchParams}`)
+    if (!res.ok) throw new Error('Failed to export audit logs')
+    return res.blob()
+  },
+
   // Invitation acceptance (public endpoints)
   async getInvitationInfo(token: string): Promise<InvitationInfo> {
     const res = await fetch(`${API_URL}/api/auth/invitation/${token}`)

@@ -6,6 +6,7 @@ These models correspond to the database schema created in migration 001.
 """
 
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -28,6 +29,7 @@ class Tenant(Base):
     status = Column(String(20), default='active')  # active, suspended, trial
     created_by_global_admin = Column(Integer, ForeignKey('user.id'), nullable=True)
     slash_commands_default_policy = Column(String(30), default="enabled_for_known")  # Feature #12: disabled | enabled_for_all | enabled_for_known
+    audit_retention_days = Column(Integer, default=90)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)
@@ -225,6 +227,29 @@ class GlobalAdminAuditLog(Base):
     ip_address = Column(String(50), nullable=True)
     user_agent = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AuditEvent(Base):
+    """Tenant-scoped audit event for tracking all platform activity."""
+    __tablename__ = "audit_event"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('user.id'), nullable=True, index=True)
+    action = Column(String(100), nullable=False, index=True)
+    resource_type = Column(String(50), nullable=True)
+    resource_id = Column(String(100), nullable=True)
+    details = Column(JSONB, nullable=True)
+    ip_address = Column(String(50), nullable=True)
+    user_agent = Column(String(500), nullable=True)
+    channel = Column(String(20), nullable=True)  # web, api, whatsapp, telegram, system
+    severity = Column(String(10), default='info')  # info, warning, critical
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index('ix_audit_event_tenant_created', 'tenant_id', 'created_at'),
+        Index('ix_audit_event_tenant_action', 'tenant_id', 'action'),
+    )
 
 
 class SubscriptionPlan(Base):

@@ -20,6 +20,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Auto-cleanup of weather skill records and slash commands on startup
 - Updated skill count from 21 to 20
 
+### Added
+
+#### Tenant-Scoped Audit Logging
+- New `audit_event` PostgreSQL table with JSONB details, tenant isolation, and composite indexes
+- `TenantAuditService` with event recording, querying, stats, CSV export, and retention purge
+- `TenantAuditActions` enum with 30+ standardized event types across auth, agents, flows, contacts, settings, security, API clients, custom skills, MCP servers, and team management
+- API endpoints: `GET /api/audit-logs` (filtered query), `GET /api/audit-logs/stats` (summary), `GET /api/audit-logs/export` (CSV)
+- Audit events wired into all major mutation routes: login/logout, agent CRUD, flow CRUD, contact CRUD, API client management, custom skills, MCP servers, team operations, settings changes, sentinel blocks
+- Enhanced Settings > Audit Logs page with stats bar, 5-filter panel (action/severity/channel/date range), expandable event details, and CSV export
+- `AuditLogEntry` component with 30+ action-type icons, severity indicators, channel badges, and click-to-filter
+- Background audit retention worker (24h cycle, per-tenant configurable retention days)
+- `audit.export` RBAC permission for CSV export (owner/admin roles)
+- Alembic migration 0010 for audit_event table and tenant.audit_retention_days column
+
+### Fixed
+
+#### BUG-109: Hub Edit Provider Instance Modal Z-Index
+- Converted `Modal.tsx` to use React Portal (`createPortal`) to escape CSS stacking contexts
+- Modal now renders directly in `document.body`, preventing backdrop-filter isolation issues
+- Added SSR safety with mounted state check for Next.js hydration compatibility
+
 ### Changed
 
 #### Skills UI Overhaul — "Add Skill" Pattern

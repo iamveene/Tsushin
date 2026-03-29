@@ -147,6 +147,7 @@ from api.routes_sentinel_profiles import router as sentinel_profiles_router, set
 # Message Queue System
 from api.routes_queue import router as queue_router
 from api.routes_api_clients import router as api_clients_router
+from api.routes_audit import router as audit_router
 # Phase 21: Provider Instance Management
 from api.routes_provider_instances import router as provider_instances_router, set_engine as set_provider_instances_engine
 # Phase 22: Custom Skills Foundation
@@ -801,6 +802,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error starting Message Queue Worker: {e}", exc_info=True)
 
+    # v0.6.0: Start Audit Retention Worker (purges expired audit events daily)
+    try:
+        from services.audit_retention_worker import start_audit_retention_worker
+        start_audit_retention_worker(engine, poll_interval_hours=24)
+        logging.info("Audit Retention Worker started (purging every 24h)")
+    except Exception as e:
+        logging.error(f"Error starting Audit Retention Worker: {e}", exc_info=True)
+
     # Phase 22.4: Auto-connect active MCP servers on startup
     async def _auto_connect_mcp_servers():
         await asyncio.sleep(5)  # Wait for full startup
@@ -921,6 +930,14 @@ async def lifespan(app: FastAPI):
         logging.info("Message Queue Worker stopped")
     except Exception as e:
         logging.error(f"Error stopping Message Queue Worker: {e}", exc_info=True)
+
+    # Stop Audit Retention Worker
+    try:
+        from services.audit_retention_worker import stop_audit_retention_worker
+        stop_audit_retention_worker()
+        logging.info("Audit Retention Worker stopped")
+    except Exception as e:
+        logging.error(f"Error stopping Audit Retention Worker: {e}", exc_info=True)
 
     session.close()
     logging.info("Application shutdown")
@@ -1156,6 +1173,7 @@ app.include_router(mcp_servers_router, prefix="/api", tags=["MCP Servers"])  # P
 app.include_router(services_router)  # Hub Local Services (Kokoro TTS container management)
 app.include_router(queue_router)  # Message Queue System
 app.include_router(api_clients_router)  # Public API v1: Client Management (UI-facing)
+app.include_router(audit_router)  # v0.6.0: Tenant-Scoped Audit Logs
 app.include_router(v1_router)  # Public API v1: All /api/v1/ endpoints
 
 # Prometheus metrics endpoint (unauthenticated — scrape target)
