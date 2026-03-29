@@ -4,7 +4,7 @@
  * Integration Hub - Consolidated Single Page
  *
  * Manages all integrations organized by category:
- * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, ElevenLabs
+ * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, ElevenLabs
  * - Communication: WhatsApp, Telegram, Discord, Slack, Email (coming soon)
  * - Productivity: Asana, Google Calendar, Notion (coming soon)
  * - Developer Tools: Shell, GitHub (coming soon)
@@ -191,6 +191,7 @@ const AI_PROVIDERS: { value: string; label: string; Icon: React.FC<IconProps>; d
   { value: 'openrouter', label: 'OpenRouter', Icon: GlobeIcon, description: '100+ models via single API', status: 'available' },
   { value: 'groq', label: 'Groq', Icon: LightningIcon, description: 'Ultra-fast inference', status: 'available' },
   { value: 'grok', label: 'Grok (xAI)', Icon: GrokIcon, description: 'xAI Grok models', status: 'available' },
+  { value: 'deepseek', label: 'DeepSeek', Icon: BrainIcon, description: 'Affordable reasoning & chat', status: 'available' },
   { value: 'elevenlabs', label: 'ElevenLabs', Icon: MicrophoneIcon, description: 'Voice AI & TTS synthesis', status: 'available' },
 ]
 
@@ -1471,7 +1472,7 @@ export default function HubPage() {
   ) => {
     const apiKey = getApiKeyForService(item.value)
     const isComingSoon = item.status === 'coming_soon'
-    const hasProviderInstance = type === 'ai' && providerInstances.some(i => i.vendor === item.value)
+    const hasInstanceKey = type === 'ai' && providerInstances.some(i => i.vendor === item.value && i.api_key_configured)
     const ItemIcon = item.Icon
 
     return (
@@ -1487,7 +1488,7 @@ export default function HubPage() {
             </div>
             <div>
               <h3 className="font-semibold text-white">{item.label}</h3>
-              {hasProviderInstance && apiKey && (
+              {hasInstanceKey && apiKey && (
                 <span className="text-[10px] text-amber-400/80">Fallback — instance key takes priority</span>
               )}
             </div>
@@ -1673,6 +1674,7 @@ export default function HubPage() {
                     grok: 'Grok (xAI)',
                     deepseek: 'DeepSeek',
                     openrouter: 'OpenRouter',
+                    elevenlabs: 'ElevenLabs',
                     ollama: 'Ollama',
                     custom: 'Custom',
                   }
@@ -1685,6 +1687,7 @@ export default function HubPage() {
                     grok: GrokIcon,
                     deepseek: BrainIcon,
                     openrouter: GlobeIcon,
+                    elevenlabs: MicrophoneIcon,
                     ollama: BotIconSvg,
                     custom: BeakerIcon,
                   }
@@ -1697,8 +1700,9 @@ export default function HubPage() {
                     grok: 'text-red-400',
                     deepseek: 'text-cyan-400',
                     openrouter: 'text-teal-400',
+                    elevenlabs: 'text-pink-400',
                     ollama: 'text-purple-400',
-                    custom: 'text-pink-400',
+                    custom: 'text-rose-400',
                   }
 
                   const healthDotClass = (status: string) => {
@@ -1712,7 +1716,7 @@ export default function HubPage() {
 
                   const allVendors = Array.from(new Set([
                     ...Object.keys(vendorGroups),
-                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'deepseek', 'openrouter',
+                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'deepseek', 'openrouter', 'elevenlabs',
                   ])).filter(v => v !== 'ollama').sort()
 
                   return (

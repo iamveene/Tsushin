@@ -25,6 +25,8 @@ const VENDORS = [
   { value: 'groq', label: 'Groq' },
   { value: 'grok', label: 'Grok (xAI)' },
   { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'elevenlabs', label: 'ElevenLabs' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'custom', label: 'Custom' },
 ]
@@ -36,6 +38,8 @@ const VENDOR_DEFAULT_URLS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
   grok: 'https://api.x.ai/v1',
   openrouter: 'https://openrouter.ai/api/v1',
+  deepseek: 'https://api.deepseek.com',
+  elevenlabs: 'https://api.elevenlabs.io/v1',
   ollama: 'http://localhost:11434',
   custom: '',
 }
