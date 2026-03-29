@@ -5,6 +5,7 @@ Phase 7.6.4 - Reusable FastAPI Dependencies
 Provides common dependencies for authentication and authorization.
 """
 
+from datetime import datetime
 from typing import Optional
 from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -104,6 +105,18 @@ def get_current_user_required(
                 detail="Account is disabled"
             )
 
+        # BUG-134 FIX: Reject tokens issued before the last password change
+        if user.password_changed_at:
+            token_iat = payload.get("iat")
+            if token_iat:
+                token_issued = datetime.utcfromtimestamp(token_iat)
+                if token_issued < user.password_changed_at:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Token invalidated by password change. Please log in again.",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+
         return user
 
     except (ValueError, TypeError):
@@ -172,6 +185,7 @@ def require_global_admin():
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Global admin privileges required"
             )
+        return current_user
 
     return check
 

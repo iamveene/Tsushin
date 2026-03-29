@@ -60,6 +60,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login_at = Column(DateTime, nullable=True)
+    password_changed_at = Column(DateTime, nullable=True)  # BUG-134: Track password changes for JWT invalidation
     deleted_at = Column(DateTime, nullable=True)
 
     # Relationships

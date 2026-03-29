@@ -87,6 +87,7 @@ class MessageResponse(BaseModel):
     id: int
     source_id: str
     chat_name: Optional[str]
+    sender: Optional[str] = None  # BUG-127: Raw sender identifier (phone/JID)
     sender_name: Optional[str]
     body: str
     timestamp: str  # Changed from int to str (datetime string from MCP)

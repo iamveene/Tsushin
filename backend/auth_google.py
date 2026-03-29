@@ -585,6 +585,9 @@ class GoogleSSOService:
             role_name = role.name if role else None
 
         # Generate JWT token
+        pwd_ts = None
+        if user.password_changed_at:
+            pwd_ts = int(user.password_changed_at.timestamp())
         token_data = {
             "sub": str(user.id),
             "email": user.email,
@@ -592,6 +595,7 @@ class GoogleSSOService:
             "is_global_admin": user.is_global_admin,
             "role": role_name,
             "auth_provider": "google",
+            "pwd_ts": pwd_ts,
         }
         jwt_token = create_access_token(token_data)
 

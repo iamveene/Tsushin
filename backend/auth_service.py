@@ -76,12 +76,17 @@ class AuthService:
             role_name = role.name if role else None
 
         # Generate access token
+        # BUG-134 FIX: Include password_changed_at timestamp for JWT invalidation on password change
+        pwd_ts = None
+        if user.password_changed_at:
+            pwd_ts = int(user.password_changed_at.timestamp())
         token_data = {
             "sub": str(user.id),
             "email": user.email,
             "tenant_id": user.tenant_id,
             "is_global_admin": user.is_global_admin,
-            "role": role_name
+            "role": role_name,
+            "pwd_ts": pwd_ts,
         }
         token = create_access_token(token_data)
 
@@ -176,7 +181,8 @@ class AuthService:
             "email": user.email,
             "tenant_id": user.tenant_id,
             "is_global_admin": user.is_global_admin,
-            "role": "owner"
+            "role": "owner",
+            "pwd_ts": None,
         }
         token = create_access_token(token_data)
 
@@ -254,6 +260,8 @@ class AuthService:
 
         # Update password
         user.password_hash = hash_password(new_password)
+        # BUG-134 FIX: Track password change time to invalidate existing JWTs
+        user.password_changed_at = datetime.utcnow()
 
         # Mark token as used
         reset_token.used_at = datetime.utcnow()

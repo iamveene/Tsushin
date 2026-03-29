@@ -11,6 +11,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **Theme:** Security, Streaming, Providers, Public API & UX
 
+### Security
+
+#### Critical Vulnerability Fixes (v0.6.0 Security Audit)
+- **BUG-131:** Removed password reset token from API response body (account takeover prevention)
+- **BUG-132:** Added tenant_id format validation + path traversal guard in toolbox workspace paths
+- **BUG-136:** Replaced custom webhook SSRF check with centralized `validate_url()` + disabled HTTP redirect following
+
+#### High Severity Fixes
+- **BUG-133:** Gemini provider now uses `system_instruction` API parameter for proper system/user prompt separation
+- **BUG-134:** JWT tokens invalidated after password change via `password_changed_at` timestamp comparison
+- **BUG-135:** Docker socket access restricted via docker-socket-proxy with least-privilege API allowlist
+- **BUG-137:** SSO `redirect_after` parameter validated to reject absolute URLs (open redirect prevention)
+- **BUG-138:** `require_global_admin` dependency now returns verified user object
+- **BUG-139:** Container `workdir` parameter restricted to `/workspace` subtree via regex + validator
+
 ### Added
 
 #### Security Event Audit Trail Hardening

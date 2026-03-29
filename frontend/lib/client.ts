@@ -114,6 +114,7 @@ export interface Message {
   id: number
   source_id: string
   chat_name?: string
+  sender?: string  // BUG-127: Raw sender identifier (phone/JID)
   sender_name?: string
   body: string
   timestamp: number

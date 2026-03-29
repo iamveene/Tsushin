@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 SAFE_PIP_PACKAGE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*((\[[\w,]+\])?(==|>=|<=|!=|~=|>|<)[\d.*]+)?$')
 SAFE_APT_PACKAGE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._+-]*(=[\d.:~+-]+)?$')
 
+# BUG-132 FIX: Tenant ID validation to prevent path traversal and injection
+_SAFE_TENANT_ID = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$')
+
 
 class ToolboxContainerService:
     """Manages per-tenant toolbox Docker containers for custom tool execution"""
@@ -46,19 +49,35 @@ class ToolboxContainerService:
         self.runtime: ContainerRuntime = get_container_runtime()
         logger.info("ToolboxContainerService initialized with container runtime")
 
+    def _validate_tenant_id(self, tenant_id: str) -> str:
+        """BUG-132 FIX: Validate tenant_id to prevent path traversal and injection."""
+        if not _SAFE_TENANT_ID.match(tenant_id):
+            raise ValueError(f"Invalid tenant_id format: {tenant_id!r}")
+        return tenant_id
+
     def _get_container_name(self, tenant_id: str) -> str:
         """Generate container name for tenant"""
+        self._validate_tenant_id(tenant_id)
         return f"{self.CONTAINER_PREFIX}{tenant_id}"
 
     def _get_image_tag(self, tenant_id: str) -> str:
         """Get tenant-specific image tag"""
+        self._validate_tenant_id(tenant_id)
         return f"tsushin-toolbox:{tenant_id}"
 
     def _get_workspace_path(self, tenant_id: str) -> Path:
         """Get workspace directory path for tenant"""
+        self._validate_tenant_id(tenant_id)
+
         backend_dir = Path(__file__).parent.parent
         workspace_base = backend_dir / "data" / "workspace"
         workspace_dir = workspace_base / tenant_id
+
+        # BUG-132 FIX: Path traversal guard — ensure resolved path stays under base
+        resolved = workspace_dir.resolve()
+        base_resolved = workspace_base.resolve()
+        if not str(resolved).startswith(str(base_resolved) + os.sep) and resolved != base_resolved:
+            raise ValueError(f"Path traversal detected for tenant_id: {tenant_id!r}")
 
         # Ensure base workspace directory exists with proper permissions
         workspace_base.mkdir(parents=True, exist_ok=True)

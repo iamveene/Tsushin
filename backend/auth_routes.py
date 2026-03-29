@@ -79,7 +79,6 @@ class AuthResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
-    reset_token: Optional[str] = None
 
 
 # MED-009 FIX: One-time code exchange models
@@ -577,14 +576,11 @@ async def request_password_reset(request: Request, reset_request: PasswordResetR
 
     if token:
         masked_email = reset_request.email[:3] + "***" + reset_request.email[reset_request.email.index("@"):] if "@" in reset_request.email else "***"
-        logger.warning(f"Password reset token generated for {masked_email} but email delivery is NOT configured. Token returned in response for admin/dev use only.")
-        return MessageResponse(
-            message="Password reset token generated. Email delivery is not configured — token included in response for admin use.",
-            reset_token=token,
-        )
+        logger.debug(f"DEV: Password reset token for {masked_email}: {token}")
 
+    # BUG-131 FIX: Always return uniform message — never reveal whether the email exists
     return MessageResponse(
-        message="If an account exists with this email, a password reset link has been sent."
+        message="If an account with that email exists, a password reset link has been sent."
     )
 
 
@@ -701,6 +697,8 @@ async def change_password(
         )
 
     current_user.password_hash = hash_password(payload.new_password)
+    # BUG-134 FIX: Track password change time to invalidate existing JWTs
+    current_user.password_changed_at = datetime.utcnow()
     db.commit()
     if current_user.tenant_id:
         log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.AUTH_PASSWORD_CHANGE, "user", str(current_user.id), {"email": current_user.email}, request)
@@ -869,12 +867,16 @@ async def accept_invitation(
     role_name = role.name if role else "member"
 
     # Generate access token
+    pwd_ts = None
+    if user.password_changed_at:
+        pwd_ts = int(user.password_changed_at.timestamp())
     token_data = {
         "sub": str(user.id),
         "email": user.email,
         "tenant_id": user.tenant_id,
         "is_global_admin": user.is_global_admin,
-        "role": role_name
+        "role": role_name,
+        "pwd_ts": pwd_ts,
     }
     access_token = create_access_token(token_data)
 
@@ -984,6 +986,17 @@ async def get_google_auth_url(
 
     Start the OAuth flow by redirecting users to this URL.
     """
+    # BUG-137 FIX: Prevent open redirect — only allow relative paths
+    if redirect_after and (
+        redirect_after.startswith('http://') or
+        redirect_after.startswith('https://') or
+        redirect_after.startswith('//')
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="redirect_after must be a relative path"
+        )
+
     try:
         sso_service = get_google_sso_service(db, get_encryption_key(db))
         auth_url = sso_service.generate_authorization_url(

@@ -1,5 +1,5 @@
 # Tsushin Bug Tracker
-**Open:** 11 | **In Progress:** 0 | **Resolved:** 129
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 140
 **Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29)
 
 ## Open Issues
@@ -65,17 +65,18 @@
 - **Resolution:** Added conditional "System" nav item (href: /system/tenants) visible only when `isGlobalAdmin`. Active highlighting on all /system/* routes.
 
 ### BUG-131: Password reset token exposed in API response body (Account Takeover)
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Critical
 - **Category:** Security / Authentication
 - **Found:** 2026-03-29 (v0.6.0 Security Audit)
-- **Files:** `backend/auth_routes.py:578-584`, `backend/auth_routes.py:82`
-- **Description:** The `POST /api/auth/password-reset/request` endpoint returns the plaintext reset token in the JSON response body when email delivery is not configured (`reset_token` field in `MessageResponse`). Any unauthenticated caller who knows a valid user email can obtain a working password reset token directly from the response and immediately call `POST /api/auth/password-reset/confirm` to take over the account. The rate limit (3/hour per IP) provides minimal protection.
-- **Exploitation:** `POST /api/auth/password-reset/request {"email":"victim@example.com"}` → read `reset_token` from response → `POST /api/auth/password-reset/confirm {"token":"...", "new_password":"..."}` → account takeover.
-- **Fix:** Remove `reset_token` from `MessageResponse` model. If email is not configured, log token at DEBUG level only (never in production). Always return uniform "if the email exists, a reset link was sent" response.
+- **Files:** `backend/auth_routes.py`
+- **Description:** Password reset token exposed in API response body, enabling unauthenticated account takeover.
+- **Resolution:** Removed `reset_token` from `MessageResponse` model. Endpoint now returns uniform message regardless of email existence. Token logged at DEBUG level only for development.
 
 ### BUG-132: Path traversal via unsanitized tenant_id in workspace path construction
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Critical
 - **Category:** Security / Multi-Tenancy
 - **Found:** 2026-03-29 (v0.6.0 Security Audit)
@@ -85,7 +86,8 @@
 - **Fix:** Add regex validation `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$` for tenant_id. Call `Path.resolve()` and verify result stays within workspace_base. Apply to `_get_container_name` and `_get_image_tag` too.
 
 ### BUG-133: Gemini prompt injection via merged system+user prompt
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** High
 - **Category:** Security / AI Safety
 - **Found:** 2026-03-29 (v0.6.0 Security Audit)
@@ -95,7 +97,8 @@
 - **Fix:** Use the `system_instruction` parameter in `genai.GenerativeModel()` constructor to separate system and user content at the API protocol level: `model = genai.GenerativeModel(model_name=..., system_instruction=system_prompt)` then `model.generate_content(user_message)`.
 
 ### BUG-134: JWT tokens not invalidated after password change or reset
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** High
 - **Category:** Security / Session Management
 - **Found:** 2026-03-29 (v0.6.0 Security Audit)
@@ -104,7 +107,8 @@
 - **Fix:** Add a `password_changed_at` timestamp to the User model. Include it (or a hash of it) in the JWT claims. On every authenticated request, compare the JWT's `password_changed_at` against the DB value — reject if the password was changed after the token was issued. Alternatively, implement a Redis-backed token blacklist.
 
 ### BUG-135: Docker socket mounted in backend container (container escape risk)
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** High
 - **Category:** Security / Infrastructure
 - **Found:** 2026-03-29 (v0.6.0 Security Audit)
@@ -113,7 +117,8 @@
 - **Fix:** Deploy `docker-socket-proxy` (e.g., Tecnativa/docker-socket-proxy) that exposes only the specific Docker API endpoints needed (container create, start, stop, exec, inspect). Restrict the proxy to deny volume mounts, privileged containers, and host network. Remove the direct socket mount from docker-compose.yml for production.
 
 ### BUG-136: SSRF bypass via HTTP redirect in webhook handler
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Critical
 - **Category:** Security / SSRF
 - **Found:** 2026-03-29 (v0.6.0 Security Audit)
@@ -123,7 +128,8 @@
 - **Fix:** Replace custom SSRF check with `validate_url()` from `utils.ssrf_validator`. Add `follow_redirects=False` to `httpx.AsyncClient` constructor.
 
 ### BUG-137: SSO `redirect_after` parameter allows open redirect
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** High
 - **Category:** Security / Authentication
 - **Found:** 2026-03-29 (v0.6.0 Security Audit)
@@ -132,7 +138,8 @@
 - **Fix:** Validate `redirect_after` is a relative path (starts with `/`, does not start with `//`, does not match `^https?://`). Reject with 400 otherwise.
 
 ### BUG-138: `require_global_admin` dependency doesn't return user object
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** High
 - **Category:** Security / Authorization
 - **Found:** 2026-03-29 (v0.6.0 Security Audit)
@@ -141,7 +148,8 @@
 - **Fix:** Add `return current_user` to the inner `check` function. Update call sites to use the returned user instead of a separate dependency.
 
 ### BUG-139: Container `workdir` parameter accepts arbitrary paths
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** High
 - **Category:** Security / Container Isolation
 - **Found:** 2026-03-29 (v0.6.0 Security Audit)
@@ -150,7 +158,8 @@
 - **Fix:** Add regex pattern constraint: `workdir: str = Field(default="/workspace", pattern=r'^/workspace(/[a-zA-Z0-9._-]+)*$')` to restrict to paths under `/workspace`.
 
 ### BUG-127: Messages sender column shows "-" for all rows in Watcher Conversations tab
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Low
 - **Category:** UX / Data Display
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)
@@ -184,7 +193,8 @@
 - **Resolution:** Changed from `<button onClick={() => window.location.href=...}>` to `<Link href={...}>` (Next.js client-side navigation). Eliminates stale closure issue and full-page reload.
 
 ### BUG-130: Organization usage shows "Agents: 36 / 5" (720% over free plan limit)
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Low
 - **Category:** UX / Data Display
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)

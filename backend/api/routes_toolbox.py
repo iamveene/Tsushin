@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from db import get_db
 from models_rbac import User
@@ -48,9 +48,18 @@ class CommandExecuteRequest(BaseModel):
     """Request schema for command execution"""
     command: str = Field(..., description="Command to execute in the container")
     timeout: Optional[int] = Field(default=300, description="Execution timeout in seconds")
-    workdir: Optional[str] = Field(default="/workspace", description="Working directory")
+    # BUG-139 FIX: Restrict workdir to /workspace and safe subdirectories only
+    workdir: Optional[str] = Field(default="/workspace", pattern=r'^/workspace(/[a-zA-Z0-9._-]+)*$', description="Working directory")
     # BUG-004 Fix: Allow global admins to specify tenant_id explicitly
     tenant_id: Optional[str] = Field(default=None, description="Tenant ID override (for global admins)")
+
+    @field_validator('workdir')
+    @classmethod
+    def validate_workdir_no_traversal(cls, v: Optional[str]) -> Optional[str]:
+        """BUG-139 FIX: Block path traversal via '..' components."""
+        if v is not None and '..' in v.split('/'):
+            raise ValueError("Path traversal ('..') is not allowed in workdir")
+        return v
 
     class Config:
         json_schema_extra = {

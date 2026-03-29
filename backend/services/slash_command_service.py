@@ -389,8 +389,7 @@ class SlashCommandService:
         import httpx
         import hashlib
         import hmac
-        from urllib.parse import urlparse
-        import ipaddress
+        from utils.ssrf_validator import validate_url, SSRFValidationError
 
         handler_config = json.loads(cmd.get("handler_config", "{}"))
         webhook_url = handler_config.get("url")
@@ -398,20 +397,11 @@ class SlashCommandService:
         if not webhook_url:
             return {"status": "error", "message": "No webhook URL configured for this command."}
 
-        # SSRF protection: deny private/internal IP ranges
+        # BUG-136 FIX: Use centralized SSRF validator with DNS-resolution-based IP checking
         try:
-            parsed = urlparse(webhook_url)
-            hostname = parsed.hostname or ""
-            if hostname in ("localhost", ""):
-                return {"status": "error", "message": "Webhook URL cannot target localhost."}
-            try:
-                ip = ipaddress.ip_address(hostname)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                    return {"status": "error", "message": "Webhook URL cannot target private/internal networks."}
-            except ValueError:
-                pass  # hostname is a domain, not an IP — allow DNS resolution by httpx
-        except Exception:
-            return {"status": "error", "message": "Invalid webhook URL."}
+            validate_url(webhook_url)
+        except SSRFValidationError as e:
+            return {"status": "error", "message": f"Webhook URL blocked by SSRF policy: {e}"}
 
         method = handler_config.get("method", "POST").upper()
         custom_headers = handler_config.get("headers", {})
@@ -439,7 +429,8 @@ class SlashCommandService:
             headers["X-Tsushin-Signature"] = signature
 
         try:
-            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            # BUG-136 FIX: Disable redirect following to prevent SSRF bypass via HTTP redirects
+            async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False) as client:
                 response = await client.request(method, webhook_url, json=payload, headers=headers)
 
                 # Cap response body read to 64KB

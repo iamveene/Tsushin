@@ -334,15 +334,11 @@ class AIClient:
         """Call Google Gemini API with asyncio.to_thread() (Phase 6.11.1)"""
         print(f"  📡 Calling Gemini API: model={self.model_name}")
 
-        # Gemini combines system and user prompt
-        full_prompt = f"{system_prompt}\n\nUser: {user_message}"
-
-        # Safety check: Gemini 2.5 Pro has ~2M token limit (~8M chars)
-        # Truncate if prompt is suspiciously large to prevent 500 errors
+        # Safety check: Truncate user message if suspiciously large
         MAX_CHARS = 1_000_000  # 1M chars safety limit
-        if len(full_prompt) > MAX_CHARS:
-            self.logger.warning(f"Prompt too large ({len(full_prompt)} chars), truncating to {MAX_CHARS}")
-            full_prompt = full_prompt[:MAX_CHARS] + "\n\n[... context truncated due to size limits ...]"
+        if len(user_message) > MAX_CHARS:
+            self.logger.warning(f"User message too large ({len(user_message)} chars), truncating to {MAX_CHARS}")
+            user_message = user_message[:MAX_CHARS] + "\n\n[... context truncated due to size limits ...]"
 
         # Configure generation with temperature and max_tokens
         generation_config = genai.GenerationConfig(
@@ -350,11 +346,19 @@ class AIClient:
             max_output_tokens=self.max_tokens
         )
 
+        # BUG-133 fix: Use system_instruction for proper role separation
+        # instead of concatenating system+user prompts (prevents prompt injection)
+        model = genai.GenerativeModel(
+            model_name=self.model_name,
+            system_instruction=system_prompt,
+            generation_config=generation_config,
+        )
+
         # Run blocking call in thread pool to unblock event loop
         response = await asyncio.to_thread(
-            self.client.generate_content,
-            full_prompt,
-            generation_config=generation_config
+            model.generate_content,
+            user_message,
+            generation_config=generation_config,
         )
 
         # Handle multi-part responses from Gemini (fix for "response.text quick accessor" error)
@@ -390,7 +394,7 @@ class AIClient:
             self.logger.info(f"Gemini token usage (actual): {token_usage}")
         else:
             # Fallback: estimate based on text length (~4 chars per token)
-            estimated_prompt = len(full_prompt) // 4
+            estimated_prompt = (len(system_prompt) + len(user_message)) // 4
             estimated_completion = len(answer) // 4
             token_usage = {
                 "prompt": estimated_prompt,
@@ -757,17 +761,24 @@ class AIClient:
             import threading
 
             accumulated_text = ""
-            full_prompt = f"{system_prompt}\n\nUser: {user_message}"
 
-            # Safety check for prompt size
+            # Safety check for user message size
             MAX_CHARS = 1_000_000
-            if len(full_prompt) > MAX_CHARS:
-                self.logger.warning(f"Prompt too large ({len(full_prompt)} chars), truncating")
-                full_prompt = full_prompt[:MAX_CHARS] + "\n\n[... truncated ...]"
+            if len(user_message) > MAX_CHARS:
+                self.logger.warning(f"User message too large ({len(user_message)} chars), truncating")
+                user_message = user_message[:MAX_CHARS] + "\n\n[... truncated ...]"
 
             generation_config = genai.GenerationConfig(
                 temperature=self.temperature,
                 max_output_tokens=self.max_tokens
+            )
+
+            # BUG-133 fix: Use system_instruction for proper role separation
+            # instead of concatenating system+user prompts (prevents prompt injection)
+            model = genai.GenerativeModel(
+                model_name=self.model_name,
+                system_instruction=system_prompt,
+                generation_config=generation_config,
             )
 
             # Use queue to stream chunks from sync thread to async code
@@ -779,8 +790,8 @@ class AIClient:
             def sync_stream():
                 """Synchronous streaming in background thread"""
                 try:
-                    response = self.client.generate_content(
-                        full_prompt,
+                    response = model.generate_content(
+                        user_message,
                         generation_config=generation_config,
                         stream=True
                     )
@@ -821,7 +832,7 @@ class AIClient:
                 total_tokens = getattr(usage_holder[0], 'total_token_count', 0) or (prompt_tokens + completion_tokens)
             else:
                 # Fallback estimation
-                prompt_tokens = len(full_prompt) // 4
+                prompt_tokens = (len(system_prompt) + len(user_message)) // 4
                 completion_tokens = len(accumulated_text) // 4
                 total_tokens = prompt_tokens + completion_tokens
 

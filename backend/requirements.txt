@@ -18,7 +18,7 @@ python-dotenv>=1.0.0
 # AI Providers
 anthropic>=0.18.1  # Phase 6.11.1: Async support
 openai>=1.40.0  # Phase 5.0: Audio skills
-google-generativeai>=0.3.2
+google-generativeai>=0.4.0  # system_instruction support (BUG-133 fix)
 google-genai>=1.0.0  # Image generation with Gemini 2.0 Flash
 
 # HTTP Clients

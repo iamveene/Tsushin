@@ -184,7 +184,7 @@ export default function ConversationsTab() {
                   filteredMessages.slice(0, messagesLimit).map((msg) => (
                     <tr key={msg.id} className="hover:bg-gray-800/50 transition-colors">
                       <td className="px-4 py-3 text-sm font-medium text-white">{msg.chat_name || '-'}</td>
-                      <td className="px-4 py-3 text-sm text-tsushin-slate">{msg.sender_name || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-tsushin-slate">{msg.sender_name || msg.sender || 'Unknown'}</td>
                       <td className="px-4 py-3 text-sm text-white max-w-md truncate">{msg.body}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         {getChannelBadge(msg.channel)}
