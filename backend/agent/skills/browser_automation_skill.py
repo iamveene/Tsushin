@@ -272,7 +272,6 @@ class BrowserAutomationSkill(BaseSkill):
 
             metadata = {
                 'provider': provider_type,
-                'mode': mode,
                 'actions_executed': len(results),
                 'actions_succeeded': sum(1 for r in results if r.success),
                 'screenshot_paths': screenshot_paths,
@@ -887,16 +886,62 @@ Return JSON array only:"""
                 metadata={"error": "missing_action", "skip_ai": True}
             )
 
-        provider_type = config.get("provider_type", "playwright")
+        # Resolve provider: mode argument overrides config
+        mode = arguments.get("mode")
+        if mode == "cdp":
+            provider_type = "cdp"
+        elif mode == "container":
+            provider_type = "playwright"
+        else:
+            provider_type = config.get("provider_type", "playwright")
 
         logger.info(f"BrowserAutomationSkill.execute_tool: action={action}, provider={provider_type}")
 
         try:
-            # Get provider
-            provider = BrowserAutomationRegistry.get_provider(
-                provider_name=provider_type,
-                db=self._db
-            )
+            # Determine if we should use persistent sessions
+            # CDP mode defaults to persistent (Chrome is already running)
+            use_session = config.get("session_persistence", provider_type == "cdp")
+
+            if use_session:
+                from hub.providers.browser_session_manager import BrowserSessionManager, BrowserSessionLimitError
+                from hub.providers.browser_automation_provider import BrowserConfig as _BrowserConfig
+                try:
+                    # Build config for session manager
+                    session_config = _BrowserConfig(
+                        provider_type=provider_type,
+                        cdp_url=config.get("cdp_url", "http://host.docker.internal:9222"),
+                        timeout_seconds=config.get("timeout_seconds", 30),
+                    )
+                    # Resolve provider factory
+                    provider_factory = None
+                    if provider_type == "cdp":
+                        from hub.providers.cdp_provider import CDPProvider
+                        provider_factory = CDPProvider
+
+                    session = await BrowserSessionManager.instance().get_or_create(
+                        tenant_id=getattr(message, 'tenant_id', '') or '',
+                        agent_id=getattr(message, 'agent_id', 0) or 0,
+                        sender_key=getattr(message, 'sender_key', '') or '',
+                        config=session_config,
+                        ttl_seconds=config.get("session_ttl_seconds", 300),
+                        provider_factory=provider_factory,
+                    )
+                    provider = session.provider
+                    should_cleanup = False  # Session manager owns lifecycle
+                    logger.info("BrowserAutomationSkill.execute_tool: Using persistent session")
+                except BrowserSessionLimitError as e:
+                    return SkillResult(
+                        success=False,
+                        output=f"Cannot open browser: {e}",
+                        metadata={"error": "session_limit", "skip_ai": True}
+                    )
+            else:
+                # Stateless: fresh provider per request
+                provider = BrowserAutomationRegistry.get_provider(
+                    provider_name=provider_type,
+                    db=self._db
+                )
+                should_cleanup = True
 
             if not provider:
                 return SkillResult(
@@ -909,7 +954,7 @@ Return JSON array only:"""
             screenshot_paths = []
 
             try:
-                await provider.initialize()
+                await provider.initialize()  # no-op if session already initialized
                 logger.info("BrowserAutomationSkill.execute_tool: Provider initialized")
 
                 # Execute the requested action
@@ -976,8 +1021,11 @@ Return JSON array only:"""
                     )
 
             finally:
-                await provider.cleanup()
-                logger.info("BrowserAutomationSkill.execute_tool: Provider cleaned up")
+                if should_cleanup:
+                    await provider.cleanup()
+                    logger.info("BrowserAutomationSkill.execute_tool: Provider cleaned up")
+                else:
+                    logger.info("BrowserAutomationSkill.execute_tool: Session kept alive")
 
             # Add common metadata
             if result.metadata:

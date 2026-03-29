@@ -244,7 +244,10 @@ class PlaywrightProvider(BrowserAutomationProvider):
                 raise
             except Exception as e:
                 code, suggestions = classify_error(e, "navigate")
-                raise NavigationError(f"Navigation failed: {e}")
+                return BrowserResult(
+                    success=False, action="navigate", error=str(e),
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def click(self, selector: str) -> BrowserResult:
         """
@@ -282,7 +285,10 @@ class PlaywrightProvider(BrowserAutomationProvider):
 
             except Exception as e:
                 code, suggestions = classify_error(e, "click")
-                raise ElementNotFoundError(f"Element not found or not clickable: {selector}")
+                return BrowserResult(
+                    success=False, action="click", error=f"Element not found or not clickable: {selector}",
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def fill(self, selector: str, value: str) -> BrowserResult:
         """
@@ -318,14 +324,16 @@ class PlaywrightProvider(BrowserAutomationProvider):
                     action="fill",
                     data={
                         "selector": selector,
-                        "value": value,
                         "value_length": len(value)
                     }
                 )
 
             except Exception as e:
                 code, suggestions = classify_error(e, "fill")
-                raise ElementNotFoundError(f"Element not found or not fillable: {selector}")
+                return BrowserResult(
+                    success=False, action="fill", error=f"Element not found or not fillable: {selector}",
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def extract(self, selector: str = "body") -> BrowserResult:
         """

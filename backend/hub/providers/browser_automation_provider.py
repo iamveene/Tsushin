@@ -98,13 +98,18 @@ def classify_error(exception: Exception, action: str) -> Tuple[BrowserErrorCode,
     """Map an exception to a structured error code + actionable suggestions."""
     msg = str(exception).lower()
 
+    nav_actions = ("navigate", "go_back", "go_forward")
+    element_actions = ("click", "fill", "hover", "select_option", "type_text", "wait_for", "get_attribute", "extract", "scroll")
+
     if isinstance(exception, SecurityError):
         code = BrowserErrorCode.SECURITY_BLOCKED
-    elif isinstance(exception, (TimeoutError, )):  # BrowserTimeoutError aliases TimeoutError
-        code = BrowserErrorCode.NAVIGATION_TIMEOUT if action in ("navigate", "go_back", "go_forward") else BrowserErrorCode.ELEMENT_NOT_FOUND
-    elif "timeout" in msg:
-        code = BrowserErrorCode.NAVIGATION_TIMEOUT if action in ("navigate", "go_back", "go_forward") else BrowserErrorCode.ELEMENT_NOT_FOUND
-    elif isinstance(exception, ElementNotFoundError) or "not found" in msg:
+    elif isinstance(exception, (TimeoutError, )):
+        code = BrowserErrorCode.NAVIGATION_TIMEOUT if action in nav_actions else BrowserErrorCode.ELEMENT_NOT_FOUND
+    elif "timeout" in msg or "waiting for locator" in msg or "waiting for selector" in msg:
+        code = BrowserErrorCode.NAVIGATION_TIMEOUT if action in nav_actions else BrowserErrorCode.ELEMENT_NOT_FOUND
+    elif isinstance(exception, ElementNotFoundError) or "not found" in msg or "no element" in msg:
+        code = BrowserErrorCode.ELEMENT_NOT_FOUND
+    elif action in element_actions and ("locator" in msg or "selector" in msg or "resolved to" in msg or "not clickable" in msg or "not fillable" in msg):
         code = BrowserErrorCode.ELEMENT_NOT_FOUND
     elif isinstance(exception, NavigationError) or "net::" in msg or "err_" in msg:
         code = BrowserErrorCode.PAGE_LOAD_FAILED
@@ -113,7 +118,8 @@ def classify_error(exception: Exception, action: str) -> Tuple[BrowserErrorCode,
     elif isinstance(exception, BrowserInitializationError):
         code = BrowserErrorCode.BROWSER_CRASH
     else:
-        code = BrowserErrorCode.UNKNOWN
+        # Default: if it's an element action, assume element issue
+        code = BrowserErrorCode.ELEMENT_NOT_FOUND if action in element_actions else BrowserErrorCode.UNKNOWN
 
     return code, list(_ERROR_SUGGESTIONS.get(code, _ERROR_SUGGESTIONS[BrowserErrorCode.UNKNOWN]))
 
