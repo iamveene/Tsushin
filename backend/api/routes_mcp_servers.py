@@ -11,7 +11,7 @@ import time
 import asyncio
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from auth_dependencies import (
     get_tenant_context,
     require_permission,
 )
+from services.audit_service import log_tenant_event, TenantAuditActions
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +235,7 @@ def get_allowed_binaries(
 @router.post("/mcp-servers", response_model=MCPServerResponse, status_code=201)
 def create_mcp_server(
     data: MCPServerCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("skills.mcp_server.manage")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -342,6 +344,7 @@ def create_mcp_server(
 
     db.commit()
     db.refresh(config)
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.MCP_CREATE, "mcp_server", str(config.id), {"name": data.server_name}, request)
     logger.info(f"Created MCP server '{data.server_name}' (transport={data.transport_type}) for tenant {ctx.tenant_id}")
     return _to_server_response(config, db)
 
@@ -448,6 +451,7 @@ def update_mcp_server(
 @router.delete("/mcp-servers/{server_id}")
 def delete_mcp_server(
     server_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("skills.mcp_server.manage")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -458,6 +462,7 @@ def delete_mcp_server(
     config.connection_status = 'disconnected'
     config.updated_at = datetime.utcnow()
     db.commit()
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.MCP_DELETE, "mcp_server", str(server_id), {"name": config.server_name}, request)
     logger.info(f"Soft-deleted MCP server {server_id} for tenant {config.tenant_id}")
     return {"message": f"MCP server '{config.server_name}' deleted successfully"}
 
@@ -465,6 +470,7 @@ def delete_mcp_server(
 @router.post("/mcp-servers/{server_id}/connect")
 async def connect_mcp_server(
     server_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("skills.mcp_server.manage")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -492,6 +498,8 @@ async def connect_mcp_server(
         )
         db.add(health)
         db.commit()
+
+        log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.MCP_CONNECT, "mcp_server", str(server_id), {"name": config.server_name}, request)
 
         return {"status": "connected", "latency_ms": latency_ms}
 
@@ -521,6 +529,7 @@ async def connect_mcp_server(
 @router.post("/mcp-servers/{server_id}/disconnect")
 async def disconnect_mcp_server(
     server_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("skills.mcp_server.manage")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -532,6 +541,9 @@ async def disconnect_mcp_server(
     manager = MCPConnectionManager.get_instance()
 
     await manager.disconnect(server_id, db)
+
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.MCP_DISCONNECT, "mcp_server", str(server_id), {"name": config.server_name}, request)
+
     return {"status": "disconnected"}
 
 

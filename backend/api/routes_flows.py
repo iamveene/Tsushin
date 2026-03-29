@@ -5,7 +5,7 @@ Handles CRUD operations for flow definitions, steps, runs, conversation threads,
 Phase 7.9: Added RBAC protection and tenant isolation
 """
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Literal
@@ -22,6 +22,7 @@ from auth_dependencies import (
     TenantContext
 )
 from models_rbac import User
+from services.audit_service import log_tenant_event, TenantAuditActions
 from schemas import (
     FlowCreate, FlowUpdate, FlowResponse, FlowDetailResponse,
     FlowStepCreate, FlowStepUpdate, FlowStepResponse,
@@ -817,6 +818,7 @@ def get_run_nodes(
 @router.post("/", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))])
 def create_flow(
     flow: FlowDefinitionCreate,
+    request: Request,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
@@ -834,6 +836,7 @@ def create_flow(
         db.commit()
         db.refresh(db_flow)
 
+        log_tenant_event(db, tenant_context.tenant_id, tenant_context.user.id, TenantAuditActions.FLOW_CREATE, "flow", str(db_flow.id), {"name": db_flow.name}, request)
         logger.info(f"Created flow definition: {db_flow.id} - {db_flow.name}")
 
         return flow_to_response(db_flow, db)
@@ -847,6 +850,7 @@ def create_flow(
 @router.post("/create", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))])
 def create_flow_v2(
     flow: FlowCreate,
+    request: Request,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
@@ -896,6 +900,7 @@ def create_flow_v2(
                 db.add(db_step)
             db.commit()
 
+        log_tenant_event(db, tenant_context.tenant_id, tenant_context.user.id, TenantAuditActions.FLOW_CREATE, "flow", str(db_flow.id), {"name": db_flow.name}, request)
         logger.info(f"Created flow definition v2: {db_flow.id} - {db_flow.name}")
 
         return flow_to_response(db_flow, db)
@@ -1168,6 +1173,7 @@ def get_flow_detail(
 def update_flow(
     flow_id: int,
     flow: FlowDefinitionUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
@@ -1221,6 +1227,7 @@ def update_flow(
         db.commit()
         db.refresh(db_flow)
 
+        log_tenant_event(db, tenant_context.tenant_id, tenant_context.user.id, TenantAuditActions.FLOW_UPDATE, "flow", str(flow_id), {"name": db_flow.name}, request)
         logger.info(f"Updated flow: {flow_id}")
 
         return flow_to_response(db_flow, db)
@@ -1316,6 +1323,7 @@ def patch_flow(
 @router.delete("/{flow_id}", status_code=204, dependencies=[Depends(require_permission("flows.delete"))])
 def delete_flow(
     flow_id: int,
+    request: Request,
     force: bool = False,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
@@ -1358,9 +1366,11 @@ def delete_flow(
                 db.query(FlowNodeRun).filter(FlowNodeRun.flow_run_id.in_(run_ids)).delete(synchronize_session=False)
             db.query(FlowRun).filter(FlowRun.flow_definition_id == flow_id).delete(synchronize_session=False)
 
+        flow_name = flow.name
         db.delete(flow)
         db.commit()
 
+        log_tenant_event(db, tenant_context.tenant_id, tenant_context.user.id, TenantAuditActions.FLOW_DELETE, "flow", str(flow_id), {"name": flow_name}, request)
         logger.info(f"Deleted flow: {flow_id}")
 
     except HTTPException:

@@ -14,6 +14,7 @@ from api.sanitizers import strip_html_tags
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from services.contact_channel_mapping_service import ContactChannelMappingService
+from services.audit_service import log_tenant_event, TenantAuditActions
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +350,7 @@ def get_contact(
 @router.post("/", response_model=ContactResponse, status_code=201)
 def create_contact(
     contact: ContactCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contacts.write")),
     ctx: TenantContext = Depends(get_tenant_context)
@@ -397,6 +399,8 @@ def create_contact(
     if linked_user_id is not None and linked_user_id > 0:
         update_user_contact_mapping(db, new_contact.id, linked_user_id)
         db.commit()
+
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.CONTACT_CREATE, "contact", str(new_contact.id), {"name": new_contact.friendly_name}, request)
 
     # Trigger WhatsApp ID resolution if phone number provided but no WhatsApp ID
     if new_contact.phone_number and not new_contact.whatsapp_id:
@@ -482,6 +486,8 @@ def update_contact(
     db.commit()
     db.refresh(db_contact)
 
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.CONTACT_UPDATE, "contact", str(contact_id), {"name": db_contact.friendly_name}, request)
+
     # CRITICAL: Clear contact cache after update (especially for is_dm_trigger changes)
     # This ensures the MessageFilter uses the latest contact settings
     if hasattr(request.app.state, 'contact_service'):
@@ -500,6 +506,7 @@ def update_contact(
 @router.delete("/{contact_id}", status_code=204)
 def delete_contact(
     contact_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contacts.delete")),
     ctx: TenantContext = Depends(get_tenant_context)
@@ -516,6 +523,8 @@ def delete_contact(
     if not ctx.can_access_resource(contact.tenant_id):
         raise HTTPException(status_code=404, detail="Contact not found")
 
+    contact_name = contact.friendly_name
+
     # Delete any user-contact mapping first
     existing_mapping = db.query(UserContactMapping).filter(
         UserContactMapping.contact_id == contact_id
@@ -525,6 +534,9 @@ def delete_contact(
 
     db.delete(contact)
     db.commit()
+
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.CONTACT_DELETE, "contact", str(contact_id), {"name": contact_name}, request)
+
     return None
 
 

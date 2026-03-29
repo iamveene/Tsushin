@@ -14,6 +14,7 @@ from schemas import (
     TriggerTestRequest, TriggerTestResponse
 )
 from auth_dependencies import require_permission, get_current_user_optional, get_tenant_context, TenantContext
+from services.audit_service import log_tenant_event, TenantAuditActions
 from agent.router import AgentRouter
 # Import SenderMemory from the old location (agent/memory.py)
 import importlib.util
@@ -153,7 +154,8 @@ def update_config(
     update: ConfigUpdate,
     db: Session = Depends(get_db),
     request: Request = None,
-    current_user: User = Depends(require_permission("org.settings.write"))
+    current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context)
 ):
     import json
     import logging
@@ -197,6 +199,8 @@ def update_config(
     config.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(config)
+
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.SETTINGS_UPDATE, "config", str(config.id), {"fields": list(update.model_dump(exclude_unset=True).keys())}, request)
 
     # Hot-reload filter configuration if filter fields changed
     if filter_fields_changed and request and hasattr(request.app.state, 'watcher'):

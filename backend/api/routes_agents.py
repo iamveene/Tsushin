@@ -4,7 +4,7 @@ Agent Management API Routes - Phase 4.4
 Provides CRUD operations for agents and tone presets.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import List, Optional
@@ -17,6 +17,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models import Agent, TonePreset, Contact, ContactAgentMapping, Config, AgentSkill, SandboxedTool, AgentSandboxedTool, Persona
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from services.audit_service import log_tenant_event, TenantAuditActions
 
 router = APIRouter()
 
@@ -594,6 +595,7 @@ def get_agent(
 @router.post("/agents", response_model=AgentResponse, status_code=201)
 def create_agent(
     agent: AgentCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("agents.write")),
     ctx: TenantContext = Depends(get_tenant_context)
@@ -668,6 +670,8 @@ def create_agent(
     db.add(switcher_skill)
     db.commit()
 
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.AGENT_CREATE, "agent", str(new_agent.id), {"name": contact.friendly_name}, request)
+
     # Pass all required parameters when calling get_agent internally
     return get_agent(new_agent.id, db, current_user, ctx)
 
@@ -676,6 +680,7 @@ def create_agent(
 def update_agent(
     agent_id: int,
     agent: AgentUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("agents.write")),
     ctx: TenantContext = Depends(get_tenant_context)
@@ -746,6 +751,8 @@ def update_agent(
     db.commit()
     db.refresh(db_agent)
 
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.AGENT_UPDATE, "agent", str(agent_id), {"name": db_agent.contact.friendly_name if db_agent.contact_id else str(agent_id)}, request)
+
     # Pass all required parameters when calling get_agent internally
     return get_agent(agent_id, db, current_user, ctx)
 
@@ -753,6 +760,7 @@ def update_agent(
 @router.delete("/agents/{agent_id}", status_code=204)
 def delete_agent(
     agent_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("agents.delete")),
     ctx: TenantContext = Depends(get_tenant_context)
@@ -769,6 +777,10 @@ def delete_agent(
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
 
+    # Capture agent name before deletion
+    agent_contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
+    agent_name = agent_contact.friendly_name if agent_contact else str(agent_id)
+
     # BUG-069 FIX: Scope count/promotion to caller's tenant only
     if agent.is_default:
         total_agents = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).count()
@@ -782,6 +794,9 @@ def delete_agent(
 
     db.delete(agent)
     db.commit()
+
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.AGENT_DELETE, "agent", str(agent_id), {"name": agent_name}, request)
+
     return None
 
 

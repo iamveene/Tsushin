@@ -8,7 +8,7 @@ IMPORTANT: Route order matters in FastAPI! Specific routes (e.g., /invitations, 
 must be defined BEFORE parameterized routes (e.g., /{user_id}) to avoid conflicts.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
@@ -25,7 +25,7 @@ from auth_dependencies import (
 )
 from auth_utils import generate_invitation_token, hash_token
 from services.email_service import send_invitation
-from services.audit_service import log_admin_action, AuditActions
+from services.audit_service import log_admin_action, AuditActions, log_tenant_event, TenantAuditActions
 import logging
 
 logger = logging.getLogger(__name__)
@@ -321,6 +321,7 @@ async def get_audit_logs(
 @router.post("/invite", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED)
 async def invite_team_member(
     request: InvitationCreate,
+    http_request: Request,
     ctx: TenantContext = Depends(get_tenant_context),
     current_user: User = Depends(require_permission("users.invite")),
 ):
@@ -426,6 +427,8 @@ async def invite_team_member(
         invitation_token=raw_invitation_token,
         personal_message=request.message,
     )
+
+    log_tenant_event(ctx.db, ctx.tenant_id, ctx.user.id, TenantAuditActions.TEAM_INVITE, "invitation", str(invitation.id), {"email": request.email, "role": request.role}, http_request)
 
     return invitation_to_response(invitation, ctx.db, include_link=True)
 
@@ -538,6 +541,7 @@ async def get_team_member(
 async def change_member_role(
     user_id: int,
     request: RoleChangeRequest,
+    http_request: Request,
     ctx: TenantContext = Depends(get_tenant_context),
     current_user: User = Depends(require_permission("users.manage")),
 ):
@@ -641,12 +645,15 @@ async def change_member_role(
         },
     )
 
+    log_tenant_event(ctx.db, ctx.tenant_id, ctx.user.id, TenantAuditActions.TEAM_ROLE_CHANGE, "user", str(user_id), {"email": target_user.email, "old_role": target_role_name, "new_role": request.role}, http_request)
+
     return user_to_response(target_user, ctx.tenant_id, ctx.db)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_team_member(
     user_id: int,
+    request: Request,
     ctx: TenantContext = Depends(get_tenant_context),
     current_user: User = Depends(require_permission("users.remove")),
 ):
@@ -698,3 +705,5 @@ async def remove_team_member(
     ).delete()
 
     ctx.db.commit()
+
+    log_tenant_event(ctx.db, ctx.tenant_id, ctx.user.id, TenantAuditActions.TEAM_REMOVE, "user", str(user_id), {"email": target_user.email}, request)

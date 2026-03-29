@@ -31,6 +31,7 @@ from models import GoogleOAuthCredentials, OAuthState
 from auth_utils import hash_password, verify_password, hash_token, create_access_token
 from auth_dependencies import get_current_user_required
 from auth_google import GoogleSSOService, GoogleSSOError, get_google_sso_service
+from services.audit_service import log_tenant_event, TenantAuditActions
 import settings
 
 
@@ -274,6 +275,9 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
     try:
         user, token = auth_service.login(login_request.email, login_request.password)
 
+        # Audit: successful login
+        log_tenant_event(db, user.tenant_id, user.id, TenantAuditActions.AUTH_LOGIN, "user", str(user.id), {"email": user.email}, request)
+
         # Get user permissions for frontend
         permissions = auth_service.get_user_permissions(user.id)
 
@@ -289,6 +293,10 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
             }
         )
     except AuthenticationError as e:
+        # Audit: failed login (only if user exists — password mismatch)
+        failed_user = db.query(User).filter(User.email == login_request.email, User.deleted_at.is_(None)).first()
+        if failed_user:
+            log_tenant_event(db, failed_user.tenant_id or '', None, TenantAuditActions.AUTH_FAILED_LOGIN, "user", None, {"email": login_request.email}, request, severity="warning")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e)
@@ -594,6 +602,8 @@ async def confirm_password_reset(request: Request, confirm_request: PasswordRese
     try:
         auth_service.reset_password(confirm_request.token, confirm_request.new_password)
 
+        log_tenant_event(db, '', None, TenantAuditActions.AUTH_PASSWORD_RESET, "user", None, {}, request)
+
         return MessageResponse(
             message="Password has been reset successfully. You can now log in with your new password."
         )
@@ -657,6 +667,7 @@ async def update_profile(
 
 @router.post("/change-password")
 async def change_password(
+    request: Request,
     payload: ChangePasswordRequest,
     current_user: User = Depends(get_current_user_required),
     db: Session = Depends(get_db),
@@ -682,17 +693,19 @@ async def change_password(
 
     current_user.password_hash = hash_password(payload.new_password)
     db.commit()
+    log_tenant_event(db, current_user.tenant_id or '', current_user.id, TenantAuditActions.AUTH_PASSWORD_CHANGE, "user", str(current_user.id), {"email": current_user.email}, request)
     return MessageResponse(message="Password changed successfully")
 
 
 @router.post("/logout")
-async def logout(current_user: User = Depends(get_current_user)):
+async def logout(request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Logout endpoint
 
     In JWT implementation, logout is handled client-side by deleting the token.
     This endpoint exists for compatibility and can be extended for token blacklisting.
     """
+    log_tenant_event(db, current_user.tenant_id or '', current_user.id, TenantAuditActions.AUTH_LOGOUT, "user", str(current_user.id), {"email": current_user.email}, request)
     return MessageResponse(
         message="Logged out successfully"
     )

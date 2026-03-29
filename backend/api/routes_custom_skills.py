@@ -11,7 +11,7 @@ import re
 import logging
 from datetime import datetime
 from typing import Optional, List, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from auth_dependencies import (
     get_tenant_context,
     require_permission,
 )
+from services.audit_service import log_tenant_event, TenantAuditActions
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +293,7 @@ async def list_custom_skills(
 @router.post("/custom-skills", response_model=CustomSkillResponse, status_code=status.HTTP_201_CREATED)
 async def create_custom_skill(
     payload: CustomSkillCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("skills.custom.create")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -415,6 +417,7 @@ async def create_custom_skill(
     db.commit()
     db.refresh(skill)
 
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.SKILL_CREATE, "skill", str(skill.id), {"name": skill.name}, request)
     logger.info(f"Custom skill created: {skill.name} (slug={skill.slug}, tenant={tenant_id})")
     return _to_response(skill)
 
@@ -441,6 +444,7 @@ async def get_custom_skill(
 async def update_custom_skill(
     skill_id: int,
     payload: CustomSkillUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("skills.custom.create")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -509,6 +513,7 @@ async def update_custom_skill(
     db.commit()
     db.refresh(skill)
 
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.SKILL_UPDATE, "skill", str(skill_id), {"name": skill.name}, request)
     logger.info(f"Custom skill updated: {skill.name} (id={skill.id}, version={skill.version})")
     return _to_response(skill)
 
@@ -516,6 +521,7 @@ async def update_custom_skill(
 @router.delete("/custom-skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_custom_skill(
     skill_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("skills.custom.delete")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -532,6 +538,7 @@ async def delete_custom_skill(
     db.delete(skill)
     db.commit()
 
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.SKILL_DELETE, "skill", str(skill_id), {"name": skill_name}, request)
     logger.info(f"Custom skill deleted: {skill_name} (id={skill_id})")
     return None
 
@@ -565,6 +572,7 @@ async def list_custom_skill_versions(
 @router.post("/custom-skills/{skill_id}/deploy")
 async def deploy_custom_skill(
     skill_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("skills.custom.create")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -589,6 +597,7 @@ async def deploy_custom_skill(
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "Deployment failed"))
 
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.SKILL_DEPLOY, "skill", str(skill_id), {"name": skill.name}, request)
     logger.info(f"Skill {skill_id} deployed for tenant {ctx.tenant_id}")
     return result
 

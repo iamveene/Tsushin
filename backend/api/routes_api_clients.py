@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from db import get_db
 from models_rbac import User
 from auth_dependencies import require_permission
 from services.api_client_service import ApiClientService, VALID_ROLES
+from services.audit_service import log_tenant_event, TenantAuditActions
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -121,6 +122,7 @@ async def list_api_clients(
 @router.post("/api/clients", response_model=ApiClientCreateResponse, status_code=201)
 async def create_api_client(
     request: ApiClientCreateRequest,
+    http_request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.write")),
 ):
@@ -148,6 +150,8 @@ async def create_api_client(
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+    log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.API_CLIENT_CREATE, "api_client", client.client_id, {"name": client.name}, http_request)
 
     scopes = service.resolve_scopes(client)
     response = _client_to_response(client)
@@ -203,6 +207,7 @@ async def update_api_client(
 @router.post("/api/clients/{client_id}/rotate-secret", response_model=RotateSecretResponse)
 async def rotate_api_client_secret(
     client_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.write")),
 ):
@@ -213,6 +218,9 @@ async def rotate_api_client_secret(
         raise HTTPException(status_code=404, detail="API client not found")
 
     raw_secret = service.rotate_secret(client)
+
+    log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.API_CLIENT_ROTATE, "api_client", client_id, {"name": client.name}, request)
+
     return {
         "client_id": client.client_id,
         "client_secret": raw_secret,
@@ -223,6 +231,7 @@ async def rotate_api_client_secret(
 @router.delete("/api/clients/{client_id}", status_code=204)
 async def revoke_api_client(
     client_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.delete")),
 ):
@@ -232,7 +241,10 @@ async def revoke_api_client(
     if not client:
         raise HTTPException(status_code=404, detail="API client not found")
 
+    client_name = client.name
     service.revoke_client(client)
+
+    log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.API_CLIENT_REVOKE, "api_client", client_id, {"name": client_name}, request)
 
 
 @router.get("/api/clients/{client_id}/usage", response_model=ApiClientUsageResponse)
