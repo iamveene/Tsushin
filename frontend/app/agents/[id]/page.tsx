@@ -6,18 +6,18 @@ import { api, Agent } from '@/lib/client'
 import AgentMemoryManager from '@/components/AgentMemoryManager'
 import AgentSkillsManager from '@/components/AgentSkillsManager'
 import AgentKnowledgeManager from '@/components/AgentKnowledgeManager'
-import AgentSandboxedToolsManager from '@/components/AgentSandboxedToolsManager'
+// AgentSandboxedToolsManager is now embedded in the Skills > Sandboxed Tools config modal
 import AgentConfigurationManager from '@/components/AgentConfigurationManager'
 import AgentChannelsManager from '@/components/AgentChannelsManager'
 import SharedKnowledgeViewer from '@/components/SharedKnowledgeViewer'
 import {
   SettingsIcon, RadioIcon, BrainIcon, SparklesIcon, BookOpenIcon,
-  LinkIcon, WrenchIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, MicrophoneIcon
+  LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, MicrophoneIcon
 } from '@/components/ui/icons'
 
-type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'knowledge' | 'shared-knowledge' | 'custom-tools'
+type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'knowledge' | 'shared-knowledge'
 
-const VALID_TABS: Tab[] = ['configuration', 'channels', 'memory', 'skills', 'knowledge', 'shared-knowledge', 'custom-tools']
+const VALID_TABS: Tab[] = ['configuration', 'channels', 'memory', 'skills', 'knowledge', 'shared-knowledge']
 
 export default function AgentDetailPage() {
   const params = useParams()
@@ -198,15 +198,6 @@ export default function AgentDetailPage() {
             >
               <LinkIcon size={16} /> Shared Knowledge
             </button>
-            <button
-              onClick={() => setActiveTab('custom-tools')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'custom-tools'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <WrenchIcon size={16} /> Sandboxed Tools
-            </button>
           </nav>
         </div>
 
@@ -236,9 +227,6 @@ export default function AgentDetailPage() {
             <SharedKnowledgeViewer agentId={agentId} />
           )}
 
-          {activeTab === 'custom-tools' && (
-            <AgentSandboxedToolsManager agentId={agentId} />
-          )}
         </div>
       </div>
     </div>

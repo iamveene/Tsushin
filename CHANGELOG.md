@@ -22,6 +22,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+#### Syslog Streaming (Audit Log Forwarding)
+- Per-tenant syslog forwarding configuration (`tenant_syslog_config` table)
+- RFC 5424 structured syslog format with Tsushin-specific structured data element
+- TCP, UDP, and TLS (certificate-based encryption) transport protocols
+- Background syslog forwarder worker with event queue, batch processing, and per-tenant circuit breaker
+- Collapsible "Syslog Forwarding" card on Settings > Audit Logs page
+- Server config (host, port, protocol, facility, app name), TLS cert upload, event category filtering
+- Test Connection button for verifying syslog server reachability
+- API endpoints: `GET/PUT /api/settings/syslog/`, `POST /api/settings/syslog/test`
+
 #### Tenant-Scoped Audit Logging
 - New `audit_event` PostgreSQL table with JSONB details, tenant isolation, and composite indexes
 - `TenantAuditService` with event recording, querying, stats, CSV export, and retention purge
@@ -42,6 +52,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added SSR safety with mounted state check for Next.js hydration compatibility
 
 ### Changed
+
+#### Skills Section — Built-in vs Custom Separation & Sandboxed Tools Migration
+- Separated built-in and custom skills with labeled section headers ("BUILT-IN SKILLS" / "CUSTOM SKILLS") and subtle divider lines
+- Replaced emoji icons on custom skill cards with styled violet SVG icon boxes (WrenchIcon) for visual consistency
+- Migrated per-agent Sandboxed Tools configuration from dedicated "Sandboxed Tools" tab into Skills > Sandboxed Tools > Configure modal
+- Removed the dedicated "Sandboxed Tools" tab from the agent editor (saves space, reduces clutter)
+- New config modal features: teal gradient header with live counter, toggle switches per tool, auto-save on toggle, security warnings for nmap/nuclei
+- If Sandboxed Tools skill is not enabled for an agent, no separate config tab wastes space
 
 #### Skills UI Overhaul — "Add Skill" Pattern
 - Redesigned Studio > Skills tab to only show enabled/configured skills (instead of listing all available skills)

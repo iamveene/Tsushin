@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { api, AgentSkill, SkillDefinition, SkillIntegration, SkillProvider, TTSProviderInfo, TTSVoice, AgentTTSConfig, SentinelProfile, SentinelProfileAssignment } from '@/lib/client'
+import { api, AgentSkill, SkillDefinition, SkillIntegration, SkillProvider, TTSProviderInfo, TTSVoice, AgentTTSConfig, SentinelProfile, SentinelProfileAssignment, AgentSandboxedTool, SandboxedTool } from '@/lib/client'
 import { ArrayConfigInput } from './ArrayConfigInput'
 import {
   PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon, BotIcon,
@@ -80,6 +80,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
   // Add Skill modal state
   const [showAddSkillModal, setShowAddSkillModal] = useState(false)
+
+  // Sandboxed Tools config (embedded in skill config modal)
+  const [sandboxedTools, setSandboxedTools] = useState<SandboxedTool[]>([])
+  const [agentSandboxedTools, setAgentSandboxedTools] = useState<AgentSandboxedTool[]>([])
+  const [sandboxedToolsLoading, setSandboxedToolsLoading] = useState(false)
+  const [sandboxedToolUpdating, setSandboxedToolUpdating] = useState<number | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -224,6 +230,56 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const openConfig = (skillType: string) => {
     setConfiguring(skillType)
     setConfigData(getSkillConfig(skillType))
+    if (skillType === 'sandboxed_tools') {
+      loadSandboxedTools()
+    }
+  }
+
+  const loadSandboxedTools = async () => {
+    setSandboxedToolsLoading(true)
+    try {
+      const [tools, assignments] = await Promise.all([
+        api.getSandboxedTools(),
+        api.getAgentSandboxedTools(agentId),
+      ])
+      setSandboxedTools(tools.filter(t => t.is_enabled))
+      setAgentSandboxedTools(assignments)
+    } catch (err) {
+      console.error('Failed to load sandboxed tools:', err)
+    } finally {
+      setSandboxedToolsLoading(false)
+    }
+  }
+
+  const isSandboxedToolEnabled = (toolId: number): boolean => {
+    return agentSandboxedTools.some(at => at.sandboxed_tool_id === toolId && at.is_enabled)
+  }
+
+  const getSandboxedToolMapping = (toolId: number): AgentSandboxedTool | undefined => {
+    return agentSandboxedTools.find(at => at.sandboxed_tool_id === toolId)
+  }
+
+  const toggleSandboxedTool = async (tool: SandboxedTool, enabled: boolean) => {
+    setSandboxedToolUpdating(tool.id)
+    try {
+      const mapping = getSandboxedToolMapping(tool.id)
+      if (enabled) {
+        if (mapping) {
+          await api.updateAgentSandboxedTool(agentId, mapping.id, { is_enabled: true })
+        } else {
+          await api.addAgentSandboxedTool(agentId, { sandboxed_tool_id: tool.id, is_enabled: true })
+        }
+      } else {
+        if (mapping) {
+          await api.updateAgentSandboxedTool(agentId, mapping.id, { is_enabled: false })
+        }
+      }
+      await loadSandboxedTools()
+    } catch (err) {
+      console.error('Failed to toggle sandboxed tool:', err)
+    } finally {
+      setSandboxedToolUpdating(null)
+    }
   }
 
   const openProviderConfig = async (providerKey: 'scheduler' | 'email' | 'web_search') => {
@@ -2165,7 +2221,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       )}
 
       {/* Standard Configuration Modal */}
-      {configuring && (
+      {configuring && configuring !== 'sandboxed_tools' && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-tsushin-surface rounded-lg max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="bg-tsushin-elevated px-6 py-4 border-b flex justify-between items-center">
@@ -2207,6 +2263,114 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
               >
                 Save Configuration
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sandboxed Tools Configuration Modal */}
+      {configuring === 'sandboxed_tools' && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-tsushin-surface rounded-xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col shadow-2xl">
+            <div className="bg-gradient-to-r from-teal-600 to-cyan-600 px-6 py-4 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <WrenchIcon size={20} /> Sandboxed Tools
+                </h3>
+                <p className="text-sm text-white/70 mt-0.5">
+                  {sandboxedTools.length} tool{sandboxedTools.length !== 1 ? 's' : ''} available &middot; {agentSandboxedTools.filter(at => at.is_enabled).length} enabled
+                </p>
+              </div>
+              <button
+                onClick={() => setConfiguring(null)}
+                className="text-white/80 hover:text-white text-xl"
+              >
+                &#x2715;
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 p-6">
+              {sandboxedToolsLoading ? (
+                <div className="text-center py-12 text-tsushin-muted text-sm">Loading tools...</div>
+              ) : sandboxedTools.length === 0 ? (
+                <div className="text-center py-12">
+                  <WrenchIcon size={40} className="mx-auto text-tsushin-muted mb-3" />
+                  <p className="text-tsushin-muted text-sm">No sandboxed tools available.</p>
+                  <p className="text-tsushin-muted/60 text-xs mt-1">Create tools in Hub &gt; Sandboxed Tools first.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {sandboxedTools.map((tool) => {
+                    const enabled = isSandboxedToolEnabled(tool.id)
+                    const isUpdating = sandboxedToolUpdating === tool.id
+                    return (
+                      <div
+                        key={tool.id}
+                        className={`border rounded-lg p-4 transition-colors ${
+                          enabled
+                            ? 'bg-teal-900/15 border-teal-600/30'
+                            : 'bg-tsushin-ink border-white/5 hover:border-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                              enabled ? 'bg-teal-500/15 border border-teal-500/20' : 'bg-white/5 border border-white/10'
+                            }`}>
+                              <WrenchIcon size={16} className={enabled ? 'text-teal-400' : 'text-tsushin-muted'} />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-sm font-semibold text-white">{tool.name}</h4>
+                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-white/5 text-tsushin-slate rounded">
+                                  {tool.tool_type}
+                                </span>
+                              </div>
+                              <p className="text-xs text-tsushin-muted mt-0.5 line-clamp-1">
+                                {tool.system_prompt.split('\n')[0]}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="ml-3 shrink-0">
+                            {isUpdating ? (
+                              <span className="text-xs text-tsushin-muted">Saving...</span>
+                            ) : (
+                              <ToggleSwitch
+                                checked={enabled}
+                                onChange={(checked) => toggleSandboxedTool(tool, checked)}
+                                title={enabled ? 'Disable tool' : 'Enable tool'}
+                              />
+                            )}
+                          </div>
+                        </div>
+                        {/* Tool-specific warnings */}
+                        {enabled && (tool.name === 'nmap' || tool.name === 'nuclei') && (
+                          <div className="mt-3 p-2.5 bg-yellow-900/20 border border-yellow-700/30 rounded-lg flex items-start gap-2">
+                            <AlertTriangleIcon size={14} className="text-yellow-400 mt-0.5 shrink-0" />
+                            <p className="text-xs text-yellow-300/80">
+                              {tool.name === 'nmap'
+                                ? 'Network scanning should only be performed on networks you own or have permission to scan.'
+                                : 'Only scan targets you own or have explicit permission to test.'}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-tsushin-ink px-6 py-3 border-t border-tsushin-border flex items-center justify-between">
+              <p className="text-xs text-tsushin-muted">
+                Changes are saved automatically per toggle.
+              </p>
+              <button
+                onClick={() => setConfiguring(null)}
+                className="px-4 py-2 text-tsushin-slate hover:bg-tsushin-surface rounded-lg text-sm"
+              >
+                Close
               </button>
             </div>
           </div>
