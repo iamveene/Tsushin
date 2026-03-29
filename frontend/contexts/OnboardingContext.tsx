@@ -5,7 +5,7 @@
  * Phase 3: Frontend Onboarding Wizard
  *
  * Manages onboarding tour state, persistence, and navigation.
- * Auto-starts tour for first-time users, provides manual trigger option.
+ * Tour only starts when the user explicitly triggers it (no auto-start).
  */
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react'
@@ -55,16 +55,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     setState(prev => ({ ...prev, hasCompletedOnboarding: completed }))
   }, [])
 
-  // Auto-start tour for new users
-  useEffect(() => {
-    if (user && !state.hasCompletedOnboarding && !state.isActive) {
-      // Small delay to let the app render first
-      const timer = setTimeout(() => {
-        startTour()
-      }, 1000)
-      return () => clearTimeout(timer)
-    }
-  }, [user, state.hasCompletedOnboarding, state.isActive])
+  // Tour is only started when the user explicitly calls startTour().
+  // No auto-start — this eliminates the race condition where the tour
+  // would fire before localStorage was read (BUG-121).
 
   const startTour = () => {
     setState(prev => ({

@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
 import { useOnboarding } from '@/contexts/OnboardingContext'
 import Modal from '@/components/ui/Modal'
 
@@ -26,6 +26,12 @@ interface TourStep {
 export default function OnboardingWizard() {
   const { state, nextStep, previousStep, minimize, maximize, completeTour, skipTour } = useOnboarding()
   const router = useRouter()
+  const pathname = usePathname()
+
+  // BUG-122: Don't render tour on unauthenticated pages
+  if (pathname?.startsWith('/auth/')) {
+    return null
+  }
 
   const tourSteps: TourStep[] = [
     {

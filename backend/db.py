@@ -131,6 +131,7 @@ def seed_rbac_defaults(session):
         ("audit.read", "audit", "read", "View audit logs"),
         ("audit.export", "audit", "export", "Export audit logs to CSV"),
         # Custom Tools (Phase 9.3)
+        ("tools.read", "tools", "read", "View custom tools and their configurations"),
         ("tools.manage", "tools", "manage", "Manage custom tools (create, update, delete)"),
         ("tools.execute", "tools", "execute", "Execute custom tools"),
         # Shell/Beacon (Phase 18)
@@ -187,7 +188,7 @@ def seed_rbac_defaults(session):
             "org.settings.read", "org.settings.write",
             "billing.read", "billing.write",
             "analytics.read", "audit.read", "audit.export",
-            "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
+            "tools.read", "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
             "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
@@ -205,7 +206,7 @@ def seed_rbac_defaults(session):
             "org.settings.read", "org.settings.write",
             "billing.read",  # View only
             "analytics.read", "audit.read", "audit.export",
-            "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
+            "tools.read", "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
             "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
@@ -222,7 +223,7 @@ def seed_rbac_defaults(session):
             "users.read",
             "org.settings.read",
             "analytics.read",
-            "tools.execute",  # Phase 9.3: Members can execute but not manage tools
+            "tools.read", "tools.execute",  # Phase 9.3: Members can read and execute but not manage tools
             "watcher.read",  # Dashboard access
         ],
         "readonly": [
@@ -230,6 +231,7 @@ def seed_rbac_defaults(session):
             "knowledge.read", "mcp.instances.read", "telegram.instances.read",  # Phase 10.1.1
             "hub.read",
             "users.read", "org.settings.read", "analytics.read",
+            "tools.read",  # Phase 9.3: Read-only can view tools
             "watcher.read",  # Dashboard access (view only)
         ],
     }

@@ -7,24 +7,10 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
 import StudioTabs from '@/components/studio/StudioTabs'
-import { api, Agent, TonePreset, Contact, Persona, SkillIntegration } from '@/lib/client'
+import { api, Agent, TonePreset, Contact, Persona } from '@/lib/client'
 import { useToast } from '@/contexts/ToastContext'
 import {
-  IconProps,
-  CalendarIcon,
-  MailIcon,
-  RefreshIcon,
-  ClipboardIcon,
-  MicrophoneIcon,
-  VolumeIcon,
-  SearchIcon,
-  GlobeIcon,
-  ShuffleIcon,
-  BrainIcon,
-  TheaterIcon,
-  PlaneIcon,
   SettingsIcon,
   StarIcon,
   CheckCircleIcon,
@@ -88,58 +74,13 @@ const MODEL_PROVIDERS = [
   }
 ]
 
-const SKILL_ICONS: Record<string, { Icon: React.FC<IconProps>; label: string }> = {
-  // Merged skills (provider-based)
-  'scheduler': { Icon: CalendarIcon, label: 'Scheduler' },
-  'email': { Icon: MailIcon, label: 'Email' },
-  // Provider skill types (hidden when merged)
-  'flows': { Icon: RefreshIcon, label: 'Flows' },
-  'gmail': { Icon: MailIcon, label: 'Gmail' },
-  'asana': { Icon: ClipboardIcon, label: 'Asana' },
-  // Audio skills
-  'audio_transcript': { Icon: MicrophoneIcon, label: 'Transcript' },
-  'audio_tts': { Icon: VolumeIcon, label: 'TTS' },
-  // Web skills (migrated from legacy tools)
-  'web_search': { Icon: SearchIcon, label: 'Web Search' },
-  'web_scraping': { Icon: GlobeIcon, label: 'Web Scraping' },
-  // Other skills
-  'agent_switcher': { Icon: ShuffleIcon, label: 'Agent Switcher' },
-  'scheduler_query': { Icon: ClipboardIcon, label: 'Schedule List' },
-  'knowledge_sharing': { Icon: BrainIcon, label: 'Knowledge Sharing' },
-  'adaptive_personality': { Icon: TheaterIcon, label: 'Adaptive Personality' },
-  'flight_search': { Icon: PlaneIcon, label: 'Flight Search' },
-  'semantic_search': { Icon: SearchIcon, label: 'Semantic Search' }
-}
-
-// Helper to get provider display name
-const getProviderDisplayName = (provider: string): string => {
-  const providers: Record<string, string> = {
-    // TTS providers
-    'kokoro': 'Kokoro',
-    'openai': 'OpenAI',
-    'elevenlabs': 'ElevenLabs',
-    'whisper': 'Whisper',
-    // Scheduler providers
-    'flows': 'Flows',
-    'google_calendar': 'Google Calendar',
-    'asana': 'Asana',
-    // Email providers
-    'gmail': 'Gmail'
-  }
-  return providers[provider?.toLowerCase()] || provider || ''
-}
-
 export default function AgentsPage() {
   const toast = useToast()
-  const pathname = usePathname()
   const [agents, setAgents] = useState<Agent[]>([])
   const [tones, setTones] = useState<TonePreset[]>([])
   const [personas, setPersonas] = useState<Persona[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
   const [agentSkillsCounts, setAgentSkillsCounts] = useState<Record<number, number>>({})
-  const [agentSkills, setAgentSkills] = useState<Record<number, string[]>>({})
-  const [agentSkillConfigs, setAgentSkillConfigs] = useState<Record<number, Record<string, any>>>({})
-  const [agentSkillIntegrations, setAgentSkillIntegrations] = useState<Record<number, SkillIntegration[]>>({})
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean>(false)
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -233,35 +174,6 @@ export default function AgentsPage() {
         skillsCounts[agent.id] = agent.skills_count || 0
       })
       setAgentSkillsCounts(skillsCounts)
-
-      const skillsMap: Record<number, string[]> = {}
-      const configsMap: Record<number, Record<string, any>> = {}
-      const integrationsMap: Record<number, SkillIntegration[]> = {}
-      await Promise.all(
-        agentsData.map(async (agent) => {
-          try {
-            const [skills, integrations] = await Promise.all([
-              api.getAgentSkills(agent.id),
-              api.getAgentSkillIntegrations(agent.id)
-            ])
-            skillsMap[agent.id] = skills.filter(s => s.is_enabled).map(s => s.skill_type)
-            configsMap[agent.id] = {}
-            skills.forEach(skill => {
-              if (skill.is_enabled) {
-                configsMap[agent.id][skill.skill_type] = skill.config || {}
-              }
-            })
-            integrationsMap[agent.id] = integrations
-          } catch (err) {
-            skillsMap[agent.id] = []
-            configsMap[agent.id] = {}
-            integrationsMap[agent.id] = []
-          }
-        })
-      )
-      setAgentSkills(skillsMap)
-      setAgentSkillConfigs(configsMap)
-      setAgentSkillIntegrations(integrationsMap)
     } catch (err) {
       console.error('Failed to load data:', err)
     } finally {
@@ -626,97 +538,11 @@ export default function AgentsPage() {
                                 ○ Inactive
                               </span>
                             )}
-                            {(() => {
-                              const skills = agentSkills[agent.id] || []
-                              const configs = agentSkillConfigs[agent.id] || {}
-                              const integrations = agentSkillIntegrations[agent.id] || []
-                              const badges: JSX.Element[] = []
-
-                              // Helper to get integration for a skill type
-                              const getIntegration = (skillType: string) =>
-                                integrations.find(i => i.skill_type === skillType)
-
-                              // Track which provider skills are part of merged skills
-                              // so we can skip them if they appear separately
-                              const hasScheduler = skills.includes('flows') || skills.includes('scheduler')
-                              const hasEmail = skills.includes('gmail') || skills.includes('email')
-
-                              skills.forEach((skillType) => {
-                                const skillInfo = SKILL_ICONS[skillType] || { Icon: LightningIcon, label: skillType }
-                                const config = configs[skillType] || {}
-                                const SkillIconComponent = skillInfo.Icon
-
-                                // Skip provider skill types that are part of merged skills
-                                // (flows and asana are providers for scheduler, gmail is provider for email)
-                                if (skillType === 'asana') return // Always skip asana, it's a scheduler provider
-
-                                // Special handling for audio skills to show provider
-                                if (skillType === 'audio_tts') {
-                                  const provider = getProviderDisplayName(config.provider)
-                                  badges.push(
-                                    <span
-                                      key={skillType}
-                                      className="badge badge-indigo flex items-center gap-1"
-                                      title={`Text-to-Speech${provider ? ` via ${provider}` : ''}`}
-                                    >
-                                      <SkillIconComponent size={12} /> {skillInfo.label}{provider ? ` (${provider})` : ''}
-                                    </span>
-                                  )
-                                } else if (skillType === 'audio_transcript') {
-                                  const mode = config.response_mode || 'conversational'
-                                  const modeLabel = mode === 'transcript_only' ? 'Raw' : 'Conversational'
-                                  badges.push(
-                                    <span
-                                      key={skillType}
-                                      className="badge badge-indigo flex items-center gap-1"
-                                      title={`Speech-to-Text - ${modeLabel} mode`}
-                                    >
-                                      <SkillIconComponent size={12} /> {skillInfo.label} ({modeLabel})
-                                    </span>
-                                  )
-                                } else if (skillType === 'flows') {
-                                  // Scheduler skill (flows is the underlying skill type)
-                                  const integration = getIntegration('flows')
-                                  const provider = integration?.scheduler_provider || 'flows'
-                                  const providerName = getProviderDisplayName(provider)
-                                  badges.push(
-                                    <span
-                                      key="scheduler"
-                                      className="badge badge-teal flex items-center gap-1"
-                                      title={`Scheduler via ${providerName}`}
-                                    >
-                                      <CalendarIcon size={12} /> Scheduler{providerName ? ` (${providerName})` : ''}
-                                    </span>
-                                  )
-                                } else if (skillType === 'gmail') {
-                                  // Email skill (gmail is the underlying skill type)
-                                  const integration = getIntegration('gmail')
-                                  const email = integration?.integration_email
-                                  badges.push(
-                                    <span
-                                      key="email"
-                                      className="badge badge-amber flex items-center gap-1"
-                                      title={`Email${email ? ` - ${email}` : ''}`}
-                                    >
-                                      <MailIcon size={12} /> Email{email ? ` (${email.split('@')[0]})` : ''}
-                                    </span>
-                                  )
-                                } else {
-                                  // Regular skill badge
-                                  badges.push(
-                                    <span
-                                      key={skillType}
-                                      className="badge badge-indigo flex items-center gap-1"
-                                      title={skillInfo.label}
-                                    >
-                                      <SkillIconComponent size={12} /> {skillInfo.label}
-                                    </span>
-                                  )
-                                }
-                              })
-
-                              return badges
-                            })()}
+                            {(agentSkillsCounts[agent.id] || 0) > 0 && (
+                              <span className="badge badge-indigo flex items-center gap-1">
+                                <LightningIcon size={12} /> {agentSkillsCounts[agent.id]} skills
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -734,24 +560,17 @@ export default function AgentsPage() {
                         <span className="flex items-center gap-1.5">
                           {agent.keywords.length || 0} keywords
                         </span>
-                        {(() => {
-                          const skills = agentSkills[agent.id] || []
-                          if (skills.includes('audio_tts')) {
-                            return <span className="flex items-center gap-1.5 text-tsushin-warning">Audio</span>
-                          } else {
-                            return <span className="flex items-center gap-1.5">Text</span>
-                          }
-                        })()}
+                        <span className="flex items-center gap-1.5">Text</span>
                       </div>
                     </div>
 
                     <div className="flex gap-2 ml-4 flex-shrink-0">
-                      <button
-                        onClick={() => window.location.href = `/agents/${agent.id}`}
+                      <Link
+                        href={`/agents/${agent.id}`}
                         className="btn-primary py-1.5 px-3 text-sm flex items-center gap-1.5"
                       >
                         <SettingsIcon size={14} /> Manage
-                      </button>
+                      </Link>
                       <button
                         onClick={() => setExpandedAgent(expandedAgent === agent.id ? null : agent.id)}
                         className="btn-ghost py-1.5 px-3 text-sm"

@@ -376,6 +376,7 @@ def seed_default_roles_and_permissions(conn):
         # Audit logs
         ("audit.read", "audit", "read", "View audit logs"),
         # Custom Tools (Phase 9.3)
+        ("tools.read", "tools", "read", "View custom tools and their configurations"),
         ("tools.manage", "tools", "manage", "Manage custom tools (create, update, delete)"),
         ("tools.execute", "tools", "execute", "Execute custom tools"),
         # Shell/Beacon (Phase 18)
@@ -434,7 +435,7 @@ def seed_default_roles_and_permissions(conn):
             "billing.read", "billing.write",
             "analytics.read",
             "audit.read",
-            "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
+            "tools.read", "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",
             "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
@@ -454,7 +455,7 @@ def seed_default_roles_and_permissions(conn):
             "billing.read",  # Can view but not write
             "analytics.read",
             "audit.read",
-            "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
+            "tools.read", "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",
             "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
@@ -472,7 +473,7 @@ def seed_default_roles_and_permissions(conn):
             "users.read",
             "org.settings.read",
             "analytics.read",
-            "tools.execute",  # Phase 9.3: Members can execute but not manage tools
+            "tools.read", "tools.execute",  # Phase 9.3: Members can read and execute but not manage tools
             "watcher.read",
         ],
         "readonly": [
@@ -488,6 +489,7 @@ def seed_default_roles_and_permissions(conn):
             "users.read",
             "org.settings.read",
             "analytics.read",
+            "tools.read",  # Phase 9.3: Read-only can view tools
             "watcher.read",
         ],
     }

@@ -1,94 +1,68 @@
 # Tsushin Bug Tracker
-**Open:** 10 | **In Progress:** 0 | **Resolved:** 121
+**Open:** 2 | **In Progress:** 0 | **Resolved:** 129
 **Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29)
 
 ## Open Issues
 
 ### BUG-121: Onboarding tour auto-navigates users away from current page
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Critical
 - **Category:** Navigation / Functional
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)
-- **Files:** `frontend/components/OnboardingWizard.tsx`, `frontend/contexts/OnboardingContext.tsx`
-- **Description:** The onboarding tour system has a race condition in `OnboardingContext.tsx` (lines 53-67) where the auto-start useEffect fires before the localStorage check (`tsushin_onboarding_completed`) is read into React state. This causes the tour to auto-start and hijack navigation, redirecting users to random pages (`/agents/19`, `/settings/organization`, `/hub`, `/settings/roles`, etc.) even after the tour has been completed or skipped. The tour persists across page reloads because React state `isActive: true` survives while localStorage is only checked on mount. Setting `localStorage.setItem('tsushin_onboarding_completed', 'true')` does not reliably prevent the tour from starting.
-- **Steps to reproduce:**
-  1. Login as any user
-  2. Navigate to any page (Watcher, Hub, Settings, etc.)
-  3. Wait 3-10 seconds
-  4. Page auto-navigates to a different route (often `/agents/19` or `/settings/organization`)
-- **Expected:** Pages should remain on the current route; tour should not auto-start if previously completed
-- **Actual:** Tour hijacks navigation, redirecting to various pages repeatedly. Users cannot stay on their intended page.
-- **Console Errors:** None directly, but causes cascading 401 errors on API calls during redirects
+- **Files:** `frontend/contexts/OnboardingContext.tsx`
+- **Description:** Race condition in auto-start useEffect fired before localStorage check completed, causing tour to hijack navigation.
+- **Resolution:** Removed auto-start useEffect entirely. Tour now only activates via explicit `startTour()` call. QA validated: page stays stable for 15+ seconds after login.
 
 ### BUG-122: Tour appears on unauthenticated pages (login, forgot-password)
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** High
 - **Category:** UX / Functional
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)
 - **Files:** `frontend/components/OnboardingWizard.tsx`
-- **Description:** The "Continue Tour" floating button and tour modal appear on unauthenticated pages like `/auth/login` and `/auth/forgot-password`. The tour should only be active when a user is authenticated and inside the main application layout.
-- **Steps to reproduce:**
-  1. Navigate to `/auth/forgot-password`
-  2. Observe "Continue Tour (1/9)" button floating on the page
-- **Expected:** Tour UI should not appear on authentication pages
-- **Actual:** Tour button and modal overlay appear on login and forgot-password pages
+- **Description:** Tour UI visible on `/auth/login` and `/auth/forgot-password`.
+- **Resolution:** Added `usePathname()` guard — returns null for `/auth/*` routes.
 
 ### BUG-123: Agent list page makes N+1 API calls for skills (92 requests for 46 agents)
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** High
 - **Category:** Performance / Functional
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)
 - **Files:** `frontend/app/agents/page.tsx`
-- **Description:** The agents list page makes 2 individual API calls per agent (one for skills, one for skill-integrations), resulting in 92 API calls for 46 agents. This causes the "Loading agents..." spinner to persist for a long time and can overwhelm the backend, contributing to the backend becoming unhealthy under load. The skills data should be fetched in a single batch request or included in the agent list response.
-- **Steps to reproduce:**
-  1. Navigate to `/agents`
-  2. Open browser DevTools Network tab
-  3. Observe 92+ individual API requests for `/api/agents/*/skills` and `/api/agents/*/skill-integrations`
-- **Expected:** Agent list should load with 1-3 API calls total (list + batch skills)
-- **Actual:** 92 individual API requests, causing slow page load and potential backend overload
+- **Description:** 92 individual API calls (2 per agent for skills + skill-integrations) caused slow page loads.
+- **Resolution:** Removed per-agent skills/skill-integrations API calls. Agent cards now use `skills_count` from the list response. Page loads with ~6 requests instead of 92+.
 
 ### BUG-124: System Admin pages fail with mixed content (HTTP API calls from HTTPS page)
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** High
 - **Category:** Functional / Configuration
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)
-- **Files:** `frontend/lib/client.ts`, `frontend/app/system/tenants/page.tsx`
-- **Description:** When accessing the platform via `https://localhost` (through the Caddy proxy), the system admin pages (`/system/tenants`, `/system/users`, etc.) make API calls to `http://127.0.0.1:8081` (the default `NEXT_PUBLIC_API_URL`). Browsers block these mixed-content requests (HTTPS page loading HTTP resources), causing CORS errors and "Failed to load tenants" errors. Other pages work because they go through the proxy's `/api/*` routing, but the system pages use the direct API URL.
-- **Steps to reproduce:**
-  1. Login as global admin via `https://localhost`
-  2. Navigate to `/system/tenants`
-  3. Page shows "Failed to load tenants" with a Retry button
-- **Expected:** System admin pages should work correctly via HTTPS proxy
-- **Actual:** API calls fail with CORS/mixed-content errors; page redirects to dashboard
-- **Console Errors:** `Mixed Content: The page at 'https://localhost/system/tenants' was loaded over HTTPS, but requested an insecure resource 'http://127.0.0.1:8081/api/tenants/'`
+- **Files:** `frontend/lib/client.ts`, `frontend/components/LayoutContent.tsx`
+- **Description:** Browser API URL resolved to `http://127.0.0.1:8081` causing mixed-content blocks on HTTPS pages.
+- **Resolution:** Changed browser-side API_URL to empty string (relative paths through proxy). Added trailing slashes to admin endpoints to prevent FastAPI 307 redirects.
 
 ### BUG-125: Sandboxed Tools page shows "Access Denied" for Owner role
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Medium
 - **Category:** Permissions / Functional
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)
-- **Files:** `frontend/app/hub/sandboxed-tools/page.tsx`, RBAC permission matrix
-- **Description:** The `/hub/sandboxed-tools` page shows "Access Denied - You do not have permission to view this page" when accessed by a user with the Owner role. The page checks for `tools.read` permission, but the Owner role only has `tools.execute` and `tools.manage` — missing `tools.read`. The Owner should have full access to all pages.
-- **Steps to reproduce:**
-  1. Login as Owner (test@example.com)
-  2. Navigate to `/hub/sandboxed-tools`
-  3. Page shows "Access Denied"
-- **Expected:** Owner should have full access to Sandboxed Tools page
-- **Actual:** Access Denied due to missing `tools.read` permission in Owner role
+- **Files:** `backend/db.py`, `backend/migrations/add_rbac_tables.py`, `backend/migrations/add_tools_permissions.py`, `backend/services/api_client_service.py`
+- **Description:** Owner role had `tools.execute` and `tools.manage` but not `tools.read`.
+- **Resolution:** Created `tools.read` permission and assigned to all roles (owner, admin, member, readonly). Seeded in live DB. Added to API client role scopes.
 
 ### BUG-126: No "System" navigation link for Global Admin users
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Medium
 - **Category:** Navigation / UX
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)
 - **Files:** `frontend/components/LayoutContent.tsx`
-- **Description:** When logged in as a Global Admin (`is_global_admin: true`), the top navigation bar shows only the standard 6 items (Watcher, Studio, Hub, Flows, Playground, Core) with no link to the System Admin section (`/system/tenants`, `/system/users`, `/system/plans`, `/system/integrations`). Global admins must manually type the URL to access system pages. There should be a "System" or "Admin" navigation item visible only to global admins.
-- **Steps to reproduce:**
-  1. Login as global admin (testadmin@example.com)
-  2. Look at the top navigation bar
-  3. No "System" or "Admin" link is present
-- **Expected:** A "System" navigation item should appear for global admin users
-- **Actual:** Only the standard 6 nav items are shown; system pages are inaccessible from the UI
+- **Description:** No "System" nav item for global admins; had to manually type URL.
+- **Resolution:** Added conditional "System" nav item (href: /system/tenants) visible only when `isGlobalAdmin`. Active highlighting on all /system/* routes.
 
 ### BUG-127: Messages sender column shows "-" for all rows in Watcher Conversations tab
 - **Status:** Open
@@ -105,32 +79,24 @@
 - **Actual:** All rows show "-" in the SENDER column
 
 ### BUG-128: Footer copyright year shows "2025" instead of "2026"
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Low
 - **Category:** UX / Visual
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)
-- **Files:** `frontend/app/auth/forgot-password/page.tsx` (and possibly other auth pages)
-- **Description:** The footer on the forgot-password page displays "2025 Tsushin Hub" instead of "2026 Tsushin". The copyright year should reflect the current year, and the product name should be consistent ("Tsushin" not "Tsushin Hub").
-- **Steps to reproduce:**
-  1. Navigate to `/auth/forgot-password`
-  2. Scroll to footer
-- **Expected:** "2026 Tsushin"
-- **Actual:** "2025 Tsushin Hub"
+- **Files:** `frontend/app/auth/forgot-password/page.tsx`, `frontend/app/auth/reset-password/page.tsx`
+- **Description:** Footer showed "2025 Tsushin Hub" instead of "2026 Tsushin".
+- **Resolution:** Updated both files to "2026 Tsushin".
 
 ### BUG-129: Agent list stale refs cause navigation to wrong pages
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
 - **Severity:** Medium
 - **Category:** Navigation / Functional
 - **Found:** 2026-03-29 (v0.6.0 UI/UX QA Audit)
 - **Files:** `frontend/app/agents/page.tsx`
-- **Description:** On the agents list page, clicking "Manage" buttons sometimes navigates to incorrect pages (e.g., `/hub`, `/settings/organization`, Watcher Billing tab) instead of the intended agent detail page. This appears to be caused by stale element references in the rendered list, possibly related to React re-renders from the tour system or API call race conditions during the N+1 skills fetching.
-- **Steps to reproduce:**
-  1. Navigate to `/agents`
-  2. Wait for agents to load
-  3. Click "Manage" on an agent card
-  4. Sometimes navigates to the wrong page entirely
-- **Expected:** Should navigate to `/agents/{id}` detail page
-- **Actual:** Occasionally navigates to unrelated pages like `/hub` or `/settings`
+- **Description:** "Manage" buttons sometimes navigated to wrong pages due to stale closures from N+1 re-renders.
+- **Resolution:** Changed from `<button onClick={() => window.location.href=...}>` to `<Link href={...}>` (Next.js client-side navigation). Eliminates stale closure issue and full-page reload.
 
 ### BUG-130: Organization usage shows "Agents: 36 / 5" (720% over free plan limit)
 - **Status:** Open

@@ -155,7 +155,7 @@ class AgentCreate(BaseModel):
     persona_id: Optional[int] = Field(None, description="ID of Persona to assign to this agent")
     keywords: List[str] = Field(default_factory=list)
     # enabled_tools removed - use AgentSkill table for web_search, weather, etc.
-    model_provider: str = Field(default="gemini", pattern="^(openai|anthropic|gemini|ollama|openrouter)$")  # Phase 5.2 + OpenRouter
+    model_provider: str = Field(default="gemini", pattern="^(openai|anthropic|gemini|ollama|openrouter|groq|grok|deepseek)$")  # Phase 5.2 + OpenRouter + Groq/Grok/DeepSeek
     model_name: str = Field(default="gemini-2.5-pro")
     response_template: str = Field(default="@{agent_name}: {response}", description="Template for response formatting. Placeholders: {agent_name}, {response}")
 
@@ -185,7 +185,7 @@ class AgentUpdate(BaseModel):
     persona_id: Optional[int] = None
     keywords: Optional[List[str]] = None
     # enabled_tools removed - use AgentSkill table for web_search, weather, etc.
-    model_provider: Optional[str] = Field(None, pattern="^(openai|anthropic|gemini|ollama|openrouter)$")  # Phase 5.2 + OpenRouter
+    model_provider: Optional[str] = Field(None, pattern="^(openai|anthropic|gemini|ollama|openrouter|groq|grok|deepseek)$")  # Phase 5.2 + OpenRouter + Groq/Grok/DeepSeek
     model_name: Optional[str] = None
     response_template: Optional[str] = None
 

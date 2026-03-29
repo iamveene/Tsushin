@@ -272,7 +272,7 @@ class TTSProviderRegistry:
         except ImportError as e:
             logger.warning(f"Could not import KokoroTTSProvider: {e}")
 
-        # Register ElevenLabs placeholder (coming soon)
+        # Register ElevenLabs provider
         try:
             from .elevenlabs_tts_provider import ElevenLabsTTSProvider
             cls.register_provider(
@@ -281,8 +281,8 @@ class TTSProviderRegistry:
                 {
                     "requires_api_key": True,
                     "is_free": False,
-                    "status": "coming_soon",
-                    "description": "Premium voice AI synthesis (coming soon)"
+                    "status": "available",
+                    "description": "Premium voice AI synthesis"
                 }
             )
         except ImportError as e:

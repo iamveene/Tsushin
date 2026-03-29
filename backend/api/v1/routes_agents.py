@@ -62,7 +62,7 @@ class AgentCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     system_prompt: str = Field(..., min_length=1)
-    model_provider: str = Field(default="gemini", pattern="^(openai|anthropic|gemini|ollama|openrouter|groq|grok)$")
+    model_provider: str = Field(default="gemini", pattern="^(openai|anthropic|gemini|ollama|openrouter|groq|grok|deepseek)$")
     model_name: str = Field(default="gemini-2.5-pro")
     persona_id: Optional[int] = None
     keywords: List[str] = Field(default_factory=list)
@@ -111,7 +111,7 @@ class AgentUpdateRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     system_prompt: Optional[str] = None
-    model_provider: Optional[str] = Field(None, pattern="^(openai|anthropic|gemini|ollama|openrouter|groq|grok)$")
+    model_provider: Optional[str] = Field(None, pattern="^(openai|anthropic|gemini|ollama|openrouter|groq|grok|deepseek)$")
     model_name: Optional[str] = None
     persona_id: Optional[int] = None
     keywords: Optional[List[str]] = None

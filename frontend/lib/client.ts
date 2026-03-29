@@ -1,4 +1,13 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
+/**
+ * API_URL resolves to '' (empty string) in the browser so that all fetch calls
+ * use relative paths (e.g. /api/...) which go through the Caddy reverse-proxy.
+ * This avoids mixed-content errors when the page is served over HTTPS while
+ * NEXT_PUBLIC_API_URL points at plain HTTP.
+ *
+ * During SSR or in non-browser contexts (e.g. scripts), we fall back to the
+ * env var so that server-side fetches still reach the backend directly.
+ */
+const API_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081')
 
 /**
  * Helper function to handle API response errors with user-friendly messages
@@ -4494,7 +4503,7 @@ export const api = {
     if (params?.status) searchParams.append('status', params.status)
     if (params?.plan) searchParams.append('plan', params.plan)
 
-    const res = await authenticatedFetch(`${API_URL}/api/tenants?${searchParams}`)
+    const res = await authenticatedFetch(`${API_URL}/api/tenants/?${searchParams}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch tenants')
     return res.json()
   },
@@ -4521,7 +4530,7 @@ export const api = {
     max_agents?: number
     max_monthly_requests?: number
   }): Promise<TenantInfo> {
-    const res = await authenticatedFetch(`${API_URL}/api/tenants`, {
+    const res = await authenticatedFetch(`${API_URL}/api/tenants/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -4997,7 +5006,7 @@ export const api = {
     if (options?.page) params.append('page', String(options.page))
     if (options?.page_size) params.append('page_size', String(options.page_size))
 
-    const res = await authenticatedFetch(`${API_URL}/api/admin/users?${params}`)
+    const res = await authenticatedFetch(`${API_URL}/api/admin/users/?${params}`)
     if (!res.ok) throw new Error('Failed to fetch users')
     return res.json()
   },
@@ -5015,7 +5024,7 @@ export const api = {
   },
 
   async createGlobalUser(data: UserCreateRequest): Promise<GlobalUser> {
-    const res = await authenticatedFetch(`${API_URL}/api/admin/users`, {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/users/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),

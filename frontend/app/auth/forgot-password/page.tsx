@@ -113,7 +113,7 @@ export default function ForgotPasswordPage() {
 
         {/* Footer */}
         <p className="text-center text-xs text-tsushin-slate">
-          &copy; 2025 Tsushin Hub. All rights reserved.
+          &copy; 2026 Tsushin. All rights reserved.
         </p>
       </div>
     </div>

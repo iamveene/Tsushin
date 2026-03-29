@@ -107,6 +107,41 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+#### BUG-121: Onboarding Tour Race Condition (Critical)
+- Removed auto-start useEffect that caused navigation hijacking via race condition with localStorage
+- Tour now only activates via explicit user action (startTour)
+
+#### BUG-122: Tour on Unauthenticated Pages
+- Added pathname guard — tour UI returns null on `/auth/*` routes
+
+#### BUG-123: Agent List N+1 API Calls (92 requests → 6)
+- Removed per-agent skills/skill-integrations API calls from agent list page
+- Agent cards use `skills_count` from list response instead of individual fetches
+
+#### BUG-124: System Admin Pages Mixed Content (CORS)
+- Browser-side API_URL now uses relative paths through Caddy proxy
+- Added trailing slashes to admin endpoints to prevent FastAPI 307 HTTP redirects
+
+#### BUG-125: Sandboxed Tools "Access Denied" for Owner Role
+- Created `tools.read` permission and assigned to all 4 roles (owner, admin, member, readonly)
+- Added to API client role scopes for v1 API access
+
+#### BUG-126: System Navigation for Global Admins
+- Added conditional "System" nav item visible only to `is_global_admin` users
+- Active highlighting on all `/system/*` routes
+
+#### BUG-128: Copyright Year
+- Updated from "2025 Tsushin Hub" to "2026 Tsushin" on auth pages
+
+#### BUG-129: Agent List Stale Navigation
+- Changed Manage button from `window.location.href` to Next.js `<Link>` for proper client-side routing
+
+#### Config: Model Provider Validation
+- Added `groq|grok|deepseek` to model_provider regex in agent create/update schemas
+
+#### Config: ElevenLabs TTS Status
+- Changed from `coming_soon` to `available` in TTS registry
+
 #### BUG-109: Hub Edit Provider Instance Modal Z-Index
 - Moved `ProviderInstanceModal` from inside `glass-card overflow-hidden` container to root-level modal section
 - Modal now renders outside the CSS stacking context, appearing centered and fully visible

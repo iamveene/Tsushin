@@ -13,10 +13,17 @@ import { useAuth, useRequireAuth } from '@/contexts/AuthContext'
 import { useOnboarding } from '@/contexts/OnboardingContext'
 import { useToast } from '@/contexts/ToastContext'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
+// Use relative paths in the browser to avoid mixed-content (HTTPS page → HTTP API)
+const API_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081')
 
 // Navigation items configuration
-const navItems = [
+interface NavItem {
+  href: string
+  label: string
+  activePrefix?: string  // Optional prefix for active-state matching (defaults to href)
+}
+
+const baseNavItems: NavItem[] = [
   { href: '/', label: 'Watcher' },
   { href: '/agents', label: 'Studio' },
   { href: '/hub', label: 'Hub' },
@@ -29,6 +36,11 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
   const pathname = usePathname()
   const { logout, isGlobalAdmin } = useAuth()
   const { startTour } = useOnboarding()
+
+  // Build nav items — add "System" link for global admins
+  const navItems = isGlobalAdmin
+    ? [...baseNavItems, { href: '/system/tenants', label: 'System', activePrefix: '/system' }]
+    : baseNavItems
 
   // Mobile menu state
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
@@ -64,9 +76,10 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
   const { user, loading } = useRequireAuth()
 
   // Check if nav item is active
-  const isActive = (href: string) => {
+  const isActive = (href: string, activePrefix?: string) => {
     if (href === '/') return pathname === '/'
-    return pathname?.startsWith(href)
+    const prefix = activePrefix || href
+    return pathname?.startsWith(prefix)
   }
 
   // Emergency stop status polling
@@ -203,23 +216,23 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                   key={item.href}
                   href={item.href}
                   className={`relative px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 group
-                    ${isActive(item.href)
+                    ${isActive(item.href, item.activePrefix)
                       ? 'text-white'
                       : 'text-tsushin-slate hover:text-white'
                     }`}
                 >
                   {/* Background highlight for active item */}
-                  {isActive(item.href) && (
+                  {isActive(item.href, item.activePrefix) && (
                     <span className="absolute inset-0 rounded-lg bg-tsushin-surface/80 border border-tsushin-border/50" />
                   )}
                   {/* Hover background */}
-                  <span className={`absolute inset-0 rounded-lg bg-tsushin-surface/0 group-hover:bg-tsushin-surface/50 transition-colors ${isActive(item.href) ? 'hidden' : ''}`} />
+                  <span className={`absolute inset-0 rounded-lg bg-tsushin-surface/0 group-hover:bg-tsushin-surface/50 transition-colors ${isActive(item.href, item.activePrefix) ? 'hidden' : ''}`} />
                   {/* Content */}
                   <span className="relative">
                     {item.label}
                   </span>
                   {/* Active underline indicator */}
-                  {isActive(item.href) && (
+                  {isActive(item.href, item.activePrefix) && (
                     <span className="absolute -bottom-[17px] left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
                   )}
                 </Link>
@@ -384,14 +397,14 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                     href={item.href}
                     onClick={() => setIsMobileMenuOpen(false)}
                     className={`relative flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200
-                      ${isActive(item.href)
+                      ${isActive(item.href, item.activePrefix)
                         ? 'text-white bg-tsushin-surface/80 border border-tsushin-border/50'
                         : 'text-tsushin-slate hover:text-white hover:bg-tsushin-surface/50'
                       }`}
                   >
                     <span>{item.label}</span>
                     {/* Active teal accent */}
-                    {isActive(item.href) && (
+                    {isActive(item.href, item.activePrefix) && (
                       <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-6 rounded-full bg-gradient-to-b from-teal-500 to-cyan-400" />
                     )}
                   </Link>
