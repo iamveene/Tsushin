@@ -205,6 +205,9 @@ class BrowserConfig:
     session_persistence: bool = False
     session_ttl_seconds: int = 300
 
+    # CDP mode
+    cdp_url: str = "http://host.docker.internal:9222"
+
     @classmethod
     def from_integration(cls, integration) -> 'BrowserConfig':
         """Create config from BrowserAutomationIntegration model."""
@@ -231,6 +234,7 @@ class BrowserConfig:
             blocked_domains=blocked,
             session_persistence=getattr(integration, 'session_persistence', False),
             session_ttl_seconds=getattr(integration, 'session_ttl_seconds', 300),
+            cdp_url=getattr(integration, 'cdp_url', 'http://host.docker.internal:9222'),
         )
 
 

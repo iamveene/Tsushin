@@ -341,6 +341,23 @@ class BrowserAutomationRegistry:
         except ImportError as e:
             logger.warning(f"Could not import PlaywrightProvider: {e}")
 
+        # Register CDP provider (host Chrome mode)
+        try:
+            from .cdp_provider import CDPProvider
+            cls.register_provider(
+                "cdp",
+                CDPProvider,
+                {
+                    "requires_api_key": False,
+                    "is_free": True,
+                    "status": "available",
+                    "description": "Connect to Chrome on host via Chrome DevTools Protocol",
+                    "mode": "cdp"
+                }
+            )
+        except ImportError as e:
+            logger.warning(f"Could not import CDPProvider: {e}")
+
         cls._initialized = True
         logger.info(f"Initialized {len(cls._providers)} browser automation provider(s)")
 

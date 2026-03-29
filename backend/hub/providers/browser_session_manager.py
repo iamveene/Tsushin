@@ -71,6 +71,7 @@ class BrowserSessionManager:
         config: "BrowserConfig",
         ttl_seconds: int = 300,
         max_sessions: int = 3,
+        provider_factory=None,
     ) -> BrowserSession:
         """
         Return an existing live session or create a fresh one.
@@ -82,6 +83,7 @@ class BrowserSessionManager:
             config: BrowserConfig for provider initialization
             ttl_seconds: Idle timeout in seconds
             max_sessions: Max concurrent sessions (enforced globally)
+            provider_factory: Optional callable(config) -> provider. Defaults to PlaywrightProvider.
         """
         key: SessionKey = (str(tenant_id), agent_id, sender_key)
         async with self._lock:
@@ -105,8 +107,10 @@ class BrowserSessionManager:
                 )
 
             # Create fresh provider + session
-            from .playwright_provider import PlaywrightProvider
-            provider = PlaywrightProvider(config)
+            if provider_factory is None:
+                from .playwright_provider import PlaywrightProvider
+                provider_factory = PlaywrightProvider
+            provider = provider_factory(config)
             await provider.initialize()
 
             session = BrowserSession(

@@ -678,8 +678,8 @@ Return JSON array only:"""
                 },
                 "provider_type": {
                     "type": "string",
-                    "enum": ["playwright"],
-                    "description": "Browser automation provider",
+                    "enum": ["playwright", "cdp"],
+                    "description": "playwright=isolated container browser, cdp=connect to Chrome on host (authenticated sessions)",
                     "default": "playwright"
                 },
                 "timeout_seconds": {
@@ -788,8 +788,8 @@ Return JSON array only:"""
                     },
                     "mode": {
                         "type": "string",
-                        "enum": ["container"],
-                        "description": "container=isolated Playwright browser (default)",
+                        "enum": ["container", "cdp"],
+                        "description": "container=isolated Playwright browser (default), cdp=connect to host Chrome with authenticated sessions",
                         "default": "container"
                     },
                     "wait_until": {

@@ -2976,6 +2976,9 @@ class BrowserAutomationIntegration(HubIntegration):
     session_persistence = Column(Boolean, default=False)
     session_ttl_seconds = Column(Integer, default=300)  # 5-minute idle timeout
 
+    # CDP mode
+    cdp_url = Column(String(255), nullable=True, default="http://host.docker.internal:9222")
+
     # Polymorphic configuration
     __mapper_args__ = {
         'polymorphic_identity': 'browser_automation',
