@@ -1,5 +1,5 @@
 # Tsushin Bug Tracker
-**Open:** 7 | **In Progress:** 0 | **Resolved:** 129
+**Open:** 11 | **In Progress:** 0 | **Resolved:** 129
 **Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29)
 
 ## Open Issues
@@ -111,6 +111,43 @@
 - **Files:** `docker-compose.yml:49,60`
 - **Description:** The backend container mounts `/var/run/docker.sock` with the comment "In production, use docker-socket-proxy and remove root override." The Docker socket gives the backend full Docker API access — effectively root on the host. If the backend is compromised (RCE via dependency vulnerability, SSRF chain, or custom skill exploit), the attacker gains host-level access. The container also runs as root (line 46: `user: root`).
 - **Fix:** Deploy `docker-socket-proxy` (e.g., Tecnativa/docker-socket-proxy) that exposes only the specific Docker API endpoints needed (container create, start, stop, exec, inspect). Restrict the proxy to deny volume mounts, privileged containers, and host network. Remove the direct socket mount from docker-compose.yml for production.
+
+### BUG-136: SSRF bypass via HTTP redirect in webhook handler
+- **Status:** Open
+- **Severity:** Critical
+- **Category:** Security / SSRF
+- **Found:** 2026-03-29 (v0.6.0 Security Audit)
+- **Files:** `backend/services/slash_command_service.py:401-443`
+- **Description:** The `_execute_webhook` method has a custom SSRF check that only validates the initial webhook URL but does NOT use the project's proper `validate_url()` from `utils/ssrf_validator.py`. More critically, `httpx.AsyncClient` follows HTTP redirects by default (up to 20). If an attacker controls a public server that responds with `301 Location: http://169.254.169.254/latest/meta-data/`, the initial check passes but the actual request lands on the cloud metadata service. The check at line 411 explicitly `pass`es for domain names, bypassing DNS-resolution-level SSRF protection entirely.
+- **Exploitation:** Tenant configures webhook URL `https://attacker.com/ssrf-redirect`. Attacker's server redirects to `http://169.254.169.254/latest/meta-data/iam/security-credentials/`. Cloud credentials returned in response body (capped at 64KB) to the caller.
+- **Fix:** Replace custom SSRF check with `validate_url()` from `utils.ssrf_validator`. Add `follow_redirects=False` to `httpx.AsyncClient` constructor.
+
+### BUG-137: SSO `redirect_after` parameter allows open redirect
+- **Status:** Open
+- **Severity:** High
+- **Category:** Security / Authentication
+- **Found:** 2026-03-29 (v0.6.0 Security Audit)
+- **Files:** `backend/auth_routes.py:978`, `frontend/app/auth/sso-callback/page.tsx:83-84`
+- **Description:** The `GET /api/auth/google/authorize` endpoint accepts a `redirect_after` query parameter with no validation. This value is stored in OAuth state, carried through the Google callback, and used in `router.replace(redirect)` on the frontend. While Next.js `router.replace` doesn't redirect to external domains, the `redirect_after` value is returned in the API response JSON and could be exploited in a phishing flow.
+- **Fix:** Validate `redirect_after` is a relative path (starts with `/`, does not start with `//`, does not match `^https?://`). Reject with 400 otherwise.
+
+### BUG-138: `require_global_admin` dependency doesn't return user object
+- **Status:** Open
+- **Severity:** High
+- **Category:** Security / Authorization
+- **Found:** 2026-03-29 (v0.6.0 Security Audit)
+- **Files:** `backend/auth_dependencies.py:162-176`
+- **Description:** The `require_global_admin()` inner `check` function has no `return current_user` statement. All call sites use `_: None = Depends(require_global_admin())` and separately declare `current_user: User = Depends(get_current_user_required)`, creating two independent auth evaluations per request. While the authorization does gate access today (exception is raised on failure), the structural fragility means a future refactor could silently introduce a bypass.
+- **Fix:** Add `return current_user` to the inner `check` function. Update call sites to use the returned user instead of a separate dependency.
+
+### BUG-139: Container `workdir` parameter accepts arbitrary paths
+- **Status:** Open
+- **Severity:** High
+- **Category:** Security / Container Isolation
+- **Found:** 2026-03-29 (v0.6.0 Security Audit)
+- **Files:** `backend/api/routes_toolbox.py:51-63`
+- **Description:** The `CommandExecuteRequest` Pydantic model accepts `workdir` as a free-form string (default `/workspace`). A user with `tools.execute` permission can set `workdir` to `/etc`, `/proc`, or any container path, bypassing workspace isolation. The value is passed directly to the Docker exec call.
+- **Fix:** Add regex pattern constraint: `workdir: str = Field(default="/workspace", pattern=r'^/workspace(/[a-zA-Z0-9._-]+)*$')` to restrict to paths under `/workspace`.
 
 ### BUG-127: Messages sender column shows "-" for all rows in Watcher Conversations tab
 - **Status:** Open
