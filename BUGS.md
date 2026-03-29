@@ -1,5 +1,5 @@
 # Tsushin Bug Tracker
-**Open:** 0 | **In Progress:** 0 | **Resolved:** 140
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 144
 **Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29)
 
 ## Open Issues
@@ -156,6 +156,46 @@
 - **Files:** `backend/api/routes_toolbox.py:51-63`
 - **Description:** The `CommandExecuteRequest` Pydantic model accepts `workdir` as a free-form string (default `/workspace`). A user with `tools.execute` permission can set `workdir` to `/etc`, `/proc`, or any container path, bypassing workspace isolation. The value is passed directly to the Docker exec call.
 - **Fix:** Add regex pattern constraint: `workdir: str = Field(default="/workspace", pattern=r'^/workspace(/[a-zA-Z0-9._-]+)*$')` to restrict to paths under `/workspace`.
+
+### BUG-140: Local get_current_user bypasses JWT invalidation on 4 auth endpoints
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
+- **Severity:** Critical
+- **Category:** Security / Authentication
+- **Found:** 2026-03-29 (v0.6.0 Implementation Review)
+- **Files:** `backend/auth_routes.py`
+- **Description:** A local `get_current_user` function in auth_routes.py performed JWT decode without checking `password_changed_at` against token `iat`. Endpoints `/me`, `/logout`, `/google/link`, `/google/unlink` used this unprotected dependency, allowing attackers with old tokens to bypass JWT invalidation after password change.
+- **Resolution:** Deleted local `get_current_user`, replaced all 4 usages with `get_current_user_required` from auth_dependencies.py which includes the BUG-134 check.
+
+### BUG-141: SSO redirect_after allows javascript: URIs
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
+- **Severity:** High
+- **Category:** Security / Authentication
+- **Found:** 2026-03-29 (v0.6.0 Implementation Review)
+- **Files:** `backend/auth_routes.py`
+- **Description:** The BUG-137 fix checked for `http://`, `https://`, `//` but not `javascript:` or `data:` URIs.
+- **Resolution:** Replaced blocklist with whitelist: redirect_after must start with `/` but not `//`. Rejects all non-relative paths.
+
+### BUG-142: change_password minimum length is 6 instead of 8
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
+- **Severity:** High
+- **Category:** Security / Authentication
+- **Found:** 2026-03-29 (v0.6.0 Implementation Review)
+- **Files:** `backend/auth_routes.py`
+- **Description:** `change_password` enforced 6-char minimum while signup and reset enforce 8. Inconsistent security boundary.
+- **Resolution:** Changed to `< 8` to match all other flows.
+
+### BUG-143: workdir regex allows dot-prefixed path segments
+- **Status:** Resolved
+- **Resolved:** 2026-03-29
+- **Severity:** High
+- **Category:** Security / Container Isolation
+- **Found:** 2026-03-29 (v0.6.0 Implementation Review)
+- **Files:** `backend/api/routes_toolbox.py`
+- **Description:** The BUG-139 regex `[a-zA-Z0-9._-]+` allowed `.` and `..` as segment starts. Field_validator caught `..` but single `.` was unguarded.
+- **Resolution:** Changed regex to require alphanumeric first character: `[a-zA-Z0-9][a-zA-Z0-9._-]*`. Defense-in-depth with existing `..` validator.
 
 ### BUG-127: Messages sender column shows "-" for all rows in Watcher Conversations tab
 - **Status:** Resolved

@@ -48,8 +48,9 @@ class CommandExecuteRequest(BaseModel):
     """Request schema for command execution"""
     command: str = Field(..., description="Command to execute in the container")
     timeout: Optional[int] = Field(default=300, description="Execution timeout in seconds")
-    # BUG-139 FIX: Restrict workdir to /workspace and safe subdirectories only
-    workdir: Optional[str] = Field(default="/workspace", pattern=r'^/workspace(/[a-zA-Z0-9._-]+)*$', description="Working directory")
+    # BUG-139 + BUG-143 FIX: Restrict workdir to /workspace and safe subdirectories only
+    # Each path segment must start with an alphanumeric character, preventing . and .. at segment start
+    workdir: Optional[str] = Field(default="/workspace", pattern=r'^/workspace(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$', description="Working directory")
     # BUG-004 Fix: Allow global admins to specify tenant_id explicitly
     tenant_id: Optional[str] = Field(default=None, description="Tenant ID override (for global admins)")
 

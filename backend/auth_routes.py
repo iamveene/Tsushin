@@ -10,7 +10,6 @@ MED-009 FIX: One-time code exchange for SSO callback (removes JWT from URL).
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
@@ -46,7 +45,6 @@ logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
-security = HTTPBearer()
 
 
 # Request/Response Models
@@ -111,53 +109,9 @@ class SetupWizardRequest(BaseModel):
     create_default_agents: bool = True
 
 
-# Dependency to get current user from JWT
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-) -> User:
-    """
-    Dependency to extract and validate current user from JWT token
-
-    Args:
-        credentials: HTTP authorization credentials
-        db: Database session
-
-    Returns:
-        Current user object
-
-    Raises:
-        HTTPException: If token is invalid or user not found
-    """
-    token = credentials.credentials
-    auth_service = AuthService(db)
-
-    # Verify token
-    payload = auth_service.verify_token(token)
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
-        )
-
-    # Get user
-    user_id = int(payload.get("sub"))
-    user = auth_service.get_user_by_id(user_id)
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found"
-        )
-
-    # BUG-076 FIX: Check is_active (matching auth_dependencies.get_current_user_required)
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is disabled"
-        )
-
-    return user
+# BUG-140 FIX: Removed local get_current_user function that bypassed JWT invalidation
+# (password_changed_at vs token iat check). All endpoints now use
+# get_current_user_required from auth_dependencies.py instead.
 
 
 # ============================================================================
@@ -620,7 +574,7 @@ async def confirm_password_reset(request: Request, confirm_request: PasswordRese
 
 
 @router.get("/me")
-async def get_current_user_info(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_current_user_info(current_user: User = Depends(get_current_user_required), db: Session = Depends(get_db)):
     """
     Get current user information
 
@@ -690,10 +644,10 @@ async def change_password(
             detail="Current password is incorrect",
         )
 
-    if len(payload.new_password) < 6:
+    if len(payload.new_password) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="New password must be at least 6 characters",
+            detail="New password must be at least 8 characters",
         )
 
     current_user.password_hash = hash_password(payload.new_password)
@@ -706,7 +660,7 @@ async def change_password(
 
 
 @router.post("/logout")
-async def logout(request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def logout(request: Request, current_user: User = Depends(get_current_user_required), db: Session = Depends(get_db)):
     """
     Logout endpoint
 
@@ -986,16 +940,15 @@ async def get_google_auth_url(
 
     Start the OAuth flow by redirecting users to this URL.
     """
-    # BUG-137 FIX: Prevent open redirect — only allow relative paths
-    if redirect_after and (
-        redirect_after.startswith('http://') or
-        redirect_after.startswith('https://') or
-        redirect_after.startswith('//')
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="redirect_after must be a relative path"
-        )
+    # BUG-137 + BUG-141 FIX: Whitelist approach — only allow relative paths starting with /
+    # This blocks javascript:, data:, http://, https://, //, and any other scheme
+    if redirect_after:
+        stripped = redirect_after.strip()
+        if not stripped.startswith('/') or stripped.startswith('//'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="redirect_after must be a relative path starting with /"
+            )
 
     try:
         sso_service = get_google_sso_service(db, get_encryption_key(db))
@@ -1118,7 +1071,7 @@ async def exchange_sso_code(
 
 @router.post("/google/link")
 async def link_google_account(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: Session = Depends(get_db)
 ):
     """
@@ -1156,7 +1109,7 @@ async def link_google_account(
 
 @router.delete("/google/unlink")
 async def unlink_google_account(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: Session = Depends(get_db)
 ):
     """

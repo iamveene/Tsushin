@@ -16,6 +16,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 #### Critical Vulnerability Fixes (v0.6.0 Security Audit)
 - **BUG-131:** Removed password reset token from API response body (account takeover prevention)
 - **BUG-132:** Added tenant_id format validation + path traversal guard in toolbox workspace paths
+- **BUG-140:** Eliminated local `get_current_user` that bypassed JWT invalidation on 4 auth endpoints
 - **BUG-136:** Replaced custom webhook SSRF check with centralized `validate_url()` + disabled HTTP redirect following
 
 #### High Severity Fixes
@@ -25,6 +26,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **BUG-137:** SSO `redirect_after` parameter validated to reject absolute URLs (open redirect prevention)
 - **BUG-138:** `require_global_admin` dependency now returns verified user object
 - **BUG-139:** Container `workdir` parameter restricted to `/workspace` subtree via regex + validator
+- **BUG-141:** SSO `redirect_after` switched from blocklist to whitelist (blocks `javascript:`, `data:`, etc.)
+- **BUG-142:** Password change minimum length aligned to 8 characters (was 6)
+- **BUG-143:** Workdir regex hardened — path segments must start with alphanumeric
 
 ### Added
 
