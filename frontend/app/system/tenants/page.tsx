@@ -7,12 +7,14 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { useRequireGlobalAdmin } from '@/contexts/AuthContext'
 import { api, TenantInfo } from '@/lib/client'
 import { GlobeIcon } from '@/components/ui/icons'
 
 export default function TenantsPage() {
   const { user, loading: authLoading } = useRequireGlobalAdmin()
+  const router = useRouter()
   const [tenants, setTenants] = useState<TenantInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -346,7 +348,10 @@ export default function TenantsPage() {
                           : 'N/A'}
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <button className="text-sm text-teal-400 hover:underline mr-3">
+                        <button
+                          onClick={() => router.push(`/system/tenants/${tenant.id}`)}
+                          className="text-sm text-teal-400 hover:underline mr-3"
+                        >
                           View
                         </button>
                         <button

@@ -144,6 +144,18 @@ class AIClient:
 
                 self.logger.info(f"AIClient initialized via provider instance {instance.id} ({instance.vendor})")
                 return  # Skip the flat-field path below
+            else:
+                # Instance not found or inactive — raise immediately instead of silently
+                # falling through to the flat-field path with wrong credentials.
+                if instance is None:
+                    raise ValueError(
+                        f"Provider instance {provider_instance_id} not found or not accessible."
+                    )
+                else:
+                    raise ValueError(
+                        f"Provider instance {provider_instance_id} ({instance.vendor}) is disabled. "
+                        "Please activate it or select a different provider."
+                    )
 
         # Get API key from database or environment (skip for Ollama and Vertex AI - Phase 5.2)
         # Priority: DB tenant key → DB system key → env var fallback (handled by get_api_key)

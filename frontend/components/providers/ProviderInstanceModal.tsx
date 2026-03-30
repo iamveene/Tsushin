@@ -18,6 +18,8 @@ interface Props {
   defaultVendor?: string
 }
 
+// LLM provider instances only — ElevenLabs is a TTS provider configured separately
+// via Hub > TTS Providers > API Keys, not as a provider instance.
 const VENDORS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
@@ -26,7 +28,6 @@ const VENDORS = [
   { value: 'grok', label: 'Grok (xAI)' },
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'deepseek', label: 'DeepSeek' },
-  { value: 'elevenlabs', label: 'ElevenLabs' },
   { value: 'vertex_ai', label: 'Vertex AI (Google Cloud)' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'custom', label: 'Custom' },
@@ -40,7 +41,6 @@ const VENDOR_DEFAULT_URLS: Record<string, string> = {
   grok: 'https://api.x.ai/v1',
   openrouter: 'https://openrouter.ai/api/v1',
   deepseek: 'https://api.deepseek.com/v1',
-  elevenlabs: 'https://api.elevenlabs.io/v1',
   vertex_ai: '',  // Region-specific — configured via Hub > Vertex AI settings
   ollama: 'http://localhost:11434',
   custom: '',

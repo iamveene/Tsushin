@@ -2000,10 +2000,13 @@ export default function HubPage() {
                     }
                   }
 
+                  // LLM provider instances grid — excludes:
+                  // - 'ollama': has its own dedicated Local Services section above with health monitoring
+                  // - 'elevenlabs': TTS-only provider configured via API Keys, not provider instances
                   const allVendors = Array.from(new Set([
                     ...Object.keys(vendorGroups),
-                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'deepseek', 'openrouter', 'elevenlabs', 'vertex_ai',
-                  ])).filter(v => v !== 'ollama').sort()
+                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'deepseek', 'openrouter', 'vertex_ai',
+                  ])).filter(v => v !== 'ollama' && v !== 'elevenlabs').sort()
 
                   return (
                     <div className="space-y-6">
