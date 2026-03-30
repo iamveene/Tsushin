@@ -2483,8 +2483,8 @@ export interface AgentCommPermission {
   is_enabled: boolean
   max_depth: number
   rate_limit_rpm: number
-  created_at: string
-  updated_at: string
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface AgentCommSession {
@@ -2516,8 +2516,8 @@ export interface AgentCommMessage {
   from_agent_name?: string
   to_agent_name?: string
   direction: string
-  message_content: string
-  message_preview?: string
+  message_content?: string | null
+  message_preview?: string | null
   model_used?: string
   execution_time_ms?: number
   sentinel_analyzed: boolean
@@ -6630,7 +6630,7 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete agent communication permission')
   },
 
-  async getAgentCommSessions(params?: { limit?: number; offset?: number; status?: string; agent_id?: number }): Promise<AgentCommSession[]> {
+  async getAgentCommSessions(params?: { limit?: number; offset?: number; status?: string; agent_id?: number }): Promise<{ items: AgentCommSession[]; total: number; limit: number; offset: number }> {
     const searchParams = new URLSearchParams()
     if (params?.limit) searchParams.set('limit', String(params.limit))
     if (params?.offset) searchParams.set('offset', String(params.offset))
@@ -6639,7 +6639,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/agent-communication/sessions?${searchParams}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch agent communication sessions')
     const data = await res.json()
-    return data.items || []
+    return { items: data.items || [], total: data.total || 0, limit: data.limit || 50, offset: data.offset || 0 }
   },
 
   async getAgentCommSessionDetail(id: number): Promise<AgentCommSession> {

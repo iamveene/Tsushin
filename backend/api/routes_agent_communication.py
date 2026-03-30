@@ -66,22 +66,28 @@ def _resolve_agent_name(db: Session, agent_id: int) -> str:
     return contact.friendly_name
 
 
-def _build_agent_name_map(db: Session, agent_ids: set) -> dict:
+def _build_agent_name_map(db: Session, agent_ids: set, tenant_id: str = None) -> dict:
     """Batch-resolve agent IDs to friendly names to avoid N+1 queries."""
     if not agent_ids:
         return {}
-    rows = (
+    q = (
         db.query(Agent.id, Contact.friendly_name)
         .join(Contact, Contact.id == Agent.contact_id)
         .filter(Agent.id.in_(agent_ids))
-        .all()
     )
+    if tenant_id:
+        q = q.filter(Agent.tenant_id == tenant_id)
+    rows = q.all()
     name_map = {row[0]: row[1] for row in rows}
     # Fill in any missing (deleted agents)
     for aid in agent_ids:
         if aid not in name_map:
             name_map[aid] = f"Agent #{aid} (deleted)"
     return name_map
+
+
+# Valid session statuses for query validation
+VALID_SESSION_STATUSES = {"pending", "in_progress", "completed", "failed", "timeout", "blocked"}
 
 
 # =============================================================================
@@ -226,6 +232,10 @@ async def list_sessions(
     db: Session = Depends(get_db),
 ):
     """List agent communication sessions with pagination and optional filters."""
+    # Validate status parameter
+    if status and status not in VALID_SESSION_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Allowed: {', '.join(sorted(VALID_SESSION_STATUSES))}")
+
     svc = AgentCommunicationService(db, ctx.tenant_id)
     sessions = svc.list_sessions(limit=limit, offset=offset, status=status, agent_id=agent_id)
 
@@ -234,7 +244,7 @@ async def list_sessions(
     for s in sessions:
         agent_ids.add(s.initiator_agent_id)
         agent_ids.add(s.target_agent_id)
-    name_map = _build_agent_name_map(db, agent_ids)
+    name_map = _build_agent_name_map(db, agent_ids, tenant_id=ctx.tenant_id)
 
     # Count total for pagination
     from sqlalchemy import func
@@ -291,7 +301,7 @@ async def get_session_detail(
     for msg in session.messages:
         agent_ids.add(msg.from_agent_id)
         agent_ids.add(msg.to_agent_id)
-    name_map = _build_agent_name_map(db, agent_ids)
+    name_map = _build_agent_name_map(db, agent_ids, tenant_id=ctx.tenant_id)
 
     messages = []
     for msg in sorted(session.messages, key=lambda m: m.created_at or datetime.min):
@@ -311,6 +321,12 @@ async def get_session_detail(
             created_at=msg.created_at,
         ))
 
+    # Mask original_sender_key PII (show only last 4 chars)
+    masked_sender_key = None
+    if session.original_sender_key:
+        key = session.original_sender_key
+        masked_sender_key = f"***{key[-4:]}" if len(key) > 4 else "***"
+
     return SessionDetailResponse(
         id=session.id,
         initiator_agent_id=session.initiator_agent_id,
@@ -323,7 +339,7 @@ async def get_session_detail(
         max_depth=session.max_depth,
         timeout_seconds=session.timeout_seconds,
         total_messages=session.total_messages,
-        original_sender_key=session.original_sender_key,
+        original_sender_key=masked_sender_key,
         original_message_preview=session.original_message_preview,
         error_text=session.error_text,
         parent_session_id=session.parent_session_id,
@@ -352,7 +368,7 @@ async def list_permissions(
     for p in perms:
         agent_ids.add(p.source_agent_id)
         agent_ids.add(p.target_agent_id)
-    name_map = _build_agent_name_map(db, agent_ids)
+    name_map = _build_agent_name_map(db, agent_ids, tenant_id=ctx.tenant_id)
 
     result = []
     for p in perms:
@@ -415,7 +431,7 @@ async def create_permission(
         rate_limit_rpm=body.rate_limit_rpm,
     )
 
-    name_map = _build_agent_name_map(db, {perm.source_agent_id, perm.target_agent_id})
+    name_map = _build_agent_name_map(db, {perm.source_agent_id, perm.target_agent_id}, tenant_id=ctx.tenant_id)
 
     return PermissionResponse(
         id=perm.id,
@@ -449,7 +465,7 @@ async def update_permission(
     if not perm:
         raise HTTPException(status_code=404, detail="Permission rule not found")
 
-    name_map = _build_agent_name_map(db, {perm.source_agent_id, perm.target_agent_id})
+    name_map = _build_agent_name_map(db, {perm.source_agent_id, perm.target_agent_id}, tenant_id=ctx.tenant_id)
 
     return PermissionResponse(
         id=perm.id,

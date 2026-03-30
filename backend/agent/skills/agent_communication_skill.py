@@ -12,6 +12,7 @@ Follows the BaseSkill / Skills-as-Tools pattern.
 from .base import BaseSkill, InboundMessage, SkillResult
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 import logging
 
 logger = logging.getLogger(__name__)
@@ -32,18 +33,10 @@ class AgentCommunicationSkill(BaseSkill):
     def __init__(self):
         super().__init__()
         self.db_session: Optional[Session] = None
-        self._agent_id: Optional[int] = None
-        self._tenant_id: Optional[str] = None
 
     def set_db_session(self, db: Session):
         super().set_db_session(db)
         self.db_session = db
-
-    def set_agent_id(self, agent_id: int):
-        self._agent_id = agent_id
-
-    def set_tenant_id(self, tenant_id: str):
-        self._tenant_id = tenant_id
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """Tool-only skill — never handles messages via keyword detection."""
@@ -170,8 +163,8 @@ class AgentCommunicationSkill(BaseSkill):
                 metadata={"error": "no_db_session", "skip_ai": False},
             )
 
-        # Resolve tenant_id from config (standard pattern in skill_manager)
-        tenant_id = config.get("tenant_id") or self._tenant_id
+        # Resolve tenant_id and agent_id from config (set by skill_manager.execute_tool_call)
+        tenant_id = config.get("tenant_id")
         agent_id = self._agent_id
 
         if not agent_id or not tenant_id:
@@ -346,15 +339,18 @@ class AgentCommunicationSkill(BaseSkill):
         )
 
     def _resolve_agent_by_name(self, name: str, tenant_id: str):
-        """Resolve an agent by friendly name (case-insensitive)."""
+        """Resolve an agent by friendly name (exact case-insensitive match).
+        Uses func.lower() equality to prevent SQL wildcard injection."""
         from models import Contact, Agent
+
+        clean_name = name.strip().lower()
 
         contact = (
             self.db_session.query(Contact)
             .filter(
                 Contact.role == "agent",
                 Contact.is_active == True,
-                Contact.friendly_name.ilike(name),
+                func.lower(Contact.friendly_name) == clean_name,
                 Contact.tenant_id == tenant_id,
             )
             .first()
@@ -364,7 +360,11 @@ class AgentCommunicationSkill(BaseSkill):
 
         agent = (
             self.db_session.query(Agent)
-            .filter(Agent.contact_id == contact.id, Agent.tenant_id == tenant_id)
+            .filter(
+                Agent.contact_id == contact.id,
+                Agent.tenant_id == tenant_id,
+                Agent.is_active == True,
+            )
             .first()
         )
         return agent
