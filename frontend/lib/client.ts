@@ -1,13 +1,13 @@
 /**
- * API_URL resolves to '' (empty string) in the browser so that all fetch calls
- * use relative paths (e.g. /api/...) which go through the Caddy reverse-proxy.
- * This avoids mixed-content errors when the page is served over HTTPS while
- * NEXT_PUBLIC_API_URL points at plain HTTP.
+ * API_URL is the base URL for all API fetch calls, resolved from NEXT_PUBLIC_API_URL.
  *
- * During SSR or in non-browser contexts (e.g. scripts), we fall back to the
- * env var so that server-side fetches still reach the backend directly.
+ * In SSL/HTTPS installs: NEXT_PUBLIC_API_URL = https://domain (Caddy endpoint).
+ * In HTTP-only installs: NEXT_PUBLIC_API_URL = http://host:8081 (direct backend).
+ *
+ * Using the absolute URL ensures HTTP-only installs work correctly without a
+ * Caddy reverse-proxy (fixes BUG-202: relative paths 404 on port 3030).
  */
-const API_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081')
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
 
 /**
  * Helper function to handle API response errors with user-friendly messages
@@ -3556,8 +3556,16 @@ export const api = {
   },
 
   // Phase 6.6-6.7: Multi-Step Flows API
-  async getFlows(): Promise<FlowDefinition[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/flows/`)
+  async getFlows(params?: { limit?: number; offset?: number; search?: string; active?: boolean; flow_type?: string; execution_method?: string }): Promise<{ items: FlowDefinition[]; total: number; limit: number; offset: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.limit) searchParams.set('limit', String(params.limit))
+    if (params?.offset !== undefined) searchParams.set('offset', String(params.offset))
+    if (params?.search) searchParams.set('search', params.search)
+    if (params?.active !== undefined) searchParams.set('active', String(params.active))
+    if (params?.flow_type) searchParams.set('flow_type', params.flow_type)
+    if (params?.execution_method) searchParams.set('execution_method', params.execution_method)
+    const qs = searchParams.toString()
+    const res = await authenticatedFetch(`${API_URL}/api/flows/${qs ? '?' + qs : ''}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch flows')
     return res.json()
   },

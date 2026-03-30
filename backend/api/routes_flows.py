@@ -911,16 +911,18 @@ def create_flow_v2(
         raise HTTPException(status_code=500, detail="Failed to create flow")
 
 
-@router.get("/", response_model=List[FlowDefinitionResponse], dependencies=[Depends(require_permission("flows.read"))])
+@router.get("/", dependencies=[Depends(require_permission("flows.read"))])
 def list_flows(
     active: Optional[bool] = None,
     flow_type: Optional[str] = None,
     execution_method: Optional[str] = None,
-    limit: int = 50,
+    search: Optional[str] = None,
+    limit: int = 25,
+    offset: int = 0,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
-    """List all flow definitions with optional filtering."""
+    """List all flow definitions with optional filtering and pagination."""
     try:
         query = db.query(FlowDefinition)
 
@@ -935,9 +937,18 @@ def list_flows(
         if execution_method is not None:
             query = query.filter(FlowDefinition.execution_method == execution_method)
 
-        flows = query.order_by(FlowDefinition.created_at.desc()).limit(limit).all()
+        if search:
+            query = query.filter(FlowDefinition.name.ilike(f"%{search}%"))
 
-        return [flow_to_response(flow, db) for flow in flows]
+        total = query.count()
+        flows = query.order_by(FlowDefinition.created_at.desc()).offset(offset).limit(limit).all()
+
+        return {
+            "items": [flow_to_response(flow, db) for flow in flows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     except Exception as e:
         logger.exception("Error listing flows")

@@ -165,6 +165,11 @@ export default function FlowsPage() {
   const [viewingRunId, setViewingRunId] = useState<number | null>(null)
   const [activeThreads, setActiveThreads] = useState<ConversationThread[]>([])
 
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalFlows, setTotalFlows] = useState(0)
+  const PAGE_SIZE = 25
+
   // Selected rows for bulk actions
   const [selectedFlows, setSelectedFlows] = useState<Set<number>>(new Set())
 
@@ -177,13 +182,13 @@ export default function FlowsPage() {
     return () => {
       window.removeEventListener('tsushin:refresh', handleRefresh)
     }
-  }, [])
+  }, [currentPage])
 
   async function loadData() {
     setLoading(true)
     try {
       const [flowsData, runsData, agentsData, contactsData, personasData, customToolsData, customSkillsData] = await Promise.allSettled([
-        api.getFlows(),
+        api.getFlows({ limit: PAGE_SIZE, offset: (currentPage - 1) * PAGE_SIZE }),
         api.getFlowRuns(undefined, 20),
         api.getAgents(true),
         api.getContacts(),
@@ -192,7 +197,10 @@ export default function FlowsPage() {
         api.getCustomSkills()
       ])
 
-      if (flowsData.status === 'fulfilled') setAllFlows(flowsData.value)
+      if (flowsData.status === 'fulfilled') {
+        setAllFlows(flowsData.value.items)
+        setTotalFlows(flowsData.value.total)
+      }
       if (runsData.status === 'fulfilled') setRuns(runsData.value)
       if (agentsData.status === 'fulfilled') setAgents(agentsData.value)
       if (contactsData.status === 'fulfilled') setContacts(contactsData.value)
@@ -363,11 +371,13 @@ export default function FlowsPage() {
     }
   }
 
+  const totalPages = Math.ceil(totalFlows / PAGE_SIZE)
+
   // Stats calculation (based on all flows, not filtered)
   const stats = {
-    totalFlows: allFlows.length,
-    activeFlows: allFlows.filter(f => f.is_active).length, // Enabled flows
-    inactiveFlows: allFlows.filter(f => !f.is_active).length, // Disabled flows
+    totalFlows: totalFlows,
+    activeFlows: allFlows.filter(f => f.is_active).length, // Enabled flows (current page)
+    inactiveFlows: allFlows.filter(f => !f.is_active).length, // Disabled flows (current page)
     totalRuns: runs.length,
     runningRuns: runs.filter(r => r.status === 'running').length,
     activeThreads: activeThreads.length,
@@ -536,6 +546,7 @@ export default function FlowsPage() {
               )}
             </div>
           ) : (
+            <>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -700,6 +711,57 @@ export default function FlowsPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800/50">
+                <div className="text-sm text-slate-400">
+                  Showing {((currentPage - 1) * PAGE_SIZE) + 1}–{Math.min(currentPage * PAGE_SIZE, totalFlows)} of {totalFlows} flows
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage <= 1}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Previous
+                  </button>
+                  {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                    let page: number
+                    if (totalPages <= 7) {
+                      page = i + 1
+                    } else if (currentPage <= 4) {
+                      page = i + 1
+                    } else if (currentPage >= totalPages - 3) {
+                      page = totalPages - 6 + i
+                    } else {
+                      page = currentPage - 3 + i
+                    }
+                    return (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page)}
+                        className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                          currentPage === page
+                            ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30'
+                            : 'border border-slate-700 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    )
+                  })}
+                  <button
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage >= totalPages}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
           )}
         </div>
 
