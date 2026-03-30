@@ -59,6 +59,7 @@ import {
   AlertTriangleIcon,
   SlackIcon,
   DiscordIcon,
+  CloudIcon,
   type IconProps
 } from '@/components/ui/icons'
 import ToggleSwitch from '@/components/ui/ToggleSwitch'
@@ -196,6 +197,7 @@ const AI_PROVIDERS: { value: string; label: string; Icon: React.FC<IconProps>; d
   { value: 'groq', label: 'Groq', Icon: LightningIcon, description: 'Ultra-fast inference', status: 'available' },
   { value: 'grok', label: 'Grok (xAI)', Icon: GrokIcon, description: 'xAI Grok models', status: 'available' },
   { value: 'deepseek', label: 'DeepSeek', Icon: BrainIcon, description: 'Affordable reasoning & chat', status: 'available' },
+  { value: 'vertex_ai', label: 'Vertex AI (GCP)', Icon: CloudIcon, description: 'Google Cloud Model Garden', status: 'available' },
   { value: 'elevenlabs', label: 'ElevenLabs', Icon: MicrophoneIcon, description: 'Voice AI & TTS synthesis', status: 'available' },
 ]
 
@@ -255,6 +257,17 @@ export default function HubPage() {
   const [discordIntegrations, setDiscordIntegrations] = useState<DiscordIntegration[]>([])
   const [showDiscordSetupModal, setShowDiscordSetupModal] = useState(false)
   const [discordTestLoading, setDiscordTestLoading] = useState<number | null>(null)
+
+  // Vertex AI configuration state
+  const [showVertexAiModal, setShowVertexAiModal] = useState(false)
+  const [vertexProjectId, setVertexProjectId] = useState('')
+  const [vertexRegion, setVertexRegion] = useState('us-east5')
+  const [vertexSaEmail, setVertexSaEmail] = useState('')
+  const [vertexPrivateKey, setVertexPrivateKey] = useState('')
+  const [vertexJsonPaste, setVertexJsonPaste] = useState('')
+  const [vertexSaving, setVertexSaving] = useState(false)
+  const [vertexTesting, setVertexTesting] = useState(false)
+  const [vertexTestResult, setVertexTestResult] = useState<{success: boolean; message: string} | null>(null)
 
   // Toolbox Container state
   const [toolboxStatus, setToolboxStatus] = useState<ToolboxStatus | null>(null)
@@ -1064,6 +1077,90 @@ export default function HubPage() {
     setShowApiKeyModal(true)
   }
 
+  // Vertex AI handlers
+  const handleVertexJsonPaste = (jsonStr: string) => {
+    setVertexJsonPaste(jsonStr)
+    try {
+      const parsed = JSON.parse(jsonStr)
+      if (parsed.project_id) setVertexProjectId(parsed.project_id)
+      if (parsed.client_email) setVertexSaEmail(parsed.client_email)
+      if (parsed.private_key) setVertexPrivateKey(parsed.private_key)
+    } catch {
+      // Not valid JSON — user may be typing
+    }
+  }
+
+  const handleSaveVertexAi = async () => {
+    if (!vertexProjectId.trim() || !vertexSaEmail.trim() || !vertexPrivateKey.trim()) {
+      toast.warning('Validation', 'Project ID, Service Account Email, and Private Key are required')
+      return
+    }
+    setVertexSaving(true)
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const response = await fetch(`${apiUrl}/api/api-keys`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          service: 'vertex_ai',
+          api_key: vertexPrivateKey.trim(),
+          is_active: true
+        })
+      })
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Failed to save: ${errorText}`)
+      }
+      // Also save project_id, region, sa_email as structured metadata via separate keys
+      // Save vertex_ai_project_id
+      await fetch(`${apiUrl}/api/api-keys`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ service: 'vertex_ai_project_id', api_key: vertexProjectId.trim(), is_active: true })
+      })
+      // Save vertex_ai_region
+      await fetch(`${apiUrl}/api/api-keys`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ service: 'vertex_ai_region', api_key: vertexRegion.trim(), is_active: true })
+      })
+      // Save vertex_ai_sa_email
+      await fetch(`${apiUrl}/api/api-keys`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ service: 'vertex_ai_sa_email', api_key: vertexSaEmail.trim(), is_active: true })
+      })
+
+      await fetchAPIKeys()
+      setShowVertexAiModal(false)
+      setSuccessMessage('Vertex AI credentials saved successfully')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save Vertex AI credentials')
+    } finally {
+      setVertexSaving(false)
+    }
+  }
+
+  const handleTestVertexAi = async () => {
+    setVertexTesting(true)
+    setVertexTestResult(null)
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const response = await fetch(`${apiUrl}/api/integrations/vertex_ai/test`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({})
+      })
+      const result = await response.json()
+      setVertexTestResult({ success: result.success, message: result.message })
+    } catch (err: unknown) {
+      setVertexTestResult({ success: false, message: err instanceof Error ? err.message : 'Test failed' })
+    } finally {
+      setVertexTesting(false)
+    }
+  }
+
   const saveAPIKey = async () => {
     if (!modalData.service || !modalData.api_key) {
       toast.warning('Validation', 'Please select a service and provide the API key')
@@ -1700,7 +1797,7 @@ export default function HubPage() {
             {apiKey ? (
               <>
                 <button
-                  onClick={() => openEditApiKeyModal(apiKey)}
+                  onClick={() => item.value === 'vertex_ai' ? setShowVertexAiModal(true) : openEditApiKeyModal(apiKey)}
                   className="flex-1 btn-ghost py-2 text-sm"
                 >
                   Edit
@@ -1714,7 +1811,7 @@ export default function HubPage() {
               </>
             ) : (
               <button
-                onClick={() => openAddApiKeyModal(item.value)}
+                onClick={() => item.value === 'vertex_ai' ? setShowVertexAiModal(true) : openAddApiKeyModal(item.value)}
                 className="w-full btn-secondary py-2 text-sm"
               >
                 Configure
@@ -4045,6 +4142,115 @@ export default function HubPage() {
         onSubmit={handleCreateDiscordIntegration}
         saving={saving}
       />
+
+      {/* Vertex AI Configuration Modal */}
+      {showVertexAiModal && (
+        <Modal
+          isOpen={showVertexAiModal}
+          onClose={() => { setShowVertexAiModal(false); setVertexTestResult(null) }}
+          title="Configure Vertex AI (Google Cloud)"
+          size="lg"
+        >
+          <div className="space-y-5">
+            {/* JSON Key Paste Option */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">
+                Paste Service Account JSON Key <span className="text-tsushin-slate">(auto-fills fields below)</span>
+              </label>
+              <textarea
+                value={vertexJsonPaste}
+                onChange={(e) => handleVertexJsonPaste(e.target.value)}
+                className="input w-full h-24 font-mono text-xs"
+                placeholder='{"type": "service_account", "project_id": "...", "client_email": "...", "private_key": "..."}'
+              />
+            </div>
+
+            <div className="border-t border-tsushin-border/30 pt-4">
+              <p className="text-xs text-tsushin-slate mb-4">Or fill in the fields manually:</p>
+            </div>
+
+            {/* Project ID */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">GCP Project ID <span className="text-tsushin-vermilion">*</span></label>
+              <input
+                type="text"
+                value={vertexProjectId}
+                onChange={(e) => setVertexProjectId(e.target.value)}
+                className="input w-full"
+                placeholder="my-project-123"
+              />
+            </div>
+
+            {/* Region */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Region <span className="text-tsushin-vermilion">*</span></label>
+              <select
+                value={vertexRegion}
+                onChange={(e) => setVertexRegion(e.target.value)}
+                className="input w-full"
+              >
+                <option value="us-east5">us-east5 (Columbus)</option>
+                <option value="us-central1">us-central1 (Iowa)</option>
+                <option value="us-east4">us-east4 (Virginia)</option>
+                <option value="us-west1">us-west1 (Oregon)</option>
+                <option value="europe-west1">europe-west1 (Belgium)</option>
+                <option value="europe-west4">europe-west4 (Netherlands)</option>
+                <option value="asia-northeast1">asia-northeast1 (Tokyo)</option>
+                <option value="asia-southeast1">asia-southeast1 (Singapore)</option>
+              </select>
+              <p className="text-xs text-tsushin-slate mt-1">Claude models: us-east5, us-central1, europe-west1, europe-west4</p>
+            </div>
+
+            {/* Service Account Email */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Service Account Email <span className="text-tsushin-vermilion">*</span></label>
+              <input
+                type="text"
+                value={vertexSaEmail}
+                onChange={(e) => setVertexSaEmail(e.target.value)}
+                className="input w-full"
+                placeholder="my-sa@my-project.iam.gserviceaccount.com"
+              />
+            </div>
+
+            {/* Private Key */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Private Key (PEM) <span className="text-tsushin-vermilion">*</span></label>
+              <textarea
+                value={vertexPrivateKey}
+                onChange={(e) => setVertexPrivateKey(e.target.value)}
+                className="input w-full h-32 font-mono text-xs"
+                placeholder="Paste your PEM private key here"
+              />
+            </div>
+
+            {/* Test Connection Result */}
+            {vertexTestResult && (
+              <div className={`p-3 rounded-lg border ${vertexTestResult.success ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+                <p className="text-sm">{vertexTestResult.success ? '\u2713' : '\u2717'} {vertexTestResult.message}</p>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={handleTestVertexAi}
+                disabled={vertexTesting || !vertexPrivateKey.trim()}
+                className="btn-secondary flex-1"
+              >
+                {vertexTesting ? 'Testing...' : 'Test Connection'}
+              </button>
+              <button
+                onClick={handleSaveVertexAi}
+                disabled={vertexSaving || !vertexProjectId.trim() || !vertexSaEmail.trim() || !vertexPrivateKey.trim()}
+                className="btn-primary flex-1"
+              >
+                {vertexSaving ? 'Saving...' : 'Save Configuration'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

@@ -88,7 +88,8 @@ SUPPORTED_SERVICES = {
     'brave_search': 'Brave Search API',
     'amadeus': 'Amadeus (Flight Search)',
     'google_flights': 'Google Flights (SerpApi)',
-    'serpapi': 'SerpAPI (Google Search)'
+    'serpapi': 'SerpAPI (Google Search)',
+    'vertex_ai': 'Vertex AI (Google Cloud)',
 }
 
 

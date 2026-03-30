@@ -78,6 +78,13 @@ PROVIDER_MODELS: Dict[str, List[Dict[str, str]]] = {
         {"value": "deepseek-chat", "label": "DeepSeek Chat (Recommended)", "description": "General-purpose, very affordable"},
         {"value": "deepseek-reasoner", "label": "DeepSeek Reasoner", "description": "Reasoning model (R1)"},
     ],
+    "vertex_ai": [
+        {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (via Vertex)", "description": "Fast & affordable on GCP"},
+        {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro (via Vertex)", "description": "Most capable on GCP"},
+        {"value": "gemini-2.0-flash", "label": "Gemini 2.0 Flash (via Vertex)", "description": "Previous generation on GCP"},
+        {"value": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (via Vertex)", "description": "Anthropic via GCP"},
+        {"value": "claude-haiku-4-5-latest", "label": "Claude Haiku 4.5 (via Vertex)", "description": "Anthropic fast via GCP"},
+    ],
     "ollama": [
         {"value": "llama3.2", "label": "Llama 3.2 (Recommended)", "description": "Meta's latest local model"},
         {"value": "llama3.1", "label": "Llama 3.1", "description": "Meta's previous generation"},
@@ -98,6 +105,7 @@ PROVIDERS = [
     {"value": "deepseek", "label": "DeepSeek", "description": "Affordable reasoning models"},
     {"value": "openrouter", "label": "OpenRouter", "description": "Multi-provider gateway"},
     {"value": "groq", "label": "Groq", "description": "Ultra-fast inference for open models"},
+    {"value": "vertex_ai", "label": "Vertex AI (Google Cloud)", "description": "GCP Model Garden — Gemini, Claude, and more"},
     {"value": "ollama", "label": "Ollama (Local)", "description": "Free local models, no API key needed"},
 ]
 

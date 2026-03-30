@@ -31,6 +31,7 @@ ENV_KEY_MAP = {
     'grok': 'GROK_API_KEY',
     'deepseek': 'DEEPSEEK_API_KEY',
     'elevenlabs': 'ELEVENLABS_API_KEY',
+    'vertex_ai': 'VERTEX_AI_PRIVATE_KEY',  # Service account private key (PEM)
 }
 
 
