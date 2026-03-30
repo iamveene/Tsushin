@@ -20,21 +20,28 @@ class DecayConfig:
     mmr_lambda: float = 0.5           # MMR diversity weight (0=max diversity, 1=pure relevance)
 
     @staticmethod
+    def _coalesce(value, default):
+        """Return value if not None, else default."""
+        return value if value is not None else default
+
+    @staticmethod
     def from_agent(agent) -> 'DecayConfig':
+        c = DecayConfig._coalesce
         return DecayConfig(
-            enabled=getattr(agent, 'memory_decay_enabled', False) or False,
-            decay_lambda=getattr(agent, 'memory_decay_lambda', 0.01) or 0.01,
-            archive_threshold=getattr(agent, 'memory_decay_archive_threshold', 0.05) or 0.05,
-            mmr_lambda=getattr(agent, 'memory_decay_mmr_lambda', 0.5) or 0.5,
+            enabled=bool(c(getattr(agent, 'memory_decay_enabled', None), False)),
+            decay_lambda=c(getattr(agent, 'memory_decay_lambda', None), 0.01),
+            archive_threshold=c(getattr(agent, 'memory_decay_archive_threshold', None), 0.05),
+            mmr_lambda=c(getattr(agent, 'memory_decay_mmr_lambda', None), 0.5),
         )
 
     @staticmethod
     def from_config_dict(config: dict) -> 'DecayConfig':
+        c = DecayConfig._coalesce
         return DecayConfig(
-            enabled=config.get('memory_decay_enabled', False) or False,
-            decay_lambda=config.get('memory_decay_lambda', 0.01) or 0.01,
-            archive_threshold=config.get('memory_decay_archive_threshold', 0.05) or 0.05,
-            mmr_lambda=config.get('memory_decay_mmr_lambda', 0.5) or 0.5,
+            enabled=bool(c(config.get('memory_decay_enabled'), False)),
+            decay_lambda=c(config.get('memory_decay_lambda'), 0.01),
+            archive_threshold=c(config.get('memory_decay_archive_threshold'), 0.05),
+            mmr_lambda=c(config.get('memory_decay_mmr_lambda'), 0.5),
         )
 
 
@@ -131,20 +138,23 @@ def mmr_rerank(
 
         for i, candidate in enumerate(remaining):
             cand_emb = candidate.get('embedding', [])
+
             if not cand_emb:
-                continue
+                # No embedding available — fall back to decayed_score only
+                mmr_score = candidate.get('decayed_score', 0)
+            else:
+                # Relevance: similarity to query
+                relevance = _cosine_similarity(cand_emb, query_embedding)
 
-            # Relevance: similarity to query
-            relevance = _cosine_similarity(cand_emb, query_embedding)
+                # Diversity: max similarity to already selected
+                selected_with_emb = [s for s in selected if s.get('embedding')]
+                max_sim_to_selected = max(
+                    _cosine_similarity(cand_emb, s['embedding'])
+                    for s in selected_with_emb
+                ) if selected_with_emb else 0.0
 
-            # Diversity: max similarity to already selected
-            max_sim_to_selected = max(
-                _cosine_similarity(cand_emb, s.get('embedding', []))
-                for s in selected if s.get('embedding')
-            ) if selected else 0.0
-
-            # MMR score
-            mmr_score = mmr_lambda * relevance - (1 - mmr_lambda) * max_sim_to_selected
+                # MMR score
+                mmr_score = mmr_lambda * relevance - (1 - mmr_lambda) * max_sim_to_selected
 
             if mmr_score > best_score:
                 best_score = mmr_score
