@@ -136,9 +136,10 @@ class AgentResponse(BaseModel):
     skills_count: Optional[int] = 0  # Number of enabled skills
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram"]
+    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack"]
     whatsapp_integration_id: Optional[int] = None  # Specific MCP instance
-    telegram_integration_id: Optional[int] = None  # Future: Telegram bot instance
+    telegram_integration_id: Optional[int] = None  # Telegram bot instance
+    slack_integration_id: Optional[int] = None  # Slack workspace integration
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -169,9 +170,10 @@ class AgentCreate(BaseModel):
     # Note: enable_semantic_search is managed via AgentSkill table (/api/agent-skills endpoint)
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram")
+    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
-    telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use (future)")
+    telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
+    slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
 
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
@@ -199,9 +201,10 @@ class AgentUpdate(BaseModel):
     # Note: enable_semantic_search is managed via AgentSkill table (/api/agent-skills endpoint)
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram")
+    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
-    telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use (future)")
+    telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
+    slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
 
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
@@ -585,6 +588,7 @@ def get_agent(
         ),
         "whatsapp_integration_id": agent.whatsapp_integration_id,
         "telegram_integration_id": agent.telegram_integration_id,
+        "slack_integration_id": agent.slack_integration_id,
 
         "created_at": agent.created_at,
         "updated_at": agent.updated_at
@@ -739,7 +743,7 @@ def update_agent(
         "response_template", "memory_size", "trigger_dm_enabled",
         "trigger_group_filters", "trigger_number_filters",
         "context_message_count", "context_char_limit", "enabled_channels",
-        "whatsapp_integration_id", "telegram_integration_id",
+        "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id",
         "is_active", "is_default",
     }
     update_data = agent.model_dump(exclude_unset=True)

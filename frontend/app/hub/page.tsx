@@ -16,9 +16,10 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { api, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, Config, ProviderInstance } from '@/lib/client'
+import { api, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, Config, ProviderInstance } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
+import SlackSetupModal from '@/components/SlackSetupModal'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
 import {
   GeminiIcon,
@@ -55,6 +56,7 @@ import {
   PackageIcon,
   CreditCardIcon,
   AlertTriangleIcon,
+  SlackIcon,
   type IconProps
 } from '@/components/ui/icons'
 import ToggleSwitch from '@/components/ui/ToggleSwitch'
@@ -199,8 +201,8 @@ const COMMUNICATION_CHANNELS: { value: string; label: string; Icon: React.FC<Ico
   { value: 'whatsapp', label: 'WhatsApp', Icon: MessageIconSvg, description: 'WhatsApp Business via MCP', status: 'available' },
   { value: 'gmail', label: 'Gmail', Icon: MailIcon, description: 'Google Gmail for email actions', status: 'available' },
   { value: 'telegram', label: 'Telegram', Icon: PlaneIcon, description: 'Telegram Bot API', status: 'available' },  // Phase 10.1.1: Now available!
+  { value: 'slack', label: 'Slack', Icon: SlackIcon, description: 'Slack workspace integration', status: 'available' },
   { value: 'discord', label: 'Discord', Icon: GamepadIcon, description: 'Discord bot integration', status: 'coming_soon' },
-  { value: 'slack', label: 'Slack', Icon: BriefcaseIcon, description: 'Slack workspace integration', status: 'coming_soon' },
 ]
 
 const PRODUCTIVITY_APPS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
@@ -241,6 +243,11 @@ export default function HubPage() {
   const [telegramInstances, setTelegramInstances] = useState<TelegramBotInstance[]>([])
   const [telegramHealthStatuses, setTelegramHealthStatuses] = useState<Record<number, TelegramHealthStatus>>({})
   const [showTelegramModal, setShowTelegramModal] = useState(false)
+
+  // v0.6.0: Slack Integration
+  const [slackIntegrations, setSlackIntegrations] = useState<SlackIntegration[]>([])
+  const [showSlackSetupModal, setShowSlackSetupModal] = useState(false)
+  const [slackTestLoading, setSlackTestLoading] = useState<number | null>(null)
 
   // Toolbox Container state
   const [toolboxStatus, setToolboxStatus] = useState<ToolboxStatus | null>(null)
@@ -347,6 +354,7 @@ export default function HubPage() {
       if (activeTab === 'communication') {
         loadMcpInstances()
         loadTelegramInstances()  // Phase 10.1.1
+        loadSlackIntegrations()  // v0.6.0
       }
       if (activeTab === 'mcp-servers') {
         loadMcpServers()  // Phase 26
@@ -490,6 +498,7 @@ export default function HubPage() {
         loadHubIntegrations(),
         loadMcpInstances(),
         loadTelegramInstances(),  // Phase 10.1.1
+        loadSlackIntegrations(),  // v0.6.0
         fetchToolboxStatus(),
         loadGoogleCredentials(),
         loadSystemConfig(),
@@ -1322,6 +1331,61 @@ export default function HubPage() {
       loadTelegramInstances()
     } catch (err: any) {
       setError(err.message || `Failed to ${action} Telegram bot`)
+    }
+  }
+
+  // v0.6.0: Slack Integration handlers
+  const loadSlackIntegrations = useCallback(async () => {
+    try {
+      const data = await api.getSlackIntegrations()
+      setSlackIntegrations(data)
+    } catch (err) {
+      console.error('Failed to load Slack integrations:', err)
+    }
+  }, [])
+
+  const handleCreateSlackIntegration = async (data: SlackIntegrationCreate) => {
+    setSaving(true)
+    try {
+      await api.createSlackIntegration(data)
+      setShowSlackSetupModal(false)
+      setSuccessMessage('Slack workspace connected successfully!')
+      setTimeout(() => setSuccessMessage(null), 3000)
+      loadSlackIntegrations()
+    } catch (err: any) {
+      setError(err.message || 'Failed to connect Slack workspace')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDeleteSlackIntegration = async (id: number) => {
+    if (!confirm('Disconnect this Slack workspace? The bot will stop responding to messages.')) return
+    try {
+      await api.deleteSlackIntegration(id)
+      setSuccessMessage('Slack workspace disconnected')
+      setTimeout(() => setSuccessMessage(null), 3000)
+      loadSlackIntegrations()
+    } catch (err: any) {
+      setError(err.message || 'Failed to disconnect Slack workspace')
+    }
+  }
+
+  const handleTestSlackConnection = async (id: number) => {
+    setSlackTestLoading(id)
+    try {
+      const result = await api.testSlackConnection(id)
+      if (result.success) {
+        setSuccessMessage(result.message || 'Slack connection is healthy!')
+      } else {
+        setError(result.message || 'Slack connection test failed')
+      }
+      setTimeout(() => { setSuccessMessage(null); setError(null) }, 3000)
+      loadSlackIntegrations()
+    } catch (err: any) {
+      setError(err.message || 'Failed to test Slack connection')
+    } finally {
+      setSlackTestLoading(null)
     }
   }
 
@@ -2447,6 +2511,87 @@ export default function HubPage() {
                   )}
                 </div>
 
+                {/* v0.6.0: Slack Integration */}
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-md font-semibold text-white flex items-center gap-2">
+                      <SlackIcon size={18} className="text-purple-400" /> Slack
+                    </h3>
+                    <button
+                      onClick={() => setShowSlackSetupModal(true)}
+                      className="px-4 py-2 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded hover:bg-purple-600/30 text-sm"
+                    >
+                      + Connect Workspace
+                    </button>
+                  </div>
+
+                  {slackIntegrations.length === 0 ? (
+                    <div className="empty-state py-12 border border-dashed border-tsushin-border rounded-xl">
+                      <div className="empty-state-icon">
+                        <SlackIcon size={36} className="text-purple-400" />
+                      </div>
+                      <h3 className="text-lg font-semibold text-white mb-2">No Slack Workspaces</h3>
+                      <p className="text-tsushin-slate mb-4">Connect a Slack workspace to enable bot messaging</p>
+                      <button
+                        onClick={() => setShowSlackSetupModal(true)}
+                        className="btn-primary"
+                      >
+                        Connect Workspace
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      {slackIntegrations.map(integration => (
+                        <div key={integration.id} className="card p-5 hover-glow">
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
+                                <SlackIcon size={20} className="text-purple-400" />
+                              </div>
+                              <div>
+                                <h3 className="font-semibold text-white">{integration.workspace_name || 'Slack Workspace'}</h3>
+                                <p className="text-xs text-tsushin-slate">{integration.mode === 'socket' ? 'Socket Mode' : 'HTTP Events'}</p>
+                              </div>
+                            </div>
+                            <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                              integration.status === 'connected'
+                                ? 'bg-green-500/20 text-green-400 border border-green-500/50'
+                                : integration.status === 'error'
+                                ? 'bg-red-500/20 text-red-400 border border-red-500/50'
+                                : 'bg-gray-500/20 text-gray-400 border border-gray-500/50'
+                            }`}>
+                              {integration.status === 'connected' ? 'Connected' : integration.status === 'error' ? 'Error' : 'Not configured'}
+                            </span>
+                          </div>
+
+                          <div className="text-xs text-tsushin-slate mb-3 space-y-1">
+                            <p>DM Policy: <span className="text-white capitalize">{integration.dm_policy}</span></p>
+                            {integration.allowed_channels.length > 0 && (
+                              <p>Channels: <span className="text-white">{integration.allowed_channels.length} allowed</span></p>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => handleTestSlackConnection(integration.id)}
+                              disabled={slackTestLoading === integration.id}
+                              className="px-3 py-1.5 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded text-xs hover:bg-purple-600/30 disabled:opacity-50"
+                            >
+                              {slackTestLoading === integration.id ? 'Testing...' : 'Test Connection'}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSlackIntegration(integration.id)}
+                              className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs hover:bg-red-600/30"
+                            >
+                              Disconnect
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* Gmail Integration */}
                 <div className="space-y-4">
                   <h3 className="text-md font-semibold text-white flex items-center gap-2">
@@ -2549,7 +2694,7 @@ export default function HubPage() {
                     <RocketIcon size={18} /> More Channels
                   </h3>
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    {COMMUNICATION_CHANNELS.filter(c => c.value !== 'whatsapp' && c.value !== 'gmail' && c.value !== 'telegram').map(channel => {
+                    {COMMUNICATION_CHANNELS.filter(c => c.value !== 'whatsapp' && c.value !== 'gmail' && c.value !== 'telegram' && c.value !== 'slack').map(channel => {
                       const ChannelIcon = channel.Icon
                       return (
                         <div key={channel.value} className="card p-4 opacity-60">
@@ -3787,6 +3932,14 @@ export default function HubPage() {
         isOpen={showTelegramModal}
         onClose={() => setShowTelegramModal(false)}
         onSubmit={handleCreateTelegramBot}
+        saving={saving}
+      />
+
+      {/* v0.6.0: Slack Setup Modal */}
+      <SlackSetupModal
+        isOpen={showSlackSetupModal}
+        onClose={() => setShowSlackSetupModal(false)}
+        onSubmit={handleCreateSlackIntegration}
         saving={saving}
       />
     </div>

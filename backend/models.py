@@ -83,6 +83,7 @@ class Config(Base):
     telegram_encryption_key = Column(String(500), nullable=True)  # Telegram bot token encryption (Fernet key)
     amadeus_encryption_key = Column(String(500), nullable=True)  # Amadeus API credentials encryption (Fernet key)
     api_key_encryption_key = Column(String(500), nullable=True)  # LLM API key encryption (Fernet key)
+    slack_encryption_key = Column(String(500), nullable=True)  # Slack token encryption (Fernet key) — v0.6.0 Item 33
 
     # System-Level AI Configuration (Phase 17: Tenant-Configurable System AI)
     # These settings control which AI provider/model is used for system operations
@@ -341,9 +342,10 @@ class Agent(Base):
 
     # Phase 10: Channel Configuration
     # Determines which channels this agent can interact through
-    enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram
+    enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack
     whatsapp_integration_id = Column(Integer, ForeignKey("whatsapp_mcp_instance.id", ondelete="SET NULL"), nullable=True)  # Specific MCP instance
     telegram_integration_id = Column(Integer, nullable=True)  # Future: FK to TelegramBotInstance
+    slack_integration_id = Column(Integer, nullable=True)  # v0.6.0 Item 33: FK to SlackIntegration
     provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
 
     # Avatar
@@ -2777,6 +2779,44 @@ class TelegramBotInstance(Base):
         Index("idx_telegram_instance_tenant", "tenant_id"),
         Index("idx_telegram_instance_status", "status"),
         Index("idx_telegram_instance_username", "bot_username"),
+    )
+
+
+# ============================================================================
+# v0.6.0 Item 33: Slack Integration
+# ============================================================================
+
+class SlackIntegration(Base):
+    """
+    v0.6.0 Item 33: Slack Workspace Integration
+
+    Manages Slack workspace connections per tenant via Socket Mode or HTTP Events API.
+    Tokens are encrypted with Fernet (per-workspace key derivation).
+
+    Example:
+        Tenant "acme-corp" → Slack workspace "Acme HQ" (team_id: T0123ABC)
+    """
+    __tablename__ = "slack_integration"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(100), nullable=False, index=True)
+    workspace_id = Column(String(50), nullable=False)       # Slack team_id
+    workspace_name = Column(String(200))
+    bot_token_encrypted = Column(Text, nullable=False)       # xoxb-... (Fernet)
+    app_token_encrypted = Column(Text)                       # xapp-... (Socket Mode)
+    signing_secret_encrypted = Column(Text)                  # HTTP mode
+    mode = Column(String(20), default="socket")              # "socket" or "http"
+    bot_user_id = Column(String(50))                         # Bot's Slack user ID
+    is_active = Column(Boolean, default=True)
+    status = Column(String(20), default="inactive")          # inactive/connected/error
+    dm_policy = Column(String(20), default="allowlist")      # open/allowlist/disabled
+    allowed_channels = Column(JSON, default=[])              # List of allowed channel_ids
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    __table_args__ = (
+        Index("idx_slack_integration_tenant", "tenant_id"),
+        Index("idx_slack_integration_status", "status"),
     )
 
 
