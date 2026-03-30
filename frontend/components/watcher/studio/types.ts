@@ -203,6 +203,7 @@ export interface BuilderGhostAgentData {
   avatar?: string | null
   permissionId?: number
   isGhost: true
+  onGhostDoubleClick?: (agentId: number) => void
 }
 
 // Union of all builder node data

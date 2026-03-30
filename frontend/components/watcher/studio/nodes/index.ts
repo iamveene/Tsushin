@@ -8,6 +8,7 @@ import BuilderToolNode from './BuilderToolNode'
 import BuilderSentinelNode from './BuilderSentinelNode'
 import BuilderKnowledgeNode from './BuilderKnowledgeNode'
 import BuilderMemoryNode from './BuilderMemoryNode'
+import BuilderGhostAgentNode from './BuilderGhostAgentNode'
 
 export const builderNodeTypes = {
   'builder-agent': BuilderAgentNode,
@@ -20,6 +21,7 @@ export const builderNodeTypes = {
   'builder-sentinel': BuilderSentinelNode,
   'builder-knowledge': BuilderKnowledgeNode,
   'builder-memory': BuilderMemoryNode,
+  'builder-ghost-agent': BuilderGhostAgentNode,
 }
 
-export { BuilderAgentNode, BuilderGroupNode, BuilderPersonaNode, BuilderChannelNode, BuilderSkillNode, BuilderSkillProviderNode, BuilderToolNode, BuilderSentinelNode, BuilderKnowledgeNode, BuilderMemoryNode }
+export { BuilderAgentNode, BuilderGroupNode, BuilderPersonaNode, BuilderChannelNode, BuilderSkillNode, BuilderSkillProviderNode, BuilderToolNode, BuilderSentinelNode, BuilderKnowledgeNode, BuilderMemoryNode, BuilderGhostAgentNode }
