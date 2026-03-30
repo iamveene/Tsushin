@@ -6,11 +6,13 @@ import { api } from '@/lib/client'
 import type { BuilderSaveRequest } from '@/lib/client'
 import { calculateGroupedRadialLayout, type GroupedCategoryInput } from '../layout/radialLayout'
 import { calculateDagreBuilderLayout } from '../layout/dagreBuilderLayout'
+import { computeGhostLayout } from '../layout/a2aGhostLayout'
+import { useA2ANetworkData } from './useA2ANetworkData'
 import type {
   AgentBuilderState, BuilderNodeData, PaletteItemData, ProfileCategoryId,
   BuilderAgentData, BuilderPersonaData, BuilderChannelData, BuilderSkillData,
   BuilderSkillProviderData, BuilderToolData, BuilderSentinelData, BuilderKnowledgeData,
-  BuilderMemoryData, BuilderGroupData, DragTransferData,
+  BuilderMemoryData, BuilderGroupData, DragTransferData, BuilderGhostAgentData,
 } from '../types'
 import { GROUPED_CATEGORIES, CATEGORY_DISPLAY } from '../types'
 import type { UseStudioDataReturn } from './useStudioData'
@@ -29,12 +31,17 @@ export interface UseAgentBuilderReturn {
   collapseAll: () => void
   resetLayout: () => void
   queueDropPosition: (itemId: string | number, pos?: { x: number; y: number }) => void
+  // A2A ghost nodes (NOT part of isDirty / save payload)
+  ghostNodes: Node<BuilderNodeData>[]
+  a2aStudioEdges: Edge[]
+  showA2ANetwork: boolean
+  setShowA2ANetwork: (show: boolean) => void
 }
 
 const INITIAL_STATE: AgentBuilderState = {
   agentId: null, agent: null, attachedPersonaId: null, attachedChannels: [], attachedSkills: [],
   attachedTools: [], toolEnabledOverrides: {}, attachedSentinelProfileId: null, attachedSentinelAssignmentId: null, attachedKnowledgeDocs: [],
-  isDirty: false, isSaving: false,
+  isDirty: false, isSaving: false, showA2ANetwork: false,
 }
 
 export function useAgentBuilder(agentId: number | null, studioData: UseStudioDataReturn, onWarning?: (message: string) => void): UseAgentBuilderReturn {
@@ -50,6 +57,57 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
   const userPositions = useRef<Map<string, { x: number; y: number }>>(new Map())
   const structuralFingerprint = useRef<string>('')
   const layoutVersion = useRef(0)
+
+  // A2A: detect when agent_communication skill is attached
+  const hasA2ASkill = state.attachedSkills.some(s => s.skillType === 'agent_communication')
+
+  // A2A: fetch peer agents when skill is attached and show toggle is on
+  const { commEnabledAgents, permissions: a2aPermissions } = useA2ANetworkData(hasA2ASkill && state.showA2ANetwork)
+
+  // Keep a stable ref to nodes for ghost layout positioning (avoids recomputing ghost positions on every drag)
+  const nodesRef = useRef(nodes)
+  nodesRef.current = nodes
+
+  // A2A: compute ghost nodes from peer agents that have permissions with the current agent
+  const ghostNodes = useMemo<Node<BuilderNodeData>[]>(() => {
+    if (!state.agentId || !hasA2ASkill || !state.showA2ANetwork || commEnabledAgents.length === 0) return []
+
+    const linkedPerms = a2aPermissions.filter(p =>
+      p.source_agent_id === state.agentId || p.target_agent_id === state.agentId
+    )
+    const peerIds = new Set(linkedPerms.map(p =>
+      p.source_agent_id === state.agentId ? p.target_agent_id : p.source_agent_id
+    ))
+    const ghostAgents = commEnabledAgents
+      .filter(a => peerIds.has(a.id))
+      .map(a => ({
+        agentId: a.id,
+        agentName: a.name,
+        avatar: a.avatar ?? null,
+        permissionId: linkedPerms.find(p => p.source_agent_id === a.id || p.target_agent_id === a.id)?.id,
+      }))
+
+    return computeGhostLayout({ existingNodes: nodesRef.current, ghostAgents }) as Node<BuilderNodeData>[]
+  }, [state.agentId, hasA2ASkill, state.showA2ANetwork, commEnabledAgents, a2aPermissions])
+
+  // A2A: edges from current agent node to each ghost node
+  const a2aStudioEdges = useMemo<Edge[]>(() => {
+    if (!state.agentId || ghostNodes.length === 0) return []
+    return ghostNodes.map(ghost => ({
+      id: `a2a-studio-${ghost.id}`,
+      source: `agent-${state.agentId}`,
+      target: ghost.id,
+      type: 'straight',
+      animated: false,
+      className: 'a2a-studio-edge',
+      style: { stroke: '#F59E0B', strokeDasharray: '6,3', strokeWidth: 1.5, opacity: 0.6 },
+    }))
+  }, [state.agentId, ghostNodes])
+
+  // A2A: toggle to show/hide ghost network
+  const setShowA2ANetwork = useCallback((show: boolean) => {
+    setState(prev => ({ ...prev, showA2ANetwork: show }))
+  }, [])
 
   // DnD: Queue drop positions so newly dropped nodes appear near cursor
   const pendingDropPositions = useRef<Map<string | number, { x: number; y: number }>>(new Map())
@@ -526,5 +584,10 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
     } catch (err) { setState(prev => ({ ...prev, isSaving: false })); throw err }
   }, [state, studioData.skills, studioData.sentinelAssignments, studioData.agentToolMappings])
 
-  return { state, nodes, edges, onNodesChange, attachProfile, detachProfile, updateNodeConfig, updateAvatar, save, isDirty, isSaving: state.isSaving, expandedCategories, toggleCategoryExpand, expandAll, collapseAll, resetLayout, queueDropPosition }
+  return {
+    state, nodes, edges, onNodesChange, attachProfile, detachProfile, updateNodeConfig, updateAvatar, save,
+    isDirty, isSaving: state.isSaving, expandedCategories, toggleCategoryExpand, expandAll, collapseAll,
+    resetLayout, queueDropPosition,
+    ghostNodes, a2aStudioEdges, showA2ANetwork: state.showA2ANetwork, setShowA2ANetwork,
+  }
 }

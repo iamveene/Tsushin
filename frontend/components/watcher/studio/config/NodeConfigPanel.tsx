@@ -10,6 +10,7 @@ import PersonaInfoPanel from './PersonaInfoPanel'
 import ChannelInfoPanel from './ChannelInfoPanel'
 import SentinelInfoPanel from './SentinelInfoPanel'
 import KnowledgeInfoPanel from './KnowledgeInfoPanel'
+import GhostAgentInfoPanel from './GhostAgentInfoPanel'
 
 interface NodeConfigPanelProps {
   isOpen: boolean
@@ -19,6 +20,8 @@ interface NodeConfigPanelProps {
   onClose: () => void
   onUpdate: (nodeType: string, nodeId: string, config: Record<string, unknown>) => void
   skillDefinitions: SkillDefinition[]
+  // For ghost agent panels — current agent context
+  currentAgentId?: number
 }
 
 const NODE_TYPE_TITLES: Record<string, string> = {
@@ -29,6 +32,7 @@ const NODE_TYPE_TITLES: Record<string, string> = {
   'builder-channel': 'Channel Details',
   'builder-sentinel': 'Security Profile',
   'builder-knowledge': 'Knowledge Document',
+  'builder-ghost-agent': 'A2A Peer Agent',
 }
 
 const NODE_TYPE_COLORS: Record<string, string> = {
@@ -39,9 +43,10 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   'builder-channel': 'text-blue-400',
   'builder-sentinel': 'text-red-400',
   'builder-knowledge': 'text-violet-400',
+  'builder-ghost-agent': 'text-amber-400',
 }
 
-export default function NodeConfigPanel({ isOpen, nodeId, nodeType, nodeData, onClose, onUpdate, skillDefinitions }: NodeConfigPanelProps) {
+export default function NodeConfigPanel({ isOpen, nodeId, nodeType, nodeData, onClose, onUpdate, skillDefinitions, currentAgentId }: NodeConfigPanelProps) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       e.stopPropagation()
@@ -71,6 +76,10 @@ export default function NodeConfigPanel({ isOpen, nodeId, nodeType, nodeData, on
         return <SentinelInfoPanel data={nodeData as any} />
       case 'builder-knowledge':
         return <KnowledgeInfoPanel data={nodeData as any} />
+      case 'builder-ghost-agent':
+        return currentAgentId
+          ? <GhostAgentInfoPanel data={nodeData as any} currentAgentId={currentAgentId} />
+          : <p className="text-xs text-tsushin-muted">No agent context.</p>
       default:
         return <p className="text-xs text-tsushin-muted">No configuration available.</p>
     }
