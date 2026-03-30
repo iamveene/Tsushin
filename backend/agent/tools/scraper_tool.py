@@ -125,8 +125,10 @@ class ScraperTool:
             # Parse HTML
             soup = BeautifulSoup(response.content, 'html.parser')
 
-            # Extract text
-            text = self.extract_text(str(soup))
+            # Extract text — remove non-content elements then get text
+            for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'noscript']):
+                tag.decompose()
+            text = soup.get_text(separator=' ', strip=True)
 
             # Extract metadata
             title = soup.find('title')

@@ -527,12 +527,13 @@ class SkillManager:
 
             config = skill_record.config or {}
 
-            # Inject tenant_id into config for API key lookups (same as process_message)
-            if 'tenant_id' not in config:
+            # Inject tenant_id and agent_id into config (same as process_message path)
+            if 'tenant_id' not in config or 'agent_id' not in config:
                 from models import Agent as AgentModel
                 agent_obj = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
                 if agent_obj:
-                    config['tenant_id'] = agent_obj.tenant_id
+                    config['tenant_id'] = config.get('tenant_id') or agent_obj.tenant_id
+            config['agent_id'] = agent_id
 
             # Validate arguments against input schema
             mcp_def = skill_class.get_mcp_tool_definition()

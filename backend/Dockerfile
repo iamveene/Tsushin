@@ -105,8 +105,10 @@ WORKDIR /app
 COPY --chown=tsushin:tsushin . .
 
 # Create required directories
-RUN mkdir -p /app/data /app/data/chroma /app/data/backups /app/logs && \
-    chown -R tsushin:tsushin /app/data /app/logs
+RUN mkdir -p /app/data /app/data/chroma /app/data/backups /app/logs \
+    /tmp/tsushin_images /tmp/tsushin_screenshots /tmp/tsushin_audio && \
+    chown -R tsushin:tsushin /app/data /app/logs \
+    /tmp/tsushin_images /tmp/tsushin_screenshots /tmp/tsushin_audio
 
 # Switch to non-root user
 USER tsushin
