@@ -92,7 +92,7 @@ const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; d
 
 const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
   { value: 'whatsapp', label: 'WhatsApp', Icon: WhatsAppIcon, activeColor: 'text-green-400', enabled: true },
-  { value: 'telegram', label: 'Telegram', Icon: TelegramIcon, activeColor: 'text-blue-400', enabled: false, badge: 'Coming Soon' },
+  { value: 'telegram', label: 'Telegram', Icon: TelegramIcon, activeColor: 'text-blue-400', enabled: true },
 ]
 
 // Summarization output format options

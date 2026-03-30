@@ -284,6 +284,50 @@ class FlowStepHandler:
             logger.error(f"Error resolving contact '{identifier}': {e}")
             return None
 
+    def _resolve_tenant_id(self, flow_run: FlowRun, step: FlowNode) -> Optional[str]:
+        """Resolve tenant_id from flow context."""
+        if flow_run and hasattr(flow_run, 'tenant_id') and flow_run.tenant_id:
+            return flow_run.tenant_id
+        # Try via agent
+        agent_id = step.agent_id if step else None
+        if not agent_id and flow_run:
+            flow = self.db.query(FlowDefinition).filter(
+                FlowDefinition.id == flow_run.flow_definition_id
+            ).first()
+            if flow:
+                agent_id = flow.default_agent_id
+        if agent_id:
+            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+            if agent:
+                return agent.tenant_id
+        return None
+
+    def _resolve_telegram_sender(self, tenant_id: str):
+        """Resolve TelegramSender for a tenant."""
+        from models import TelegramBotInstance
+        from services.telegram_bot_service import TelegramBotService
+        from telegram_integration.sender import TelegramSender
+
+        try:
+            bot_instance = self.db.query(TelegramBotInstance).filter(
+                TelegramBotInstance.tenant_id == tenant_id,
+                TelegramBotInstance.status == "active"
+            ).first()
+
+            if not bot_instance:
+                logger.warning(f"No active Telegram bot for tenant {tenant_id}")
+                return None
+
+            telegram_service = TelegramBotService(self.db)
+            token = telegram_service._decrypt_token(
+                bot_instance.bot_token_encrypted,
+                bot_instance.tenant_id
+            )
+            return TelegramSender(token)
+        except Exception as e:
+            logger.error(f"Failed to resolve Telegram sender: {e}")
+            return None
+
 
 class NotificationStepHandler(FlowStepHandler):
     """Handles Notification steps - sends one-way notifications."""
@@ -298,9 +342,9 @@ class NotificationStepHandler(FlowStepHandler):
         """Send notification message without expecting reply."""
         config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
 
-        # Channel guard: only WhatsApp is supported for now
+        # Channel guard: WhatsApp and Telegram supported
         channel = config.get("channel", "whatsapp")
-        if channel != "whatsapp":
+        if channel not in ("whatsapp", "telegram"):
             logger.warning(f"Notification step uses unsupported channel '{channel}', skipping")
             return {
                 "status": "skipped",
@@ -329,56 +373,110 @@ class NotificationStepHandler(FlowStepHandler):
         recipient = self._replace_variables(recipient, enriched_data)
         message = self._replace_variables(message_template, enriched_data)
 
-        # Resolve contact identifier (e.g., "@alice") to phone number
-        resolved_recipient = self._resolve_contact_to_phone(recipient)
-        if not resolved_recipient:
-            logger.error(f"Could not resolve recipient '{recipient}' to a phone number")
-            return {
-                "recipient": recipient,
-                "status": "failed",
-                "error": f"Could not resolve recipient '{recipient}' to a phone number"
-            }
+        if channel == "whatsapp":
+            # Resolve contact identifier (e.g., "@alice") to phone number
+            resolved_recipient = self._resolve_contact_to_phone(recipient)
+            if not resolved_recipient:
+                logger.error(f"Could not resolve recipient '{recipient}' to a phone number")
+                return {
+                    "recipient": recipient,
+                    "status": "failed",
+                    "error": f"Could not resolve recipient '{recipient}' to a phone number"
+                }
 
-        logger.info(f"Sending notification to {recipient} (resolved: {resolved_recipient})")
+            logger.info(f"Sending notification to {recipient} (resolved: {resolved_recipient})")
 
-        try:
-            # Resolve MCP URL and secret using tenant context from flow_run and step
-            mcp_url, api_secret = self._resolve_mcp_url_and_secret(resolved_recipient, flow_run=flow_run, step=step)
+            try:
+                # Resolve MCP URL and secret using tenant context from flow_run and step
+                mcp_url, api_secret = self._resolve_mcp_url_and_secret(resolved_recipient, flow_run=flow_run, step=step)
 
-            # Check MCP health before sending
-            if not self._check_mcp_connection(mcp_url):
-                logger.error(f"MCP not ready at {mcp_url}, cannot send notification")
+                # Check MCP health before sending
+                if not self._check_mcp_connection(mcp_url):
+                    logger.error(f"MCP not ready at {mcp_url}, cannot send notification")
+                    return {
+                        "recipient": recipient,
+                        "resolved_recipient": resolved_recipient,
+                        "message_sent": message,
+                        "mcp_url": mcp_url,
+                        "success": False,
+                        "status": "failed",
+                        "error": "MCP instance not connected or authenticated",
+                        "channel": "whatsapp",
+                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                    }
+
+                # Phase Security-1: Pass api_secret for authentication
+                success = await self.mcp_sender.send_message(resolved_recipient, message, api_url=mcp_url, api_secret=api_secret)
+
                 return {
                     "recipient": recipient,
                     "resolved_recipient": resolved_recipient,
                     "message_sent": message,
                     "mcp_url": mcp_url,
-                    "success": False,
+                    "success": success,
+                    "status": "completed" if success else "failed",
+                    "channel": "whatsapp",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+            except Exception as e:
+                logger.error(f"Failed to send notification: {e}")
+                return {
+                    "recipient": recipient,
+                    "resolved_recipient": resolved_recipient if 'resolved_recipient' in locals() else None,
                     "status": "failed",
-                    "error": "MCP instance not connected or authenticated",
+                    "error": str(e)
+                }
+
+        elif channel == "telegram":
+            # Telegram notification: resolve sender and send via Telegram Bot API
+            tenant_id = self._resolve_tenant_id(flow_run, step)
+            if not tenant_id:
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": "Could not resolve tenant_id for Telegram notification",
                     "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
-            # Phase Security-1: Pass api_secret for authentication
-            success = await self.mcp_sender.send_message(resolved_recipient, message, api_url=mcp_url, api_secret=api_secret)
+            telegram_sender = self._resolve_telegram_sender(tenant_id)
+            if not telegram_sender:
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": "No active Telegram bot configured for this tenant",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
 
-            return {
-                "recipient": recipient,
-                "resolved_recipient": resolved_recipient,
-                "message_sent": message,
-                "mcp_url": mcp_url,
-                "success": success,
-                "status": "completed" if success else "failed",
-                "timestamp": datetime.utcnow().isoformat() + "Z"
-            }
-        except Exception as e:
-            logger.error(f"Failed to send notification: {e}")
-            return {
-                "recipient": recipient,
-                "resolved_recipient": resolved_recipient if 'resolved_recipient' in locals() else None,
-                "status": "failed",
-                "error": str(e)
-            }
+            # Recipient should be a Telegram chat_id (numeric string)
+            try:
+                chat_id = int(recipient)
+            except (ValueError, TypeError):
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": f"Invalid Telegram chat_id: {recipient}",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            try:
+                success = await telegram_sender.send_message(chat_id=chat_id, message=message)
+                return {
+                    "recipient": recipient,
+                    "message_sent": message,
+                    "success": success,
+                    "status": "completed" if success else "failed",
+                    "channel": "telegram",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+            except Exception as e:
+                logger.error(f"Failed to send Telegram notification: {e}")
+                return {
+                    "recipient": recipient,
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": str(e),
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
 
 
 class MessageStepHandler(FlowStepHandler):
@@ -394,9 +492,9 @@ class MessageStepHandler(FlowStepHandler):
         """Send message to recipients."""
         config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
 
-        # Channel guard: only WhatsApp is supported for now
+        # Channel guard: WhatsApp and Telegram supported
         channel = config.get("channel", "whatsapp")
-        if channel != "whatsapp":
+        if channel not in ("whatsapp", "telegram"):
             logger.warning(f"Message step uses unsupported channel '{channel}', skipping")
             return {
                 "status": "skipped",
@@ -431,68 +529,117 @@ class MessageStepHandler(FlowStepHandler):
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
-        # Resolve contact identifiers to phone numbers
-        resolved_recipients = []
-        for recipient in recipients:
-            resolved = self._resolve_contact_to_phone(recipient)
-            if resolved:
-                resolved_recipients.append(resolved)
-            else:
-                logger.warning(f"Could not resolve recipient '{recipient}', skipping")
+        if channel == "whatsapp":
+            # Resolve contact identifiers to phone numbers
+            resolved_recipients = []
+            for recipient in recipients:
+                resolved = self._resolve_contact_to_phone(recipient)
+                if resolved:
+                    resolved_recipients.append(resolved)
+                else:
+                    logger.warning(f"Could not resolve recipient '{recipient}', skipping")
 
-        if not resolved_recipients:
-            logger.error("No valid recipients after resolution")
-            return {
-                "recipients": recipients,
-                "resolved_recipients": [],
-                "message_sent": message,
-                "sent_count": 0,
-                "total_recipients": len(recipients),
-                "status": "failed",
-                "error": "No valid recipients could be resolved",
-                "timestamp": datetime.utcnow().isoformat() + "Z"
-            }
+            if not resolved_recipients:
+                logger.error("No valid recipients after resolution")
+                return {
+                    "recipients": recipients,
+                    "resolved_recipients": [],
+                    "message_sent": message,
+                    "sent_count": 0,
+                    "total_recipients": len(recipients),
+                    "status": "failed",
+                    "error": "No valid recipients could be resolved",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
 
-        logger.info(f"Sending message to {len(resolved_recipients)} resolved recipient(s)")
+            logger.info(f"Sending message to {len(resolved_recipients)} resolved recipient(s)")
 
-        # Resolve MCP URL and secret once using tenant context (same for all recipients)
-        mcp_url, api_secret = self._resolve_mcp_url_and_secret(resolved_recipients[0], flow_run=flow_run, step=step)
+            # Resolve MCP URL and secret once using tenant context (same for all recipients)
+            mcp_url, api_secret = self._resolve_mcp_url_and_secret(resolved_recipients[0], flow_run=flow_run, step=step)
 
-        # Check MCP health before sending
-        if not self._check_mcp_connection(mcp_url):
-            logger.error(f"MCP not ready at {mcp_url}, cannot send messages")
+            # Check MCP health before sending
+            if not self._check_mcp_connection(mcp_url):
+                logger.error(f"MCP not ready at {mcp_url}, cannot send messages")
+                return {
+                    "recipients": recipients,
+                    "resolved_recipients": resolved_recipients,
+                    "message_sent": message,
+                    "mcp_url": mcp_url,
+                    "sent_count": 0,
+                    "total_recipients": len(recipients),
+                    "status": "failed",
+                    "error": "MCP instance not connected or authenticated",
+                    "channel": "whatsapp",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            sent_count = 0
+            for recipient in resolved_recipients:
+                try:
+                    # Phase Security-1: Pass api_secret for authentication
+                    success = await self.mcp_sender.send_message(recipient, message, api_url=mcp_url, api_secret=api_secret)
+                    if success:
+                        sent_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to send message to {recipient}: {e}")
+
             return {
                 "recipients": recipients,
                 "resolved_recipients": resolved_recipients,
                 "message_sent": message,
                 "mcp_url": mcp_url,
-                "sent_count": 0,
+                "sent_count": sent_count,
                 "total_recipients": len(recipients),
-                "status": "failed",
-                "error": "MCP instance not connected or authenticated",
+                "status": "completed" if sent_count > 0 else "failed",
+                "channel": "whatsapp",
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
-        sent_count = 0
-        for recipient in resolved_recipients:
-            try:
-                # Phase Security-1: Pass api_secret for authentication
-                success = await self.mcp_sender.send_message(recipient, message, api_url=mcp_url, api_secret=api_secret)
-                if success:
-                    sent_count += 1
-            except Exception as e:
-                logger.error(f"Failed to send message to {recipient}: {e}")
+        elif channel == "telegram":
+            # Telegram message: resolve sender and send via Telegram Bot API
+            tenant_id = self._resolve_tenant_id(flow_run, step)
+            if not tenant_id:
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": "Could not resolve tenant_id for Telegram message",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
 
-        return {
-            "recipients": recipients,
-            "resolved_recipients": resolved_recipients,
-            "message_sent": message,
-            "mcp_url": mcp_url,
-            "sent_count": sent_count,
-            "total_recipients": len(recipients),
-            "status": "completed" if sent_count > 0 else "failed",
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        }
+            telegram_sender = self._resolve_telegram_sender(tenant_id)
+            if not telegram_sender:
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": "No active Telegram bot configured for this tenant",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            sent_count = 0
+            for recipient in recipients:
+                # Each recipient should be a Telegram chat_id (numeric string)
+                try:
+                    chat_id = int(recipient)
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid Telegram chat_id: {recipient}, skipping")
+                    continue
+
+                try:
+                    success = await telegram_sender.send_message(chat_id=chat_id, message=message)
+                    if success:
+                        sent_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to send Telegram message to {recipient}: {e}")
+
+            return {
+                "recipients": recipients,
+                "message_sent": message,
+                "sent_count": sent_count,
+                "total_recipients": len(recipients),
+                "status": "completed" if sent_count > 0 else "failed",
+                "channel": "telegram",
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
 
 
 class ToolStepHandler(FlowStepHandler):
@@ -1005,9 +1152,9 @@ class ConversationStepHandler(FlowStepHandler):
         """Start conversation and optionally create ConversationThread."""
         config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
 
-        # Channel guard: only WhatsApp is supported for now
+        # Channel guard: WhatsApp and Telegram supported
         channel = config.get("channel", "whatsapp")
-        if channel != "whatsapp":
+        if channel not in ("whatsapp", "telegram"):
             logger.warning(f"Conversation step uses unsupported channel '{channel}', skipping")
             return {
                 "status": "skipped",
