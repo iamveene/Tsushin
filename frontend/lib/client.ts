@@ -121,7 +121,7 @@ export interface Message {
   is_group: boolean
   matched_filter: boolean
   seen_at: string
-  channel?: 'whatsapp' | 'playground' | 'telegram' | 'slack'  // Phase 10.1.1 + v0.6.0: Channel tracking
+  channel?: 'whatsapp' | 'playground' | 'telegram' | 'slack' | 'discord'  // Phase 10.1.1 + v0.6.0: Channel tracking
 }
 
 // Sandboxed Tools (formerly CustomTools - renamed in Skills-as-Tools Phase 6)
@@ -1302,7 +1302,7 @@ export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'm
 export type SummarizationPromptMode = 'append' | 'replace'
 
 export interface FlowStepConfig {
-  channel?: 'whatsapp' | 'telegram' | 'slack'
+  channel?: 'whatsapp' | 'telegram' | 'slack' | 'discord'
   recipient?: string
   message_template?: string
   content?: string
@@ -1628,6 +1628,27 @@ export interface SlackIntegrationCreate {
   mode?: 'socket' | 'http'
   dm_policy?: 'open' | 'allowlist' | 'disabled'
   allowed_channels?: string[]
+}
+
+// v0.6.0: Discord Integration
+export interface DiscordIntegration {
+  id: number
+  tenant_id: string
+  application_id: string
+  bot_user_id: string | null
+  is_active: boolean
+  status: 'inactive' | 'connected' | 'error'
+  dm_policy: 'open' | 'allowlist' | 'disabled'
+  allowed_guilds: string[]
+  guild_channel_config: Record<string, any>
+  created_at: string
+  updated_at: string | null
+}
+
+export interface DiscordIntegrationCreate {
+  bot_token: string
+  application_id: string
+  dm_policy?: 'open' | 'allowlist' | 'disabled'
 }
 
 // Playground Feature
@@ -4160,6 +4181,60 @@ export const api = {
   async getSlackChannels(id: number): Promise<any[]> {
     const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}/channels`)
     if (!res.ok) throw new Error('Failed to fetch Slack channels')
+    return res.json()
+  },
+
+  // v0.6.0: Discord Integration
+  async getDiscordIntegrations(): Promise<DiscordIntegration[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/`)
+    if (!res.ok) throw new Error('Failed to fetch Discord integrations')
+    return res.json()
+  },
+
+  async createDiscordIntegration(data: DiscordIntegrationCreate): Promise<DiscordIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      throw new Error(error.detail || 'Failed to create Discord integration')
+    }
+    return res.json()
+  },
+
+  async updateDiscordIntegration(id: number, data: Partial<DiscordIntegrationCreate>): Promise<DiscordIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      throw new Error(error.detail || 'Failed to update Discord integration')
+    }
+    return res.json()
+  },
+
+  async deleteDiscordIntegration(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) throw new Error('Failed to delete Discord integration')
+  },
+
+  async testDiscordConnection(id: number): Promise<{ success: boolean; bot_user?: string; guilds?: number; error?: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}/test`, {
+      method: 'POST',
+    })
+    if (!res.ok) throw new Error('Failed to test Discord connection')
+    return res.json()
+  },
+
+  async getDiscordGuilds(id: number): Promise<any[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}/guilds`)
+    if (!res.ok) throw new Error('Failed to fetch Discord guilds')
     return res.json()
   },
 

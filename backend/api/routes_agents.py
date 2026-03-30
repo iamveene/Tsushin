@@ -136,10 +136,11 @@ class AgentResponse(BaseModel):
     skills_count: Optional[int] = 0  # Number of enabled skills
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack"]
+    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord"]
     whatsapp_integration_id: Optional[int] = None  # Specific MCP instance
     telegram_integration_id: Optional[int] = None  # Telegram bot instance
     slack_integration_id: Optional[int] = None  # Slack workspace integration
+    discord_integration_id: Optional[int] = None  # Discord bot integration
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -174,6 +175,7 @@ class AgentCreate(BaseModel):
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
+    discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
 
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
@@ -205,6 +207,7 @@ class AgentUpdate(BaseModel):
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
+    discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
 
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
@@ -589,6 +592,7 @@ def get_agent(
         "whatsapp_integration_id": agent.whatsapp_integration_id,
         "telegram_integration_id": agent.telegram_integration_id,
         "slack_integration_id": agent.slack_integration_id,
+        "discord_integration_id": agent.discord_integration_id,
 
         "created_at": agent.created_at,
         "updated_at": agent.updated_at
@@ -743,7 +747,7 @@ def update_agent(
         "response_template", "memory_size", "trigger_dm_enabled",
         "trigger_group_filters", "trigger_number_filters",
         "context_message_count", "context_char_limit", "enabled_channels",
-        "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id",
+        "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id", "discord_integration_id",
         "is_active", "is_default",
     }
     update_data = agent.model_dump(exclude_unset=True)

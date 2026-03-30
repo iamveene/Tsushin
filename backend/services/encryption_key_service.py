@@ -53,7 +53,7 @@ def _save_encryption_key_to_db(key_type: str, key: str, db: Session) -> bool:
     Save encryption key to Config table.
 
     Args:
-        key_type: Type of key ('google', 'asana', 'telegram', 'amadeus', or 'api_key')
+        key_type: Type of key ('google', 'asana', 'telegram', 'amadeus', 'api_key', 'slack', or 'discord')
         key: The encryption key to save
         db: Database session
 
@@ -80,6 +80,8 @@ def _save_encryption_key_to_db(key_type: str, key: str, db: Session) -> bool:
             config.api_key_encryption_key = key
         elif key_type == 'slack':
             config.slack_encryption_key = key
+        elif key_type == 'discord':
+            config.discord_encryption_key = key
         else:
             logger.warning(f"Unknown key type: {key_type}")
             return False
@@ -102,7 +104,7 @@ def get_encryption_key(key_type: str, db: Session, auto_generate: bool = True) -
     gets a unique encryption key automatically generated on first use.
 
     Args:
-        key_type: Type of encryption key ('google', 'asana', 'telegram', 'amadeus', 'api_key', or 'slack')
+        key_type: Type of encryption key ('google', 'asana', 'telegram', 'amadeus', 'api_key', 'slack', or 'discord')
         db: Database session
         auto_generate: If True, generate and save a new key if none exists
 
@@ -121,6 +123,7 @@ def get_encryption_key(key_type: str, db: Session, auto_generate: bool = True) -
         'amadeus': 'AMADEUS_ENCRYPTION_KEY',
         'api_key': 'API_KEY_ENCRYPTION_KEY',
         'slack': 'SLACK_ENCRYPTION_KEY',
+        'discord': 'DISCORD_ENCRYPTION_KEY',
     }
 
     # Step 1: Check database (Config table)
@@ -142,6 +145,8 @@ def get_encryption_key(key_type: str, db: Session, auto_generate: bool = True) -
                 db_key = config.api_key_encryption_key
             elif key_type == 'slack':
                 db_key = config.slack_encryption_key
+            elif key_type == 'discord':
+                db_key = config.discord_encryption_key
 
             if _is_valid_fernet_key(db_key):
                 logger.debug(f"Using database encryption key for {key_type}")
@@ -292,3 +297,20 @@ def get_slack_encryption_key(db: Session) -> Optional[str]:
         Slack encryption key (never None in normal operation)
     """
     return get_encryption_key('slack', db, auto_generate=True)
+
+
+def get_discord_encryption_key(db: Session) -> Optional[str]:
+    """
+    Get Discord encryption key (for Discord bot tokens).
+
+    v0.6.0 Item 34: Dedicated encryption key for Discord integration tokens.
+
+    Automatically generates a new key if none exists (SaaS-ready).
+
+    Args:
+        db: Database session
+
+    Returns:
+        Discord encryption key (never None in normal operation)
+    """
+    return get_encryption_key('discord', db, auto_generate=True)

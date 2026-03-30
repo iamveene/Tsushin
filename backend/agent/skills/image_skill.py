@@ -651,7 +651,7 @@ class ImageSkill(BaseSkill):
             "use_ai_fallback": True,
             "lookback_messages": 5,
             "processing_message": "Processing your image, please wait...",
-            "enabled_channels": ["whatsapp", "playground", "telegram"],
+            "enabled_channels": ["whatsapp", "playground", "telegram", "slack", "discord"],
             "execution_mode": "hybrid"
         }
 

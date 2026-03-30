@@ -1110,6 +1110,17 @@ class AgentRouter:
 
         self.logger.info(f"Routing message from {sender_key} (trigger: {trigger_type})")
 
+        # Item 32/33/34: Global emergency stop — blocks ALL channels (WhatsApp, Telegram, Slack, Discord)
+        try:
+            from models import Config as ConfigModel
+            config_record = self.db.query(ConfigModel).first()
+            if config_record and getattr(config_record, 'emergency_stop', False):
+                channel = message.get("channel", "whatsapp")
+                self.logger.warning(f"[EMERGENCY STOP] Blocking {channel} message from {sender_key} — emergency stop is active")
+                return
+        except Exception:
+            pass  # If check fails, continue normal processing
+
         # SAFETY CHECK 1: Age check
         # Warn if message is older than 1 hour (3600 seconds)
         # This helps detect if we are processing historical messages

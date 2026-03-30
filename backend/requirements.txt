@@ -62,6 +62,9 @@ python-telegram-bot>=21.0
 slack-bolt>=1.20.0
 slack-sdk>=3.27.0
 
+# Discord Integration (v0.6.0 Item 34)
+discord.py>=2.4.0
+
 # Observability
 prometheus_client>=0.20.0  # Prometheus metrics exposition
 
