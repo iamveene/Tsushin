@@ -145,7 +145,7 @@ class ChannelHealthService:
                 from models import SlackIntegration
                 slack_instances = db.query(SlackIntegration).filter(
                     SlackIntegration.is_active == True,
-                    SlackIntegration.status.in_(["connected", "inactive"])
+                    SlackIntegration.status.in_(["connected"])
                 ).all()
                 for inst in slack_instances:
                     try:
@@ -160,7 +160,7 @@ class ChannelHealthService:
                 from models import DiscordIntegration
                 discord_instances = db.query(DiscordIntegration).filter(
                     DiscordIntegration.is_active == True,
-                    DiscordIntegration.status.in_(["connected", "inactive"])
+                    DiscordIntegration.status.in_(["connected"])
                 ).all()
                 for inst in discord_instances:
                     try:
@@ -536,9 +536,12 @@ class ChannelHealthService:
                 instance_id=str(instance_id),
             ).set(_STATE_GAUGE_MAP.get(new_state, 0))
 
-        # 2. Write ChannelHealthEvent record (if model is available)
+        # 2. Write ChannelHealthEvent record (use isolated session to avoid
+        #    contaminating the caller's session on failure)
+        audit_db = None
         try:
             from models import ChannelHealthEvent
+            audit_db = self.get_db_session()
             event = ChannelHealthEvent(
                 tenant_id=tenant_id,
                 channel_type=channel_type,
@@ -550,16 +553,23 @@ class ChannelHealthService:
                 health_status=health_status,
                 latency_ms=latency_ms,
             )
-            db.add(event)
-            db.commit()
+            audit_db.add(event)
+            audit_db.commit()
         except ImportError:
             logger.debug("ChannelHealthEvent model not yet available - skipping DB write")
         except Exception as e:
             logger.warning(f"Failed to write ChannelHealthEvent: {e}")
-            try:
-                db.rollback()
-            except Exception:
-                pass
+            if audit_db:
+                try:
+                    audit_db.rollback()
+                except Exception:
+                    pass
+        finally:
+            if audit_db:
+                try:
+                    audit_db.close()
+                except Exception:
+                    pass
 
         # 3. Emit via WatcherActivityService (if available)
         if self.watcher_activity_service:

@@ -47,6 +47,7 @@ class CircuitBreaker:
                 return (old, self.state)
         elif self.state == CircuitBreakerState.CLOSED:
             self.failure_count = 0  # Reset on success
+            self.success_count = 0
         return None if old == self.state else (old, self.state)
 
     def record_failure(self, reason: str = "") -> Optional[Tuple[CircuitBreakerState, CircuitBreakerState]]:
