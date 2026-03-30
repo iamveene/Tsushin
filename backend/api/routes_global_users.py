@@ -597,6 +597,7 @@ async def admin_reset_password(
 
     # Update password
     user.password_hash = hash_password(body.new_password)
+    user.password_changed_at = datetime.utcnow()
     user.updated_at = datetime.utcnow()
     db.commit()
 

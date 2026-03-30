@@ -388,7 +388,9 @@ class ShellSecurityService:
         commands: List[str],
         allowed_commands: Optional[List[str]] = None,
         allowed_paths: Optional[List[str]] = None,
-        require_approval_for_high_risk: bool = True
+        require_approval_for_high_risk: bool = True,
+        tenant_id: Optional[str] = None,
+        db: Optional[Session] = None
     ) -> Tuple[bool, SecurityCheckResult]:
         """
         Check multiple commands and return aggregated result.
@@ -398,6 +400,8 @@ class ShellSecurityService:
             allowed_commands: Optional whitelist
             allowed_paths: Optional path restrictions
             require_approval_for_high_risk: Whether to require approval for high-risk
+            tenant_id: Tenant ID for loading tenant-specific patterns (Phase 19)
+            db: Database session for loading patterns (Phase 19)
 
         Returns:
             Tuple of (all_allowed, aggregated_result)
@@ -412,7 +416,9 @@ class ShellSecurityService:
                 cmd,
                 allowed_commands,
                 allowed_paths,
-                require_approval_for_high_risk
+                require_approval_for_high_risk,
+                tenant_id=tenant_id,
+                db=db
             )
 
             if not result.allowed:

@@ -964,7 +964,9 @@ async def queue_command(
         commands=request.commands,
         allowed_commands=integration.allowed_commands or None,
         allowed_paths=integration.allowed_paths or None,
-        require_approval_for_high_risk=True
+        require_approval_for_high_risk=True,
+        tenant_id=ctx.tenant_id,
+        db=db
     )
 
     if not all_allowed:
