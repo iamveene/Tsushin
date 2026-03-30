@@ -1036,6 +1036,29 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
 
         print()
 
+    def _ensure_frontend_started(self):
+        """Ensure frontend container is running — workaround for docker-compose v1 race condition."""
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Running}}", "tsushin-frontend"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0 or result.stdout.strip() != 'true':
+                print_info("Frontend not running (docker-compose v1 race) — starting it now...")
+                ssl_mode = self.config.get('SSL_MODE', 'disabled')
+                if ssl_mode != 'disabled':
+                    start_cmd = self.docker_compose_cmd + [
+                        "-f", "docker-compose.yml",
+                        "-f", "docker-compose.ssl.yml",
+                        "up", "-d", "frontend"
+                    ]
+                else:
+                    start_cmd = self.docker_compose_cmd + ["up", "-d", "frontend"]
+                subprocess.run(start_cmd, cwd=self.root_dir, check=True, capture_output=True)
+                print_success("Frontend container started")
+        except Exception as e:
+            print_warning(f"Could not ensure frontend started: {e}")
+
     def health_check(self):
         """Wait for services to be healthy"""
         print_header("Health Checks")
@@ -1059,6 +1082,8 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
             print_error("Backend health check failed")
             print_info("Check logs: docker-compose logs backend")
             sys.exit(1)
+
+        self._ensure_frontend_started()
 
         # Frontend health check
         print_info(f"Waiting for frontend at {frontend_url}...")
