@@ -36,6 +36,9 @@ interface GraphLeftPanelProps {
   // Phase 10: Fullscreen mode
   isMaximized?: boolean
   onToggleMaximize?: () => void
+  // A2A: Toggle for static A2A permission edges (agents view only)
+  showA2ALinks?: boolean
+  onShowA2ALinksChange?: (value: boolean) => void
 }
 
 const LAYOUT_DIRECTIONS: { value: LayoutOptions['direction']; label: string }[] = [
@@ -101,6 +104,13 @@ const ChevronDoubleLeftIcon = ({ className }: { className?: string }) => (
   </svg>
 )
 
+// A2A: Icon for agent-to-agent links
+const ArrowsRightLeftIcon = ({ className }: { className?: string }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 3M21 7.5H7.5" />
+  </svg>
+)
+
 // Phase 10: Fullscreen icons
 const ArrowsPointingOutIcon = ({ className }: { className?: string }) => (
   <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -134,6 +144,8 @@ export default function GraphLeftPanel({
   isExpandingAll = false,
   isMaximized = false,
   onToggleMaximize,
+  showA2ALinks = true,
+  onShowA2ALinksChange,
 }: GraphLeftPanelProps) {
   // Default to collapsed to save space for the graph nodes
   const [collapsed, setCollapsed] = useState(true)
@@ -142,7 +154,8 @@ export default function GraphLeftPanel({
   const hasAgentsFilter = (viewType === 'agents' || viewType === 'security') && onShowInactiveAgentsChange
   const hasProjectsFilter = viewType === 'projects' && onShowArchivedProjectsChange
   const hasUsersFilter = viewType === 'users' && onShowInactiveUsersChange
-  const hasAnyFilter = hasAgentsFilter || hasProjectsFilter || hasUsersFilter
+  const hasA2AFilter = viewType === 'agents' && onShowA2ALinksChange !== undefined
+  const hasAnyFilter = hasAgentsFilter || hasProjectsFilter || hasUsersFilter || hasA2AFilter
 
   if (collapsed) {
     return (
@@ -320,6 +333,32 @@ export default function GraphLeftPanel({
                     className={`
                       absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform
                       ${showInactiveAgents ? 'translate-x-5' : 'translate-x-0.5'}
+                    `}
+                  />
+                </button>
+              </div>
+            )}
+
+            {/* A2A Links Toggle - Only for Agents view */}
+            {hasA2AFilter && (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ArrowsRightLeftIcon className="w-4 h-4 text-amber-400" />
+                  <span className="text-sm text-tsushin-slate">A2A Links</span>
+                </div>
+                <button
+                  onClick={() => onShowA2ALinksChange!(!showA2ALinks)}
+                  role="switch"
+                  aria-checked={showA2ALinks}
+                  className={`
+                    relative w-10 h-5 rounded-full transition-colors
+                    ${showA2ALinks ? 'bg-amber-500' : 'bg-tsushin-deep'}
+                  `}
+                >
+                  <span
+                    className={`
+                      absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform
+                      ${showA2ALinks ? 'translate-x-5' : 'translate-x-0.5'}
                     `}
                   />
                 </button>

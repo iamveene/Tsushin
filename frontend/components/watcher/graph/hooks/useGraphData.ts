@@ -19,8 +19,10 @@ import {
   WhatsAppChannelInfo,
   TelegramChannelInfo,
   SentinelHierarchy,
+  AgentCommPermission,
 } from '@/lib/client'
 import { GraphNode, GraphEdge, ChannelStatus, GraphViewType, UserRole, SecurityDetectionMode, SecuritySkillData } from '../types'
+import { MarkerType } from '@xyflow/react'
 
 
 export interface UseGraphDataOptions {
@@ -33,6 +35,7 @@ export interface UseGraphDataOptions {
 export interface UseGraphDataReturn {
   nodes: GraphNode[]
   edges: GraphEdge[]
+  a2aEdges: GraphEdge[]
   loading: boolean
   error: string | null
   refetch: () => Promise<void>
@@ -399,15 +402,60 @@ async function fetchUsersViewData(showInactiveUsers: boolean): Promise<{ nodes: 
 }
 
 /**
+ * Build A2A permission edges for the agents view.
+ * Each permission produces a directed dashed amber edge from source agent to target agent.
+ * Disabled permissions are rendered semi-transparent.
+ */
+function buildA2AEdges(permissions: AgentCommPermission[]): GraphEdge[] {
+  return permissions.map(perm => ({
+    id: `a2a-${perm.id}`,
+    source: `agent-${perm.source_agent_id}`,
+    target: `agent-${perm.target_agent_id}`,
+    type: 'default',
+    animated: false,
+    data: {
+      permissionId: perm.id,
+      sourceAgentId: perm.source_agent_id,
+      targetAgentId: perm.target_agent_id,
+      isEnabled: perm.is_enabled,
+      isA2A: true,
+    },
+    className: `a2a-edge-static${!perm.is_enabled ? ' a2a-edge-disabled' : ''}`,
+    style: {
+      stroke: '#F59E0B',
+      strokeDasharray: '6,3',
+      strokeWidth: 2,
+      opacity: perm.is_enabled ? 1 : 0.4,
+    },
+    label: 'A2A',
+    labelStyle: { fill: '#F59E0B', fontSize: 10, fontWeight: 600 },
+    labelBgStyle: { fill: 'transparent' },
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#F59E0B', width: 12, height: 12 },
+  }))
+}
+
+/**
  * Fetch agents view data - Phase 6: Optimized with batch endpoint
  * Single API call instead of 3 + 2N calls
+ * A2A: Also fetches comm permissions in parallel to build static A2A edges
  */
-async function fetchAgentsViewData(showInactiveAgents: boolean): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
-  // Phase 6: Single batch API call for all data
-  const data = await api.getAgentsGraphPreview()
+async function fetchAgentsViewData(showInactiveAgents: boolean): Promise<{ nodes: GraphNode[]; edges: GraphEdge[]; a2aEdges: GraphEdge[] }> {
+  // Fetch graph preview and A2A permissions in parallel
+  const [data, permissions] = await Promise.all([
+    api.getAgentsGraphPreview(),
+    api.getAgentCommPermissions().catch(() => [] as AgentCommPermission[]),
+  ])
 
   // Transform batch data into graph format
-  return transformBatchToAgentsGraphData(data, showInactiveAgents)
+  const { nodes, edges } = transformBatchToAgentsGraphData(data, showInactiveAgents)
+
+  // Build A2A edges from permissions (only keep edges where both endpoints exist as agent nodes)
+  const agentNodeIds = new Set(nodes.map(n => n.id))
+  const a2aEdges = buildA2AEdges(permissions).filter(
+    e => agentNodeIds.has(e.source) && agentNodeIds.has(e.target)
+  )
+
+  return { nodes, edges, a2aEdges }
 }
 
 /**
@@ -597,6 +645,7 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
 
   const [nodes, setNodes] = useState<GraphNode[]>([])
   const [edges, setEdges] = useState<GraphEdge[]>([])
+  const [a2aEdges, setA2AEdges] = useState<GraphEdge[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -605,7 +654,7 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
     setError(null)
 
     try {
-      let result: { nodes: GraphNode[]; edges: GraphEdge[] }
+      let result: { nodes: GraphNode[]; edges: GraphEdge[]; a2aEdges?: GraphEdge[] }
 
       switch (viewType) {
         case 'projects':
@@ -625,6 +674,7 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
 
       setNodes(result.nodes)
       setEdges(result.edges)
+      setA2AEdges(result.a2aEdges ?? [])
     } catch (err) {
       console.error('[useGraphData] Error fetching data:', err)
       setError(err instanceof Error ? err.message : 'Failed to load graph data')
@@ -641,6 +691,7 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
   return {
     nodes,
     edges,
+    a2aEdges,
     loading,
     error,
     refetch: fetchData,

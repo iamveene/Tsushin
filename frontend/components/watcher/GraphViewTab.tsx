@@ -81,11 +81,14 @@ export default function GraphViewTab() {
   // Phase 5: Filter state for users view
   const [showInactiveUsers, setShowInactiveUsers] = useState(false)
 
+  // A2A: Toggle for static A2A permission edges (agents view only, default ON)
+  const [showA2ALinks, setShowA2ALinks] = useState(true)
+
   // Phase 10: Fullscreen mode
   const [isMaximized, setIsMaximized] = useState(false)
 
   // Fetch data based on view type
-  const { nodes, edges, loading, error, refetch } = useGraphData({
+  const { nodes, edges, a2aEdges, loading, error, refetch } = useGraphData({
     viewType,
     showInactiveAgents,
     showArchivedProjects,
@@ -378,12 +381,16 @@ export default function GraphViewTab() {
           isExpandingAll={isExpandingAll}
           isMaximized={isMaximized}
           onToggleMaximize={() => setIsMaximized(!isMaximized)}
+          showA2ALinks={showA2ALinks}
+          onShowA2ALinksChange={setShowA2ALinks}
         />
 
         {/* Graph Canvas */}
         <GraphCanvasComponent
           initialNodes={nodes}
           initialEdges={edges}
+          a2aEdges={a2aEdges}
+          showA2ALinks={showA2ALinks}
           onNodeClick={handleNodeClick}
           autoFit={autoFit}
           layoutOptions={layoutOptions}
