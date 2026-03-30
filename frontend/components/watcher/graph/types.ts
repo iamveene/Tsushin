@@ -48,6 +48,8 @@ export interface AgentNodeData {
   hasActiveSkill?: boolean   // Skill is being used (visible even when collapsed)
   hasActiveKb?: boolean      // KB is being accessed (visible even when collapsed)
   isFading?: boolean         // Post-processing coordinated fade-out
+  // A2A: depth indicator during active agent-to-agent chains
+  a2aDepth?: number
 }
 
 export interface ContactNodeData {
@@ -280,4 +282,33 @@ export interface GraphConfig {
 // Graph filters for the left panel
 export interface GraphFilters {
   showInactiveAgents: boolean
+}
+
+// ============================================================
+// A2A (Agent-to-Agent) Visualization Types
+// ============================================================
+
+// Represents an active A2A session tracked in the graph view
+export interface A2ASessionInfo {
+  initiatorId: number
+  targetId: number
+  sessionType: 'ask' | 'delegate'
+  depth: number
+  startTime: number
+}
+
+// Edge data for a comm permission link between two agents
+export interface CommPermissionEdgeData {
+  permissionId: number
+  sourceAgentId: number
+  targetAgentId: number
+  isEnabled: boolean
+}
+
+// Extension of ActivityState — A2A session tracking fields
+// (ActivityState itself lives in GraphCanvas.tsx; these fields are
+//  added here for type-sharing across A2A graph components)
+export interface A2AActivityExtension {
+  activeA2ASessions: Map<string, A2ASessionInfo>
+  fadingA2ASessions: Set<string>
 }

@@ -24,6 +24,7 @@ from models import (
     SandboxedTool, AgentSandboxedTool, Contact, Persona,
     SentinelProfile, SentinelProfileAssignment,
     HubIntegration, GmailIntegration, CalendarIntegration,
+    AgentCommunicationPermission,
 )
 from models_rbac import User
 from auth_dependencies import (

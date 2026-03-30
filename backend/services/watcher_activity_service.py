@@ -256,6 +256,44 @@ class WatcherActivityService:
         await self._broadcast_to_tenant(tenant_id, message)
         logger.debug(f"Emitted channel_health: {channel_type}/{instance_id}, state={circuit_state}")
 
+    async def emit_agent_communication(
+        self,
+        tenant_id: str,
+        initiator_agent_id: int,
+        target_agent_id: int,
+        session_id: int,
+        status: str,
+        session_type: str,
+        depth: int = 1
+    ) -> None:
+        """
+        Emit A2A communication event to Watcher WebSocket clients.
+
+        Args:
+            tenant_id: Tenant ID
+            initiator_agent_id: ID of the agent initiating the communication
+            target_agent_id: ID of the agent receiving the communication
+            session_id: AgentCommunicationSession ID
+            status: "start" or "end"
+            session_type: "ask" or "delegate" (maps to session_type in AgentCommunicationSession)
+            depth: Delegation depth (0-based from AgentCommunicationSession.depth, displayed as 1-based)
+        """
+        if tenant_id not in self.tenant_connections:
+            return  # No listeners, skip
+
+        message = {
+            "type": "agent_communication",
+            "initiator_agent_id": initiator_agent_id,
+            "target_agent_id": target_agent_id,
+            "session_id": session_id,
+            "status": status,
+            "session_type": session_type,
+            "depth": depth,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+        await self._broadcast_to_tenant(tenant_id, message)
+        logger.debug(f"Emitted agent_communication: {initiator_agent_id}->{target_agent_id}, status={status}, depth={depth}")
+
 
 # Convenience functions for fire-and-forget event emission
 def emit_agent_processing_async(
@@ -346,6 +384,32 @@ def emit_channel_health_async(
             health_status=health_status,
             latency_ms=latency_ms,
             detail=detail
+        ))
+    except RuntimeError:
+        pass
+
+
+def emit_agent_communication_async(
+    tenant_id: str,
+    initiator_agent_id: int,
+    target_agent_id: int,
+    session_id: int,
+    status: str,
+    session_type: str,
+    depth: int = 1
+):
+    """Fire-and-forget wrapper for A2A communication events."""
+    service = WatcherActivityService.get_instance()
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(service.emit_agent_communication(
+            tenant_id=tenant_id,
+            initiator_agent_id=initiator_agent_id,
+            target_agent_id=target_agent_id,
+            session_id=session_id,
+            status=status,
+            session_type=session_type,
+            depth=depth
         ))
     except RuntimeError:
         pass

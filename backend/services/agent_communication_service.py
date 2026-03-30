@@ -14,6 +14,7 @@ from typing import Optional, List, Dict, Any
 
 from sqlalchemy.orm import Session
 
+from services.watcher_activity_service import emit_agent_communication_async
 from models import (
     Agent,
     AgentSkill,
@@ -184,6 +185,17 @@ class AgentCommunicationService:
         self.db.commit()
         self.db.refresh(session)
 
+        # Emit A2A communication start event (non-blocking)
+        emit_agent_communication_async(
+            tenant_id=self.tenant_id,
+            initiator_agent_id=source_agent_id,
+            target_agent_id=target_agent_id,
+            session_id=session.id,
+            status="start",
+            session_type=session_type,
+            depth=depth,
+        )
+
         # 8. Record request message
         request_msg = AgentCommunicationMessage(
             session_id=session.id,
@@ -218,6 +230,16 @@ class AgentCommunicationService:
                 "session_id": session.id,
                 "sentinel_reason": sentinel_result_data.get("reason"),
             })
+            # Emit A2A communication end event (non-blocking)
+            emit_agent_communication_async(
+                tenant_id=self.tenant_id,
+                initiator_agent_id=source_agent_id,
+                target_agent_id=target_agent_id,
+                session_id=session.id,
+                status="end",
+                session_type=session_type,
+                depth=depth,
+            )
             return AgentCommunicationResult(
                 success=False,
                 session_id=session.id,
@@ -239,6 +261,16 @@ class AgentCommunicationService:
             self._audit_log("agent_comm.send", source_agent_id, target_agent_id, {
                 "session_id": session.id, "status": "timeout",
             })
+            # Emit A2A communication end event (non-blocking)
+            emit_agent_communication_async(
+                tenant_id=self.tenant_id,
+                initiator_agent_id=source_agent_id,
+                target_agent_id=target_agent_id,
+                session_id=session.id,
+                status="end",
+                session_type=session_type,
+                depth=depth,
+            )
             return AgentCommunicationResult(
                 success=False,
                 session_id=session.id,
@@ -250,6 +282,16 @@ class AgentCommunicationService:
             session.completed_at = datetime.utcnow()
             self.db.commit()
             logger.error(f"Agent comm error: {exc}", exc_info=True)
+            # Emit A2A communication end event (non-blocking)
+            emit_agent_communication_async(
+                tenant_id=self.tenant_id,
+                initiator_agent_id=source_agent_id,
+                target_agent_id=target_agent_id,
+                session_id=session.id,
+                status="end",
+                session_type=session_type,
+                depth=depth,
+            )
             return AgentCommunicationResult(
                 success=False,
                 session_id=session.id,
@@ -279,6 +321,17 @@ class AgentCommunicationService:
         session.completed_at = datetime.utcnow()
         session.total_messages = len(session.messages)
         self.db.commit()
+
+        # Emit A2A communication end event (non-blocking)
+        emit_agent_communication_async(
+            tenant_id=self.tenant_id,
+            initiator_agent_id=source_agent_id,
+            target_agent_id=target_agent_id,
+            session_id=session.id,
+            status="end",
+            session_type=session_type,
+            depth=depth,
+        )
 
         # 13. Get target agent display name
         target_contact = self.db.query(Contact).filter(Contact.id == target_agent.contact_id).first()

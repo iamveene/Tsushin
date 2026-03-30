@@ -19,7 +19,8 @@ from db import get_db
 from models import (
     Agent, AgentSkillIntegration, HubIntegration, GmailIntegration,
     CalendarIntegration, AsanaIntegration, AgentSkill, AgentKnowledge,
-    Contact, WhatsAppMCPInstance, TelegramBotInstance, SentinelAgentConfig
+    Contact, WhatsAppMCPInstance, TelegramBotInstance, SentinelAgentConfig,
+    AgentCommunicationPermission,
 )
 from models_rbac import User
 from auth_dependencies import (
@@ -283,6 +284,101 @@ async def get_agents_graph_preview(
     }
 
     return GraphPreviewResponse(agents=agents, channels=channels)
+
+
+# =============================================================================
+# GET /api/v2/agents/comm-enabled — A2A visualization data
+# IMPORTANT: Must remain before the /{agent_id} route to avoid FastAPI
+# matching "comm-enabled" as an integer agent_id parameter.
+# =============================================================================
+
+class AgentSummary(BaseModel):
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    agent_type: str
+
+
+class CommPermissionSummary(BaseModel):
+    id: int
+    source_agent_id: int
+    target_agent_id: int
+    is_enabled: bool
+    max_depth: int
+    rate_limit_rpm: int
+
+
+class CommEnabledResponse(BaseModel):
+    agents: List[AgentSummary]
+    permissions: List[CommPermissionSummary]
+
+
+@router.get(
+    "/comm-enabled",
+    response_model=CommEnabledResponse,
+    dependencies=[Depends(require_permission("agents.read"))],
+)
+async def get_comm_enabled_agents(
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Return all agents with the agent_communication skill enabled, plus all
+    A2A communication permissions for this tenant.
+
+    Used by Graph View and Agent Builder to populate the A2A visualization layer.
+    """
+    db = ctx.db
+
+    comm_skill_rows = (
+        db.query(AgentSkill.agent_id)
+        .filter(
+            AgentSkill.skill_type == "agent_communication",
+            AgentSkill.is_enabled == True,
+        )
+        .subquery()
+    )
+
+    agents_db = (
+        db.query(Agent, Contact.friendly_name)
+        .join(Contact, Agent.contact_id == Contact.id)
+        .filter(
+            Agent.tenant_id == ctx.tenant_id,
+            Agent.is_active == True,
+            Agent.id.in_(comm_skill_rows),
+        )
+        .all()
+    )
+
+    agents = [
+        AgentSummary(
+            id=agent.id,
+            name=friendly_name or f"Agent {agent.id}",
+            avatar=agent.avatar,
+            agent_type=agent.model_provider or "gemini",
+        )
+        for agent, friendly_name in agents_db
+    ]
+
+    permissions_db = (
+        db.query(AgentCommunicationPermission)
+        .filter(AgentCommunicationPermission.tenant_id == ctx.tenant_id)
+        .order_by(AgentCommunicationPermission.id)
+        .all()
+    )
+
+    permissions = [
+        CommPermissionSummary(
+            id=perm.id,
+            source_agent_id=perm.source_agent_id,
+            target_agent_id=perm.target_agent_id,
+            is_enabled=perm.is_enabled,
+            max_depth=perm.max_depth or 3,
+            rate_limit_rpm=perm.rate_limit_rpm or 30,
+        )
+        for perm in permissions_db
+    ]
+
+    return CommEnabledResponse(agents=agents, permissions=permissions)
 
 
 # =============================================================================
