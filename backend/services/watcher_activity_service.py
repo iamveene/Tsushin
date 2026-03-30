@@ -217,6 +217,45 @@ class WatcherActivityService:
         await self._broadcast_to_tenant(tenant_id, message)
         logger.debug(f"Emitted kb_used: agent={agent_id}, docs={doc_count}, chunks={chunk_count}")
 
+    async def emit_channel_health(
+        self,
+        tenant_id: str,
+        channel_type: str,
+        instance_id: int,
+        circuit_state: str,
+        health_status: str,
+        latency_ms: float = None,
+        detail: str = None
+    ):
+        """
+        Emit channel health update event (Item 38).
+
+        Args:
+            tenant_id: Tenant ID
+            channel_type: Channel type (whatsapp, telegram)
+            instance_id: Channel instance ID
+            circuit_state: Circuit breaker state (closed, open, half_open)
+            health_status: Health status (healthy, unhealthy, degraded)
+            latency_ms: Health check latency in milliseconds
+            detail: Optional detail message
+        """
+        if tenant_id not in self.tenant_connections:
+            return  # No listeners, skip
+
+        message = {
+            "type": "channel_health",
+            "channel_type": channel_type,
+            "instance_id": instance_id,
+            "circuit_state": circuit_state,
+            "health_status": health_status,
+            "latency_ms": latency_ms,
+            "detail": detail,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+
+        await self._broadcast_to_tenant(tenant_id, message)
+        logger.debug(f"Emitted channel_health: {channel_type}/{instance_id}, state={circuit_state}")
+
 
 # Convenience functions for fire-and-forget event emission
 def emit_agent_processing_async(
@@ -281,6 +320,32 @@ def emit_kb_used_async(
             agent_id=agent_id,
             doc_count=doc_count,
             chunk_count=chunk_count
+        ))
+    except RuntimeError:
+        pass
+
+
+def emit_channel_health_async(
+    tenant_id: str,
+    channel_type: str,
+    instance_id: int,
+    circuit_state: str,
+    health_status: str,
+    latency_ms: float = None,
+    detail: str = None
+):
+    """Fire-and-forget wrapper for channel health events (Item 38)."""
+    service = WatcherActivityService.get_instance()
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(service.emit_channel_health(
+            tenant_id=tenant_id,
+            channel_type=channel_type,
+            instance_id=instance_id,
+            circuit_state=circuit_state,
+            health_status=health_status,
+            latency_ms=latency_ms,
+            detail=detail
         ))
     except RuntimeError:
         pass

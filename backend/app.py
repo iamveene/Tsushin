@@ -146,6 +146,7 @@ from api.routes_custom_skills import router as custom_skills_router, set_engine 
 # Phase 22.4: MCP Server Integration
 from api.routes_mcp_servers import router as mcp_servers_router, set_engine as set_mcp_servers_engine
 from api.routes_services import router as services_router
+from api.routes_agent_communication import router as agent_comm_router, set_engine as set_agent_comm_engine
 from api.v1.router import v1_router
 from middleware.rate_limiter import ApiV1RateLimitMiddleware
 from services.queue_worker import start_queue_worker, stop_queue_worker
@@ -216,6 +217,9 @@ async def lifespan(app: FastAPI):
 
     # Phase 22.4: MCP Server Integration
     set_mcp_servers_engine(engine)
+
+    # v0.6.0 Item 15: Agent-to-Agent Communication
+    set_agent_comm_engine(engine)
 
     logging.info("Database initialized")
 
@@ -555,6 +559,42 @@ async def lifespan(app: FastAPI):
         logging.error(f"Error starting MCP Health Monitor: {e}", exc_info=True)
         # Non-fatal - app can run without health monitor
 
+    # v0.6.0 Item 38: Start Channel Health Service (circuit breakers for all channels)
+    try:
+        from services.channel_health_service import ChannelHealthService
+        from services.channel_alert_dispatcher import ChannelAlertDispatcher
+        from services.watcher_activity_service import WatcherActivityService
+        import settings as app_settings
+
+        if getattr(app_settings, 'CHANNEL_HEALTH_ENABLED', True):
+            alert_dispatcher = ChannelAlertDispatcher(get_db_session=SessionLocal)
+            channel_health_service = ChannelHealthService(
+                get_db_session=SessionLocal,
+                container_manager=container_manager if container_manager else MCPContainerManager(),
+                watcher_activity_service=WatcherActivityService.get_instance() if hasattr(WatcherActivityService, 'get_instance') else None,
+                alert_dispatcher=alert_dispatcher
+            )
+
+            # Wire MCPHealthMonitor recovery callback to notify ChannelHealthService
+            if mcp_health_monitor and hasattr(mcp_health_monitor, 'on_recovery_triggered'):
+                original_callback = mcp_health_monitor.on_recovery_triggered
+                def combined_callback(instance_id, reason):
+                    if original_callback:
+                        original_callback(instance_id, reason)
+                    logging.info(f"🔄 Auto-recovery triggered for MCP instance {instance_id}: {reason}")
+                    channel_health_service.on_external_recovery("whatsapp", instance_id)
+                mcp_health_monitor.on_recovery_triggered = combined_callback
+
+            await channel_health_service.start()
+            app.state.channel_health_service = channel_health_service
+            logging.info("🏥 Channel Health Service started (circuit breakers enabled for all channels)")
+        else:
+            logging.info("Channel Health Service disabled via TSN_CHANNEL_HEALTH_ENABLED")
+
+    except Exception as e:
+        logging.error(f"Error starting Channel Health Service: {e}", exc_info=True)
+        # Non-fatal
+
     # Phase 10.1.1: Initialize Telegram Watcher Manager
     try:
         from services.telegram_watcher_manager import TelegramWatcherManager
@@ -886,6 +926,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logging.error(f"Error stopping Telegram Watcher Manager: {e}", exc_info=True)
 
+    # v0.6.0 Item 38: Stop Channel Health Service
+    if hasattr(app.state, 'channel_health_service'):
+        try:
+            await app.state.channel_health_service.stop()
+            logging.info("🏥 Channel Health Service stopped")
+        except Exception as e:
+            logging.error(f"Error stopping Channel Health Service: {e}", exc_info=True)
+
     # Stop MCP Health Monitor Service
     if hasattr(app.state, 'mcp_health_monitor'):
         try:
@@ -1187,6 +1235,13 @@ app.include_router(skill_integrations_router, prefix="/api")  # Skill Integratio
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
 app.include_router(slack_router, prefix="/api/integrations/slack")  # v0.6.0 Item 33: Slack Integration
+
+# v0.6.0 Item 38: Channel Health Monitor
+try:
+    from api.routes_channel_health import router as channel_health_router
+    app.include_router(channel_health_router)
+except ImportError:
+    logging.warning("Channel health routes not available")
 app.include_router(discord_router, prefix="/api/integrations/discord")  # v0.6.0 Item 34: Discord Integration
 app.include_router(system_ai_router)  # Phase 17: System AI Configuration
 app.include_router(integrations_router)  # Integration Test Connection
@@ -1200,6 +1255,7 @@ app.include_router(services_router)  # Hub Local Services (Kokoro TTS container 
 app.include_router(queue_router)  # Message Queue System
 app.include_router(api_clients_router)  # Public API v1: Client Management (UI-facing)
 app.include_router(audit_router)  # v0.6.0: Tenant-Scoped Audit Logs
+app.include_router(agent_comm_router, prefix="/api")  # v0.6.0 Item 15: Agent-to-Agent Communication
 app.include_router(syslog_config_router)  # v0.6.0: Syslog Forwarding Configuration
 app.include_router(v1_router)  # Public API v1: All /api/v1/ endpoints
 
