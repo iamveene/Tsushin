@@ -88,10 +88,12 @@ class TelegramChannelAdapter(ChannelAdapter):
         try:
             me = await self.telegram_sender.client.get_me()
             if me:
+                # Handle both dict and object responses from different Telegram clients
+                username = me.get("username", "unknown") if isinstance(me, dict) else getattr(me, "username", "unknown")
                 return HealthResult(
                     healthy=True,
                     status="connected",
-                    detail=f"Bot: @{me.get('username', 'unknown')}"
+                    detail=f"Bot: @{username}"
                 )
             return HealthResult(healthy=False, status="error", detail="get_me returned None")
         except Exception as e:

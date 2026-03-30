@@ -72,9 +72,12 @@ class WhatsAppChannelAdapter(ChannelAdapter):
                 error=f"Invalid WhatsApp recipient: {to}"
             )
 
+        if not agent_id:
+            self.logger.debug("WhatsApp send without agent_id — using default MCP instance")
+
         mcp_url, api_secret = self._resolve_mcp_instance(agent_id) if agent_id else (None, None)
 
-        if agent_id and not self._check_mcp_connection(agent_id, mcp_url):
+        if agent_id and mcp_url and not self._check_mcp_connection(agent_id, mcp_url):
             return SendResult(
                 success=False,
                 error=f"MCP not connected for agent {agent_id}"
@@ -171,26 +174,37 @@ class WhatsAppChannelAdapter(ChannelAdapter):
 
     def _check_mcp_connection(self, agent_id: int, mcp_api_url: str) -> bool:
         """Check if MCP instance is connected before sending.
-        Mirrors router._check_mcp_connection logic.
+        Mirrors router._check_mcp_connection logic exactly.
         """
         import httpx
 
-        if not mcp_api_url:
-            return False
+        # Backward compatibility: skip check for None or default URL
+        if not mcp_api_url or mcp_api_url == "http://127.0.0.1:8080/api":
+            return True
 
         try:
-            with httpx.Client(timeout=5.0) as client:
-                response = client.get(f"{mcp_api_url}/health")
-                if response.status_code == 200:
-                    data = response.json()
-                    connected = data.get("connected", False)
-                    authenticated = data.get("authenticated", False)
-                    if connected and authenticated:
-                        return True
+            response = httpx.get(f"{mcp_api_url}/health", timeout=5.0)
+
+            if response.status_code == 200:
+                data = response.json()
+                connected = data.get("connected", False)
+
+                if not connected:
                     self.logger.warning(
-                        f"MCP not ready for agent {agent_id}: connected={connected}, authenticated={authenticated}"
+                        f"MCP instance for agent {agent_id} is NOT authenticated. "
+                        f"Skipping message send to prevent queue buildup."
                     )
                     return False
+
+                return True
+            else:
+                self.logger.warning(
+                    f"MCP health check failed for agent {agent_id}: HTTP {response.status_code}"
+                )
+                return False
         except Exception as e:
-            self.logger.warning(f"MCP health check failed for agent {agent_id}: {e}")
+            self.logger.error(
+                f"Failed to check MCP connection for agent {agent_id}: {e}",
+                exc_info=True
+            )
             return False
