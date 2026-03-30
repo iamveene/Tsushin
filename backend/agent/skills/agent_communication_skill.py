@@ -56,7 +56,7 @@ class AgentCommunicationSkill(BaseSkill):
             "keywords": [],
             "use_ai_fallback": False,
             "ai_model": "gemini-2.5-flash-lite",
-            "default_timeout": 30,
+            "default_timeout": 60,
             "default_max_depth": 3,
         }
 
@@ -68,7 +68,7 @@ class AgentCommunicationSkill(BaseSkill):
                 "default_timeout": {
                     "type": "integer",
                     "description": "Default timeout in seconds for inter-agent communication",
-                    "default": 30,
+                    "default": 60,
                     "minimum": 5,
                     "maximum": 120,
                 },
@@ -259,7 +259,7 @@ class AgentCommunicationSkill(BaseSkill):
             original_sender_key=message.sender_key,
             original_message_preview=message.body[:200],
             session_type="sync",
-            timeout=config.get("default_timeout", 30),
+            timeout=config.get("default_timeout", 60),
             depth=current_depth + 1,
             parent_session_id=parent_session_id,
         )
@@ -325,7 +325,7 @@ class AgentCommunicationSkill(BaseSkill):
             original_sender_key=message.sender_key,
             original_message_preview=message.body[:200],
             session_type="delegation",
-            timeout=config.get("default_timeout", 30),
+            timeout=config.get("default_timeout", 60),
             depth=current_depth + 1,
             parent_session_id=parent_session_id,
         )
