@@ -78,7 +78,7 @@ export default function AgentCommunicationManager() {
       const data = await api.getAgentCommSessions(params)
       setSessions(data)
     } catch (err: any) {
-      toast.error(err.message || 'Failed to load sessions')
+      toast.error('Load Failed', err.message || 'Failed to load sessions')
     } finally {
       setSessionsLoading(false)
     }
@@ -90,7 +90,7 @@ export default function AgentCommunicationManager() {
       const data = await api.getAgentCommPermissions()
       setPermissions(data)
     } catch (err: any) {
-      toast.error(err.message || 'Failed to load permissions')
+      toast.error('Load Failed', err.message || 'Failed to load permissions')
     } finally {
       setPermissionsLoading(false)
     }
@@ -102,7 +102,7 @@ export default function AgentCommunicationManager() {
       const data = await api.getAgentCommStats()
       setStats(data)
     } catch (err: any) {
-      toast.error(err.message || 'Failed to load stats')
+      toast.error('Load Failed', err.message || 'Failed to load stats')
     } finally {
       setStatsLoading(false)
     }
@@ -120,7 +120,7 @@ export default function AgentCommunicationManager() {
       const detail = await api.getAgentCommSessionDetail(sessionId)
       setSessionMessages(detail.messages || [])
     } catch (err: any) {
-      toast.error(err.message || 'Failed to load session detail')
+      toast.error('Load Failed', err.message || 'Failed to load session detail')
     } finally {
       setMessagesLoading(false)
     }
@@ -128,11 +128,11 @@ export default function AgentCommunicationManager() {
 
   const handleCreatePermission = async () => {
     if (!newPermission.source_agent_id || !newPermission.target_agent_id) {
-      toast.error('Please select both source and target agents')
+      toast.warning('Validation', 'Please select both source and target agents')
       return
     }
     if (newPermission.source_agent_id === newPermission.target_agent_id) {
-      toast.error('Source and target agents must be different')
+      toast.warning('Validation', 'Source and target agents must be different')
       return
     }
     setSavingPermission(true)
@@ -143,7 +143,7 @@ export default function AgentCommunicationManager() {
       setNewPermission({ source_agent_id: 0, target_agent_id: 0, max_depth: 3, rate_limit_rpm: 10 })
       loadPermissions()
     } catch (err: any) {
-      toast.error(err.message || 'Failed to create permission')
+      toast.error('Create Failed', err.message || 'Failed to create permission')
     } finally {
       setSavingPermission(false)
     }
@@ -155,7 +155,7 @@ export default function AgentCommunicationManager() {
       toast.success(`Permission ${perm.is_enabled ? 'disabled' : 'enabled'}`)
       loadPermissions()
     } catch (err: any) {
-      toast.error(err.message || 'Failed to update permission')
+      toast.error('Update Failed', err.message || 'Failed to update permission')
     }
   }
 
@@ -166,7 +166,7 @@ export default function AgentCommunicationManager() {
       toast.success('Permission deleted')
       loadPermissions()
     } catch (err: any) {
-      toast.error(err.message || 'Failed to delete permission')
+      toast.error('Delete Failed', err.message || 'Failed to delete permission')
     } finally {
       setDeletingId(null)
     }

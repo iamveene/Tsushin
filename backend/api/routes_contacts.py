@@ -211,7 +211,7 @@ class ContactCreate(BaseModel):
     phone_number: str | None = Field(None, max_length=20, pattern=r"^\+?[1-9]\d{6,14}$")
     telegram_id: str | None = Field(None, max_length=50)  # Phase 10.1.1: Telegram user ID
     telegram_username: str | None = Field(None, max_length=50)  # Phase 10.1.1: Telegram @username
-    role: str = Field(default="user", pattern="^(user|agent)$")
+    role: str = Field(default="user", pattern="^(user|agent|external)$")
     is_dm_trigger: bool = Field(default=True)  # Phase 4.3: Default True, user can opt-out during creation
     slash_commands_enabled: Optional[bool] = Field(None, description="Feature #12: NULL = tenant default, True/False = explicit override")
     notes: str | None = None
@@ -255,7 +255,7 @@ class ContactUpdate(BaseModel):
     phone_number: str | None = Field(None, max_length=20, pattern=r"^\+?[1-9]\d{6,14}$")
     telegram_id: str | None = Field(None, max_length=50)  # Phase 10.1.1: Telegram user ID
     telegram_username: str | None = Field(None, max_length=50)  # Phase 10.1.1: Telegram @username
-    role: str | None = Field(None, pattern="^(user|agent)$")
+    role: str | None = Field(None, pattern="^(user|agent|external)$")
     is_active: bool | None = None
     is_dm_trigger: bool | None = None  # Phase 4.3
     slash_commands_enabled: Optional[bool] = None  # Feature #12: NULL = tenant default, True/False = explicit override

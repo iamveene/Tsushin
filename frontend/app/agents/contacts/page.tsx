@@ -22,7 +22,7 @@ interface ContactFormData {
   phone_number: string
   telegram_id: string
   telegram_username: string
-  role: 'user' | 'agent'
+  role: 'user' | 'agent' | 'external'
   is_dm_trigger: boolean
   slash_commands_enabled: boolean | null
   notes: string
@@ -186,7 +186,7 @@ export default function ContactsPage() {
       phone_number: contact.phone_number || '',
       telegram_id: contact.telegram_id || '',
       telegram_username: contact.telegram_username || '',
-      role: contact.role as 'user' | 'agent',
+      role: contact.role as 'user' | 'agent' | 'external',
       is_dm_trigger: contact.is_dm_trigger || false,
       slash_commands_enabled: contact.slash_commands_enabled ?? null,
       notes: contact.notes || '',
@@ -534,11 +534,12 @@ export default function ContactsPage() {
               </label>
               <select
                 value={formData.role}
-                onChange={(e) => setFormData({ ...formData, role: e.target.value as 'user' | 'agent' })}
+                onChange={(e) => setFormData({ ...formData, role: e.target.value as 'user' | 'agent' | 'external' })}
                 className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-elevated text-white focus:ring-2 focus:ring-tsushin-indigo"
               >
                 <option value="user">User</option>
                 <option value="agent">Agent</option>
+                <option value="external">External</option>
               </select>
             </div>
 

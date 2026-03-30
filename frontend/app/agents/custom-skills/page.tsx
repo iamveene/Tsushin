@@ -145,7 +145,7 @@ function CustomSkillsPageContent() {
       const data = await api.listCustomSkills()
       setSkills(data)
     } catch (e: any) {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : 'An unexpected error occurred')
     } finally {
       setLoading(false)
     }
@@ -318,7 +318,7 @@ function CustomSkillsPageContent() {
       setShowModal(false)
       fetchSkills()
     } catch (e: any) {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : 'An unexpected error occurred')
     } finally {
       setSaving(false)
     }
@@ -333,7 +333,7 @@ function CustomSkillsPageContent() {
       setDeletingSkill(null)
       fetchSkills()
     } catch (e: any) {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : 'An unexpected error occurred')
     }
   }
 
@@ -344,7 +344,7 @@ function CustomSkillsPageContent() {
       await api.updateCustomSkill(skill.id, { is_enabled: !skill.is_enabled })
       fetchSkills()
     } catch (e: any) {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : 'An unexpected error occurred')
     } finally {
       setTogglingId(null)
     }
@@ -358,7 +358,7 @@ function CustomSkillsPageContent() {
       setSuccess(`Skill "${skill.name}" deployed to container`)
       fetchSkills()
     } catch (e: any) {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : 'An unexpected error occurred')
     } finally {
       setDeployingId(null)
     }
@@ -379,7 +379,7 @@ function CustomSkillsPageContent() {
       // Auto-open scan detail popover so user sees the result immediately
       setScanDetailSkillId(skill.id)
     } catch (e: any) {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : 'An unexpected error occurred')
     } finally {
       setScanningId(null)
     }

@@ -2476,7 +2476,6 @@ export interface CustomSkillExecutionRecord {
 
 export interface AgentCommPermission {
   id: number
-  tenant_id: string
   source_agent_id: number
   target_agent_id: number
   source_agent_name?: string
@@ -2499,8 +2498,8 @@ export interface AgentCommSession {
   session_type: string
   status: string
   depth: number
-  max_depth: number
-  timeout_seconds: number
+  max_depth?: number
+  timeout_seconds?: number
   total_messages: number
   error_text?: string
   parent_session_id?: number
