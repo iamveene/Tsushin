@@ -157,6 +157,9 @@ services:
       # Security
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
       - TSN_CORS_ORIGINS=${TSN_CORS_ORIGINS:-*}
+      # SEC-006: Master key for envelope-encrypting Fernet keys stored in DB.
+      # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      - TSN_MASTER_KEY=${TSN_MASTER_KEY:-}
 
       # Integrations
       - ASANA_ENCRYPTION_KEY=${ASANA_ENCRYPTION_KEY:-}
