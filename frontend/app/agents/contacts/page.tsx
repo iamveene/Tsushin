@@ -9,10 +9,10 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import StudioTabs from '@/components/studio/StudioTabs'
-import { api, Agent, Contact, ContactAgentMapping, TeamMember } from '@/lib/client'
+import { api, Agent, Contact, ContactAgentMapping, TeamMember, ChannelMapping } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import { useToast } from '@/contexts/ToastContext'
-import { SmartphoneIcon, WhatsAppIcon, TelegramIcon, UserIcon, FileTextIcon, RefreshIcon } from '@/components/ui/icons'
+import { SmartphoneIcon, WhatsAppIcon, TelegramIcon, UserIcon, FileTextIcon, RefreshIcon, SlackIcon, DiscordIcon } from '@/components/ui/icons'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
 
@@ -53,6 +53,12 @@ export default function ContactsPage() {
   })
   const [resolvingWhatsApp, setResolvingWhatsApp] = useState<number | null>(null)
   const [resolvingAll, setResolvingAll] = useState(false)
+
+  // Channel mapping management
+  const [showAddMappingForm, setShowAddMappingForm] = useState(false)
+  const [addMappingType, setAddMappingType] = useState('slack')
+  const [addMappingIdentifier, setAddMappingIdentifier] = useState('')
+  const [addMappingLoading, setAddMappingLoading] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -246,6 +252,68 @@ export default function ContactsPage() {
     setEditing(null)
     setCreating(false)
     resetForm()
+    setShowAddMappingForm(false)
+    setAddMappingIdentifier('')
+    setAddMappingType('slack')
+  }
+
+  const handleAddChannelMapping = async (contactId: number) => {
+    if (!addMappingIdentifier.trim()) return
+    setAddMappingLoading(true)
+    try {
+      await api.addChannelMapping(contactId, {
+        channel_type: addMappingType,
+        channel_identifier: addMappingIdentifier.trim(),
+      })
+      toast.success('Channel Added', `${addMappingType} channel link added`)
+      setAddMappingIdentifier('')
+      setShowAddMappingForm(false)
+      await loadData()
+    } catch (err) {
+      toast.error('Add Failed', err instanceof Error ? err.message : 'Failed to add channel mapping')
+    } finally {
+      setAddMappingLoading(false)
+    }
+  }
+
+  const handleRemoveChannelMapping = async (contactId: number, mappingId: number) => {
+    try {
+      await api.removeChannelMapping(contactId, mappingId)
+      toast.success('Channel Removed', 'Channel link removed')
+      await loadData()
+    } catch (err) {
+      toast.error('Remove Failed', err instanceof Error ? err.message : 'Failed to remove channel mapping')
+    }
+  }
+
+  const renderChannelBadge = (mapping: ChannelMapping) => {
+    const meta = mapping.channel_metadata || {}
+    switch (mapping.channel_type) {
+      case 'slack':
+        return (
+          <span key={mapping.id} className="inline-flex items-center gap-1 text-purple-400">
+            <SlackIcon size={14} />{meta.display_name || meta.username || mapping.channel_identifier}
+          </span>
+        )
+      case 'discord':
+        return (
+          <span key={mapping.id} className="inline-flex items-center gap-1 text-indigo-400">
+            <DiscordIcon size={14} />{meta.display_name || (meta.username ? `@${meta.username}` : mapping.channel_identifier)}
+          </span>
+        )
+      case 'email':
+        return (
+          <span key={mapping.id} className="inline-flex items-center gap-1 text-yellow-400">
+            {mapping.channel_identifier}
+          </span>
+        )
+      default:
+        return (
+          <span key={mapping.id} className="inline-flex items-center gap-1 text-tsushin-slate">
+            <SmartphoneIcon size={14} />{mapping.channel_type}: {mapping.channel_identifier}
+          </span>
+        )
+    }
   }
 
   const userContacts = contacts.filter(c => c.role === 'user')
@@ -378,6 +446,8 @@ export default function ContactsPage() {
                             <UserIcon size={14} />{contact.linked_user_name || contact.linked_user_email}
                           </span>
                         )}
+                        {/* Channel mappings (Slack, Discord, etc. — skip legacy types already shown above) */}
+                        {contact.channel_mappings?.filter(m => !['whatsapp', 'telegram', 'phone'].includes(m.channel_type)).map(m => renderChannelBadge(m))}
                         {contact.notes && <span className="inline-flex items-center gap-1 italic"><FileTextIcon size={14} />{contact.notes}</span>}
                       </div>
                     </div>
@@ -680,6 +750,96 @@ export default function ContactsPage() {
               </p>
             </div>
           )}
+
+          {/* Channel Identities (edit mode only) */}
+          {editing !== null && (() => {
+            const contact = contacts.find(c => c.id === editing)
+            const channelMappings = contact?.channel_mappings || []
+            return (
+              <div className="p-3 bg-tsushin-elevated/50 border border-tsushin-border rounded-md">
+                <label className="block text-sm font-medium mb-2 text-tsushin-slate">
+                  Channel Identities
+                </label>
+
+                {channelMappings.length > 0 ? (
+                  <div className="space-y-2 mb-3">
+                    {channelMappings.map(m => (
+                      <div key={m.id} className="flex items-center justify-between px-3 py-2 bg-tsushin-surface rounded border border-tsushin-border">
+                        <div className="flex items-center gap-2 text-sm">
+                          {m.channel_type === 'slack' && <SlackIcon size={14} className="text-purple-400" />}
+                          {m.channel_type === 'discord' && <DiscordIcon size={14} className="text-indigo-400" />}
+                          {m.channel_type === 'whatsapp' && <WhatsAppIcon size={14} className="text-green-400" />}
+                          {m.channel_type === 'telegram' && <TelegramIcon size={14} className="text-blue-400" />}
+                          {!['slack', 'discord', 'whatsapp', 'telegram'].includes(m.channel_type) && <SmartphoneIcon size={14} className="text-tsushin-slate" />}
+                          <span className="text-white font-medium">{m.channel_type}</span>
+                          <span className="text-tsushin-slate">{m.channel_identifier}</span>
+                          {m.channel_metadata?.display_name && (
+                            <span className="text-tsushin-slate italic">({m.channel_metadata.display_name})</span>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleRemoveChannelMapping(editing, m.id)}
+                          className="text-red-400 hover:text-red-300 text-xs px-2 py-1"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-tsushin-slate mb-3">No channel identities linked.</p>
+                )}
+
+                {!showAddMappingForm ? (
+                  <button
+                    onClick={() => setShowAddMappingForm(true)}
+                    className="text-sm text-tsushin-indigo hover:text-tsushin-indigo/80"
+                  >
+                    + Add Channel Link
+                  </button>
+                ) : (
+                  <div className="space-y-2 p-3 bg-tsushin-surface rounded border border-tsushin-border">
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        value={addMappingType}
+                        onChange={(e) => setAddMappingType(e.target.value)}
+                        className="px-3 py-2 text-sm border border-tsushin-border rounded-md bg-tsushin-elevated text-white"
+                      >
+                        <option value="slack">Slack</option>
+                        <option value="discord">Discord</option>
+                        <option value="telegram">Telegram</option>
+                        <option value="whatsapp">WhatsApp</option>
+                        <option value="email">Email</option>
+                        <option value="phone">Phone</option>
+                      </select>
+                      <input
+                        type="text"
+                        value={addMappingIdentifier}
+                        onChange={(e) => setAddMappingIdentifier(e.target.value)}
+                        placeholder={addMappingType === 'slack' ? 'T123ABC:U456DEF' : addMappingType === 'discord' ? 'Discord user ID' : 'Identifier'}
+                        className="px-3 py-2 text-sm border border-tsushin-border rounded-md bg-tsushin-elevated text-white"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleAddChannelMapping(editing)}
+                        disabled={addMappingLoading || !addMappingIdentifier.trim()}
+                        className="px-3 py-1.5 text-sm bg-tsushin-indigo text-white rounded hover:bg-tsushin-indigo/90 disabled:opacity-50"
+                      >
+                        {addMappingLoading ? 'Adding...' : 'Add'}
+                      </button>
+                      <button
+                        onClick={() => { setShowAddMappingForm(false); setAddMappingIdentifier('') }}
+                        className="px-3 py-1.5 text-sm text-tsushin-slate hover:text-white"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
         </div>
       </Modal>
     </div>
