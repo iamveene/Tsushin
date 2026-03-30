@@ -108,6 +108,7 @@ export default function StudioProjectsPage() {
   })
 
   const loadProjects = useCallback(async () => {
+    setError(null)
     try {
       const data = await api.getProjects()
       setProjects(data)
