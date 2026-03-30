@@ -168,6 +168,10 @@ class ShellSkill(BaseSkill):
         }
 
     @classmethod
+    def get_sentinel_exemptions(cls) -> list:
+        return ["shell_malicious"]
+
+    @classmethod
     def get_mcp_tool_definition(cls) -> Dict[str, Any]:
         """MCP-compliant tool definition for shell command execution."""
         return {

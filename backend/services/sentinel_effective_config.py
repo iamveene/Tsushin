@@ -71,6 +71,23 @@ class SentinelEffectiveConfig:
         """Check if a specific detection type is enabled."""
         return self.detection_config.get(detection_type, {}).get("enabled", True)
 
+    def apply_skill_exemptions(self, exempted_types: list) -> None:
+        """
+        Disable detection types that are auto-exempted by enabled skills.
+        Called after profile resolution, before analysis. The skill being
+        enabled IS the authorization — Sentinel should not second-guess it.
+
+        Clones detection_config to avoid mutating the shared cached instance.
+        """
+        if not exempted_types:
+            return
+        self.detection_config = {k: dict(v) for k, v in self.detection_config.items()}
+        for det_type in exempted_types:
+            if det_type in self.detection_config:
+                self.detection_config[det_type]["enabled"] = False
+            else:
+                self.detection_config[det_type] = {"enabled": False, "custom_prompt": None}
+
     def get_custom_prompt(self, detection_type: str) -> Optional[str]:
         """Get custom prompt for a specific detection type, if set."""
         return self.detection_config.get(detection_type, {}).get("custom_prompt")

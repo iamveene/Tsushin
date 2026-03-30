@@ -476,6 +476,10 @@ class AgentSwitcherSkill(BaseSkill):
             "risk_notes": None  # Agent switching is low-risk
         }
 
+    @classmethod
+    def get_sentinel_exemptions(cls) -> list:
+        return ["agent_takeover"]
+
     async def execute_tool(
         self,
         arguments: Dict[str, Any],

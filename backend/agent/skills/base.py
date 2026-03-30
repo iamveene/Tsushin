@@ -262,6 +262,23 @@ class BaseSkill(ABC):
             "risk_notes": None
         }
 
+    @classmethod
+    def get_sentinel_exemptions(cls) -> list:
+        """
+        Detection types to auto-exempt when this skill is enabled on an agent.
+
+        The skill being enabled IS the authorization decision. Sentinel should
+        not block legitimate use of an explicitly enabled skill.
+
+        Override in skills that map to specific detection types:
+        - ShellSkill → ["shell_malicious"]
+        - AgentSwitcherSkill → ["agent_takeover"]
+
+        Returns:
+            List of detection type keys from DETECTION_REGISTRY.
+        """
+        return []
+
     # =========================================================================
     # SKILLS-AS-TOOLS: EXECUTION MODE CONTROL
     # =========================================================================

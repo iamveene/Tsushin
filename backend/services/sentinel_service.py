@@ -432,6 +432,17 @@ class SentinelService:
         # Get effective configuration (skill_type enables skill-level profile resolution)
         config = self.get_effective_config(agent_id, skill_type=skill_type)
 
+        # Auto-exempt detection types for enabled skills (skill enablement = authorization)
+        if agent_id:
+            try:
+                from services.skill_context_service import SkillContextService
+                exemptions = SkillContextService(self.db).get_agent_sentinel_exemptions(agent_id)
+                if exemptions:
+                    config.apply_skill_exemptions(exemptions)
+                    self.logger.debug(f"Auto-exempted {exemptions} for agent {agent_id}")
+            except Exception as ex:
+                self.logger.warning(f"Failed to apply skill exemptions: {ex}")
+
         # Check if Sentinel is enabled
         if not config.is_enabled:
             return self._create_allowed_result("prompt", "sentinel_disabled", start_time)
