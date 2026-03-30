@@ -44,23 +44,24 @@ class ChannelAlertDispatcher:
             event_type: Event type (e.g., closed_to_open)
             detail: Detail message about the event
         """
-        # Check cooldown
-        key = (channel_type, instance_id)
-        last = self._last_alert.get(key)
-        if last:
-            elapsed = (datetime.utcnow() - last).total_seconds()
-            if elapsed < self.DEFAULT_COOLDOWN_SECONDS:
-                logger.debug(
-                    f"Alert cooldown active for {channel_type}/{instance_id} - "
-                    f"{int(self.DEFAULT_COOLDOWN_SECONDS - elapsed)}s remaining"
-                )
-                return
-
-        # Load alert config from DB
+        # Load alert config from DB first (need cooldown_seconds for check)
         config = self._load_alert_config(tenant_id)
         if not config or not config.get("enabled", False):
             logger.debug(f"Alerts disabled for tenant {tenant_id}")
             return
+
+        # Check cooldown using per-tenant config (falls back to default)
+        cooldown = config.get("cooldown_seconds", self.DEFAULT_COOLDOWN_SECONDS)
+        key = (channel_type, instance_id)
+        last = self._last_alert.get(key)
+        if last:
+            elapsed = (datetime.utcnow() - last).total_seconds()
+            if elapsed < cooldown:
+                logger.debug(
+                    f"Alert cooldown active for {channel_type}/{instance_id} - "
+                    f"{int(cooldown - elapsed)}s remaining"
+                )
+                return
 
         # Record alert time
         self._last_alert[key] = datetime.utcnow()

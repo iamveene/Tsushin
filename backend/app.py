@@ -535,6 +535,7 @@ async def lifespan(app: FastAPI):
 
     # Start MCP Health Monitor Service (auto-recovery for keepalive timeouts)
     mcp_health_monitor = None
+    container_manager = None
     try:
         # Initialize container manager for health checks and restarts
         container_manager = MCPContainerManager()
