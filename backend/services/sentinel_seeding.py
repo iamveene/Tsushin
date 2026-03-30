@@ -390,6 +390,21 @@ def run_sentinel_migrations(db: Session) -> dict:
         results["errors"].append(f"Exceptions seeding failed: {e}")
         logger.error(f"Exceptions seeding failed: {e}", exc_info=True)
 
+    # Migrate browser automation integration table for SSRF allowlist
+    try:
+        db.execute(text(
+            "ALTER TABLE browser_automation_integration "
+            "ADD COLUMN allowed_domains_json TEXT"
+        ))
+        db.commit()
+        logger.info("Added allowed_domains_json to browser_automation_integration")
+    except Exception as e:
+        db.rollback()
+        if "already exists" in str(e).lower() or "duplicate column" in str(e).lower():
+            logger.debug("browser_automation_integration.allowed_domains_json already exists")
+        else:
+            logger.debug(f"browser_automation_integration migration: {e}")
+
     if not results["errors"]:
         logger.info("Sentinel migrations completed successfully")
     else:

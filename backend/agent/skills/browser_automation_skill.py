@@ -1156,6 +1156,19 @@ Return JSON array only:"""
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
 
+        # Sentinel SSRF pre-check (LLM-based intent analysis)
+        if not await self._sentinel_ssrf_check(
+            url,
+            tenant_id=getattr(self, '_tenant_id', None),
+            agent_id=getattr(self, '_agent_id', None),
+            sender_key=getattr(self, '_sender_key', None),
+        ):
+            return SkillResult(
+                success=False,
+                output=f"Blocked by Sentinel SSRF protection: URL '{url}' was flagged as a potential SSRF attempt targeting internal resources",
+                metadata={"error": "ssrf_blocked", "skip_ai": True}
+            )
+
         wait_until = arguments.get("wait_until", "load")
 
         result = await provider.navigate(url=url, wait_until=wait_until)

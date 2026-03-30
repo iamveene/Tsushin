@@ -3079,6 +3079,9 @@ class BrowserAutomationIntegration(HubIntegration):
     # Domain blocklist (JSON array)
     blocked_domains_json = Column(Text, nullable=True)
 
+    # Domain allowlist (JSON array) — if non-empty, ONLY these domains are permitted
+    allowed_domains_json = Column(Text, nullable=True)
+
     # Session persistence (Phase 35a)
     session_persistence = Column(Boolean, default=False)
     session_ttl_seconds = Column(Integer, default=300)  # 5-minute idle timeout
