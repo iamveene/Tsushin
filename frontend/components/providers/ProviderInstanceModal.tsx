@@ -27,6 +27,7 @@ const VENDORS = [
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'elevenlabs', label: 'ElevenLabs' },
+  { value: 'vertex_ai', label: 'Vertex AI (Google Cloud)' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'custom', label: 'Custom' },
 ]
@@ -40,6 +41,7 @@ const VENDOR_DEFAULT_URLS: Record<string, string> = {
   openrouter: 'https://openrouter.ai/api/v1',
   deepseek: 'https://api.deepseek.com',
   elevenlabs: 'https://api.elevenlabs.io/v1',
+  vertex_ai: '',  // Region-specific — configured via Hub > Vertex AI settings
   ollama: 'http://localhost:11434',
   custom: '',
 }

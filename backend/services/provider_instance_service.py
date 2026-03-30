@@ -26,6 +26,7 @@ VENDOR_DEFAULT_BASE_URLS = {
     "deepseek": "https://api.deepseek.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "ollama": "http://host.docker.internal:11434",
+    "vertex_ai": None,  # Region-specific — resolved dynamically from credentials
 }
 
 SUPPORTED_VENDORS = list(VENDOR_DEFAULT_BASE_URLS.keys()) + ["custom"]

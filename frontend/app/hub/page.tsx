@@ -1958,6 +1958,7 @@ export default function HubPage() {
                     deepseek: 'DeepSeek',
                     openrouter: 'OpenRouter',
                     elevenlabs: 'ElevenLabs',
+                    vertex_ai: 'Vertex AI (Google Cloud)',
                     ollama: 'Ollama',
                     custom: 'Custom',
                   }
@@ -1971,6 +1972,7 @@ export default function HubPage() {
                     deepseek: BrainIcon,
                     openrouter: GlobeIcon,
                     elevenlabs: MicrophoneIcon,
+                    vertex_ai: CloudIcon,
                     ollama: BotIconSvg,
                     custom: BeakerIcon,
                   }
@@ -1984,6 +1986,7 @@ export default function HubPage() {
                     deepseek: 'text-cyan-400',
                     openrouter: 'text-teal-400',
                     elevenlabs: 'text-pink-400',
+                    vertex_ai: 'text-sky-400',
                     ollama: 'text-purple-400',
                     custom: 'text-rose-400',
                   }
@@ -1999,7 +2002,7 @@ export default function HubPage() {
 
                   const allVendors = Array.from(new Set([
                     ...Object.keys(vendorGroups),
-                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'deepseek', 'openrouter', 'elevenlabs',
+                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'deepseek', 'openrouter', 'elevenlabs', 'vertex_ai',
                   ])).filter(v => v !== 'ollama').sort()
 
                   return (

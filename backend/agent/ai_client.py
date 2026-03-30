@@ -90,6 +90,52 @@ class AIClient:
                     self.client = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0))
                     if api_key:
                         self.ollama_api_key = api_key
+                elif instance.vendor == "vertex_ai":
+                    # Vertex AI instance: api_key stores the PEM private key
+                    # Project ID, region, SA email loaded from api_key_service or env vars
+                    vertex_private_key = api_key or os.getenv("VERTEX_AI_PRIVATE_KEY", "")
+                    vertex_project_id = get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_PROJECT_ID", "")
+                    vertex_region = get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_REGION", "us-east5")
+                    vertex_sa_email = get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_SERVICE_ACCOUNT_EMAIL", "")
+
+                    if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
+                        raise ValueError("Vertex AI instance requires project_id, service_account_email, and private_key.")
+
+                    self.vertex_project_id = vertex_project_id
+                    self.vertex_region = vertex_region
+                    self.vertex_sa_email = vertex_sa_email
+
+                    if model_name.startswith("claude"):
+                        self.vertex_publisher = "anthropic"
+                    elif model_name.startswith("mistral") or model_name.startswith("codestral"):
+                        self.vertex_publisher = "mistralai"
+                    else:
+                        self.vertex_publisher = "google"
+
+                    from google.oauth2 import service_account as sa_module
+                    from google.auth.transport.requests import Request as AuthRequest
+
+                    formatted_key = vertex_private_key.replace('\\n', '\n')
+                    credentials_info = {
+                        "type": "service_account",
+                        "project_id": vertex_project_id,
+                        "client_email": vertex_sa_email,
+                        "private_key": formatted_key,
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }
+                    self._vertex_credentials = sa_module.Credentials.from_service_account_info(
+                        credentials_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                    )
+                    self._vertex_auth_request = AuthRequest()
+
+                    if self.vertex_publisher == "google":
+                        self._vertex_credentials.refresh(self._vertex_auth_request)
+                        vi_base_url = f"https://{vertex_region}-aiplatform.googleapis.com/v1/projects/{vertex_project_id}/locations/{vertex_region}/endpoints/openapi"
+                        self.client = AsyncOpenAI(api_key=self._vertex_credentials.token, base_url=vi_base_url)
+                        if not self.model_name.startswith("google/"):
+                            self.model_name = f"google/{self.model_name}"
+                    else:
+                        self.client = None  # Claude via Vertex uses httpx directly
                 else:
                     # All OpenAI-compatible (openai, groq, grok, openrouter, custom)
                     if not api_key:
