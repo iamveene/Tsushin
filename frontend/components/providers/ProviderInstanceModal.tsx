@@ -39,7 +39,7 @@ const VENDOR_DEFAULT_URLS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
   grok: 'https://api.x.ai/v1',
   openrouter: 'https://openrouter.ai/api/v1',
-  deepseek: 'https://api.deepseek.com',
+  deepseek: 'https://api.deepseek.com/v1',
   elevenlabs: 'https://api.elevenlabs.io/v1',
   vertex_ai: '',  // Region-specific — configured via Hub > Vertex AI settings
   ollama: 'http://localhost:11434',

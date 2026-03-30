@@ -4,7 +4,7 @@
  * Integration Hub - Consolidated Single Page
  *
  * Manages all integrations organized by category:
- * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, ElevenLabs
+ * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI, ElevenLabs
  * - Communication: WhatsApp, Telegram, Discord, Slack, Email (coming soon)
  * - Productivity: Asana, Google Calendar, Notion (coming soon)
  * - Developer Tools: Shell, GitHub (coming soon)
