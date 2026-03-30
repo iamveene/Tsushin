@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import type { A2ASessionInfo } from '@/components/watcher/graph/types'
 
 export type ActivityConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'error'
 
@@ -38,7 +39,19 @@ interface KbUsedEvent {
   timestamp: string
 }
 
-type ActivityEvent = AgentProcessingEvent | SkillUsedEvent | KbUsedEvent
+// A2A communication event — emitted at session start and end
+interface AgentCommunicationEvent {
+  type: 'agent_communication'
+  initiator_agent_id: number
+  target_agent_id: number
+  session_id: number
+  status: 'start' | 'end'
+  session_type: 'ask' | 'delegate'
+  depth: number
+  timestamp: string
+}
+
+type ActivityEvent = AgentProcessingEvent | SkillUsedEvent | KbUsedEvent | AgentCommunicationEvent
 
 // Skill usage info for UI
 export interface SkillUseInfo {
@@ -78,6 +91,10 @@ interface UseWatcherActivityReturn {
   fadingAgents: Set<number>
   fadingChannels: Set<string>
   isConnected: boolean
+  // A2A real-time session tracking
+  activeA2ASessions: Map<string, A2ASessionInfo>
+  fadingA2ASessions: Set<string>
+  agentA2ADepths: Map<number, number>
 }
 
 /**
@@ -96,6 +113,10 @@ export function useWatcherActivity(
   // Session-based tracking: all activity tied to agent processing lifecycle
   const [processingSessions, setProcessingSessions] = useState<Map<number, ProcessingSession>>(new Map())
 
+  // A2A session tracking
+  const [a2aSessions, setA2aSessions] = useState<Map<string, A2ASessionInfo>>(new Map())
+  const [fadingA2ASessions, setFadingA2ASessions] = useState<Set<string>>(new Set())
+
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -106,6 +127,8 @@ export function useWatcherActivity(
   // Timeout refs
   const processingTimeoutRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
   const sessionFadeTimeoutRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+  const a2aFadeTimeoutRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const a2aStartTimeRef = useRef<Map<string, number>>(new Map())
 
   const PROCESSING_TIMEOUT = 30000 // 30 seconds safety timeout
   const MIN_AGENT_GLOW_DURATION = 5000 // Minimum visible glow for fast operations
@@ -159,6 +182,18 @@ export function useWatcherActivity(
     return channels
   }, [processingSessions])
 
+  // Derive max A2A depth per agent from active sessions (for depth badge on agent nodes)
+  const agentA2ADepths = useMemo(() => {
+    const map = new Map<number, number>()
+    a2aSessions.forEach(session => {
+      const existingInit = map.get(session.initiatorId) ?? 0
+      if (session.depth > existingInit) map.set(session.initiatorId, session.depth)
+      const existingTarget = map.get(session.targetId) ?? 0
+      if (session.depth > existingTarget) map.set(session.targetId, session.depth)
+    })
+    return map
+  }, [a2aSessions])
+
   const getWebSocketUrl = useCallback(() => {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
     const wsProtocol = apiUrl.startsWith('https') ? 'wss' : 'ws'
@@ -176,6 +211,8 @@ export function useWatcherActivity(
     processingTimeoutRef.current.clear()
     sessionFadeTimeoutRef.current.forEach(timeout => clearTimeout(timeout))
     sessionFadeTimeoutRef.current.clear()
+    a2aFadeTimeoutRef.current.forEach(timeout => clearTimeout(timeout))
+    a2aFadeTimeoutRef.current.clear()
   }, [])
 
   // Start coordinated fade-out for an agent's entire processing chain
@@ -393,6 +430,62 @@ export function useWatcherActivity(
         return next
       })
     }
+
+    if (data.type === 'agent_communication') {
+      const event = data as AgentCommunicationEvent
+      const sessionKey = String(event.session_id)
+
+      if (event.status === 'start') {
+        a2aStartTimeRef.current.set(sessionKey, Date.now())
+
+        // Cancel any pending fade for this session (re-used session_id edge case)
+        const existingFade = a2aFadeTimeoutRef.current.get(sessionKey)
+        if (existingFade) {
+          clearTimeout(existingFade)
+          a2aFadeTimeoutRef.current.delete(sessionKey)
+        }
+
+        setA2aSessions(prev => {
+          const next = new Map(prev)
+          next.set(sessionKey, {
+            initiatorId: event.initiator_agent_id,
+            targetId: event.target_agent_id,
+            sessionType: event.session_type,
+            depth: event.depth,
+            startTime: Date.now(),
+          })
+          return next
+        })
+        setFadingA2ASessions(prev => {
+          const next = new Set(prev)
+          next.delete(sessionKey)
+          return next
+        })
+      } else {
+        // status === 'end': enforce minimum glow duration then fade
+        const startTime = a2aStartTimeRef.current.get(sessionKey)
+        const elapsed = startTime ? Date.now() - startTime : MIN_AGENT_GLOW_DURATION
+        const remaining = Math.max(0, MIN_AGENT_GLOW_DURATION - elapsed)
+
+        const startA2AFadeOut = () => {
+          setFadingA2ASessions(prev => { const n = new Set(prev); n.add(sessionKey); return n })
+          const cleanupTimeout = setTimeout(() => {
+            setA2aSessions(prev => { const n = new Map(prev); n.delete(sessionKey); return n })
+            setFadingA2ASessions(prev => { const n = new Set(prev); n.delete(sessionKey); return n })
+            a2aStartTimeRef.current.delete(sessionKey)
+            a2aFadeTimeoutRef.current.delete(sessionKey)
+          }, POST_PROCESSING_FADE_DURATION)
+          a2aFadeTimeoutRef.current.set(sessionKey, cleanupTimeout)
+        }
+
+        if (remaining > 0) {
+          const delayTimeout = setTimeout(startA2AFadeOut, remaining)
+          a2aFadeTimeoutRef.current.set(sessionKey, delayTimeout)
+        } else {
+          startA2AFadeOut()
+        }
+      }
+    }
   }, [updateConnectionState, startCoordinatedFadeOut])
 
   const connect = useCallback(() => {
@@ -510,6 +603,8 @@ export function useWatcherActivity(
     // Reset state
     setProcessingAgents(new Set())
     setProcessingSessions(new Map())
+    setA2aSessions(new Map())
+    setFadingA2ASessions(new Set())
     updateConnectionState('disconnected')
   }, [clearAllTimeouts, updateConnectionState])
 
@@ -532,6 +627,9 @@ export function useWatcherActivity(
     recentKbUse,
     fadingAgents,
     fadingChannels,
-    isConnected: connectionState === 'connected'
+    isConnected: connectionState === 'connected',
+    activeA2ASessions: a2aSessions,
+    fadingA2ASessions,
+    agentA2ADepths,
   }
 }
