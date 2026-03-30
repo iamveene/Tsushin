@@ -245,6 +245,7 @@ backend/test-api.html
 # Local-only directories (QA artifacts, test data, methodology docs, brand assets)
 qa-screenshots/
 test-evidence/
+test-screenshots/
 sample_data/
 test_documents/
 methodology/

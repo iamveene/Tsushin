@@ -63,6 +63,31 @@ description = "OpenRouter API Key"
 regex = '''sk-or-[a-zA-Z0-9_-]{40,}'''
 keywords = ["openrouter"]
 
+[[rules]]
+id = "vertex-ai-service-account-email"
+description = "Vertex AI / GCP Service Account Email"
+regex = '''[a-zA-Z0-9._-]+@[a-zA-Z0-9_-]+\.iam\.gserviceaccount\.com'''
+keywords = ["gserviceaccount", "iam"]
+
+[[rules]]
+id = "vertex-ai-private-key"
+description = "Vertex AI / GCP Private Key (PEM)"
+regex = '''-----BEGIN (RSA |EC |)PRIVATE KEY-----'''
+keywords = ["private_key"]
+
+[[rules]]
+id = "vertex-ai-project-id"
+description = "Vertex AI / GCP hardcoded project ID in env assignment"
+regex = '''VERTEX_AI_PROJECT_ID\s*=\s*['"]([a-z][a-z0-9-]{4,28}[a-z0-9])['"]'''
+secretGroup = 1
+keywords = ["VERTEX_AI_PROJECT_ID"]
+
+[[rules]]
+id = "vertex-ai-credentials-json"
+description = "Vertex AI / GCP service account credentials JSON (inline)"
+regex = '''"type"\s*:\s*"service_account"'''
+keywords = ["service_account"]
+
 # ============================================
 # Allowlist - files/patterns that should be ignored
 # ============================================
@@ -141,6 +166,10 @@ regexes = [
     '''test[-_]?123''',
     '''mock[-_]?.*[-_]?key''',
     '''12345+''',
+
+    # Vertex AI / GCP placeholder patterns (infrastructure templates)
+    '''@PROJECT\.iam\.gserviceaccount\.com''',
+    '''\$\{\{.*secrets\.GCP_PROJECT''',
 ]
 
 # Specific commits to allow (add commit hashes here if needed)
