@@ -151,6 +151,12 @@ class PlaygroundWebSocketService:
                         from services.playground_thread_service import PlaygroundThreadService
                         from models import Memory
 
+                        # Ensure clean DB session before post-streaming queries
+                        try:
+                            self.db.rollback()
+                        except Exception:
+                            pass
+
                         # Check if this is a fresh thread (only 2 messages: user + assistant)
                         current_thread = self.db.query(ConversationThread).filter(
                             ConversationThread.id == thread_id
@@ -208,6 +214,10 @@ class PlaygroundWebSocketService:
 
         except Exception as e:
             self.logger.error(f"Error in streaming message: {e}", exc_info=True)
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
             yield {
                 "type": "error",
                 "error": str(e)

@@ -17,6 +17,10 @@ from services.watcher_activity_service import emit_agent_processing_async
 
 logger = logging.getLogger(__name__)
 
+# Module-level caches for generated media (persist across PlaygroundService instances)
+_IMAGE_CACHE: dict[str, str] = {}
+_AUDIO_CACHE: dict[str, str] = {}
+
 
 class PlaygroundService:
     """
@@ -1700,10 +1704,8 @@ class PlaygroundService:
                     # Generate audio ID for serving
                     audio_id = str(uuid.uuid4())
 
-                    # Store audio path mapping (in-memory for now, could use Redis/DB)
-                    if not hasattr(self, '_audio_cache'):
-                        self._audio_cache = {}
-                    self._audio_cache[audio_id] = audio_path
+                    # Store audio path mapping in module-level cache
+                    _AUDIO_CACHE[audio_id] = audio_path
 
                     return {
                         "audio_url": f"/api/playground/audio/{audio_id}",
@@ -1727,16 +1729,15 @@ class PlaygroundService:
         Returns:
             File path or None if not found
         """
-        if not hasattr(self, '_audio_cache'):
-            self._audio_cache = {}
-        return self._audio_cache.get(audio_id)
+        return _AUDIO_CACHE.get(audio_id)
 
     def _cache_image(self, image_path: str) -> str:
         """
         Cache an image file and return a serveable URL.
 
         Phase 6: Image Generation for Playground.
-        Follows the same pattern as audio caching.
+        Uses module-level cache so the GET endpoint can find the image
+        even though it creates a new PlaygroundService instance.
 
         Args:
             image_path: Path to the generated image file
@@ -1746,11 +1747,8 @@ class PlaygroundService:
         """
         import uuid
 
-        if not hasattr(self, '_image_cache'):
-            self._image_cache = {}
-
         image_id = str(uuid.uuid4())
-        self._image_cache[image_id] = image_path
+        _IMAGE_CACHE[image_id] = image_path
         return f"/api/playground/images/{image_id}"
 
     def get_image_path(self, image_id: str) -> Optional[str]:
@@ -1763,9 +1761,7 @@ class PlaygroundService:
         Returns:
             File path or None if not found
         """
-        if not hasattr(self, '_image_cache'):
-            self._image_cache = {}
-        return self._image_cache.get(image_id)
+        return _IMAGE_CACHE.get(image_id)
 
     async def check_agent_audio_capabilities(self, agent_id: int) -> Dict[str, Any]:
         """

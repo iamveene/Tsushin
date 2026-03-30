@@ -782,10 +782,7 @@ export default function ExpertMode({
                             <div className="whitespace-pre-wrap break-words">{msg.content}</div>
                             {msg.image_url && (
                               <img
-                                src={msg.image_url.startsWith('/api/')
-                                  ? `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}${msg.image_url}`
-                                  : msg.image_url
-                                }
+                                src={msg.image_url}
                                 alt="Generated image"
                                 className="mt-3 rounded-lg max-w-full max-h-[400px] object-contain cursor-pointer border border-[var(--pg-border)]"
                                 onClick={(e) => window.open((e.target as HTMLImageElement).src, '_blank')}
@@ -794,10 +791,7 @@ export default function ExpertMode({
                             {msg.audio_url && (
                               <audio
                                 controls
-                                src={msg.audio_url.startsWith('/api/')
-                                  ? `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}${msg.audio_url}`
-                                  : msg.audio_url
-                                }
+                                src={msg.audio_url}
                                 className="mt-2 h-8 w-full max-w-[200px]"
                               />
                             )}

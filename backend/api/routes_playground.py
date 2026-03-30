@@ -565,10 +565,11 @@ async def upload_audio(
 async def get_audio_file(
     audio_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
 ):
     """
     Serve TTS audio file by ID.
+    No auth required — the UUID itself acts as an unguessable access token.
+    Browsers cannot send Authorization headers for <audio> src requests.
 
     Phase 14.1: TTS Audio Responses
     """
@@ -605,12 +606,13 @@ async def get_audio_file(
 async def get_image_file(
     image_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
 ):
     """
     Serve generated image file by ID.
 
     Phase 6: Image Generation for Playground
+    No auth required — the UUID itself acts as an unguessable access token.
+    Browsers cannot send Authorization headers for <img> src requests.
     """
     from fastapi.responses import FileResponse
     import os
