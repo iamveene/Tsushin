@@ -74,6 +74,15 @@ def seed_rbac_defaults(session):
     if existing_roles:
         return  # Already seeded
 
+    # Guard against partial seeding: if permissions exist but no roles,
+    # a previous startup crashed mid-seed and committed permissions only.
+    # Clear the orphaned permissions so the batch insert can succeed.
+    existing_perms = session.query(Permission).first()
+    if existing_perms:
+        print("[RBAC] Detected partial seeding (permissions without roles) — clearing orphaned permissions...")
+        session.query(Permission).delete()
+        session.commit()
+
     print("[RBAC] Seeding default roles and permissions...")
 
     # Define permissions
