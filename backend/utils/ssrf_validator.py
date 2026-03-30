@@ -149,10 +149,11 @@ def validate_url(
                 f"Domain '{hostname}' is not in the allowed domains list"
             )
 
-    # Additional blocked domains (per-tenant blocklist)
+    # Additional blocked domains (per-tenant blocklist) — exact or suffix match
     if blocked_domains:
         for blocked in blocked_domains:
-            if blocked.lower() in hostname_lower:
+            blocked_lower = blocked.lower()
+            if hostname_lower == blocked_lower or hostname_lower.endswith("." + blocked_lower):
                 raise SSRFValidationError(
                     f"Domain '{hostname}' is blocked by tenant policy"
                 )
