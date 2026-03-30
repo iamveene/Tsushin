@@ -39,6 +39,7 @@ const PROVIDER_CONFIG: Record<string, { name: string; color: string; bgColor: st
   kokoro: { name: 'Kokoro', color: 'text-pink-400', bgColor: 'bg-pink-500/10' },
   elevenlabs: { name: 'ElevenLabs', color: 'text-cyan-400', bgColor: 'bg-cyan-500/10' },
   ollama: { name: 'Ollama (Local)', color: 'text-purple-400', bgColor: 'bg-purple-500/10' },
+  vertex_ai: { name: 'Vertex AI (GCP)', color: 'text-cyan-400', bgColor: 'bg-cyan-500/10' },
   unknown: { name: 'Other', color: 'text-gray-400', bgColor: 'bg-gray-500/10' },
 }
 

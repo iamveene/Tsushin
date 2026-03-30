@@ -161,16 +161,13 @@ async def _test_vertex_ai(db: Session, tenant_id: str) -> TestConnectionResponse
     import os
 
     try:
-        # Load credentials from env vars
-        project_id = os.getenv("VERTEX_AI_PROJECT_ID", "")
-        region = os.getenv("VERTEX_AI_REGION", "us-east5")
-        sa_email = os.getenv("VERTEX_AI_SERVICE_ACCOUNT_EMAIL", "")
-        private_key = os.getenv("VERTEX_AI_PRIVATE_KEY", "")
+        from services.api_key_service import get_api_key
 
-        # Also check DB api_key storage (the private key may be stored there)
-        if not private_key:
-            from services.api_key_service import get_api_key
-            private_key = get_api_key("vertex_ai", db, tenant_id=tenant_id) or ""
+        # Load credentials: DB (per-tenant) takes priority over env vars
+        project_id = get_api_key("vertex_ai_project_id", db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_PROJECT_ID", "")
+        region = get_api_key("vertex_ai_region", db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_REGION", "us-east5")
+        sa_email = get_api_key("vertex_ai_sa_email", db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_SERVICE_ACCOUNT_EMAIL", "")
+        private_key = get_api_key("vertex_ai", db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_PRIVATE_KEY", "")
 
         if not project_id or not sa_email or not private_key:
             missing = []
@@ -215,7 +212,7 @@ async def _test_vertex_ai(db: Session, tenant_id: str) -> TestConnectionResponse
                     "project_id": project_id,
                     "region": region,
                     "service_account": sa_email,
-                    "token_preview": credentials.token[:12] + "...",
+                    "token_valid": True,
                 },
             )
         else:

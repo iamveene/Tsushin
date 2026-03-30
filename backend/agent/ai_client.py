@@ -196,26 +196,24 @@ class AIClient:
             self.logger.info(f"Initialized DeepSeek client with model: {model_name}")
         elif self.provider == "vertex_ai":
             # Vertex AI uses service account credentials, not a simple API key
-            # Load config from env vars (fallback) or DB
-            import json as _json
+            # Priority: DB (per-tenant) → env var fallback
+            vertex_private_key = api_key or os.getenv("VERTEX_AI_PRIVATE_KEY", "")
 
+            # Load project_id, region, sa_email from DB or env vars
             vertex_project_id = os.getenv("VERTEX_AI_PROJECT_ID", "")
             vertex_region = os.getenv("VERTEX_AI_REGION", "us-east5")
             vertex_sa_email = os.getenv("VERTEX_AI_SERVICE_ACCOUNT_EMAIL", "")
-            vertex_private_key = api_key or os.getenv("VERTEX_AI_PRIVATE_KEY", "")  # api_key from DB stores the private key
 
-            # If DB has vertex_ai config stored as JSON in the api_key field, parse it
             if db:
-                from models import Config
-                config = db.query(Config).first()
-                if config:
-                    vertex_config = getattr(config, 'vertex_ai_config', None)
-                    if vertex_config and isinstance(vertex_config, dict):
-                        vertex_project_id = vertex_config.get('project_id', vertex_project_id)
-                        vertex_region = vertex_config.get('region', vertex_region)
-                        vertex_sa_email = vertex_config.get('service_account_email', vertex_sa_email)
-                        if vertex_config.get('private_key'):
-                            vertex_private_key = vertex_config['private_key']
+                db_project = get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id)
+                db_region = get_api_key('vertex_ai_region', db, tenant_id=tenant_id)
+                db_sa_email = get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id)
+                if db_project:
+                    vertex_project_id = db_project
+                if db_region:
+                    vertex_region = db_region
+                if db_sa_email:
+                    vertex_sa_email = db_sa_email
 
             if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
                 raise ValueError(
@@ -223,11 +221,10 @@ class AIClient:
                     "Configure via Hub → Integrations or set VERTEX_AI_* environment variables."
                 )
 
-            # Store config for use in API calls
+            # Store config for use in API calls (private key not stored — only needed for credential init)
             self.vertex_project_id = vertex_project_id
             self.vertex_region = vertex_region
             self.vertex_sa_email = vertex_sa_email
-            self.vertex_private_key = vertex_private_key
 
             # Determine publisher from model name
             # Claude models go through Anthropic publisher, everything else through Google
@@ -273,11 +270,8 @@ class AIClient:
                 if not self.model_name.startswith("google/"):
                     self.model_name = f"google/{self.model_name}"
             elif self.vertex_publisher == "anthropic":
-                # Use Anthropic SDK's Vertex AI integration
-                self.client = AsyncAnthropic(
-                    # We'll handle Vertex auth manually in _call_vertex_anthropic
-                    api_key="vertex-placeholder"  # Not used - we override with Bearer token
-                )
+                # Claude via Vertex uses httpx directly with rawPredict — no SDK client needed
+                self.client = None
 
             self.logger.info(f"Initialized Vertex AI client: project={vertex_project_id}, region={vertex_region}, publisher={self.vertex_publisher}, model={model_name}")
         else:
