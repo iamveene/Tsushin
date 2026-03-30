@@ -14,7 +14,7 @@ import { useOnboarding } from '@/contexts/OnboardingContext'
 import { useToast } from '@/contexts/ToastContext'
 
 // Use relative paths in the browser to avoid mixed-content (HTTPS page → HTTP API)
-const API_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081')
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
 
 // Navigation items configuration
 interface NavItem {
