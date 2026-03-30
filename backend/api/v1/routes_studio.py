@@ -179,7 +179,7 @@ SKILL_METADATA = {
 }
 
 EXCLUDED_SKILL_TYPES = {"automation"}
-VALID_CHANNELS = {"playground", "whatsapp", "telegram", "slack"}
+VALID_CHANNELS = {"playground", "whatsapp", "telegram", "slack", "discord"}
 SENSITIVE_CONFIG_PATTERNS = {"api_key", "secret", "access_token", "auth_token", "password", "credential"}
 
 

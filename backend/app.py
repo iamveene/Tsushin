@@ -123,6 +123,8 @@ from api.routes_model_pricing import router as model_pricing_router
 from api.routes_telegram_instances import router as telegram_instances_router
 # v0.6.0 Item 33: Slack Integration
 from api.routes_slack import router as slack_router
+# v0.6.0 Item 34: Discord Integration
+from api.routes_discord import router as discord_router
 # Phase 17: System AI Configuration
 from api.routes_system_ai import router as system_ai_router
 # Integration Test Connection endpoints (Groq, Grok, ElevenLabs, etc.)
@@ -1185,6 +1187,7 @@ app.include_router(skill_integrations_router, prefix="/api")  # Skill Integratio
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
 app.include_router(slack_router, prefix="/api/integrations/slack")  # v0.6.0 Item 33: Slack Integration
+app.include_router(discord_router, prefix="/api/integrations/discord")  # v0.6.0 Item 34: Discord Integration
 app.include_router(system_ai_router)  # Phase 17: System AI Configuration
 app.include_router(integrations_router)  # Integration Test Connection
 app.include_router(sentinel_router, prefix="/api")  # Phase 20: Sentinel Security Agent

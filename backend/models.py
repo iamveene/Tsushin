@@ -84,6 +84,7 @@ class Config(Base):
     amadeus_encryption_key = Column(String(500), nullable=True)  # Amadeus API credentials encryption (Fernet key)
     api_key_encryption_key = Column(String(500), nullable=True)  # LLM API key encryption (Fernet key)
     slack_encryption_key = Column(String(500), nullable=True)  # Slack token encryption (Fernet key) — v0.6.0 Item 33
+    discord_encryption_key = Column(String(500), nullable=True)  # Discord token encryption (Fernet key) — v0.6.0 Item 34
 
     # System-Level AI Configuration (Phase 17: Tenant-Configurable System AI)
     # These settings control which AI provider/model is used for system operations
@@ -342,10 +343,11 @@ class Agent(Base):
 
     # Phase 10: Channel Configuration
     # Determines which channels this agent can interact through
-    enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack
+    enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack, discord
     whatsapp_integration_id = Column(Integer, ForeignKey("whatsapp_mcp_instance.id", ondelete="SET NULL"), nullable=True)  # Specific MCP instance
     telegram_integration_id = Column(Integer, nullable=True)  # Future: FK to TelegramBotInstance
     slack_integration_id = Column(Integer, nullable=True)  # v0.6.0 Item 33: FK to SlackIntegration
+    discord_integration_id = Column(Integer, nullable=True)  # v0.6.0 Item 34: FK to DiscordIntegration
     provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
 
     # Avatar
@@ -2817,6 +2819,37 @@ class SlackIntegration(Base):
     __table_args__ = (
         Index("idx_slack_integration_tenant", "tenant_id"),
         Index("idx_slack_integration_status", "status"),
+    )
+
+
+class DiscordIntegration(Base):
+    """
+    v0.6.0 Item 34: Discord Bot Integration
+
+    Manages Discord bot connections per tenant via REST API (outbound) and
+    Gateway events (inbound). Bot token is encrypted with Fernet.
+
+    Example:
+        Tenant "acme-corp" → Discord Bot "Acme Bot" (application_id: 123456789)
+    """
+    __tablename__ = "discord_integration"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(100), nullable=False, index=True)
+    bot_token_encrypted = Column(Text, nullable=False)          # Bot token (Fernet)
+    application_id = Column(String(50), nullable=False)         # Discord Application ID
+    bot_user_id = Column(String(50))                            # Bot's Discord user ID
+    is_active = Column(Boolean, default=True)
+    status = Column(String(20), default="inactive")             # inactive/connected/error
+    dm_policy = Column(String(20), default="allowlist")         # open/allowlist/disabled
+    allowed_guilds = Column(JSON, default=[])                   # List of allowed guild (server) IDs
+    guild_channel_config = Column(JSON, default={})             # Per-guild channel configuration
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    __table_args__ = (
+        Index("idx_discord_integration_tenant", "tenant_id"),
+        Index("idx_discord_integration_status", "status"),
     )
 
 

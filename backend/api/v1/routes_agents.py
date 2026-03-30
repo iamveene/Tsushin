@@ -24,7 +24,7 @@ from api.v1.schemas import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-VALID_CHANNELS = {"playground", "whatsapp", "telegram", "slack"}
+VALID_CHANNELS = {"playground", "whatsapp", "telegram", "slack", "discord"}
 
 
 # ============================================================================
