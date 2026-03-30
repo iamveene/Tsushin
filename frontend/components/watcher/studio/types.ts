@@ -17,6 +17,7 @@ export type BuilderNodeType =
   | 'builder-sentinel'
   | 'builder-knowledge'
   | 'builder-memory'
+  | 'builder-ghost-agent'
 
 // Profile category for the palette
 export type ProfileCategoryId =
@@ -192,6 +193,18 @@ export interface BuilderGroupData {
   onDragGroupDrop?: (categoryId: ProfileCategoryId, data: DragTransferData) => void
 }
 
+// A2A ghost agent node — semi-transparent reference to a peer agent that has
+// a comm permission with the agent being built/viewed in Studio
+export interface BuilderGhostAgentData {
+  [key: string]: unknown
+  type: 'builder-ghost-agent'
+  agentId: number
+  agentName: string
+  avatar?: string | null
+  permissionId?: number
+  isGhost: true
+}
+
 // Union of all builder node data
 export type BuilderNodeData =
   | BuilderAgentData
@@ -204,6 +217,7 @@ export type BuilderNodeData =
   | BuilderSentinelData
   | BuilderKnowledgeData
   | BuilderMemoryData
+  | BuilderGhostAgentData
 
 // React Flow types
 export type BuilderNode = Node<BuilderNodeData>
@@ -249,6 +263,8 @@ export interface AgentBuilderState {
   attachedKnowledgeDocs: number[]
   isDirty: boolean
   isSaving: boolean
+  // A2A: toggle to show peer agents with comm permissions as ghost nodes
+  showA2ANetwork: boolean
 }
 
 // Drag-and-drop transfer data

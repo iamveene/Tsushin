@@ -319,3 +319,60 @@
   animation: edge-glow-fade-violet 3s ease-out forwards;
   stroke-width: 2.5 !important;
 }
+
+/* ============================================================
+   A2A Edge Animations — #F59E0B amber (agent-to-agent links)
+   ============================================================ */
+
+/* Static dashed A2A edge (permission exists) */
+.a2a-edge-static {
+  stroke-dasharray: 6, 3 !important;
+}
+
+/* Disabled permission — 25% opacity overlay */
+.a2a-edge-disabled {
+  opacity: 0.25 !important;
+}
+
+/* Amber: A2A ask mode (1.5s, matches existing pulse timing) */
+@keyframes a2a-edge-glow {
+  0%, 100% { filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.8)); stroke-opacity: 1; }
+  50%       { filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.4)); stroke-opacity: 0.7; }
+}
+.react-flow__edge.edge-active-amber .react-flow__edge-path {
+  stroke: #F59E0B !important;
+  stroke-width: 2.5 !important;
+  animation: a2a-edge-glow 1.5s ease-in-out infinite;
+}
+
+/* Amber: A2A delegation mode (2.5s heavier pulse) */
+@keyframes a2a-edge-glow-delegation {
+  0%, 100% { filter: drop-shadow(0 0 6px rgba(245, 158, 11, 1.0)); stroke-opacity: 1; }
+  50%       { filter: drop-shadow(0 0 18px rgba(245, 158, 11, 0.5)); stroke-opacity: 0.8; }
+}
+.react-flow__edge.edge-active-amber-delegation .react-flow__edge-path {
+  stroke: #F59E0B !important;
+  stroke-width: 3 !important;
+  animation: a2a-edge-glow-delegation 2.5s ease-in-out infinite;
+}
+
+/* Amber: A2A edge fade-out (3s, matches existing fade timing) */
+@keyframes a2a-edge-fade {
+  0%   { filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.8)); stroke: #F59E0B; }
+  100% { filter: drop-shadow(0 0 0 rgba(245, 158, 11, 0)); stroke: #484F58; }
+}
+.react-flow__edge.edge-fading-amber .react-flow__edge-path {
+  animation: a2a-edge-fade 3s ease-out forwards;
+  stroke-width: 2.5 !important;
+}
+
+/* Depth badge on agent nodes during active A2A chains */
+.a2a-depth-badge {
+  background-color: #F59E0B;
+  color: #000;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  line-height: 1.4;
+}

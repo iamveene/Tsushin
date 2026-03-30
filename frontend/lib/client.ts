@@ -2489,6 +2489,30 @@ export interface AgentCommPermission {
   updated_at?: string | null
 }
 
+// Lightweight agent record returned by the comm-enabled endpoint
+export interface CommEnabledAgent {
+  id: number
+  name: string
+  avatar: string | null
+  agent_type: string
+}
+
+// Summarised permission record returned by the comm-enabled endpoint
+export interface CommPermissionSummary {
+  id: number
+  source_agent_id: number
+  target_agent_id: number
+  is_enabled: boolean
+  max_depth: number
+  rate_limit_rpm: number
+}
+
+// Response shape of GET /api/v2/agents/comm-enabled
+export interface CommEnabledResponse {
+  agents: CommEnabledAgent[]
+  permissions: CommPermissionSummary[]
+}
+
 export interface AgentCommSession {
   id: number
   initiator_agent_id: number
@@ -6661,6 +6685,12 @@ export const api = {
   async getAgentCommStats(): Promise<AgentCommStats> {
     const res = await authenticatedFetch(`${API_URL}/api/agent-communication/stats`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch agent communication stats')
+    return res.json()
+  },
+
+  async getCommEnabledAgents(): Promise<CommEnabledResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/v2/agents/comm-enabled`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch comm-enabled agents')
     return res.json()
   },
 }
