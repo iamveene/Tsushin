@@ -188,6 +188,13 @@ async def update_api_client(
     if not client:
         raise HTTPException(status_code=404, detail="API client not found")
 
+    # BUG-SEC-008 FIX: Pass updater permissions for privilege escalation check
+    updater_perms = None
+    if not current_user.is_global_admin:
+        from auth_service import AuthService
+        auth_svc = AuthService(db)
+        updater_perms = auth_svc.get_user_permissions(current_user.id)
+
     try:
         updated = service.update_client(
             client,
@@ -197,6 +204,7 @@ async def update_api_client(
             rate_limit_rpm=request.rate_limit_rpm,
             expires_at=request.expires_at,
             custom_scopes=request.custom_scopes,
+            updater_permissions=updater_perms,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
