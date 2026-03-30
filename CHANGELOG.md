@@ -5,6 +5,19 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-03-30
+
+### Added
+- **SSRF Protection for Browser Automation (Security)**: Comprehensive Server-Side Request Forgery protection for the browser automation skill.
+  - New `browser_ssrf` Sentinel detection type with LLM-based intent analysis at 3 aggressiveness levels
+  - DNS-resolution-based URL validation blocks private IPs, cloud metadata (169.254.169.254), Docker/Kubernetes internals, CGNAT ranges, and loopback addresses
+  - Per-tenant URL allowlist/blocklist support in BrowserConfig — tenants can restrict browser navigation to approved domains only
+  - Sentinel `analyze_browser_url()` pre-navigation check integrated into the browser automation skill pipeline
+  - Browser SSRF toggle in Sentinel settings UI (critical severity, enabled by default)
+  - Updated unified classification prompts to include `browser_ssrf` in all aggressiveness levels
+  - Automatic DB migration adds `detect_browser_ssrf` and `browser_ssrf_prompt` columns for existing installations
+  - Fresh installs seed `browser_ssrf` detection enabled by default
+
 ## [0.6.0] - 2026-03-30
 
 ### Added
