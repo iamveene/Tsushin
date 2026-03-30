@@ -98,7 +98,8 @@ class SlashCommandService:
                     "help_text": cmd.help_text,
                     "is_enabled": cmd.is_enabled,
                     "handler_type": cmd.handler_type,
-                    "sort_order": cmd.sort_order
+                    "sort_order": cmd.sort_order,
+                    "permission_required": cmd.permission_required
                 }
 
         return list(result.values())
@@ -124,14 +125,14 @@ class SlashCommandService:
     # Command Detection
     # =========================================================================
 
-    def _get_compiled_patterns(self, tenant_id: str) -> List[Tuple[re.Pattern, Dict]]:
+    def _get_compiled_patterns(self, tenant_id: str, language_code: Optional[str] = None) -> List[Tuple[re.Pattern, Dict]]:
         """Get compiled regex patterns for command matching."""
-        cache_key = tenant_id
+        cache_key = f"{tenant_id}:{language_code}" if language_code else tenant_id
 
         if cache_key in self._pattern_cache:
             return self._pattern_cache[cache_key]
 
-        commands = self.get_commands(tenant_id)
+        commands = self.get_commands(tenant_id, language_code=language_code)
         patterns = []
 
         for cmd in commands:
@@ -160,7 +161,8 @@ class SlashCommandService:
     def detect_command(
         self,
         message: str,
-        tenant_id: str
+        tenant_id: str,
+        language_code: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Detect if a message is a slash command.
@@ -168,6 +170,7 @@ class SlashCommandService:
         Args:
             message: The message text
             tenant_id: Tenant ID for command lookup
+            language_code: Optional language code for scoped pattern matching
 
         Returns:
             Dict with command info and matched groups, or None if not a command
@@ -176,7 +179,7 @@ class SlashCommandService:
             return None
 
         message = message.strip()
-        patterns = self._get_compiled_patterns(tenant_id)
+        patterns = self._get_compiled_patterns(tenant_id, language_code=language_code)
 
         for pattern, cmd in patterns:
             match = pattern.match(message)
@@ -231,6 +234,15 @@ class SlashCommandService:
 
         cmd = detection["command"]
         handler_type = cmd.get("handler_type", "built-in")
+
+        # SECURITY: Log warning when permission_required is set but not yet enforced
+        # Full RBAC enforcement deferred — requires channel-aware permission resolution
+        if cmd.get("permission_required"):
+            self.logger.warning(
+                f"[SLASH CMD] Command '{cmd['command_name']}' has permission_required="
+                f"'{cmd['permission_required']}' but enforcement is not yet implemented. "
+                f"Channel={channel}, user_id={user_id}"
+            )
 
         if handler_type == "built-in":
             return await self._execute_builtin(
@@ -1670,7 +1682,7 @@ Type `/help all` to see syntax for all commands.
         agent_id: int
     ) -> Dict[str, Any]:
         """Execute a sandboxed tool by name."""
-        from models import SandboxedTool, SandboxedToolCommand, AgentSkill
+        from models import SandboxedTool, SandboxedToolCommand, AgentSkill, AgentSandboxedTool
 
         # Escape LIKE wildcards to prevent matching arbitrary tools
         escaped_name = tool_name.replace('%', '\\%').replace('_', '\\_')
@@ -1702,6 +1714,20 @@ Type `/help all` to see syntax for all commands.
             return {
                 "status": "error",
                 "message": f"❌ Tool '{tool_name}' not found.\n\n**Available tools:**\n{tool_list}\n\n**Built-in tools:**\n• search\n• schedule\n• flights"
+            }
+
+        # SECURITY: Check agent-level tool assignment (not just tenant-level)
+        agent_tool_auth = self.db.query(AgentSandboxedTool).filter(
+            AgentSandboxedTool.agent_id == agent_id,
+            AgentSandboxedTool.sandboxed_tool_id == tool.id,
+            AgentSandboxedTool.is_enabled == True
+        ).first()
+
+        if not agent_tool_auth:
+            return {
+                "status": "error",
+                "message": f"Tool '{tool_name}' is not assigned to this agent",
+                "tool_name": tool_name
             }
 
         # Parse arguments intelligently
@@ -2215,7 +2241,8 @@ Type `/help all` to see syntax for all commands.
         return await service.execute_inbox(
             tenant_id=kwargs.get("tenant_id"),
             agent_id=kwargs.get("agent_id"),
-            count=count
+            count=count,
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_search(self, **kwargs) -> Dict[str, Any]:
@@ -2233,7 +2260,8 @@ Type `/help all` to see syntax for all commands.
         return await service.execute_search(
             tenant_id=kwargs.get("tenant_id"),
             agent_id=kwargs.get("agent_id"),
-            query=query
+            query=query,
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_unread(self, **kwargs) -> Dict[str, Any]:
@@ -2247,7 +2275,8 @@ Type `/help all` to see syntax for all commands.
         service = EmailCommandService(self.db)
         return await service.execute_unread(
             tenant_id=kwargs.get("tenant_id"),
-            agent_id=kwargs.get("agent_id")
+            agent_id=kwargs.get("agent_id"),
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_info(self, **kwargs) -> Dict[str, Any]:
@@ -2261,7 +2290,8 @@ Type `/help all` to see syntax for all commands.
         service = EmailCommandService(self.db)
         return await service.execute_info(
             tenant_id=kwargs.get("tenant_id"),
-            agent_id=kwargs.get("agent_id")
+            agent_id=kwargs.get("agent_id"),
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_list(self, **kwargs) -> Dict[str, Any]:
@@ -2280,7 +2310,8 @@ Type `/help all` to see syntax for all commands.
         return await service.execute_list(
             tenant_id=kwargs.get("tenant_id"),
             agent_id=kwargs.get("agent_id"),
-            filter_type=filter_type
+            filter_type=filter_type,
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_read(self, **kwargs) -> Dict[str, Any]:
@@ -2298,7 +2329,8 @@ Type `/help all` to see syntax for all commands.
         return await service.execute_read(
             tenant_id=kwargs.get("tenant_id"),
             agent_id=kwargs.get("agent_id"),
-            identifier=identifier
+            identifier=identifier,
+            sender_key=kwargs.get("sender_key")
         )
 
     # =========================================================================

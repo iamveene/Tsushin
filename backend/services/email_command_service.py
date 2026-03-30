@@ -21,9 +21,10 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# Cache for last email list results (keyed by agent_id)
+# Cache for last email list results (keyed by (agent_id, sender_key) tuple)
 # This enables /email read <index> to work with numbered results
-_last_list_cache: Dict[int, List[Dict]] = {}
+# SECURITY: Keyed by both agent_id AND sender_key to prevent cross-user data leakage
+_last_list_cache: Dict[tuple, List[Dict]] = {}
 
 
 class EmailCommandService:
@@ -85,6 +86,7 @@ class EmailCommandService:
         self,
         tenant_id: str,
         agent_id: int,
+        sender_key: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -198,6 +200,7 @@ Use `/email list` to see recent emails"""
         tenant_id: str,
         agent_id: int,
         filter_type: Optional[str] = None,
+        sender_key: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -298,8 +301,8 @@ Use `/email list` to see recent emails"""
                     lines.append(f"   _{snippet}..._")
                 lines.append("")
 
-            # Cache results for /email read <index>
-            _last_list_cache[agent_id] = email_details
+            # Cache results for /email read <index> (scoped by sender_key)
+            _last_list_cache[(agent_id, sender_key)] = email_details
 
             # Add helpful footer based on filter
             if filter_label == "unread":
@@ -340,6 +343,7 @@ Use `/email list` to see recent emails"""
         tenant_id: str,
         agent_id: int,
         identifier: str,
+        sender_key: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -375,8 +379,8 @@ Use `/email list` to see recent emails"""
             if identifier.isdigit():
                 index = int(identifier)
                 if 1 <= index <= 50:
-                    # Look up from cache
-                    cached_list = _last_list_cache.get(agent_id)
+                    # Look up from cache (scoped by sender_key)
+                    cached_list = _last_list_cache.get((agent_id, sender_key))
                     if not cached_list:
                         return {
                             "status": "error",
@@ -504,6 +508,7 @@ Use `/email list` to see recent emails"""
         tenant_id: str,
         agent_id: int,
         count: int = 10,
+        sender_key: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -577,8 +582,8 @@ Use `/email list` to see recent emails"""
                     lines.append(f"   _{snippet}..._")
                 lines.append("")
 
-            # Cache results for /email read <index>
-            _last_list_cache[agent_id] = email_details
+            # Cache results for /email read <index> (scoped by sender_key)
+            _last_list_cache[(agent_id, sender_key)] = email_details
 
             lines.append("💡 Use `/email search \"query\"` to search for specific emails")
             lines.append("**Read:** `/email read <number>` to read full email content")
@@ -613,6 +618,7 @@ Use `/email list` to see recent emails"""
         agent_id: int,
         query: str,
         count: int = 10,
+        sender_key: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -709,8 +715,8 @@ Use `/email list` to see recent emails"""
                     lines.append(f"   _{snippet}..._")
                 lines.append("")
 
-            # Cache results for /email read <index>
-            _last_list_cache[agent_id] = email_details
+            # Cache results for /email read <index> (scoped by sender_key)
+            _last_list_cache[(agent_id, sender_key)] = email_details
 
             lines.append("**Read:** `/email read <number>` to read full email content")
 
@@ -744,6 +750,7 @@ Use `/email list` to see recent emails"""
         tenant_id: str,
         agent_id: int,
         count: int = 20,
+        sender_key: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -806,8 +813,8 @@ Use `/email list` to see recent emails"""
                     lines.append(f"   _{snippet}..._")
                 lines.append("")
 
-            # Cache results for /email read <index>
-            _last_list_cache[agent_id] = email_details
+            # Cache results for /email read <index> (scoped by sender_key)
+            _last_list_cache[(agent_id, sender_key)] = email_details
 
             if len(email_details) >= count:
                 lines.append(f"_Showing first {count} unread. There may be more._")

@@ -156,15 +156,15 @@ async def execute_command(
 
     service = SlashCommandService(db)
 
-    # Use provided sender_key or generate from user ID
+    # SECURITY: Always generate sender_key from authenticated user — never accept from request body
     # Match the format used in playground_service.py for proper tool buffer integration
     if data.channel == "playground" and data.thread_id:
         # Use thread-specific sender_key format for proper isolation
-        sender_key = data.sender_key or f"playground_u{current_user.id}_a{data.agent_id}_t{data.thread_id}"
+        sender_key = f"playground_u{current_user.id}_a{data.agent_id}_t{data.thread_id}"
     elif data.channel == "playground":
-        sender_key = data.sender_key or f"playground_user_{current_user.id}"
+        sender_key = f"playground_user_{current_user.id}"
     else:
-        sender_key = data.sender_key or f"user_{current_user.id}"
+        sender_key = f"user_{current_user.id}"
 
     result = await service.execute_command(
         message=data.message,
