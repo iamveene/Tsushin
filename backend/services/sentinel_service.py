@@ -288,6 +288,10 @@ class SentinelService:
                 merged.poisoning_prompt = tenant_config.poisoning_prompt
             if tenant_config.shell_intent_prompt:
                 merged.shell_intent_prompt = tenant_config.shell_intent_prompt
+            if getattr(tenant_config, 'memory_poisoning_prompt', None):
+                merged.memory_poisoning_prompt = tenant_config.memory_poisoning_prompt
+            if getattr(tenant_config, 'browser_ssrf_prompt', None):
+                merged.browser_ssrf_prompt = tenant_config.browser_ssrf_prompt
 
         # Override with agent config if present (only non-None values)
         if agent_override:

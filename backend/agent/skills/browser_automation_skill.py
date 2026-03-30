@@ -544,7 +544,7 @@ Return JSON array only:"""
                     success=False,
                     action='navigate',
                     data={},
-                    error=f"Blocked by Sentinel SSRF protection: URL '{url}' was flagged as a potential SSRF attempt targeting internal resources"
+                    error="Navigation blocked by security policy"
                 )
             return await provider.navigate(
                 url=url,
@@ -1165,7 +1165,7 @@ Return JSON array only:"""
         ):
             return SkillResult(
                 success=False,
-                output=f"Blocked by Sentinel SSRF protection: URL '{url}' was flagged as a potential SSRF attempt targeting internal resources",
+                output="Navigation blocked by security policy",
                 metadata={"error": "ssrf_blocked", "skip_ai": True}
             )
 
