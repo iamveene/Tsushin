@@ -18,7 +18,7 @@ import settings
 # ---------------------------------------------------------------------------
 
 if settings.METRICS_ENABLED:
-    from prometheus_client import Counter, Histogram, Info, generate_latest, CONTENT_TYPE_LATEST
+    from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest, CONTENT_TYPE_LATEST
 
     SERVICE_INFO = Info("tsn_service", "Tsushin service metadata")
     SERVICE_INFO.info({
@@ -37,6 +37,32 @@ if settings.METRICS_ENABLED:
         "HTTP request duration in seconds",
         ["method", "path_template"],
         buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+    )
+
+    # Item 38: Channel Health Monitor metrics
+    TSN_CIRCUIT_BREAKER_TRANSITIONS_TOTAL = Counter(
+        "tsn_circuit_breaker_transitions_total",
+        "Total circuit breaker state transitions",
+        ["channel_type", "from_state", "to_state"],
+    )
+
+    TSN_CIRCUIT_BREAKER_STATE = Gauge(
+        "tsn_circuit_breaker_state",
+        "Current circuit breaker state (0=closed, 1=open, 2=half_open)",
+        ["channel_type", "instance_id"],
+    )
+
+    TSN_CHANNEL_HEALTH_CHECK_DURATION = Histogram(
+        "tsn_channel_health_check_duration_seconds",
+        "Channel health check duration in seconds",
+        ["channel_type"],
+        buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+    )
+
+    TSN_CHANNEL_HEALTH_CHECK_FAILURES_TOTAL = Counter(
+        "tsn_channel_health_check_failures_total",
+        "Total channel health check failures",
+        ["channel_type", "reason"],
     )
 
 
