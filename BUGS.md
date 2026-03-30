@@ -1,8 +1,98 @@
 # Tsushin Bug Tracker
-**Open:** 0 | **In Progress:** 0 | **Resolved:** 146
-**Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29)
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 155
+**Source:** v0.6.1 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30)
 
 ## Open Issues
+
+### BUG-147: sender_key spoofing on /api/commands/execute endpoint
+- **Status:** Resolved
+- **Resolved:** 2026-03-30
+- **Severity:** High
+- **Category:** Security / Authentication
+- **Found:** 2026-03-30 (v0.6.0 Slash Command Hardening Audit)
+- **Files:** `backend/api/routes_commands.py`
+- **Description:** The `/api/commands/execute` endpoint accepted `sender_key` from the request body, allowing authenticated users to impersonate other users in tool execution and email cache lookups.
+- **Resolution:** Always derive sender_key from the authenticated user's JWT. Never accept from request body.
+
+### BUG-148: Email cache cross-user data leakage via agent_id-only key
+- **Status:** Resolved
+- **Resolved:** 2026-03-30
+- **Severity:** High
+- **Category:** Security / Data Leakage
+- **Found:** 2026-03-30 (v0.6.0 Slash Command Hardening Audit)
+- **Files:** `backend/services/email_command_service.py`
+- **Description:** Email list cache (`_last_list_cache`) was keyed only by `agent_id`. User A's email results could be read by User B via `/email read 1` on the same agent.
+- **Resolution:** Changed cache key to `(agent_id, sender_key)` tuple for per-user isolation.
+
+### BUG-149: Agent-level sandboxed tool authorization bypass
+- **Status:** Resolved
+- **Resolved:** 2026-03-30
+- **Severity:** High
+- **Category:** Security / Privilege Escalation
+- **Found:** 2026-03-30 (v0.6.0 Slash Command Hardening Audit)
+- **Files:** `backend/services/slash_command_service.py`
+- **Description:** `_execute_sandboxed_tool` only checked tenant-level tool access, not agent-level assignment via `AgentSandboxedTool` table. Any agent could execute any tenant tool regardless of assignment.
+- **Resolution:** Added `AgentSandboxedTool` authorization check before execution. Unauthorized attempts return clear error.
+
+### BUG-150: Scheduler permissions not seeded — entire scheduler API returns 403
+- **Status:** Resolved
+- **Resolved:** 2026-03-30
+- **Severity:** Critical
+- **Category:** Permissions / RBAC
+- **Found:** 2026-03-30 (v0.6.0 RBAC Permission Matrix Audit)
+- **Files:** `backend/db.py`, `backend/api/routes_scheduler.py`
+- **Description:** `scheduler.create`, `scheduler.edit`, `scheduler.cancel` permissions were used in `routes_scheduler.py` but never seeded in the database. All scheduler API calls returned 403 Forbidden for every role.
+- **Resolution:** Added 4 scheduler permissions to `seed_rbac_defaults` and `ensure_rbac_permissions` with proper role assignments (owner/admin: all, member: read/create/edit, readonly: read).
+
+### BUG-151: Frontend billing.manage permission mismatch — billing page inaccessible
+- **Status:** Resolved
+- **Resolved:** 2026-03-30
+- **Severity:** High
+- **Category:** Frontend / Permissions
+- **Found:** 2026-03-30 (v0.6.0 RBAC Permission Matrix Audit)
+- **Files:** `frontend/hooks/usePermission.ts`, `frontend/app/settings/billing/page.tsx`
+- **Description:** Frontend checked `billing.manage` but backend seeds `billing.write`. The billing page was permanently inaccessible to all roles.
+- **Resolution:** Changed frontend to check `billing.write` to match backend permission name.
+
+### BUG-152: Sentinel profile read endpoints have no RBAC permission guard
+- **Status:** Resolved
+- **Resolved:** 2026-03-30
+- **Severity:** Medium
+- **Category:** Security / Permissions
+- **Found:** 2026-03-30 (v0.6.0 RBAC Permission Matrix Audit)
+- **Files:** `backend/api/routes_sentinel_profiles.py`
+- **Description:** 5 GET endpoints (assignments, effective, hierarchy, list, detail) had no `require_permission` dependency — any authenticated user could read security configs.
+- **Resolution:** Added `require_permission("org.settings.read")` to all 5 read endpoints.
+
+### BUG-153: Knowledge base routes have no RBAC permission guard
+- **Status:** Resolved
+- **Resolved:** 2026-03-30
+- **Severity:** Medium
+- **Category:** Security / Permissions
+- **Found:** 2026-03-30 (v0.6.0 RBAC Permission Matrix Audit)
+- **Files:** `backend/api/routes_knowledge_base.py`
+- **Description:** All 8 knowledge base endpoints used `get_current_user_required` only — no fine-grained RBAC. The `knowledge.read/write/delete` permissions were seeded but never checked.
+- **Resolution:** Added appropriate `require_permission` guards to all 8 endpoints (read/write/delete).
+
+### BUG-154: WhatsApp channel adapter _check_mcp_connection behavioral regression
+- **Status:** Resolved
+- **Resolved:** 2026-03-30
+- **Severity:** High
+- **Category:** Channel Abstraction / Regression
+- **Found:** 2026-03-30 (v0.6.0 Code Review — Perfection Team)
+- **Files:** `backend/channels/whatsapp/adapter.py`
+- **Description:** Two regressions: (1) adapter returned False for None/default MCP URL while original router returned True (backward compat); (2) adapter checked `authenticated` flag which original router never checked. Both would silently drop messages.
+- **Resolution:** Mirrored router logic exactly: allow sends for None/default URL, only check `connected` flag.
+
+### BUG-155: Telegram adapter health_check crashes on non-dict get_me response
+- **Status:** Resolved
+- **Resolved:** 2026-03-30
+- **Severity:** Low
+- **Category:** Channel Abstraction / Error Handling
+- **Found:** 2026-03-30 (v0.6.0 Code Review — Perfection Team)
+- **Files:** `backend/channels/telegram/adapter.py`
+- **Description:** `health_check()` called `.get('username')` on `get_me()` result which could be an object, not a dict.
+- **Resolution:** Added `isinstance(me, dict)` check with `getattr` fallback for object responses.
 
 ### BUG-121: Onboarding tour auto-navigates users away from current page
 - **Status:** Resolved
