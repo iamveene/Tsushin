@@ -46,6 +46,17 @@ const MODEL_PROVIDERS = [
       'databricks/dbrx-instruct',
       'nousresearch/hermes-3-llama-3.1-405b'
     ]
+  },
+  {
+    value: 'vertex_ai',
+    label: 'Vertex AI (Google Cloud)',
+    models: [
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gemini-2.0-flash',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5-latest',
+    ]
   }
 ]
 

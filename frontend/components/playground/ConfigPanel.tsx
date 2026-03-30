@@ -154,6 +154,13 @@ const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
     { value: 'databricks/dbrx-instruct', label: 'DBRX Instruct' },
     { value: 'nousresearch/hermes-3-llama-3.1-405b', label: 'Hermes 3 Llama 3.1 405B' },
   ],
+  vertex_ai: [
+    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Vertex)' },
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Vertex)' },
+    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (Vertex)' },
+    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Vertex)' },
+    { value: 'claude-haiku-4-5-latest', label: 'Claude Haiku 4.5 (Vertex)' },
+  ],
 }
 
 interface ConfigPanelProps {

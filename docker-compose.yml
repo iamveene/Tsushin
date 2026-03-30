@@ -143,6 +143,12 @@ services:
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
 
+      # Vertex AI (Google Cloud Model Garden)
+      - VERTEX_AI_PROJECT_ID=${VERTEX_AI_PROJECT_ID:-}
+      - VERTEX_AI_REGION=${VERTEX_AI_REGION:-us-east5}
+      - VERTEX_AI_SERVICE_ACCOUNT_EMAIL=${VERTEX_AI_SERVICE_ACCOUNT_EMAIL:-}
+      - VERTEX_AI_PRIVATE_KEY=${VERTEX_AI_PRIVATE_KEY:-}
+
       # Tool API Keys
       - BRAVE_API=${BRAVE_API:-}
       - AMADEUS_API_KEY=${AMADEUS_API_KEY:-}

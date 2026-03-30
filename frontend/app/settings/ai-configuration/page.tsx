@@ -81,6 +81,11 @@ const PROVIDER_ICONS: Record<string, React.ReactNode> = {
       <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7zm2 15h-4v-1h4v1zm1.5-4.37l-.5.34V15h-6v-2.03l-.5-.34A5 5 0 0 1 7 9a5 5 0 0 1 10 0 5 5 0 0 1-1.5 3.63z"/>
     </svg>
   ),
+  vertex_ai: (
+    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+    </svg>
+  ),
 }
 
 // Provider colors for styling
@@ -93,6 +98,7 @@ const PROVIDER_COLORS: Record<string, { bg: string; text: string; border: string
   openrouter: { bg: 'bg-purple-500/10', text: 'text-purple-400', border: 'border-purple-500/30' },
   groq: { bg: 'bg-yellow-500/10', text: 'text-yellow-400', border: 'border-yellow-500/30' },
   ollama: { bg: 'bg-violet-500/10', text: 'text-violet-400', border: 'border-violet-500/30' },
+  vertex_ai: { bg: 'bg-cyan-500/10', text: 'text-cyan-400', border: 'border-cyan-500/30' },
 }
 
 export default function AIConfigurationPage() {

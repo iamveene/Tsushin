@@ -99,14 +99,19 @@ class AIClient:
                 self.logger.info(f"AIClient initialized via provider instance {instance.id} ({instance.vendor})")
                 return  # Skip the flat-field path below
 
-        # Get API key from database or environment (skip for Ollama - Phase 5.2)
+        # Get API key from database or environment (skip for Ollama and Vertex AI - Phase 5.2)
         # Priority: DB tenant key → DB system key → env var fallback (handled by get_api_key)
         api_key = None
-        if db and provider != 'ollama':
+        if db and provider not in ('ollama', 'vertex_ai'):
             api_key = get_api_key(self.provider, db, tenant_id=tenant_id)
 
-        # Validate API key for cloud providers
-        if provider != 'ollama' and not api_key:
+        # Vertex AI uses its own credential loading (service account, not simple API key)
+        # but may store the private key in the api_key table
+        if db and provider == 'vertex_ai':
+            api_key = get_api_key('vertex_ai', db, tenant_id=tenant_id)  # Optional — private key from DB
+
+        # Validate API key for cloud providers (skip Ollama and Vertex AI which handle their own auth)
+        if provider not in ('ollama', 'vertex_ai') and not api_key:
             raise ValueError(
                 f"No API key found for provider: {provider}. "
                 f"Configure via Hub → API Keys or set environment variable."
@@ -189,6 +194,92 @@ class AIClient:
                 base_url="https://api.deepseek.com/v1"
             )
             self.logger.info(f"Initialized DeepSeek client with model: {model_name}")
+        elif self.provider == "vertex_ai":
+            # Vertex AI uses service account credentials, not a simple API key
+            # Load config from env vars (fallback) or DB
+            import json as _json
+
+            vertex_project_id = os.getenv("VERTEX_AI_PROJECT_ID", "")
+            vertex_region = os.getenv("VERTEX_AI_REGION", "us-east5")
+            vertex_sa_email = os.getenv("VERTEX_AI_SERVICE_ACCOUNT_EMAIL", "")
+            vertex_private_key = api_key or os.getenv("VERTEX_AI_PRIVATE_KEY", "")  # api_key from DB stores the private key
+
+            # If DB has vertex_ai config stored as JSON in the api_key field, parse it
+            if db:
+                from models import Config
+                config = db.query(Config).first()
+                if config:
+                    vertex_config = getattr(config, 'vertex_ai_config', None)
+                    if vertex_config and isinstance(vertex_config, dict):
+                        vertex_project_id = vertex_config.get('project_id', vertex_project_id)
+                        vertex_region = vertex_config.get('region', vertex_region)
+                        vertex_sa_email = vertex_config.get('service_account_email', vertex_sa_email)
+                        if vertex_config.get('private_key'):
+                            vertex_private_key = vertex_config['private_key']
+
+            if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
+                raise ValueError(
+                    "Vertex AI requires project_id, service_account_email, and private_key. "
+                    "Configure via Hub → Integrations or set VERTEX_AI_* environment variables."
+                )
+
+            # Store config for use in API calls
+            self.vertex_project_id = vertex_project_id
+            self.vertex_region = vertex_region
+            self.vertex_sa_email = vertex_sa_email
+            self.vertex_private_key = vertex_private_key
+
+            # Determine publisher from model name
+            # Claude models go through Anthropic publisher, everything else through Google
+            if model_name.startswith("claude"):
+                self.vertex_publisher = "anthropic"
+            elif model_name.startswith("mistral") or model_name.startswith("codestral"):
+                self.vertex_publisher = "mistralai"
+            else:
+                self.vertex_publisher = "google"
+
+            # Create OAuth2 credentials for token refresh
+            from google.oauth2 import service_account as sa_module
+            from google.auth.transport.requests import Request as AuthRequest
+
+            # Format the private key (handle escaped newlines)
+            formatted_key = vertex_private_key.replace('\\n', '\n')
+
+            credentials_info = {
+                "type": "service_account",
+                "project_id": vertex_project_id,
+                "client_email": vertex_sa_email,
+                "private_key": formatted_key,
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+
+            self._vertex_credentials = sa_module.Credentials.from_service_account_info(
+                credentials_info,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            self._vertex_auth_request = AuthRequest()
+
+            # For Gemini models, we can use the OpenAI-compatible endpoint
+            # For Anthropic models, we need rawPredict with Anthropic format
+            if self.vertex_publisher == "google":
+                # Use OpenAI-compatible chat completions endpoint
+                self._vertex_credentials.refresh(self._vertex_auth_request)
+                base_url = f"https://{vertex_region}-aiplatform.googleapis.com/v1/projects/{vertex_project_id}/locations/{vertex_region}/endpoints/openapi"
+                self.client = AsyncOpenAI(
+                    api_key=self._vertex_credentials.token,
+                    base_url=base_url
+                )
+                # OpenAI-compat endpoint requires google/ prefix for model names
+                if not self.model_name.startswith("google/"):
+                    self.model_name = f"google/{self.model_name}"
+            elif self.vertex_publisher == "anthropic":
+                # Use Anthropic SDK's Vertex AI integration
+                self.client = AsyncAnthropic(
+                    # We'll handle Vertex auth manually in _call_vertex_anthropic
+                    api_key="vertex-placeholder"  # Not used - we override with Bearer token
+                )
+
+            self.logger.info(f"Initialized Vertex AI client: project={vertex_project_id}, region={vertex_region}, publisher={self.vertex_publisher}, model={model_name}")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
@@ -238,6 +329,15 @@ class AIClient:
             elif self.provider in ("groq", "grok", "deepseek"):
                 # Groq, Grok, and DeepSeek use OpenAI-compatible API
                 result = await self._call_openai(system_prompt, user_message)
+            elif self.provider == "vertex_ai":
+                if self.vertex_publisher == "google":
+                    # Gemini via OpenAI-compatible endpoint — refresh token first
+                    self._refresh_vertex_token()
+                    result = await self._call_openai(system_prompt, user_message)
+                elif self.vertex_publisher == "anthropic":
+                    result = await self._call_vertex_anthropic(system_prompt, user_message)
+                else:
+                    result = await self._call_vertex_raw(system_prompt, user_message)
             else:
                 raise ValueError(f"Unsupported provider: {self.provider}")
 
@@ -612,6 +712,15 @@ class AIClient:
             elif self.provider in ("groq", "grok", "deepseek"):
                 # Groq, Grok, and DeepSeek use OpenAI-compatible streaming API
                 stream_gen = self._stream_openai(system_prompt, user_message)
+            elif self.provider == "vertex_ai":
+                if self.vertex_publisher == "google":
+                    self._refresh_vertex_token()
+                    stream_gen = self._stream_openai(system_prompt, user_message)
+                elif self.vertex_publisher == "anthropic":
+                    stream_gen = self._stream_vertex_anthropic(system_prompt, user_message)
+                else:
+                    yield {"type": "error", "error": f"Streaming not supported for Vertex AI publisher: {self.vertex_publisher}"}
+                    return
             else:
                 yield {
                     "type": "error",
@@ -942,4 +1051,146 @@ class AIClient:
             yield {"type": "error", "error": f"Timeout streaming from Ollama"}
         except Exception as e:
             self.logger.error(f"Ollama streaming error: {e}", exc_info=True)
+            yield {"type": "error", "error": str(e)}
+
+    # ==================== Vertex AI Methods ====================
+
+    def _refresh_vertex_token(self):
+        """Refresh the Vertex AI OAuth2 access token if expired."""
+        if not self._vertex_credentials.valid:
+            self._vertex_credentials.refresh(self._vertex_auth_request)
+            # Update the OpenAI client's API key with the new token
+            if hasattr(self, 'client') and isinstance(self.client, AsyncOpenAI):
+                self.client.api_key = self._vertex_credentials.token
+            self.logger.debug("Refreshed Vertex AI access token")
+
+    async def _call_vertex_anthropic(self, system_prompt: str, user_message: str) -> Dict:
+        """Call Anthropic Claude via Vertex AI rawPredict endpoint."""
+        print(f"  📡 Calling Vertex AI (Anthropic): model={self.model_name}, region={self.vertex_region}")
+
+        # Refresh OAuth2 token
+        if not self._vertex_credentials.valid:
+            self._vertex_credentials.refresh(self._vertex_auth_request)
+
+        # Build the rawPredict URL
+        url = (
+            f"https://{self.vertex_region}-aiplatform.googleapis.com/v1/"
+            f"projects/{self.vertex_project_id}/locations/{self.vertex_region}/"
+            f"publishers/anthropic/models/{self.model_name}:rawPredict"
+        )
+
+        # Anthropic Messages API format with Vertex-specific version
+        payload = {
+            "anthropic_version": "vertex-2023-10-16",
+            "messages": [
+                {"role": "user", "content": user_message}
+            ],
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "system": system_prompt,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self._vertex_credentials.token}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            if response.status_code != 200:
+                error_body = response.text[:500]
+                self.logger.error(f"Vertex AI Anthropic error {response.status_code}: {error_body}")
+                response.raise_for_status()
+            data = response.json()
+
+        answer = ""
+        if data.get("content"):
+            for block in data["content"]:
+                if block.get("type") == "text":
+                    answer += block["text"]
+
+        token_usage = {
+            "prompt": data.get("usage", {}).get("input_tokens", 0),
+            "completion": data.get("usage", {}).get("output_tokens", 0),
+            "total": data.get("usage", {}).get("input_tokens", 0) + data.get("usage", {}).get("output_tokens", 0),
+        }
+
+        return {"answer": answer, "token_usage": token_usage, "error": None}
+
+    async def _call_vertex_raw(self, system_prompt: str, user_message: str) -> Dict:
+        """Fallback for unsupported Vertex AI publishers (e.g., MistralAI)."""
+        raise ValueError(
+            f"Vertex AI publisher '{self.vertex_publisher}' is not yet supported for non-streaming calls. "
+            f"Use Google or Anthropic models via Vertex AI."
+        )
+
+    async def _stream_vertex_anthropic(self, system_prompt: str, user_message: str):
+        """Stream tokens from Anthropic Claude via Vertex AI rawPredict with SSE streaming."""
+        print(f"  📡 Streaming Vertex AI (Anthropic): model={self.model_name}")
+
+        if not self._vertex_credentials.valid:
+            self._vertex_credentials.refresh(self._vertex_auth_request)
+
+        url = (
+            f"https://{self.vertex_region}-aiplatform.googleapis.com/v1/"
+            f"projects/{self.vertex_project_id}/locations/{self.vertex_region}/"
+            f"publishers/anthropic/models/{self.model_name}:streamRawPredict"
+        )
+
+        payload = {
+            "anthropic_version": "vertex-2023-10-16",
+            "messages": [
+                {"role": "user", "content": user_message}
+            ],
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "system": system_prompt,
+            "stream": True,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self._vertex_credentials.token}",
+            "Content-Type": "application/json",
+        }
+
+        total_tokens = {"prompt": 0, "completion": 0}
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+                async with client.stream("POST", url, json=payload, headers=headers) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]  # Remove "data: " prefix
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            event = json.loads(data_str)
+                            event_type = event.get("type", "")
+
+                            if event_type == "content_block_delta":
+                                delta = event.get("delta", {})
+                                if delta.get("type") == "text_delta":
+                                    yield {"type": "token", "content": delta["text"]}
+                            elif event_type == "message_delta":
+                                usage = event.get("usage", {})
+                                total_tokens["completion"] = usage.get("output_tokens", 0)
+                            elif event_type == "message_start":
+                                msg_usage = event.get("message", {}).get("usage", {})
+                                total_tokens["prompt"] = msg_usage.get("input_tokens", 0)
+                        except json.JSONDecodeError:
+                            continue
+
+            yield {
+                "type": "done",
+                "token_usage": {
+                    "prompt": total_tokens["prompt"],
+                    "completion": total_tokens["completion"],
+                    "total": total_tokens["prompt"] + total_tokens["completion"],
+                },
+                "error": None,
+            }
+        except Exception as e:
+            self.logger.error(f"Vertex AI Anthropic streaming error: {e}", exc_info=True)
             yield {"type": "error", "error": str(e)}

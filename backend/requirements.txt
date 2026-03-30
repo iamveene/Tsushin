@@ -20,6 +20,7 @@ anthropic>=0.18.1  # Phase 6.11.1: Async support
 openai>=1.40.0  # Phase 5.0: Audio skills
 google-generativeai>=0.4.0  # system_instruction support (BUG-133 fix)
 google-genai>=1.0.0  # Image generation with Gemini 2.0 Flash
+google-auth>=2.28.0  # Vertex AI service account auth + OAuth2 token refresh
 
 # HTTP Clients
 httpx>=0.27.0  # Updated for MCP compatibility

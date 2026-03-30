@@ -1283,6 +1283,14 @@ export const ArrowDownIcon = ({ size = 18, className = '' }: IconProps) => (
   </svg>
 )
 
+// Cloud Icon — for cloud providers (GCP, AWS, etc.)
+export const CloudIcon = ({ size = 18, className = '' }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+  </svg>
+)
+
 // Beaker / Lab Test Icon
 export const BeakerIcon = ({ size = 18, className = '' }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
