@@ -40,6 +40,7 @@ def _run_purge_cycle(SessionFactory):
                     logger.info(f"[AuditRetention] Purged {purged} expired events for tenant {tenant.id} (retention={retention_days}d)")
             except Exception as e:
                 logger.error(f"[AuditRetention] Failed to purge tenant {tenant.id}: {e}")
+                session.rollback()
 
         if total_purged > 0:
             logger.info(f"[AuditRetention] Total purged: {total_purged} events across {len(tenants)} tenants")

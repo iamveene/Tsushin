@@ -9,6 +9,7 @@ Phase 23 adds script execution support: deploys scripts to the
 tenant's toolbox container and runs them with JSON input/output.
 """
 import json
+import shlex
 import time
 import logging
 from typing import Dict, Optional, Any
@@ -121,21 +122,22 @@ class CustomSkillAdapter(BaseSkill):
 
         # Build the execution command
         entrypoint = self._record.script_entrypoint or "main.py"
+        safe_entrypoint = shlex.quote(entrypoint)
         skill_dir = f"/workspace/skills/{self._record.id}"
         language = self._record.script_language or "python"
 
         if language == "python":
-            cmd = f"cd {skill_dir} && python {entrypoint}"
+            cmd = f"cd {skill_dir} && python {safe_entrypoint}"
         elif language == "bash":
-            cmd = f"cd {skill_dir} && bash {entrypoint}"
+            cmd = f"cd {skill_dir} && bash {safe_entrypoint}"
         elif language == "nodejs":
-            cmd = f"cd {skill_dir} && node {entrypoint}"
+            cmd = f"cd {skill_dir} && node {safe_entrypoint}"
         else:
-            cmd = f"cd {skill_dir} && python {entrypoint}"
+            cmd = f"cd {skill_dir} && python {safe_entrypoint}"
 
         # Prepare input as JSON environment variable
         input_json = json.dumps(arguments or {})
-        cmd = f'export TSUSHIN_INPUT={json.dumps(input_json)} && {cmd}'
+        cmd = f'export TSUSHIN_INPUT={shlex.quote(input_json)} && {cmd}'
 
         container_service = get_toolbox_service()
         timeout = self._record.timeout_seconds or 30

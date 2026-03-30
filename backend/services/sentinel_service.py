@@ -319,9 +319,11 @@ class SentinelService:
             from models import SentinelProfile
 
             if profile_id:
+                from sqlalchemy import or_
                 svc = SentinelProfilesService(self.db, self.tenant_id)
                 profile = self.db.query(SentinelProfile).filter(
                     SentinelProfile.id == profile_id,
+                    or_(SentinelProfile.is_system == True, SentinelProfile.tenant_id == self.tenant_id),
                 ).first()
                 if profile:
                     return svc._resolve_profile(profile, "skill_scan")

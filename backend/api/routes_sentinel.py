@@ -973,6 +973,7 @@ class MemoryCleanupResponse(BaseModel):
 async def cleanup_poisoned_memory(
     agent_id: Optional[int] = Query(None, description="Optional: limit cleanup to specific agent"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write")),
     tenant: TenantContext = Depends(get_tenant_context),
 ):
     """

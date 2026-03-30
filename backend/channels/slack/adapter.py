@@ -6,6 +6,7 @@ Wraps slack-bolt/slack-sdk for messaging through Slack workspaces.
 Follows the same ChannelAdapter contract as WhatsApp and Telegram adapters.
 """
 
+import asyncio
 import logging
 from typing import ClassVar, Optional
 
@@ -75,14 +76,18 @@ class SlackChannelAdapter(ChannelAdapter):
         thread_ts = kwargs.get("thread_ts")
 
         try:
+            loop = asyncio.get_event_loop()
             if media_path:
                 import os
-                response = self.client.files_upload_v2(
-                    channel=to,
-                    file=media_path,
-                    initial_comment=text,
-                    thread_ts=thread_ts,
-                    filename=os.path.basename(media_path)
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.files_upload_v2(
+                        channel=to,
+                        file=media_path,
+                        initial_comment=text,
+                        thread_ts=thread_ts,
+                        filename=os.path.basename(media_path)
+                    )
                 )
                 return SendResult(
                     success=response.get("ok", False),
@@ -90,10 +95,13 @@ class SlackChannelAdapter(ChannelAdapter):
                     raw=response.data if hasattr(response, 'data') else None
                 )
 
-            response = self.client.chat_postMessage(
-                channel=to,
-                text=text,
-                thread_ts=thread_ts
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.chat_postMessage(
+                    channel=to,
+                    text=text,
+                    thread_ts=thread_ts
+                )
             )
             return SendResult(
                 success=response.get("ok", False),
@@ -107,7 +115,8 @@ class SlackChannelAdapter(ChannelAdapter):
     async def health_check(self) -> HealthResult:
         """Check Slack Bot API connection via auth.test."""
         try:
-            response = self.client.auth_test()
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, self.client.auth_test)
             if response.get("ok"):
                 return HealthResult(
                     healthy=True,

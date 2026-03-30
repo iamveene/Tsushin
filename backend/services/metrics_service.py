@@ -97,9 +97,20 @@ def _normalise_path(path: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def metrics_endpoint(request: Request) -> Response:
-    """Prometheus scrape endpoint."""
+    """Prometheus scrape endpoint.
+
+    If TSN_METRICS_SCRAPE_TOKEN is set, requires Bearer token auth.
+    If not set, allows unauthenticated access (local dev).
+    """
     if not settings.METRICS_ENABLED:
         return Response(status_code=404, content="Metrics disabled")
+
+    import os
+    scrape_token = os.environ.get("TSN_METRICS_SCRAPE_TOKEN")
+    if scrape_token:
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Bearer ") or auth_header[7:] != scrape_token:
+            return Response(status_code=401, content="Unauthorized")
 
     body = generate_latest()
     return Response(content=body, media_type=CONTENT_TYPE_LATEST)

@@ -19,6 +19,7 @@
 # }
 #
 # {SSL_DOMAIN} {
+#     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 #     handle /api/* {
 #         reverse_proxy backend:8081
 #     }
@@ -33,6 +34,7 @@
 # --- Manual Certificate Mode ---
 # {SSL_DOMAIN} {
 #     tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+#     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 #     handle /api/* {
 #         reverse_proxy backend:8081
 #     }
@@ -47,6 +49,7 @@
 # --- Self-Signed Mode ---
 # {SSL_DOMAIN} {
 #     tls internal
+#     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 #     handle /api/* {
 #         reverse_proxy backend:8081
 #     }

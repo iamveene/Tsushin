@@ -207,10 +207,23 @@ class SyslogConnectionPool:
                     os.chmod(key_path, stat.S_IRUSR | stat.S_IWUSR)   # 0o600
                     os.write(cert_fd, client_cert.encode())
                     os.close(cert_fd)
+                    cert_fd = -1  # Mark as closed
                     os.write(key_fd, client_key.encode())
                     os.close(key_fd)
+                    key_fd = -1  # Mark as closed
                     ctx.load_cert_chain(cert_path, key_path)
                 finally:
+                    # Close file descriptors if not already closed
+                    if cert_fd >= 0:
+                        try:
+                            os.close(cert_fd)
+                        except OSError:
+                            pass
+                    if key_fd >= 0:
+                        try:
+                            os.close(key_fd)
+                        except OSError:
+                            pass
                     os.unlink(cert_path)
                     os.unlink(key_path)
 

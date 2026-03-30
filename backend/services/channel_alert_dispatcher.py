@@ -24,7 +24,7 @@ class ChannelAlertDispatcher:
 
     def __init__(self, get_db_session: Callable):
         self.get_db_session = get_db_session
-        self._last_alert: Dict[Tuple[str, int], datetime] = {}
+        self._last_alert: Dict[Tuple[str, str, int], datetime] = {}
 
     async def dispatch(
         self,
@@ -52,7 +52,7 @@ class ChannelAlertDispatcher:
 
         # Check cooldown using per-tenant config (falls back to default)
         cooldown = config.get("cooldown_seconds", self.DEFAULT_COOLDOWN_SECONDS)
-        key = (channel_type, instance_id)
+        key = (tenant_id, channel_type, instance_id)
         last = self._last_alert.get(key)
         if last:
             elapsed = (datetime.utcnow() - last).total_seconds()

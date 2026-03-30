@@ -156,6 +156,8 @@ def seed_rbac_defaults(session):
         ("scheduler.create", "scheduler", "create", "Create scheduled events"),
         ("scheduler.edit", "scheduler", "edit", "Edit scheduled events"),
         ("scheduler.cancel", "scheduler", "cancel", "Cancel scheduled events"),
+        # MCP Server Management (v0.6.0 Item 25)
+        ("skills.mcp_server.manage", "mcp_servers", "manage", "Manage MCP server integrations"),
     ]
 
     # Create permissions
@@ -206,6 +208,7 @@ def seed_rbac_defaults(session):
             "watcher.read",  # Dashboard access
             "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
             "scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel",  # v0.6.0: Scheduler
+            "skills.mcp_server.manage",  # v0.6.0 Item 25: MCP Server Management
         ],
         "admin": [
             "agents.read", "agents.write", "agents.delete", "agents.execute",
@@ -227,6 +230,7 @@ def seed_rbac_defaults(session):
             "watcher.read",  # Dashboard access
             "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
             "scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel",  # v0.6.0: Scheduler
+            "skills.mcp_server.manage",  # v0.6.0 Item 25: MCP Server Management
         ],
         "member": [
             "agents.read", "agents.write", "agents.execute",
@@ -627,6 +631,20 @@ def ensure_rbac_permissions(session):
                             session.add(RolePermission(role_id=role.id, permission_id=perm.id))
                             print(f"[RBAC] Assigned {name} to role: {role_name}")
                             slack_perms_added = True
+        else:
+            for role_name, role_perms in slack_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            slack_perms_added = True
     if slack_perms_added:
         session.commit()
         print("[RBAC] Slack integration permissions ensured successfully")
@@ -662,9 +680,65 @@ def ensure_rbac_permissions(session):
                             session.add(RolePermission(role_id=role.id, permission_id=perm.id))
                             print(f"[RBAC] Assigned {name} to role: {role_name}")
                             discord_perms_added = True
+        else:
+            for role_name, role_perms in discord_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            discord_perms_added = True
     if discord_perms_added:
         session.commit()
         print("[RBAC] Discord integration permissions ensured successfully")
+
+    # v0.6.0 Item 25: Ensure MCP server permissions exist
+    mcp_server_permissions_data = [
+        ("skills.mcp_server.manage", "mcp_servers", "manage", "Manage MCP server integrations"),
+    ]
+    mcp_server_role_assignments = {
+        "owner": ["skills.mcp_server.manage"],
+        "admin": ["skills.mcp_server.manage"],
+    }
+    mcp_server_perms_added = False
+    for name, resource, action, description in mcp_server_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+            for role_name, role_perms in mcp_server_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        rp = RolePermission(role_id=role.id, permission_id=perm.id)
+                        session.add(rp)
+                        print(f"[RBAC] Assigned {name} to role: {role_name}")
+            mcp_server_perms_added = True
+        else:
+            for role_name, role_perms in mcp_server_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            mcp_server_perms_added = True
+    if mcp_server_perms_added:
+        session.commit()
+        print("[RBAC] MCP server permissions ensured successfully")
 
 
 def seed_slash_commands(session):

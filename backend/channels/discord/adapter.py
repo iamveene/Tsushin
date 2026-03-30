@@ -10,6 +10,7 @@ for sending). Gateway/WebSocket is only required for inbound event handling, whi
 is managed externally.
 """
 
+import json
 import logging
 import os
 from typing import ClassVar, Optional
@@ -93,11 +94,13 @@ class DiscordChannelAdapter(ChannelAdapter):
             if media_path:
                 # Multipart upload for file attachments
                 form = aiohttp.FormData()
-                form.add_field("payload_json", '{"content": ' + repr(text or '') + '}',
+                form.add_field("payload_json", json.dumps({"content": text or ""}),
                                content_type="application/json")
+                with open(media_path, "rb") as f:
+                    file_data = f.read()
                 form.add_field(
                     "files[0]",
-                    open(media_path, "rb"),
+                    file_data,
                     filename=os.path.basename(media_path)
                 )
                 # Need separate headers without Content-Type for multipart

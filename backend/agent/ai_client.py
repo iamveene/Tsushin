@@ -143,7 +143,7 @@ class AIClient:
                 try:
                     self.ollama_base_url = validate_ollama_url(self.ollama_base_url)
                 except SSRFValidationError as e:
-                    logger.error(f"SSRF blocked: Ollama base URL '{self.ollama_base_url}' rejected: {e}. Falling back to default.")
+                    self.logger.error(f"SSRF blocked: Ollama base URL '{self.ollama_base_url}' rejected: {e}. Falling back to default.")
                     self.ollama_base_url = "http://host.docker.internal:11434"
 
             # Extended timeout for CPU inference (first load can be slow)
@@ -275,9 +275,8 @@ class AIClient:
         """Call Anthropic Claude API"""
         print(f"  📡 Calling Anthropic API: model={self.model_name}")
 
-        # Run blocking call in thread pool to unblock event loop
-        response = await asyncio.to_thread(
-            self.client.messages.create,
+        # AsyncAnthropic client — await directly
+        response = await self.client.messages.create(
             model=self.model_name,
             max_tokens=self.max_tokens,
             temperature=self.temperature,

@@ -104,7 +104,8 @@ class PlaygroundService:
         media_type: Optional[str] = None,
         media_data: Optional[bytes] = None,
         skip_user_message: bool = False,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        sender_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send a message to an agent from the playground.
@@ -139,8 +140,10 @@ class PlaygroundService:
             # FIX 2026-01-30: Thread isolation takes priority for Playground
             # Previously, contact-based sender_key took priority which caused ALL threads
             # to share the same memory (breaking thread isolation)
-            # Now: thread_id > contact-based > generic user key
-            if thread_id:
+            # Now: explicit sender_key > thread_id > contact-based > generic user key
+            if sender_key:
+                self.logger.info(f"Using explicit sender_key: {sender_key}")
+            elif thread_id:
                 # Phase 14.1: Use thread-specific sender_key for thread isolation
                 sender_key = f"playground_u{user_id}_a{agent_id}_t{thread_id}"
                 self.logger.info(f"Using thread-specific sender_key: {sender_key}")
@@ -751,7 +754,8 @@ class PlaygroundService:
         agent_id: int,
         message_text: str,
         thread_id: Optional[int] = None,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        sender_key: Optional[str] = None,
     ):
         """
         Process message with streaming response (Phase 14.9).
@@ -778,8 +782,10 @@ class PlaygroundService:
 
         try:
             # FIX 2026-01-30: Thread isolation takes priority for Playground (streaming)
-            # Same logic as send_message() - thread_id > contact-based > generic user key
-            if thread_id:
+            # Same logic as send_message() - explicit sender_key > thread_id > contact-based > generic user key
+            if sender_key:
+                self.logger.info(f"Using explicit sender_key: {sender_key}")
+            elif thread_id:
                 # Phase 14.1: Use thread-specific sender_key for thread isolation
                 sender_key = f"playground_u{user_id}_a{agent_id}_t{thread_id}"
                 self.logger.info(f"[STREAMING] Using thread-specific sender_key: {sender_key}")

@@ -1203,6 +1203,14 @@ class AgentRouter:
                         Agent.is_active == True
                     ).first()
 
+                    # Validate override agent belongs to the same tenant
+                    if agent and agent.tenant_id != tenant_id:
+                        self.logger.warning(
+                            f"[SLASH-MENTION] Agent {agent.id} tenant mismatch "
+                            f"(agent={agent.tenant_id}, router={tenant_id}). Ignoring."
+                        )
+                        agent = None
+
                     if agent:
                         self.logger.info(
                             f"[SLASH-MENTION] Detected @{agent_contact.friendly_name} "
@@ -1675,6 +1683,21 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         f"🛡️ SENTINEL (detect_only): Threat detected but allowing - "
                         f"{sentinel_result.detection_type}"
                     )
+                    # Send threat notification for detect_only/warned threats
+                    try:
+                        config = sentinel.get_effective_config(agent_id)
+                        mcp_api_url = self.config.get("mcp_api_url") if self.config else None
+                        mcp_api_secret = self.config.get("mcp_api_secret") if self.config else None
+                        await sentinel.send_threat_notification(
+                            result=sentinel_result,
+                            config=config,
+                            sender_key=sender_key,
+                            agent_id=agent_id,
+                            mcp_api_url=mcp_api_url,
+                            mcp_api_secret=mcp_api_secret,
+                        )
+                    except Exception as notif_e:
+                        self.logger.warning(f"Failed to send Sentinel notification: {notif_e}")
             except Exception as e:
                 self.logger.warning(f"Sentinel pre-check failed, allowing message: {e}")
 
@@ -1734,6 +1757,18 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                             f"🛡️ MEMGUARD (detect_only): Memory poisoning detected but allowing - "
                             f"{memguard_result.reason}"
                         )
+                        # Audit log the MemGuard detect_only warning
+                        try:
+                            from services.audit_service import log_tenant_event, TenantAuditActions
+                            log_tenant_event(self.db, tenant_id, None,
+                                TenantAuditActions.SECURITY_MEMGUARD_BLOCK, "message", None,
+                                {"reason": memguard_result.reason,
+                                 "threat_score": getattr(memguard_result, 'threat_score', None),
+                                 "sender": sender_key, "channel": message.get("channel", "whatsapp"),
+                                 "agent_id": agent_id, "action": "detect_only"},
+                                severity="info")
+                        except Exception:
+                            pass
             except Exception as e:
                 self.logger.warning(f"MemGuard Layer A check failed, allowing message: {e}")
 

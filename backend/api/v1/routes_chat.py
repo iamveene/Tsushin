@@ -153,6 +153,14 @@ async def _process_sync(agent, agent_name, request, caller, db):
 
     # Handle thread — create new if not specified
     thread_id = request.thread_id
+    if thread_id:
+        # Validate thread belongs to caller's tenant
+        thread = db.query(ConversationThread).filter(
+            ConversationThread.id == thread_id,
+            ConversationThread.tenant_id == caller.tenant_id,
+        ).first()
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
     if not thread_id:
         thread_service = PlaygroundThreadService(db)
         thread_data = await thread_service.create_thread(
@@ -171,6 +179,7 @@ async def _process_sync(agent, agent_name, request, caller, db):
             message_text=request.message,
             thread_id=thread_id,
             tenant_id=caller.tenant_id,
+            sender_key=sender_key,
         )
     except Exception as e:
         logger.error(f"Chat error for agent {agent.id}: {e}", exc_info=True)
@@ -220,6 +229,14 @@ async def _process_stream_sse(agent, agent_name, request, caller, db):
 
     # Handle thread
     thread_id = request.thread_id
+    if thread_id:
+        # Validate thread belongs to caller's tenant
+        thread = db.query(ConversationThread).filter(
+            ConversationThread.id == thread_id,
+            ConversationThread.tenant_id == caller.tenant_id,
+        ).first()
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
     if not thread_id:
         thread_service = PlaygroundThreadService(db)
         thread_data = await thread_service.create_thread(
@@ -238,6 +255,7 @@ async def _process_stream_sse(agent, agent_name, request, caller, db):
                 agent_id=agent.id,
                 message_text=request.message,
                 thread_id=thread_id,
+                sender_key=sender_key,
             ):
                 chunk_data = json.dumps(chunk)
                 yield f"data: {chunk_data}\n\n"

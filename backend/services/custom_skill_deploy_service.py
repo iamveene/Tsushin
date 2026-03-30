@@ -9,6 +9,7 @@ cleanup when skills are removed.
 import hashlib
 import logging
 import base64
+import shlex
 from typing import Dict
 from sqlalchemy.orm import Session
 
@@ -52,6 +53,7 @@ class CustomSkillDeployService:
 
         # Create skill directory and write script
         entrypoint = skill.script_entrypoint or "main.py"
+        safe_entrypoint = shlex.quote(entrypoint)
         skill_dir = f"/workspace/skills/{skill_id}"
 
         try:
@@ -64,11 +66,11 @@ class CustomSkillDeployService:
             encoded = base64.b64encode(skill.script_content.encode()).decode()
             await container_service.execute_command(
                 tenant_id,
-                f"echo '{encoded}' | base64 -d > {skill_dir}/{entrypoint}",
+                f"echo '{encoded}' | base64 -d > {skill_dir}/{safe_entrypoint}",
                 db=db,
             )
             await container_service.execute_command(
-                tenant_id, f"chmod +x {skill_dir}/{entrypoint}", db=db
+                tenant_id, f"chmod +x {skill_dir}/{safe_entrypoint}", db=db
             )
 
             # Update hash
