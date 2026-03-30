@@ -58,7 +58,7 @@ SKILL_METADATA = {
 
 EXCLUDED_SKILL_TYPES = {"automation"}
 
-VALID_CHANNELS = {"playground", "whatsapp", "telegram"}
+VALID_CHANNELS = {"playground", "whatsapp", "telegram", "slack"}
 SENSITIVE_CONFIG_PATTERNS = {"api_key", "secret", "access_token", "auth_token", "password", "credential"}
 
 logger = logging.getLogger(__name__)

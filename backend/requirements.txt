@@ -58,6 +58,10 @@ aiohttp>=3.8.0  # Phase 8: MCP HTTP bridge communication
 # Telegram Integration (Phase 10.1.1)
 python-telegram-bot>=21.0
 
+# Slack Integration (v0.6.0 Item 33)
+slack-bolt>=1.20.0
+slack-sdk>=3.27.0
+
 # Observability
 prometheus_client>=0.20.0  # Prometheus metrics exposition
 

@@ -110,6 +110,9 @@ def seed_rbac_defaults(session):
         ("telegram.instances.read", "telegram_instances", "read", "View Telegram bot instances"),
         ("telegram.instances.manage", "telegram_instances", "manage", "Start/stop Telegram instances"),
         ("telegram.instances.delete", "telegram_instances", "delete", "Delete Telegram bot instances"),
+        # Slack Integrations (v0.6.0 Item 33)
+        ("integrations.slack.read", "slack_integrations", "read", "View Slack integrations"),
+        ("integrations.slack.write", "slack_integrations", "write", "Create and manage Slack integrations"),
         # Hub Integrations
         ("hub.read", "hub", "read", "View hub integrations"),
         ("hub.write", "hub", "write", "Create and update hub integrations"),
@@ -188,6 +191,7 @@ def seed_rbac_defaults(session):
             "knowledge.read", "knowledge.write", "knowledge.delete",
             "mcp.instances.read", "mcp.instances.create", "mcp.instances.manage", "mcp.instances.delete",
             "telegram.instances.create", "telegram.instances.read", "telegram.instances.manage", "telegram.instances.delete",  # Phase 10.1.1
+            "integrations.slack.read", "integrations.slack.write",  # v0.6.0 Item 33
             "hub.read", "hub.write", "hub.delete",
             "users.read", "users.invite", "users.manage", "users.remove",
             "org.settings.read", "org.settings.write",
@@ -207,6 +211,7 @@ def seed_rbac_defaults(session):
             "knowledge.read", "knowledge.write", "knowledge.delete",
             "mcp.instances.read", "mcp.instances.create", "mcp.instances.manage", "mcp.instances.delete",
             "telegram.instances.create", "telegram.instances.read", "telegram.instances.manage", "telegram.instances.delete",  # Phase 10.1.1
+            "integrations.slack.read", "integrations.slack.write",  # v0.6.0 Item 33
             "hub.read", "hub.write", "hub.delete",
             "users.read", "users.invite", "users.manage", "users.remove",
             "org.settings.read", "org.settings.write",
@@ -226,6 +231,7 @@ def seed_rbac_defaults(session):
             "knowledge.read", "knowledge.write",
             "mcp.instances.read", "mcp.instances.create", "mcp.instances.manage",
             "telegram.instances.read", "telegram.instances.create", "telegram.instances.manage",  # Phase 10.1.1
+            "integrations.slack.read", "integrations.slack.write",  # v0.6.0 Item 33
             "hub.read", "hub.write",
             "users.read",
             "org.settings.read",
@@ -237,6 +243,7 @@ def seed_rbac_defaults(session):
         "readonly": [
             "agents.read", "contacts.read", "memory.read", "flows.read",
             "knowledge.read", "mcp.instances.read", "telegram.instances.read",  # Phase 10.1.1
+            "integrations.slack.read",  # v0.6.0 Item 33
             "hub.read",
             "users.read", "org.settings.read", "analytics.read",
             "tools.read",  # Phase 9.3: Read-only can view tools
@@ -581,6 +588,41 @@ def ensure_rbac_permissions(session):
     if scheduler_perms_added:
         session.commit()
         print("[RBAC] Scheduler permissions ensured successfully")
+
+    # v0.6.0 Item 33: Ensure Slack integration permissions exist
+    slack_permissions_data = [
+        ("integrations.slack.read", "slack_integrations", "read", "View Slack integrations"),
+        ("integrations.slack.write", "slack_integrations", "write", "Create and manage Slack integrations"),
+    ]
+    slack_role_assignments = {
+        "owner": ["integrations.slack.read", "integrations.slack.write"],
+        "admin": ["integrations.slack.read", "integrations.slack.write"],
+        "member": ["integrations.slack.read", "integrations.slack.write"],
+        "readonly": ["integrations.slack.read"],
+    }
+    slack_perms_added = False
+    for name, resource, action, description in slack_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+            for role_name, role_perms in slack_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_rp = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == perm.id
+                        ).first()
+                        if not existing_rp:
+                            session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            slack_perms_added = True
+    if slack_perms_added:
+        session.commit()
+        print("[RBAC] Slack integration permissions ensured successfully")
 
 
 def seed_slash_commands(session):

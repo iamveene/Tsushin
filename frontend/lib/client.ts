@@ -121,7 +121,7 @@ export interface Message {
   is_group: boolean
   matched_filter: boolean
   seen_at: string
-  channel?: 'whatsapp' | 'playground' | 'telegram'  // Phase 10.1.1: Channel tracking
+  channel?: 'whatsapp' | 'playground' | 'telegram' | 'slack'  // Phase 10.1.1 + v0.6.0: Channel tracking
 }
 
 // Sandboxed Tools (formerly CustomTools - renamed in Skills-as-Tools Phase 6)
@@ -1302,7 +1302,7 @@ export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'm
 export type SummarizationPromptMode = 'append' | 'replace'
 
 export interface FlowStepConfig {
-  channel?: 'whatsapp' | 'telegram'
+  channel?: 'whatsapp' | 'telegram' | 'slack'
   recipient?: string
   message_template?: string
   content?: string
@@ -1603,6 +1603,31 @@ export interface TelegramHealthStatus {
   bot_username: string
   api_reachable: boolean
   error: string | null
+}
+
+// v0.6.0: Slack Integration
+export interface SlackIntegration {
+  id: number
+  tenant_id: string
+  workspace_id: string
+  workspace_name: string | null
+  mode: 'socket' | 'http'
+  bot_user_id: string | null
+  is_active: boolean
+  status: 'inactive' | 'connected' | 'error'
+  dm_policy: 'open' | 'allowlist' | 'disabled'
+  allowed_channels: string[]
+  created_at: string
+  updated_at: string | null
+}
+
+export interface SlackIntegrationCreate {
+  bot_token: string
+  app_token?: string
+  signing_secret?: string
+  mode?: 'socket' | 'http'
+  dm_policy?: 'open' | 'allowlist' | 'disabled'
+  allowed_channels?: string[]
 }
 
 // Playground Feature
@@ -4081,6 +4106,60 @@ export const api = {
   async getTelegramHealth(id: number): Promise<TelegramHealthStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/${id}/health`)
     if (!res.ok) throw new Error('Failed to fetch Telegram health')
+    return res.json()
+  },
+
+  // v0.6.0: Slack Integration
+  async getSlackIntegrations(): Promise<SlackIntegration[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/`)
+    if (!res.ok) throw new Error('Failed to fetch Slack integrations')
+    return res.json()
+  },
+
+  async createSlackIntegration(data: SlackIntegrationCreate): Promise<SlackIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      throw new Error(error.detail || 'Failed to create Slack integration')
+    }
+    return res.json()
+  },
+
+  async updateSlackIntegration(id: number, data: Partial<SlackIntegrationCreate>): Promise<SlackIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      throw new Error(error.detail || 'Failed to update Slack integration')
+    }
+    return res.json()
+  },
+
+  async deleteSlackIntegration(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) throw new Error('Failed to delete Slack integration')
+  },
+
+  async testSlackConnection(id: number): Promise<{ success: boolean; message: string; details?: any }> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}/test`, {
+      method: 'POST',
+    })
+    if (!res.ok) throw new Error('Failed to test Slack connection')
+    return res.json()
+  },
+
+  async getSlackChannels(id: number): Promise<any[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}/channels`)
+    if (!res.ok) throw new Error('Failed to fetch Slack channels')
     return res.json()
   },
 
