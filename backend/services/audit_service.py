@@ -513,6 +513,9 @@ def log_tenant_event(
         log_tenant_event(db, ctx.tenant_id, user.id, TenantAuditActions.AGENT_CREATE,
                          "agent", str(agent.id), {"name": agent.name}, request)
     """
+    # Global admins have no tenant — skip tenant-scoped audit logging silently.
+    if tenant_id is None:
+        return None
     try:
         ip_address = None
         user_agent = None
