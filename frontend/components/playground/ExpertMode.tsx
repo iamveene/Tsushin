@@ -779,14 +779,17 @@ export default function ExpertMode({
                               ? 'bg-[var(--pg-accent)] text-[var(--pg-void)] rounded-tr-sm'
                               : 'bg-[var(--pg-surface)] border border-[var(--pg-border)] text-[var(--pg-text)] rounded-tl-sm'
                           }`}>
-                            {isUser ? (
-                              <div className="whitespace-pre-wrap break-words">{msg.content}</div>
-                            ) : (
-                              <div className="prose prose-sm prose-invert max-w-none break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_pre]:my-2 [&_code]:text-xs [&_pre]:bg-black/20 [&_pre]:rounded [&_pre]:p-2">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {msg.content}
-                                </ReactMarkdown>
-                              </div>
+                            <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                            {msg.image_url && (
+                              <img
+                                src={msg.image_url.startsWith('/api/')
+                                  ? `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}${msg.image_url}`
+                                  : msg.image_url
+                                }
+                                alt="Generated image"
+                                className="mt-3 rounded-lg max-w-full max-h-[400px] object-contain cursor-pointer border border-[var(--pg-border)]"
+                                onClick={(e) => window.open((e.target as HTMLImageElement).src, '_blank')}
+                              />
                             )}
                             {msg.audio_url && (
                               <audio

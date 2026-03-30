@@ -1088,7 +1088,15 @@ export default function PlaygroundPage() {
           // This ensures edit/regenerate operations use the IDs stored in the database
           if (activeThreadId) {
             const threadData = await api.getThread(activeThreadId)
-            setMessages(threadData.messages || [])
+            const threadMessages = threadData.messages || []
+            // Phase 6: Inject image_url into the last assistant message if present
+            if (response.image_url && threadMessages.length > 0) {
+              const lastMsg = threadMessages[threadMessages.length - 1]
+              if (lastMsg.role === 'assistant') {
+                lastMsg.image_url = response.image_url
+              }
+            }
+            setMessages(threadMessages)
 
             // Check if thread was auto-renamed
             if (response.thread_renamed && response.new_thread_title) {
@@ -1105,7 +1113,8 @@ export default function PlaygroundPage() {
               role: 'assistant',
               content: response.message,
               timestamp: response.timestamp,
-              message_id: agentMsgId
+              message_id: agentMsgId,
+              image_url: response.image_url || undefined,  // Phase 6: Image generation
             }
             setMessages((prev) => [...prev, agentMsg])
           }

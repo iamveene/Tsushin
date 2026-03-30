@@ -1637,25 +1637,7 @@ export interface PlaygroundChatResponse {
   thread_renamed?: boolean
   new_thread_title?: string
   kb_used?: KBUsageItem[]  // KB usage tracking
-  // Message Queue fields (returned when status="queued")
-  queue_id?: number
-  position?: number
-}
-
-// Message Queue types
-export interface QueueItem {
-  id: number
-  status: string  // "pending" | "processing" | "completed" | "failed" | "dead_letter"
-  channel: string
-  agent_id: number
-  sender_key: string
-  priority: number
-  retry_count: number
-  queued_at: string | null
-  processing_started_at: string | null
-  error_message?: string | null
-  completed_at?: string | null
-  position?: number
+  image_url?: string  // Phase 6: Generated image URL
 }
 
 export interface PlaygroundMessage {
@@ -1673,6 +1655,7 @@ export interface PlaygroundMessage {
   is_bookmarked?: boolean  // Phase 14.2: Bookmark flag
   bookmarked_at?: string  // Phase 14.2: Bookmark timestamp
   kb_used?: KBUsageItem[]  // KB usage tracking
+  image_url?: string  // Phase 6: Generated image URL
 }
 
 // Phase 14.0: Audio capabilities response

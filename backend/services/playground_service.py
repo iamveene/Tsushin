@@ -457,6 +457,16 @@ class PlaygroundService:
                         metadata=skill_result.metadata
                     )
 
+                    # Phase 6: Cache generated images and include URL in response
+                    image_url = None
+                    if skill_result.media_paths:
+                        for media_path in skill_result.media_paths:
+                            import os
+                            if os.path.exists(media_path):
+                                image_url = self._cache_image(media_path)
+                                self.logger.info(f"Cached skill image: {media_path} -> {image_url}")
+                                break  # Use first image
+
                     # Return skill result directly
                     return {
                         "status": "success",
@@ -464,7 +474,8 @@ class PlaygroundService:
                         "agent_name": agent_name,
                         "tool_used": f"skill:{inbound_msg.sender}",  # Skill identifier
                         "execution_time": None,
-                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "image_url": image_url,
                     }
 
             except Exception as e:
@@ -700,6 +711,17 @@ class PlaygroundService:
                     "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
+            # Phase 6: Cache generated images from tool execution
+            image_url = None
+            media_paths = result.get("media_paths")
+            if media_paths:
+                import os
+                for media_path in media_paths:
+                    if os.path.exists(media_path):
+                        image_url = self._cache_image(media_path)
+                        self.logger.info(f"Cached tool image: {media_path} -> {image_url}")
+                        break  # Use first image
+
             return {
                 "status": "success",
                 "message": result.get("answer") or "",
@@ -707,7 +729,8 @@ class PlaygroundService:
                 "execution_time": result.get("execution_time"),
                 "agent_name": agent_name,
                 "kb_used": result.get("kb_used", []),  # KB usage tracking
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "image_url": image_url,
             }
 
         except Exception as e:
@@ -1049,12 +1072,23 @@ class PlaygroundService:
                         channel="playground"
                     )
 
+                    # Phase 6: Cache generated images from skill in streaming path
+                    image_url = None
+                    if skill_result.media_paths:
+                        import os
+                        for media_path in skill_result.media_paths:
+                            if os.path.exists(media_path):
+                                image_url = self._cache_image(media_path)
+                                self.logger.info(f"[STREAMING] Cached skill image: {media_path} -> {image_url}")
+                                break
+
                     # Return done
                     yield {
                         "type": "done",
                         "message_id": message_id,
                         "thread_id": thread_id,
-                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "image_url": image_url,
                     }
                     return  # Skill handled it, don't process with AI
 
@@ -1104,7 +1138,8 @@ class PlaygroundService:
                 "agent_name": agent_name,
                 "tool_used": response.get("tool_used"),
                 "kb_used": response.get("kb_used", []),
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "image_url": response.get("image_url"),  # Phase 6: Image generation
             }
 
         except Exception as e:
@@ -1695,6 +1730,42 @@ class PlaygroundService:
         if not hasattr(self, '_audio_cache'):
             self._audio_cache = {}
         return self._audio_cache.get(audio_id)
+
+    def _cache_image(self, image_path: str) -> str:
+        """
+        Cache an image file and return a serveable URL.
+
+        Phase 6: Image Generation for Playground.
+        Follows the same pattern as audio caching.
+
+        Args:
+            image_path: Path to the generated image file
+
+        Returns:
+            URL path for serving the image (e.g., /api/playground/images/{id})
+        """
+        import uuid
+
+        if not hasattr(self, '_image_cache'):
+            self._image_cache = {}
+
+        image_id = str(uuid.uuid4())
+        self._image_cache[image_id] = image_path
+        return f"/api/playground/images/{image_id}"
+
+    def get_image_path(self, image_id: str) -> Optional[str]:
+        """
+        Get image file path by ID.
+
+        Args:
+            image_id: Image file ID
+
+        Returns:
+            File path or None if not found
+        """
+        if not hasattr(self, '_image_cache'):
+            self._image_cache = {}
+        return self._image_cache.get(image_id)
 
     async def check_agent_audio_capabilities(self, agent_id: int) -> Dict[str, Any]:
         """

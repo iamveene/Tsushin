@@ -141,6 +141,7 @@ class PlaygroundWebSocketService:
                     # Final metadata
                     token_usage = chunk.get("token_usage")
                     message_id = chunk.get("message_id")
+                    image_url = chunk.get("image_url")  # Phase 6: Image generation
 
                     # Auto-rename thread based on first message
                     thread_renamed = False
@@ -191,7 +192,8 @@ class PlaygroundWebSocketService:
                         "token_usage": token_usage,
                         "timestamp": datetime.utcnow().isoformat() + "Z",
                         "thread_renamed": thread_renamed,
-                        "new_thread_title": new_thread_title
+                        "new_thread_title": new_thread_title,
+                        "image_url": image_url,  # Phase 6: Image generation
                     }
 
                 elif chunk_type == "error":

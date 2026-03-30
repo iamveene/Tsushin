@@ -29,29 +29,15 @@ if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
 
 # Setup logging with TSN configuration (UTF-8 encoding for Unicode support)
-# When TSN_LOG_FORMAT=json, use JsonFormatter for structured output.
-if settings.LOG_FORMAT.lower() == "json":
-    from services.logging_service import JsonFormatter
-    _json_fmt = JsonFormatter()
-    _file_handler = logging.FileHandler(settings.LOG_FILE, encoding='utf-8')
-    _file_handler.setFormatter(_json_fmt)
-    _stream_handler = logging.StreamHandler()
-    _stream_handler.setFormatter(_json_fmt)
-    logging.basicConfig(
-        level=settings.LOG_LEVEL,
-        handlers=[_file_handler, _stream_handler],
-        force=True,
-    )
-else:
-    logging.basicConfig(
-        level=settings.LOG_LEVEL,
-        format="%(asctime)s - [%(name)s] - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(settings.LOG_FILE, encoding='utf-8'),
-            logging.StreamHandler()
-        ],
-        force=True,  # Ensure config is applied even if root logger was initialized by imports
-    )
+logging.basicConfig(
+    level=settings.LOG_LEVEL,
+    format="%(asctime)s - [%(name)s] - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(settings.LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler()
+    ],
+    force=True  # Ensure config is applied even if root logger was initialized by imports
+)
 
 logger = logging.getLogger(__name__)
 logger.info(f"Starting {settings.SERVICE_NAME} v{settings.SERVICE_VERSION}")

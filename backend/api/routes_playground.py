@@ -53,6 +53,7 @@ class PlaygroundChatResponse(BaseModel):
     kb_used: Optional[List[KBUsageItem]] = None  # KB usage tracking
     action: Optional[str] = None  # For command actions (e.g., project_entered, project_exited)
     data: Optional[Dict[str, Any]] = None  # For command data (e.g., project info)
+    image_url: Optional[str] = None  # Phase 6: Generated image URL
 
 
 class PlaygroundMessage(BaseModel):
@@ -66,6 +67,7 @@ class PlaygroundMessage(BaseModel):
     bookmarked_at: Optional[str] = None
     original_content: Optional[str] = None
     kb_used: Optional[List[KBUsageItem]] = None  # KB usage tracking
+    image_url: Optional[str] = None  # Phase 6: Generated image URL
 
 
 class PlaygroundHistoryResponse(BaseModel):
@@ -596,6 +598,43 @@ async def get_audio_file(
         audio_path,
         media_type=content_type,
         filename=f"response.{ext}"
+    )
+
+
+@router.get("/api/playground/images/{image_id}")
+async def get_image_file(
+    image_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required)
+):
+    """
+    Serve generated image file by ID.
+
+    Phase 6: Image Generation for Playground
+    """
+    from fastapi.responses import FileResponse
+    import os
+
+    service = PlaygroundService(db)
+    image_path = service.get_image_path(image_id)
+
+    if not image_path or not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="Image file not found")
+
+    ext = image_path.rsplit(".", 1)[-1].lower() if "." in image_path else "png"
+    content_types = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+    }
+    content_type = content_types.get(ext, "image/png")
+
+    return FileResponse(
+        image_path,
+        media_type=content_type,
+        filename=f"generated.{ext}"
     )
 
 
