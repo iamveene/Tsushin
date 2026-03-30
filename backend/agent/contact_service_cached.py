@@ -12,7 +12,8 @@ Performance Goals:
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple
 import logging
-from models import Contact
+from sqlalchemy import or_
+from models import Contact, ContactChannelMapping
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,24 @@ class CachedContactService:
             (Contact.telegram_id == identifier)  # Phase 10.1.1
         ).first()
 
-        return contact
+        if contact:
+            return contact
+
+        # Fallback: Search channel mappings (Slack, Discord, etc.)
+        mapping = self.db.query(ContactChannelMapping).filter(
+            or_(
+                ContactChannelMapping.channel_identifier == identifier,
+                ContactChannelMapping.channel_identifier.like(f"%:{identifier}")
+            )
+        ).first()
+
+        if mapping:
+            return self.db.query(Contact).filter(
+                Contact.id == mapping.contact_id,
+                Contact.is_active == True
+            ).first()
+
+        return None
 
     def _evict_if_needed(self, now: datetime):
         """Evict expired or excess entries"""

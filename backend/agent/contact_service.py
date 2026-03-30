@@ -5,7 +5,8 @@ Phase 4.2: Contact Management System
 
 from typing import Optional, Dict, List, Tuple
 from sqlalchemy.orm import Session
-from models import Contact
+from sqlalchemy import or_
+from models import Contact, ContactChannelMapping
 import re
 
 
@@ -78,8 +79,36 @@ class ContactService:
             Contact.is_active == True,
             Contact.whatsapp_id == sender_normalized
         ).first()
+        if contact:
+            return contact
 
-        return contact
+        # Fallback: Search by channel mapping (supports Slack, Discord, etc.)
+        return self._lookup_by_channel_mapping(sender_normalized) or self._lookup_by_channel_mapping(sender)
+
+    def _lookup_by_channel_mapping(self, identifier: str) -> Optional[Contact]:
+        """
+        Lookup contact via ContactChannelMapping table.
+        Handles both exact matches (Discord snowflake) and composite
+        identifiers (Slack workspace_id:user_id).
+        """
+        if not identifier:
+            return None
+
+        mapping = self.db.query(ContactChannelMapping).filter(
+            or_(
+                ContactChannelMapping.channel_identifier == identifier,
+                ContactChannelMapping.channel_identifier.like(f"%:{identifier}")
+            )
+        ).first()
+
+        if mapping:
+            contact = self.db.query(Contact).filter(
+                Contact.id == mapping.contact_id,
+                Contact.is_active == True
+            ).first()
+            return contact
+
+        return None
 
     def detect_mentions(self, message_body: str) -> List[Contact]:
         """
