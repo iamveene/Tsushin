@@ -139,6 +139,30 @@ class AgentRouter:
             except Exception as e:
                 self.logger.error(f"Failed to initialize TelegramSender: {e}", exc_info=True)
 
+        # Item 32: Channel Abstraction Layer — register adapters per channel
+        from channels.registry import ChannelRegistry
+        from channels.whatsapp.adapter import WhatsAppChannelAdapter
+        from channels.telegram.adapter import TelegramChannelAdapter
+        from channels.playground.adapter import PlaygroundChannelAdapter
+
+        self.channel_registry = ChannelRegistry()
+
+        if mcp_instance_id:
+            self.channel_registry.register(
+                "whatsapp",
+                WhatsAppChannelAdapter(db_session, self.mcp_sender, mcp_instance_id, self.logger)
+            )
+        if telegram_instance_id and self.telegram_sender:
+            self.channel_registry.register(
+                "telegram",
+                TelegramChannelAdapter(self.telegram_sender, self.logger)
+            )
+        self.channel_registry.register(
+            "playground",
+            PlaygroundChannelAdapter(self.logger)
+        )
+        self.logger.info(f"ChannelRegistry initialized with channels: {self.channel_registry.list_channels()}")
+
         # Phase 5.0: Initialize SkillManager for audio transcription, TTS, etc.
         # Phase 7.2: Pass token_tracker for usage analytics
         self.skill_manager = get_skill_manager(token_tracker=self.token_tracker)
@@ -452,13 +476,14 @@ class AgentRouter:
         media_path: str = None
     ) -> bool:
         """
-        Phase 10.1.1: Universal message sender supporting WhatsApp and Telegram.
-        Cross-channel contamination fix: Validates recipients before sending.
+        Item 32: Universal message sender via Channel Abstraction Layer.
+        Dispatches to the registered ChannelAdapter for the target channel.
+        Cross-channel contamination prevention via adapter.validate_recipient().
 
         Args:
             recipient: Chat ID (WhatsApp) or Telegram chat_id
             message_text: Message content
-            channel: "whatsapp" or "telegram"
+            channel: "whatsapp", "telegram", "slack", "discord", etc.
             agent_id: Agent ID for MCP URL resolution (WhatsApp only)
             media_path: Optional media file path (audio, image, etc.)
 
@@ -466,52 +491,30 @@ class AgentRouter:
             True if message sent successfully
         """
         try:
-            # CRITICAL: Validate recipient for channel to prevent cross-channel contamination
-            if not self._validate_recipient_for_channel(recipient, channel):
-                self.logger.error(
-                    f"❌ Message blocked: Recipient '{recipient}' is invalid for channel '{channel}'"
-                )
-                return False
-
-            if channel == "telegram":
-                if not self.telegram_sender:
-                    self.logger.error("TelegramSender not initialized")
-                    return False
-
-                # Phase 6: Send photo if media_path is provided (image generation)
-                if media_path:
-                    self.logger.info(f"Sending photo to Telegram chat {recipient}: {media_path}")
-                    return await self.telegram_sender.send_photo(
-                        chat_id=int(recipient),
-                        photo_path=media_path,
-                        caption=message_text or None
+            adapter = self.channel_registry.get_adapter(channel)
+            if adapter is None:
+                # Fallback: validate recipient with legacy method for unregistered channels
+                if not self._validate_recipient_for_channel(recipient, channel):
+                    self.logger.error(
+                        f"Message blocked: Recipient '{recipient}' is invalid for channel '{channel}'"
                     )
-
-                return await self.telegram_sender.send_message(
-                    chat_id=int(recipient),
-                    message=message_text
-                )
-
-            elif channel == "whatsapp":
-                # Phase Security-1: Resolve MCP URL and secret for WhatsApp
-                mcp_url, api_secret = self._resolve_mcp_instance(agent_id) if agent_id else (None, None)
-
-                # Check connection before sending
-                if agent_id and not self._check_mcp_connection(agent_id, mcp_url):
-                    self.logger.warning(f"[SKIP] MCP not connected, skipping message to {recipient}")
                     return False
+                self.logger.error(f"No adapter registered for channel: {channel}")
+                return False
 
-                return await self.mcp_sender.send_message(
-                    recipient,
-                    message_text,
-                    media_path=media_path,
-                    api_url=mcp_url,
-                    api_secret=api_secret
+            result = await adapter.send_message(
+                to=recipient,
+                text=message_text,
+                media_path=media_path,
+                agent_id=agent_id
+            )
+
+            if not result.success:
+                self.logger.warning(
+                    f"Message send failed via {channel}: {result.error or 'unknown error'}"
                 )
 
-            else:
-                self.logger.error(f"Unknown channel: {channel}")
-                return False
+            return result.success
 
         except Exception as e:
             self.logger.error(f"Error sending message via {channel}: {e}", exc_info=True)
