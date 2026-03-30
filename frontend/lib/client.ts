@@ -392,6 +392,7 @@ export interface SentinelConfig {
   detect_poisoning: boolean
   detect_shell_malicious_intent: boolean
   detect_memory_poisoning: boolean
+  detect_browser_ssrf: boolean
   aggressiveness_level: number
   llm_provider: string
   llm_model: string
@@ -426,6 +427,7 @@ export interface SentinelConfigUpdate {
   detect_poisoning?: boolean
   detect_shell_malicious_intent?: boolean
   detect_memory_poisoning?: boolean
+  detect_browser_ssrf?: boolean
   aggressiveness_level?: number
   llm_provider?: string
   llm_model?: string

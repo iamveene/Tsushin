@@ -200,6 +200,7 @@ class SentinelService:
             detect_agent_takeover=True,
             detect_poisoning=True,
             detect_shell_malicious_intent=True,
+            detect_browser_ssrf=True,
             aggressiveness_level=1,
             llm_provider="gemini",
             llm_model="gemini-2.5-flash-lite",
@@ -235,6 +236,7 @@ class SentinelService:
             detect_agent_takeover=system_config.detect_agent_takeover,
             detect_poisoning=system_config.detect_poisoning,
             detect_shell_malicious_intent=system_config.detect_shell_malicious_intent,
+            detect_browser_ssrf=getattr(system_config, 'detect_browser_ssrf', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -264,6 +266,7 @@ class SentinelService:
             merged.detect_agent_takeover = tenant_config.detect_agent_takeover
             merged.detect_poisoning = tenant_config.detect_poisoning
             merged.detect_shell_malicious_intent = tenant_config.detect_shell_malicious_intent
+            merged.detect_browser_ssrf = getattr(tenant_config, 'detect_browser_ssrf', True)
             merged.aggressiveness_level = tenant_config.aggressiveness_level
             merged.llm_provider = tenant_config.llm_provider
             merged.llm_model = tenant_config.llm_model
@@ -783,6 +786,68 @@ class SentinelService:
             start_time=start_time,
             skill_context=skill_context,
             tool_name="run_shell_command",  # For exception matching
+        )
+
+        return result
+
+    async def analyze_browser_url(
+        self,
+        url: str,
+        agent_id: Optional[int] = None,
+        sender_key: Optional[str] = None,
+        message_id: Optional[str] = None,
+        skill_type: Optional[str] = None,
+    ) -> SentinelAnalysisResult:
+        """
+        Analyze a browser navigation URL for SSRF intent.
+
+        Uses LLM-based semantic analysis to detect attempts to access internal
+        services, cloud metadata, or private network resources via browser automation.
+
+        This complements the pattern-based SSRF validation in ssrf_validator.py
+        with intent-level analysis that can detect indirect or obfuscated SSRF attempts.
+
+        Args:
+            url: The URL being navigated to
+            agent_id: Agent ID for agent-specific config
+            sender_key: User identifier for logging
+            message_id: Message ID for logging
+            skill_type: Skill type for skill-level profile resolution (defaults to "browser_automation")
+
+        Returns:
+            SentinelAnalysisResult with threat detection results
+        """
+        start_time = time.time()
+
+        # Get effective configuration
+        config = self.get_effective_config(agent_id, skill_type=skill_type or "browser_automation")
+
+        # Check if Sentinel is enabled
+        if not config.is_enabled:
+            return self._create_allowed_result("browser", "sentinel_disabled", start_time)
+
+        if config.aggressiveness_level <= 0:
+            return self._create_allowed_result("browser", "aggressiveness_off", start_time)
+
+        if not config.is_detection_enabled("browser_ssrf"):
+            return self._create_allowed_result("browser", "browser_ssrf_disabled", start_time)
+
+        # Truncate URL for analysis
+        truncated_url = url[:config.max_input_chars]
+        input_hash = self._hash_input(truncated_url)
+
+        # Analyze for SSRF intent
+        result = await self._analyze_single(
+            input_content=truncated_url,
+            input_hash=input_hash,
+            analysis_type="browser",
+            detection_type="browser_ssrf",
+            config=config,
+            sender_key=sender_key,
+            message_id=message_id,
+            agent_id=agent_id,
+            start_time=start_time,
+            tool_name="browser_navigate",
         )
 
         return result

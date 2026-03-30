@@ -156,6 +156,7 @@ export default function SentinelSettingsPage() {
         detect_poisoning: configData.detect_poisoning,
         detect_shell_malicious_intent: configData.detect_shell_malicious_intent,
         detect_memory_poisoning: configData.detect_memory_poisoning,
+        detect_browser_ssrf: configData.detect_browser_ssrf,
         aggressiveness_level: configData.aggressiveness_level,
         llm_provider: configData.llm_provider,
         llm_model: configData.llm_model,
@@ -840,6 +841,7 @@ export default function SentinelSettingsPage() {
                   { key: 'detect_agent_takeover', label: 'Agent Takeover', desc: 'Attempts to hijack agent identity', severity: 'high' },
                   { key: 'detect_poisoning', label: 'Poisoning Attacks', desc: 'Gradual manipulation patterns', severity: 'medium' },
                   { key: 'detect_shell_malicious_intent', label: 'Shell Malicious Intent', desc: 'Malicious shell command patterns', severity: 'critical' },
+                  { key: 'detect_browser_ssrf', label: 'Browser SSRF', desc: 'Server-Side Request Forgery via browser automation', severity: 'critical' },
                 ].map((detection) => (
                   <div key={detection.key} className="flex items-center justify-between py-2">
                     <div className="flex items-center gap-3">

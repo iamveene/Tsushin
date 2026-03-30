@@ -20,6 +20,7 @@ Usage:
 import ipaddress
 import logging
 import socket
+from typing import Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,13 @@ def is_dangerous_ip(ip_str: str) -> bool:
     return False
 
 
-def validate_url(url: str, *, allow_private: bool = False) -> str:
+def validate_url(
+    url: str,
+    *,
+    allow_private: bool = False,
+    allowed_domains: Optional[list] = None,
+    blocked_domains: Optional[list] = None,
+) -> str:
     """
     Validate a URL against SSRF attacks using DNS-resolution-based IP checking.
 
@@ -101,6 +108,9 @@ def validate_url(url: str, *, allow_private: bool = False) -> str:
         url: The URL to validate.
         allow_private: If True, allow private/loopback IPs (for services like Ollama
                        that legitimately run on private networks).
+        allowed_domains: If non-empty, ONLY these domains are permitted (tenant allowlist).
+                         Empty list or None means all public domains are allowed.
+        blocked_domains: Additional domains to block beyond the default blocklist.
 
     Returns:
         The original URL if valid.
@@ -127,6 +137,25 @@ def validate_url(url: str, *, allow_private: bool = False) -> str:
         raise SSRFValidationError("URL has no hostname")
 
     hostname_lower = hostname.lower()
+
+    # Tenant-level allowlist: if set, ONLY these domains are permitted
+    if allowed_domains:
+        allowed_lower = [d.lower() for d in allowed_domains]
+        if not any(
+            hostname_lower == d or hostname_lower.endswith("." + d)
+            for d in allowed_lower
+        ):
+            raise SSRFValidationError(
+                f"Domain '{hostname}' is not in the allowed domains list"
+            )
+
+    # Additional blocked domains (per-tenant blocklist)
+    if blocked_domains:
+        for blocked in blocked_domains:
+            if blocked.lower() in hostname_lower:
+                raise SSRFValidationError(
+                    f"Domain '{hostname}' is blocked by tenant policy"
+                )
 
     # Block known internal hostnames (unless private IPs allowed)
     if not allow_private:

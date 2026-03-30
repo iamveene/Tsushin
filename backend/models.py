@@ -2151,6 +2151,7 @@ class SentinelConfig(Base):
     detect_poisoning = Column(Boolean, default=True, nullable=False)
     detect_shell_malicious_intent = Column(Boolean, default=True, nullable=False)
     detect_memory_poisoning = Column(Boolean, default=True, nullable=False)
+    detect_browser_ssrf = Column(Boolean, default=True, nullable=False)
 
     # Aggressiveness: 0=Off, 1=Moderate, 2=Aggressive, 3=Extra Aggressive
     aggressiveness_level = Column(Integer, default=1, nullable=False)
@@ -2167,6 +2168,7 @@ class SentinelConfig(Base):
     poisoning_prompt = Column(Text, nullable=True)
     shell_intent_prompt = Column(Text, nullable=True)
     memory_poisoning_prompt = Column(Text, nullable=True)
+    browser_ssrf_prompt = Column(Text, nullable=True)
 
     # Performance settings
     cache_ttl_seconds = Column(Integer, default=300, nullable=False)  # 5-minute cache

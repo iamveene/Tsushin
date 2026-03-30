@@ -128,6 +128,10 @@ class SentinelEffectiveConfig:
                 "enabled": getattr(config, "detect_memory_poisoning", True),
                 "custom_prompt": getattr(config, "memory_poisoning_prompt", None),
             },
+            "browser_ssrf": {
+                "enabled": getattr(config, "detect_browser_ssrf", True),
+                "custom_prompt": getattr(config, "browser_ssrf_prompt", None),
+            },
         }
 
         return cls(

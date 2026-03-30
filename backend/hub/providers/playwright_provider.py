@@ -178,19 +178,17 @@ class PlaywrightProvider(BrowserAutomationProvider):
             raise BrowserInitializationError(f"Could not launch browser: {str(e)}")
 
     def _validate_url(self, url: str) -> None:
-        """Validate URL against SSRF using shared validator."""
+        """Validate URL against SSRF using shared validator with tenant allowlist/blocklist."""
         from utils.ssrf_validator import validate_url, SSRFValidationError
         try:
-            validate_url(url)
+            validate_url(
+                url,
+                allowed_domains=self.config.allowed_domains or None,
+                blocked_domains=self.config.blocked_domains or None,
+            )
         except SSRFValidationError as e:
+            logger.warning(f"SSRF validation blocked URL: {url} — {e}")
             raise SecurityError(str(e))
-
-        # Keep existing blocked domains check
-        parsed = urlparse(url)
-        hostname = (parsed.hostname or "").lower()
-        for blocked in self.config.blocked_domains:
-            if blocked.lower() in hostname:
-                raise SecurityError(f"Navigation to blocked domain: {blocked}")
 
     async def navigate(self, url: str, wait_until: str = "load") -> BrowserResult:
         """

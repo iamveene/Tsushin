@@ -206,6 +206,7 @@ class BrowserConfig:
 
     # Security settings
     blocked_domains: List[str] = field(default_factory=list)
+    allowed_domains: List[str] = field(default_factory=list)  # Tenant allowlist: only these domains permitted (empty = allow all public)
 
     # Session persistence (Phase 35a)
     session_persistence: bool = False
@@ -226,6 +227,13 @@ class BrowserConfig:
             except (json.JSONDecodeError, TypeError):
                 blocked = []
 
+        allowed = []
+        if hasattr(integration, 'allowed_domains_json') and integration.allowed_domains_json:
+            try:
+                allowed = json.loads(integration.allowed_domains_json)
+            except (json.JSONDecodeError, TypeError):
+                allowed = []
+
         return cls(
             provider_type=getattr(integration, 'provider_type', 'playwright'),
             mode=getattr(integration, 'mode', 'container'),
@@ -238,6 +246,7 @@ class BrowserConfig:
             user_agent=getattr(integration, 'user_agent', None),
             proxy_url=getattr(integration, 'proxy_url', None),
             blocked_domains=blocked,
+            allowed_domains=allowed,
             session_persistence=getattr(integration, 'session_persistence', False),
             session_ttl_seconds=getattr(integration, 'session_ttl_seconds', 300),
             cdp_url=getattr(integration, 'cdp_url', 'http://host.docker.internal:9222'),

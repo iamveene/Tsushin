@@ -180,6 +180,11 @@ class BrowserAutomationSkill(BaseSkill):
         try:
             logger.info(f"BrowserAutomationSkill: Processing message: {message.body[:100]}...")
 
+            # Store context for Sentinel SSRF checks in _execute_action
+            self._tenant_id = getattr(message, 'tenant_id', None)
+            self._agent_id = getattr(message, 'agent_id', None)
+            self._sender_key = getattr(message, 'sender_key', None)
+
             provider_type = config.get('provider_type', 'playwright')
 
             # Parse natural language into actions
@@ -458,6 +463,58 @@ Return JSON array only:"""
 
         return None
 
+    async def _sentinel_ssrf_check(self, url: str, tenant_id: str = None, agent_id: int = None, sender_key: str = None) -> bool:
+        """
+        Run Sentinel browser_ssrf analysis on a URL before navigation.
+
+        This provides LLM-based intent analysis complementing the pattern-based
+        SSRF validation in ssrf_validator.py. Catches obfuscated or indirect
+        SSRF attempts that pattern matching might miss.
+
+        Args:
+            url: URL to check
+            tenant_id: Tenant ID for config resolution
+            agent_id: Agent ID for agent-specific config
+            sender_key: User identifier for audit logging
+
+        Returns:
+            True if URL is safe to navigate, False if blocked by Sentinel
+        """
+        if not self._db:
+            return True  # No DB session = can't run Sentinel check
+
+        try:
+            from services.sentinel_service import SentinelService
+            sentinel = SentinelService(self._db, tenant_id, token_tracker=self.token_tracker)
+            result = await sentinel.analyze_browser_url(
+                url=url,
+                agent_id=agent_id,
+                sender_key=sender_key,
+                skill_type="browser_automation",
+            )
+
+            if result.is_threat_detected and result.action == "blocked":
+                logger.warning(
+                    f"Sentinel browser_ssrf blocked navigation to {url}: "
+                    f"score={result.threat_score}, reason={result.threat_reason}"
+                )
+                return False
+
+            if result.is_threat_detected:
+                # detect_only or warn_only mode — log but allow
+                logger.info(
+                    f"Sentinel browser_ssrf detected (non-blocking): {url}, "
+                    f"score={result.threat_score}, reason={result.threat_reason}"
+                )
+
+            return True
+
+        except Exception as e:
+            # Fail open: if Sentinel check fails, allow navigation
+            # The pattern-based ssrf_validator in PlaywrightProvider still protects
+            logger.warning(f"Sentinel browser_ssrf check failed (allowing): {e}")
+            return True
+
     async def _execute_action(self, provider, action_def: Dict) -> BrowserResult:
         """
         Execute a single browser action.
@@ -475,8 +532,22 @@ Return JSON array only:"""
         logger.info(f"Executing action: {action_name} with params: {params}")
 
         if action_name == 'navigate':
+            url = params.get('url', '')
+            # Sentinel SSRF pre-check (LLM-based intent analysis)
+            if not await self._sentinel_ssrf_check(
+                url,
+                tenant_id=getattr(self, '_tenant_id', None),
+                agent_id=getattr(self, '_agent_id', None),
+                sender_key=getattr(self, '_sender_key', None),
+            ):
+                return BrowserResult(
+                    success=False,
+                    action='navigate',
+                    data={},
+                    error=f"Blocked by Sentinel SSRF protection: URL '{url}' was flagged as a potential SSRF attempt targeting internal resources"
+                )
             return await provider.navigate(
-                url=params.get('url', ''),
+                url=url,
                 wait_until=params.get('wait_until', 'load')
             )
 
@@ -724,10 +795,19 @@ Return JSON array only:"""
             "risk_notes": (
                 "URL mentions and screenshot requests are expected for browser automation. "
                 "Still flag: credential harvesting pages, phishing domains, "
-                "requests to extract passwords/sensitive data, or commands that "
-                "try to bypass security measures."
+                "requests to extract passwords/sensitive data, commands that "
+                "try to bypass security measures, and SSRF attempts targeting "
+                "internal IPs, cloud metadata, or Docker/Kubernetes services."
             )
         }
+
+    @classmethod
+    def get_sentinel_exemptions(cls) -> list:
+        """
+        Browser automation does NOT exempt browser_ssrf detection.
+        SSRF protection must remain active even when the skill is enabled.
+        """
+        return []  # No exemptions — SSRF checks stay active
 
     # =========================================================================
     # SKILLS-AS-TOOLS: MCP TOOL DEFINITIONS (Phase 4)
@@ -871,6 +951,11 @@ Return JSON array only:"""
         Returns:
             SkillResult with browser operation result
         """
+        # Store context for Sentinel SSRF checks
+        self._tenant_id = getattr(message, 'tenant_id', None)
+        self._agent_id = getattr(message, 'agent_id', None)
+        self._sender_key = getattr(message, 'sender_key', None)
+
         action = arguments.get("action")
 
         ALL_ACTIONS = [
