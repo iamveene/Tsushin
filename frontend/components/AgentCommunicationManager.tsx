@@ -38,7 +38,7 @@ export default function AgentCommunicationManager() {
     source_agent_id: 0,
     target_agent_id: 0,
     max_depth: 3,
-    rate_limit_rpm: 10,
+    rate_limit_rpm: 30,
   })
   const [savingPermission, setSavingPermission] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
@@ -75,8 +75,8 @@ export default function AgentCommunicationManager() {
     try {
       const params: { limit: number; status?: string } = { limit: 50 }
       if (statusFilter) params.status = statusFilter
-      const data = await api.getAgentCommSessions(params)
-      setSessions(data)
+      const result = await api.getAgentCommSessions(params)
+      setSessions(result.items)
     } catch (err: any) {
       toast.error('Load Failed', err.message || 'Failed to load sessions')
     } finally {
@@ -140,7 +140,7 @@ export default function AgentCommunicationManager() {
       await api.createAgentCommPermission(newPermission)
       toast.success('Permission created successfully')
       setShowAddModal(false)
-      setNewPermission({ source_agent_id: 0, target_agent_id: 0, max_depth: 3, rate_limit_rpm: 10 })
+      setNewPermission({ source_agent_id: 0, target_agent_id: 0, max_depth: 3, rate_limit_rpm: 30 })
       loadPermissions()
     } catch (err: any) {
       toast.error('Create Failed', err.message || 'Failed to create permission')
@@ -160,6 +160,7 @@ export default function AgentCommunicationManager() {
   }
 
   const handleDeletePermission = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this permission? This action cannot be undone.')) return
     setDeletingId(id)
     try {
       await api.deleteAgentCommPermission(id)
@@ -252,7 +253,6 @@ export default function AgentCommunicationManager() {
                 <option value="blocked">Blocked</option>
                 <option value="failed">Failed</option>
                 <option value="timeout">Timeout</option>
-                <option value="error">Error</option>
               </select>
               <button
                 onClick={loadSessions}
@@ -371,7 +371,7 @@ export default function AgentCommunicationManager() {
                                 </div>
                               </div>
                               <p className="text-sm text-gray-300 whitespace-pre-wrap break-words">
-                                {msg.message_content}
+                                {msg.message_content ?? ''}
                               </p>
                               <p className="text-xs text-tsushin-muted mt-1">
                                 {formatDateTimeFull(msg.created_at)}

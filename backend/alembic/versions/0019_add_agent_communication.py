@@ -66,6 +66,7 @@ def upgrade():
         op.create_index('ix_agent_comm_session_tenant', 'agent_communication_session', ['tenant_id'])
         op.create_index('ix_agent_comm_session_tenant_status', 'agent_communication_session', ['tenant_id', 'status'])
         op.create_index('ix_agent_comm_session_initiator', 'agent_communication_session', ['initiator_agent_id', 'started_at'])
+        op.create_index('ix_agent_comm_session_target', 'agent_communication_session', ['target_agent_id'])
 
     # --- agent_communication_message table ---
     if 'agent_communication_message' not in existing_tables:

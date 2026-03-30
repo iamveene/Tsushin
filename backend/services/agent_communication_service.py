@@ -66,6 +66,12 @@ class AgentCapabilities:
 # Service
 # ---------------------------------------------------------------------------
 
+# Hard system ceiling for delegation depth regardless of permission settings
+SYSTEM_MAX_DEPTH = 5
+
+VALID_SESSION_STATUSES = {"pending", "in_progress", "completed", "failed", "timeout", "blocked"}
+
+
 class AgentCommunicationService:
     """
     Orchestrates inter-agent communication.
@@ -122,11 +128,15 @@ class AgentCommunicationService:
         if not target_agent:
             return AgentCommunicationResult(success=False, error=f"Target agent {target_agent_id} not found")
         if not source_agent.is_active:
-            return AgentCommunicationResult(success=False, error=f"Source agent is inactive")
+            return AgentCommunicationResult(success=False, error="Source agent is inactive")
         if not target_agent.is_active:
-            return AgentCommunicationResult(success=False, error=f"Target agent is inactive")
+            return AgentCommunicationResult(success=False, error="Target agent is inactive")
         if source_agent.tenant_id != self.tenant_id or target_agent.tenant_id != self.tenant_id:
             return AgentCommunicationResult(success=False, error="Cross-tenant communication not allowed")
+
+        # 1b. Self-communication guard
+        if source_agent_id == target_agent_id:
+            return AgentCommunicationResult(success=False, error="An agent cannot communicate with itself")
 
         # 2. Check permission
         permission = self._check_permission(source_agent_id, target_agent_id)
@@ -134,8 +144,8 @@ class AgentCommunicationService:
             self._audit_log("agent_comm.blocked", source_agent_id, target_agent_id, {"reason": "no_permission"})
             return AgentCommunicationResult(success=False, error="No communication permission between these agents")
 
-        # 3. Check depth
-        max_depth = permission.max_depth or self.DEFAULT_MAX_DEPTH
+        # 3. Check depth (enforce system ceiling regardless of permission)
+        max_depth = min(permission.max_depth or self.DEFAULT_MAX_DEPTH, SYSTEM_MAX_DEPTH)
         if depth >= max_depth:
             self._audit_log("agent_comm.blocked", source_agent_id, target_agent_id, {"reason": "depth_exceeded", "depth": depth, "max_depth": max_depth})
             return AgentCommunicationResult(success=False, error=f"Maximum delegation depth ({max_depth}) exceeded")
@@ -187,8 +197,13 @@ class AgentCommunicationService:
         self.db.add(request_msg)
         self.db.commit()
 
-        # 9. Sentinel analysis
-        sentinel_result_data = await self._sentinel_analyze(message, source_agent_id, target_agent_id, depth)
+        # 9. Sentinel analysis (fail-closed for inter-agent comms)
+        try:
+            sentinel_result_data = await self._sentinel_analyze(message, source_agent_id, target_agent_id, depth)
+        except Exception as e:
+            logger.error(f"Sentinel analysis error (blocking as precaution): {e}", exc_info=True)
+            sentinel_result_data = {"blocked": True, "reason": "Sentinel analysis error — blocking as precaution"}
+
         request_msg.sentinel_analyzed = True
         request_msg.sentinel_result = sentinel_result_data
         self.db.commit()
@@ -242,7 +257,7 @@ class AgentCommunicationService:
             )
 
         # 11. Record response message
-        response_text = ai_result.get("answer", "")
+        response_text = ai_result.get("answer") or ""
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         response_msg = AgentCommunicationMessage(
@@ -251,12 +266,13 @@ class AgentCommunicationService:
             to_agent_id=source_agent_id,
             direction="response",
             message_content=response_text,
-            message_preview=response_text[:500],
-            model_used=ai_result.get("model_used"),
+            message_preview=response_text[:500] if response_text else "",
+            model_used=f"{target_agent.model_provider}/{target_agent.model_name}",
             token_usage_json=ai_result.get("tokens"),
             execution_time_ms=elapsed_ms,
         )
         self.db.add(response_msg)
+        self.db.flush()  # Ensure response_msg PK is assigned and relationship is coherent
 
         # 12. Finalize session
         session.status = "completed"
@@ -292,6 +308,11 @@ class AgentCommunicationService:
 
     def discover_agents(self, requesting_agent_id: int) -> List[AgentDiscoveryInfo]:
         """List agents that the requesting agent is permitted to communicate with."""
+        # Validate requester belongs to this tenant
+        requester = self._get_agent(requesting_agent_id)
+        if not requester:
+            return []
+
         permissions = (
             self.db.query(AgentCommunicationPermission)
             .filter(
@@ -304,13 +325,16 @@ class AgentCommunicationService:
 
         results: List[AgentDiscoveryInfo] = []
         for perm in permissions:
-            agent = self.db.query(Agent).filter(Agent.id == perm.target_agent_id).first()
+            agent = self.db.query(Agent).filter(
+                Agent.id == perm.target_agent_id,
+                Agent.is_active == True,
+            ).first()
             if not agent:
                 continue
             contact = self.db.query(Contact).filter(Contact.id == agent.contact_id).first()
             agent_name = contact.friendly_name if contact else f"Agent {agent.id}"
 
-            # Get enabled skills
+            # Get enabled skills (expose skill types, not system prompts)
             skills = (
                 self.db.query(AgentSkill)
                 .filter(AgentSkill.agent_id == agent.id, AgentSkill.is_enabled == True)
@@ -321,7 +345,7 @@ class AgentCommunicationService:
             results.append(AgentDiscoveryInfo(
                 agent_id=agent.id,
                 agent_name=agent_name,
-                description=agent.system_prompt[:200] if agent.system_prompt else None,
+                description=None,  # Don't leak system prompts
                 capabilities=capabilities,
                 is_available=agent.is_active,
             ))
@@ -346,7 +370,7 @@ class AgentCommunicationService:
         return AgentCapabilities(
             agent_id=agent.id,
             agent_name=agent_name,
-            description=agent.system_prompt[:200] if agent.system_prompt else None,
+            description=None,  # Don't leak system prompts
             skills=[s.skill_type for s in skills],
             model_provider=agent.model_provider,
             model_name=agent.model_name,
@@ -530,9 +554,15 @@ class AgentCommunicationService:
         )
 
     def _check_rate_limit(self, source_id: int, target_id: int, pair_rpm: int) -> Optional[str]:
-        """Check rate limits. Returns error string if exceeded, None if OK."""
+        """Check rate limits. Returns error string if exceeded, None if OK.
+        Fails closed on errors (blocks rather than allowing)."""
         try:
             from middleware.rate_limiter import api_rate_limiter
+        except ImportError:
+            logger.error("Rate limiter module unavailable — agent comm rate limiting disabled")
+            return None  # ImportError only: module not available, allow (rate limiter is optional infra)
+
+        try:
             pair_key = f"agent_comm:{source_id}:{target_id}"
             if not api_rate_limiter.allow(pair_key, pair_rpm or self.DEFAULT_RATE_LIMIT_RPM):
                 return f"Rate limit exceeded for agent pair ({source_id} -> {target_id})"
@@ -540,7 +570,8 @@ class AgentCommunicationService:
             if not api_rate_limiter.allow(global_key, self.GLOBAL_RATE_LIMIT_RPM):
                 return f"Global inter-agent rate limit exceeded for agent {source_id}"
         except Exception as e:
-            logger.warning(f"Rate limit check failed (allowing): {e}")
+            logger.error(f"Rate limit check error (blocking as precaution): {e}", exc_info=True)
+            return "Rate limit check failed; blocking as precaution"
         return None
 
     def _detect_loop(self, session_id: int, target_agent_id: int) -> bool:
@@ -555,6 +586,7 @@ class AgentCommunicationService:
             if not sess:
                 break
             visited_agents.add(sess.initiator_agent_id)
+            visited_agents.add(sess.target_agent_id)
             if not sess.parent_session_id:
                 break
             current_id = sess.parent_session_id
@@ -567,21 +599,19 @@ class AgentCommunicationService:
         target_agent_id: int,
         depth: int,
     ) -> Optional[Dict]:
-        """Run Sentinel analysis on the inter-agent message."""
-        try:
-            from services.sentinel_service import SentinelService
-            sentinel = SentinelService(self.db, self.tenant_id, token_tracker=self.token_tracker)
-            result = await sentinel.analyze_prompt(
-                prompt=message,
-                agent_id=target_agent_id,
-                source="agent_communication",
-            )
-            if result and result.is_threat_detected:
-                if result.action == "blocked":
-                    return {"blocked": True, "reason": result.threat_reason, "score": result.threat_score}
-                return {"blocked": False, "reason": result.threat_reason, "score": result.threat_score}
-        except Exception as e:
-            logger.warning(f"Sentinel analysis failed (allowing): {e}")
+        """Run Sentinel analysis on the inter-agent message.
+        Raises on failure so the caller can decide fail-open/closed policy."""
+        from services.sentinel_service import SentinelService
+        sentinel = SentinelService(self.db, self.tenant_id, token_tracker=self.token_tracker)
+        result = await sentinel.analyze_prompt(
+            prompt=message,
+            agent_id=target_agent_id,
+            source="agent_communication",
+        )
+        if result and result.is_threat_detected:
+            if result.action == "blocked":
+                return {"blocked": True, "reason": result.threat_reason, "score": result.threat_score}
+            return {"blocked": False, "reason": result.threat_reason, "score": result.threat_score}
         return None
 
     async def _invoke_target_agent(
@@ -596,6 +626,8 @@ class AgentCommunicationService:
         from agent.agent_service import AgentService
 
         # Build config dict directly (follows playground_service.py pattern)
+        # Note: enabled_tools is empty to prevent recursive tool invocations
+        # during inter-agent calls. The target agent uses its LLM knowledge only.
         agent_config = {
             "agent_id": target_agent.id,
             "model_provider": target_agent.model_provider,

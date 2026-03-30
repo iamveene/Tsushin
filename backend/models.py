@@ -3329,9 +3329,9 @@ class AgentCommunicationPermission(Base):
     __tablename__ = "agent_communication_permission"
 
     id = Column(Integer, primary_key=True)
-    tenant_id = Column(String(50), nullable=False, index=True)
-    source_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
-    target_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(String(50), nullable=False)
+    source_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    target_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
     is_enabled = Column(Boolean, default=True)
     max_depth = Column(Integer, default=3)  # Max delegation depth for this pair
     rate_limit_rpm = Column(Integer, default=30)  # Rate limit for this pair
@@ -3345,6 +3345,8 @@ class AgentCommunicationPermission(Base):
     __table_args__ = (
         UniqueConstraint("source_agent_id", "target_agent_id", name="uq_agent_comm_perm_pair"),
         Index("ix_agent_comm_perm_tenant", "tenant_id"),
+        Index("ix_agent_comm_perm_source", "source_agent_id"),
+        Index("ix_agent_comm_perm_target", "target_agent_id"),
     )
 
 
@@ -3356,9 +3358,9 @@ class AgentCommunicationSession(Base):
     __tablename__ = "agent_communication_session"
 
     id = Column(Integer, primary_key=True)
-    tenant_id = Column(String(50), nullable=False, index=True)
-    initiator_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
-    target_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(String(50), nullable=False)
+    initiator_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    target_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
     original_sender_key = Column(String(255), nullable=True)  # End-user who triggered this
     original_message_preview = Column(String(200), nullable=True)  # First 200 chars of user message
     session_type = Column(String(20), default="sync")  # sync / async / delegation
@@ -3375,12 +3377,14 @@ class AgentCommunicationSession(Base):
     # Relationships
     initiator_agent = relationship("Agent", foreign_keys=[initiator_agent_id])
     target_agent_rel = relationship("Agent", foreign_keys=[target_agent_id])
-    parent_session = relationship("AgentCommunicationSession", remote_side="AgentCommunicationSession.id", backref="child_sessions")
+    parent_session = relationship("AgentCommunicationSession", remote_side=[id], backref="child_sessions")
     messages = relationship("AgentCommunicationMessage", back_populates="session", cascade="all, delete-orphan")
 
     __table_args__ = (
+        Index("ix_agent_comm_session_tenant", "tenant_id"),
         Index("ix_agent_comm_session_tenant_status", "tenant_id", "status"),
         Index("ix_agent_comm_session_initiator", "initiator_agent_id", "started_at"),
+        Index("ix_agent_comm_session_target", "target_agent_id"),
     )
 
 
@@ -3391,7 +3395,7 @@ class AgentCommunicationMessage(Base):
     __tablename__ = "agent_communication_message"
 
     id = Column(Integer, primary_key=True)
-    session_id = Column(Integer, ForeignKey("agent_communication_session.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(Integer, ForeignKey("agent_communication_session.id", ondelete="CASCADE"), nullable=False)
     from_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
     to_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
     direction = Column(String(10), nullable=False)  # request / response
