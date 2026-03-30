@@ -80,12 +80,18 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
     ))
     const ghostAgents = commEnabledAgents
       .filter(a => peerIds.has(a.id))
-      .map(a => ({
-        agentId: a.id,
-        agentName: a.name,
-        avatar: a.avatar ?? null,
-        permissionId: linkedPerms.find(p => p.source_agent_id === a.id || p.target_agent_id === a.id)?.id,
-      }))
+      .map(a => {
+        const outPerm = linkedPerms.find(p => p.source_agent_id === state.agentId && p.target_agent_id === a.id)
+        const inPerm = linkedPerms.find(p => p.source_agent_id === a.id && p.target_agent_id === state.agentId)
+        const direction = outPerm && inPerm ? 'bidirectional' : outPerm ? 'outbound' : 'inbound'
+        return {
+          agentId: a.id,
+          agentName: a.name,
+          avatar: a.avatar ?? null,
+          permissionId: outPerm?.id ?? inPerm?.id,
+          direction: direction as 'outbound' | 'inbound' | 'bidirectional',
+        }
+      })
 
     return computeGhostLayout({ existingNodes: nodesRef.current, ghostAgents }) as Node<BuilderNodeData>[]
   }, [state.agentId, hasA2ASkill, state.showA2ANetwork, commEnabledAgents, a2aPermissions])

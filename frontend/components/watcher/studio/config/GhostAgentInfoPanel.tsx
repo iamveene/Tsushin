@@ -19,6 +19,7 @@ export default function GhostAgentInfoPanel({ data, currentAgentId }: GhostAgent
 
   useEffect(() => {
     setIsLoading(true)
+    setPermission(null)
     api.getAgentCommPermissions()
       .then(perms => {
         const match = perms.find(p =>

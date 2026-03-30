@@ -105,7 +105,7 @@ class WatcherActivityService:
             return
 
         disconnected = set()
-        for websocket in self.tenant_connections[tenant_id]:
+        for websocket in set(self.tenant_connections[tenant_id]):
             try:
                 await websocket.send_json(message)
             except Exception as e:

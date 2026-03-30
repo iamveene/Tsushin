@@ -302,7 +302,7 @@
    ============================================================ */
 
 .builder-ghost-agent-node {
-  opacity: 0.5;
+  opacity: 0.75;
   border: 2px dashed #F59E0B !important;
   background: rgba(245, 158, 11, 0.04);
   pointer-events: all;

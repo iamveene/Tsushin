@@ -67,6 +67,8 @@ export default function A2APermissionConfigForm({
       <div className="config-field">
         <label>Enabled</label>
         <button
+          role="switch"
+          aria-checked={isEnabled}
           onClick={() => setIsEnabled(!isEnabled)}
           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${isEnabled ? 'bg-amber-500' : 'bg-tsushin-surface border border-tsushin-border'}`}
         >
@@ -96,11 +98,12 @@ export default function A2APermissionConfigForm({
         <input
           type="number"
           min={1}
-          max={1000}
+          max={100}
           value={rateLimitRpm}
-          onChange={e => setRateLimitRpm(Math.max(1, Number(e.target.value)))}
+          onChange={e => setRateLimitRpm(Math.max(1, Math.min(100, Number(e.target.value))))}
           className="config-input w-full"
         />
+        <p className="field-help">Maximum 100 req/min (backend cap)</p>
       </div>
 
       {error && (

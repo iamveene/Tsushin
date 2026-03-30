@@ -162,6 +162,7 @@ function AgentNode(props: NodeProps<AgentNodeData>) {
               <span
                 className="a2a-depth-badge flex items-center gap-0.5 px-1 h-4 rounded text-[10px] font-bold animate-pulse"
                 title={`A2A Delegation Depth: ${a2aDepth}`}
+                aria-label={`A2A delegation depth: ${a2aDepth}`}
               >
                 A{a2aDepth}
               </span>
