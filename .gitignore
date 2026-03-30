@@ -67,6 +67,7 @@ ops/.pids/
 .claude/
 .cursor/
 CLAUDE.md
+BUGS.md
 *.swp
 *.swo
 *~
