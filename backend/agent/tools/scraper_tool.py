@@ -107,12 +107,15 @@ class ScraperTool:
                 "Accept-Language": "en-US,en;q=0.9"
             }
 
+            # Use certifi CA bundle (system certs may be stale in Docker)
+            import certifi
             response = requests.get(
                 url,
                 headers=headers,
                 timeout=self.timeout,
                 allow_redirects=True,
-                stream=True
+                stream=True,
+                verify=certifi.where(),
             )
 
             # Check content length

@@ -43,6 +43,7 @@ ARG TARGETARCH
 
 # Install runtime dependencies, security scanning tools, and Playwright system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     curl \
     sqlite3 \
     libpq5 \
