@@ -594,15 +594,21 @@ class AgentCommunicationService:
     ) -> Dict:
         """Invoke the target agent's AI processing and return the result dict."""
         from agent.agent_service import AgentService
-        from db import load_config
 
-        # Build config for target agent (simplified — no MCP reader needed)
-        system_config = load_config(self.db)
-        agent_config = dict(system_config)
-        agent_config["model_provider"] = target_agent.model_provider
-        agent_config["model_name"] = target_agent.model_name
-        agent_config["system_prompt"] = target_agent.system_prompt
-        agent_config["keywords"] = target_agent.keywords or []
+        # Build config dict directly (follows playground_service.py pattern)
+        agent_config = {
+            "agent_id": target_agent.id,
+            "model_provider": target_agent.model_provider,
+            "model_name": target_agent.model_name,
+            "system_prompt": target_agent.system_prompt,
+            "keywords": target_agent.keywords or [],
+            "memory_size": target_agent.memory_size or 1000,
+            "enabled_tools": [],
+            "response_template": target_agent.response_template,
+            "enable_semantic_search": target_agent.enable_semantic_search or False,
+            "context_message_count": target_agent.context_message_count or 10,
+            "memory_isolation_mode": target_agent.memory_isolation_mode or "isolated",
+        }
 
         # Get source agent's display name
         source_contact = self.db.query(Contact).filter(Contact.id == source_agent.contact_id).first()

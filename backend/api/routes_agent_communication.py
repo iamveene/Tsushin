@@ -261,6 +261,7 @@ async def list_sessions(
             session_type=s.session_type,
             status=s.status,
             depth=s.depth,
+            max_depth=s.max_depth,
             total_messages=s.total_messages,
             original_message_preview=s.original_message_preview,
             error_text=s.error_text,
