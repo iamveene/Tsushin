@@ -97,6 +97,10 @@ class SkillManager:
             from agent.skills.agent_switcher_skill import AgentSwitcherSkill
             self.register_skill(AgentSwitcherSkill)
 
+            # Agent Communication: Inter-agent messaging (v0.6.0 Item 15)
+            from agent.skills.agent_communication_skill import AgentCommunicationSkill
+            self.register_skill(AgentCommunicationSkill)
+
             # Gmail: Import Gmail skill for email reading
             from agent.skills.gmail_skill import GmailSkill
             self.register_skill(GmailSkill)
@@ -117,7 +121,7 @@ class SkillManager:
             from agent.skills.sandboxed_tools_skill import SandboxedToolsSkill
             self.register_skill(SandboxedToolsSkill)
 
-            logger.info("Built-in skills registered: flight_search, web_search, web_scraping, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, gmail, shell, browser_automation, image, sandboxed_tools")
+            logger.info("Built-in skills registered: flight_search, web_search, web_scraping, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image, sandboxed_tools")
         except Exception as e:
             logger.error(f"Error registering built-in skills: {e}", exc_info=True)
 

@@ -284,6 +284,14 @@ class TenantAuditActions:
     TEAM_REMOVE = "team.remove"
     TEAM_ROLE_CHANGE = "team.role_change"
 
+    # Agent Communication (v0.6.0 Item 15)
+    AGENT_COMM_SEND = "agent_comm.send"
+    AGENT_COMM_RECEIVE = "agent_comm.receive"
+    AGENT_COMM_BLOCKED = "agent_comm.blocked"
+    AGENT_COMM_PERMISSION_CREATE = "agent_comm.permission.create"
+    AGENT_COMM_PERMISSION_UPDATE = "agent_comm.permission.update"
+    AGENT_COMM_PERMISSION_DELETE = "agent_comm.permission.delete"
+
 
 class TenantAuditService:
     """Service for tenant-scoped audit event recording and querying."""

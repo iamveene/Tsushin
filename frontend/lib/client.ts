@@ -25,16 +25,24 @@ async function handleApiError(res: Response, defaultMessage: string): Promise<ne
   if (res.status === 409) {
     throw new Error('Conflict: This resource already exists or cannot be modified.')
   }
-  // Try to extract error message from response
+  // Try to extract error message from response body
+  let detail: string | undefined
   try {
     const data = await res.json()
     if (data.detail) {
-      throw new Error(data.detail)
+      if (typeof data.detail === 'string') {
+        detail = data.detail
+      } else if (Array.isArray(data.detail)) {
+        // Pydantic validation errors come as array of objects with msg field
+        detail = data.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ')
+      } else {
+        detail = String(data.detail)
+      }
     }
   } catch {
-    // If JSON parsing fails, use default message
+    // JSON parsing failed, use default message
   }
-  throw new Error(defaultMessage)
+  throw new Error(detail || defaultMessage)
 }
 
 /**
@@ -2464,10 +2472,72 @@ export interface CustomSkillExecutionRecord {
   created_at?: string | null
 }
 
+// ==================== Agent Communication (v0.6.0 Item 15) ====================
+
+export interface AgentCommPermission {
+  id: number
+  tenant_id: string
+  source_agent_id: number
+  target_agent_id: number
+  source_agent_name?: string
+  target_agent_name?: string
+  is_enabled: boolean
+  max_depth: number
+  rate_limit_rpm: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentCommSession {
+  id: number
+  initiator_agent_id: number
+  target_agent_id: number
+  initiator_agent_name?: string
+  target_agent_name?: string
+  original_sender_key?: string
+  original_message_preview?: string
+  session_type: string
+  status: string
+  depth: number
+  max_depth: number
+  timeout_seconds: number
+  total_messages: number
+  error_text?: string
+  parent_session_id?: number
+  started_at: string
+  completed_at?: string
+  messages?: AgentCommMessage[]
+}
+
+export interface AgentCommMessage {
+  id: number
+  session_id: number
+  from_agent_id: number
+  to_agent_id: number
+  from_agent_name?: string
+  to_agent_name?: string
+  direction: string
+  message_content: string
+  message_preview?: string
+  model_used?: string
+  execution_time_ms?: number
+  sentinel_analyzed: boolean
+  sentinel_result?: any
+  created_at: string
+}
+
+export interface AgentCommStats {
+  total_sessions: number
+  completed_sessions: number
+  blocked_sessions: number
+  success_rate: number
+  avg_response_time_ms: number
+}
+
 export const api = {
   async getConfig(): Promise<Config> {
     const res = await authenticatedFetch(`${API_URL}/api/config`)
-    if (!res.ok) throw new Error('Failed to fetch config')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch config')
     return res.json()
   },
 
@@ -2477,7 +2547,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(update),
     })
-    if (!res.ok) throw new Error('Failed to update config')
+    if (!res.ok) await handleApiError(res, 'Failed to update config')
     return res.json()
   },
 
@@ -2486,25 +2556,25 @@ export const api = {
     if (after) params.append('after', after)
 
     const res = await authenticatedFetch(`${API_URL}/api/messages?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch messages')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch messages')
     return res.json()
   },
 
   async getMessageCount(): Promise<{ total: number }> {
     const res = await authenticatedFetch(`${API_URL}/api/messages/count`)
-    if (!res.ok) throw new Error('Failed to fetch message count')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch message count')
     return res.json()
   },
 
   async getAgentRuns(limit = 100): Promise<AgentRun[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agent-runs?limit=${limit}`)
-    if (!res.ok) throw new Error('Failed to fetch agent runs')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent runs')
     return res.json()
   },
 
   async getAgentRunsCount(): Promise<{ total: number }> {
     const res = await authenticatedFetch(`${API_URL}/api/agent-runs/count`)
-    if (!res.ok) throw new Error('Failed to fetch agent runs count')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent runs count')
     return res.json()
   },
 
@@ -2514,13 +2584,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, sender_key: senderKey }),
     })
-    if (!res.ok) throw new Error('Failed to trigger test')
+    if (!res.ok) await handleApiError(res, 'Failed to trigger test')
     return res.json()
   },
 
   async health(): Promise<{ status: string }> {
     const res = await authenticatedFetch(`${API_URL}/api/health`)
-    if (!res.ok) throw new Error('Health check failed')
+    if (!res.ok) await handleApiError(res, 'Health check failed')
     return res.json()
   },
 
@@ -2536,20 +2606,20 @@ export const api = {
     }
   }> {
     const res = await authenticatedFetch(`${API_URL}/api/stats/memory`)
-    if (!res.ok) throw new Error('Failed to fetch memory stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch memory stats')
     return res.json()
   },
 
   // Tone Presets
   async getTonePresets(): Promise<TonePreset[]> {
     const res = await authenticatedFetch(`${API_URL}/api/tones`)
-    if (!res.ok) throw new Error('Failed to fetch tone presets')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch tone presets')
     return res.json()
   },
 
   async getTonePreset(id: number): Promise<TonePreset> {
     const res = await authenticatedFetch(`${API_URL}/api/tones/${id}`)
-    if (!res.ok) throw new Error('Failed to fetch tone preset')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch tone preset')
     return res.json()
   },
 
@@ -2559,7 +2629,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(tone),
     })
-    if (!res.ok) throw new Error('Failed to create tone preset')
+    if (!res.ok) await handleApiError(res, 'Failed to create tone preset')
     return res.json()
   },
 
@@ -2569,7 +2639,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(tone),
     })
-    if (!res.ok) throw new Error('Failed to update tone preset')
+    if (!res.ok) await handleApiError(res, 'Failed to update tone preset')
     return res.json()
   },
 
@@ -2577,7 +2647,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/tones/${id}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete tone preset')
+    if (!res.ok) await handleApiError(res, 'Failed to delete tone preset')
   },
 
   // Phase 5.1: Personas
@@ -2586,13 +2656,13 @@ export const api = {
     if (activeOnly) params.append('active_only', 'true')
 
     const res = await authenticatedFetch(`${API_URL}/api/personas/?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch personas')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch personas')
     return res.json()
   },
 
   async getPersona(id: number): Promise<Persona> {
     const res = await authenticatedFetch(`${API_URL}/api/personas/${id}`)
-    if (!res.ok) throw new Error('Failed to fetch persona')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch persona')
     return res.json()
   },
 
@@ -2609,7 +2679,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(persona),
     })
-    if (!res.ok) throw new Error('Failed to create persona')
+    if (!res.ok) await handleApiError(res, 'Failed to create persona')
     return res.json()
   },
 
@@ -2626,7 +2696,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(persona),
     })
-    if (!res.ok) throw new Error('Failed to update persona')
+    if (!res.ok) await handleApiError(res, 'Failed to update persona')
     return res.json()
   },
 
@@ -2634,7 +2704,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/personas/${id}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete persona')
+    if (!res.ok) await handleApiError(res, 'Failed to delete persona')
   },
 
   // Prompts & Patterns Admin
@@ -2835,13 +2905,13 @@ export const api = {
   // Phase 6 - Graph View: Batch endpoints for performance
   async getAgentsGraphPreview(): Promise<GraphPreviewResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/v2/agents/graph-preview`)
-    if (!res.ok) throw new Error('Failed to fetch agents graph preview')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agents graph preview')
     return res.json()
   },
 
   async getAgentExpandData(agentId: number): Promise<AgentExpandDataResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/v2/agents/${agentId}/expand-data`)
-    if (!res.ok) throw new Error('Failed to fetch agent expand data')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent expand data')
     return res.json()
   },
 
@@ -2849,7 +2919,7 @@ export const api = {
   async getAgentBuilderData(agentId: number, includeGlobals = false): Promise<BuilderDataResponse> {
     const params = includeGlobals ? '?include_globals=true' : ''
     const res = await authenticatedFetch(`${API_URL}/api/v2/agents/${agentId}/builder-data${params}`)
-    if (!res.ok) throw new Error('Failed to fetch builder data')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch builder data')
     return res.json()
   },
 
@@ -2859,14 +2929,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to save builder data')
+    if (!res.ok) await handleApiError(res, 'Failed to save builder data')
     return res.json()
   },
 
   // Contacts
   async getContacts(): Promise<Contact[]> {
     const res = await authenticatedFetch(`${API_URL}/api/contacts/`)
-    if (!res.ok) throw new Error('Failed to fetch contacts')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch contacts')
     return res.json()
   },
 
@@ -2887,7 +2957,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(contact),
     })
-    if (!res.ok) throw new Error('Failed to create contact')
+    if (!res.ok) await handleApiError(res, 'Failed to create contact')
     return res.json()
   },
 
@@ -2908,10 +2978,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(contact),
     })
-    if (!res.ok) {
-      const error = await res.json()
-      throw new Error(error.detail || 'Failed to update contact')
-    }
+    if (!res.ok) await handleApiError(res, 'Failed to update contact')
     return res.json()
   },
 
@@ -2919,7 +2986,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/contacts/${contactId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete contact')
+    if (!res.ok) await handleApiError(res, 'Failed to delete contact')
   },
 
   // Phase 10.2: Channel Mappings
@@ -2933,7 +3000,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(mapping),
     })
-    if (!res.ok) throw new Error('Failed to add channel mapping')
+    if (!res.ok) await handleApiError(res, 'Failed to add channel mapping')
     return res.json()
   },
 
@@ -2941,7 +3008,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/contacts/${contactId}/channels/${mappingId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to remove channel mapping')
+    if (!res.ok) await handleApiError(res, 'Failed to remove channel mapping')
   },
 
   async updateChannelMappingMetadata(contactId: number, mappingId: number, metadata: any): Promise<ChannelMapping> {
@@ -2950,7 +3017,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(metadata),
     })
-    if (!res.ok) throw new Error('Failed to update channel mapping metadata')
+    if (!res.ok) await handleApiError(res, 'Failed to update channel mapping metadata')
     return res.json()
   },
 
@@ -2964,7 +3031,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/contacts/${contactId}/resolve-whatsapp?force=${force}`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error('Failed to resolve WhatsApp ID')
+    if (!res.ok) await handleApiError(res, 'Failed to resolve WhatsApp ID')
     return res.json()
   },
 
@@ -2979,21 +3046,21 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/contacts/resolve-all-whatsapp`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error('Failed to resolve WhatsApp IDs')
+    if (!res.ok) await handleApiError(res, 'Failed to resolve WhatsApp IDs')
     return res.json()
   },
 
   // Contact-Agent Mappings
   async getContactAgentMappings(): Promise<ContactAgentMapping[]> {
     const res = await authenticatedFetch(`${API_URL}/api/contact-agent-mappings`)
-    if (!res.ok) throw new Error('Failed to fetch contact-agent mappings')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch contact-agent mappings')
     return res.json()
   },
 
   async getContactAgentMapping(contactId: number): Promise<ContactAgentMapping | null> {
     const res = await authenticatedFetch(`${API_URL}/api/contact-agent-mappings/contact/${contactId}`)
     if (res.status === 404) return null
-    if (!res.ok) throw new Error('Failed to fetch contact-agent mapping')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch contact-agent mapping')
     return res.json()
   },
 
@@ -3003,7 +3070,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contact_id: contactId, agent_id: agentId }),
     })
-    if (!res.ok) throw new Error('Failed to set contact-agent mapping')
+    if (!res.ok) await handleApiError(res, 'Failed to set contact-agent mapping')
     return res.json()
   },
 
@@ -3011,25 +3078,25 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/contact-agent-mappings/contact/${contactId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete contact-agent mapping')
+    if (!res.ok) await handleApiError(res, 'Failed to delete contact-agent mapping')
   },
 
   // Phase 5.0: Memory Management
   async getAgentMemoryStats(agentId: number): Promise<MemoryStats> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/memory/stats`)
-    if (!res.ok) throw new Error('Failed to fetch memory stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch memory stats')
     return res.json()
   },
 
   async getAgentConversations(agentId: number): Promise<ConversationSummary[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/memory/conversations`)
-    if (!res.ok) throw new Error('Failed to fetch conversations')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch conversations')
     return res.json()
   },
 
   async getConversationDetails(agentId: number, senderKey: string): Promise<ConversationDetails> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/memory/conversation/${encodeURIComponent(senderKey)}`)
-    if (!res.ok) throw new Error('Failed to fetch conversation details')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch conversation details')
     return res.json()
   },
 
@@ -3037,7 +3104,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/memory/conversation/${encodeURIComponent(senderKey)}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete conversation')
+    if (!res.ok) await handleApiError(res, 'Failed to delete conversation')
   },
 
   async cleanOldMessages(agentId: number, olderThanDays: number, dryRun = true): Promise<{ deleted_count: number; preview: string[] }> {
@@ -3046,7 +3113,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ older_than_days: olderThanDays, dry_run: dryRun }),
     })
-    if (!res.ok) throw new Error('Failed to clean old messages')
+    if (!res.ok) await handleApiError(res, 'Failed to clean old messages')
     return res.json()
   },
 
@@ -3056,7 +3123,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ confirm_token: confirmToken }),
     })
-    if (!res.ok) throw new Error('Failed to reset agent memory')
+    if (!res.ok) await handleApiError(res, 'Failed to reset agent memory')
     return res.json()
   },
 
@@ -3077,7 +3144,7 @@ export const api = {
 
   async getAgentSkill(agentId: number, skillType: string): Promise<AgentSkill> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/skills/${skillType}`)
-    if (!res.ok) throw new Error('Failed to fetch agent skill')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent skill')
     return res.json()
   },
 
@@ -3101,14 +3168,14 @@ export const api = {
   // Skill Integrations (Provider Configuration)
   async getAgentSkillIntegrations(agentId: number): Promise<SkillIntegration[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/skill-integrations`)
-    if (!res.ok) throw new Error('Failed to fetch skill integrations')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch skill integrations')
     const data = await res.json()
     return data.integrations || []
   },
 
   async getSkillIntegration(agentId: number, skillType: string): Promise<SkillIntegration | null> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/skill-integrations/${skillType}`)
-    if (!res.ok) throw new Error('Failed to fetch skill integration')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch skill integration')
     const data = await res.json()
     return data.exists ? data : null
   },
@@ -3123,7 +3190,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(update),
     })
-    if (!res.ok) throw new Error('Failed to update skill integration')
+    if (!res.ok) await handleApiError(res, 'Failed to update skill integration')
     return res.json()
   },
 
@@ -3131,12 +3198,12 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/skill-integrations/${skillType}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete skill integration')
+    if (!res.ok) await handleApiError(res, 'Failed to delete skill integration')
   },
 
   async getSkillProviders(skillType: string): Promise<SkillProvider[]> {
     const res = await authenticatedFetch(`${API_URL}/api/skill-providers/${skillType}`)
-    if (!res.ok) throw new Error('Failed to fetch skill providers')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch skill providers')
     const data = await res.json()
     return data.providers || []
   },
@@ -3144,25 +3211,25 @@ export const api = {
   // TTS Provider Management
   async getTTSProviders(): Promise<TTSProviderInfo[]> {
     const res = await authenticatedFetch(`${API_URL}/api/tts-providers`)
-    if (!res.ok) throw new Error('Failed to fetch TTS providers')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch TTS providers')
     return res.json()
   },
 
   async getTTSProviderStatus(providerName: string): Promise<TTSProviderStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/tts-providers/${providerName}/status`)
-    if (!res.ok) throw new Error('Failed to fetch TTS provider status')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch TTS provider status')
     return res.json()
   },
 
   async getTTSProviderVoices(providerName: string): Promise<TTSVoice[]> {
     const res = await authenticatedFetch(`${API_URL}/api/tts-providers/${providerName}/voices`)
-    if (!res.ok) throw new Error('Failed to fetch TTS provider voices')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch TTS provider voices')
     return res.json()
   },
 
   async getAgentTTSProvider(agentId: number): Promise<AgentTTSConfig> {
     const res = await authenticatedFetch(`${API_URL}/api/tts-providers/agents/${agentId}/provider`)
-    if (!res.ok) throw new Error('Failed to fetch agent TTS config')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent TTS config')
     return res.json()
   },
 
@@ -3172,20 +3239,20 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
     })
-    if (!res.ok) throw new Error('Failed to update agent TTS config')
+    if (!res.ok) await handleApiError(res, 'Failed to update agent TTS config')
     return res.json()
   },
 
   // Phase 5.0: Knowledge Management
   async getAgentKnowledge(agentId: number): Promise<AgentKnowledge[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base`)
-    if (!res.ok) throw new Error('Failed to fetch agent knowledge')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent knowledge')
     return res.json()
   },
 
   async getKnowledgeDocument(agentId: number, docId: number): Promise<AgentKnowledge> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/${docId}`)
-    if (!res.ok) throw new Error('Failed to fetch knowledge document')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch knowledge document')
     return res.json()
   },
 
@@ -3197,7 +3264,7 @@ export const api = {
       method: 'POST',
       body: formData,
     })
-    if (!res.ok) throw new Error('Failed to upload knowledge document')
+    if (!res.ok) await handleApiError(res, 'Failed to upload knowledge document')
     return res.json()
   },
 
@@ -3205,12 +3272,12 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/${docId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete knowledge document')
+    if (!res.ok) await handleApiError(res, 'Failed to delete knowledge document')
   },
 
   async getKnowledgeChunks(agentId: number, docId: number): Promise<KnowledgeChunk[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/${docId}/chunks`)
-    if (!res.ok) throw new Error('Failed to fetch knowledge chunks')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch knowledge chunks')
     return res.json()
   },
 
@@ -3220,20 +3287,20 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, max_results: maxResults }),
     })
-    if (!res.ok) throw new Error('Failed to search agent knowledge')
+    if (!res.ok) await handleApiError(res, 'Failed to search agent knowledge')
     return res.json()
   },
 
   // Sandboxed Tools (Phase 6.1, renamed from Custom Tools in Skills-as-Tools Phase 6)
   async getSandboxedTools(): Promise<SandboxedTool[]> {
     const res = await authenticatedFetch(`${API_URL}/api/custom-tools/`)
-    if (!res.ok) throw new Error('Failed to fetch sandboxed tools')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch sandboxed tools')
     return res.json()
   },
 
   async getSandboxedToolExecutions(limit = 50): Promise<SandboxedToolExecution[]> {
     const res = await authenticatedFetch(`${API_URL}/api/custom-tools/executions/?limit=${limit}`)
-    if (!res.ok) throw new Error('Failed to fetch tool executions')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch tool executions')
     return res.json()
   },
 
@@ -3243,7 +3310,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tool_id: toolId, command_id: commandId, parameters }),
     })
-    if (!res.ok) throw new Error('Failed to execute custom tool')
+    if (!res.ok) await handleApiError(res, 'Failed to execute custom tool')
     return res.json()
   },
 
@@ -3258,13 +3325,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to update custom tool')
+    if (!res.ok) await handleApiError(res, 'Failed to update custom tool')
     return res.json()
   },
 
   async getToolCommands(toolId: number): Promise<CustomToolCommand[]> {
     const res = await authenticatedFetch(`${API_URL}/api/custom-tools/${toolId}/commands`)
-    if (!res.ok) throw new Error('Failed to fetch tool commands')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch tool commands')
     return res.json()
   },
 
@@ -3280,7 +3347,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to create tool command')
+    if (!res.ok) await handleApiError(res, 'Failed to create tool command')
     return res.json()
   },
 
@@ -3288,12 +3355,12 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/custom-tools/commands/${commandId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete tool command')
+    if (!res.ok) await handleApiError(res, 'Failed to delete tool command')
   },
 
   async getCommandParameters(commandId: number): Promise<CustomToolParameter[]> {
     const res = await authenticatedFetch(`${API_URL}/api/custom-tools/commands/${commandId}/parameters`)
-    if (!res.ok) throw new Error('Failed to fetch command parameters')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch command parameters')
     return res.json()
   },
 
@@ -3309,7 +3376,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to create tool parameter')
+    if (!res.ok) await handleApiError(res, 'Failed to create tool parameter')
     return res.json()
   },
 
@@ -3317,13 +3384,13 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/custom-tools/parameters/${parameterId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete tool parameter')
+    if (!res.ok) await handleApiError(res, 'Failed to delete tool parameter')
   },
 
   // Phase 6.2: Agent Sandboxed Tool Management (renamed from Custom Tools)
   async getAgentSandboxedTools(agentId: number): Promise<AgentSandboxedTool[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/custom-tools`)
-    if (!res.ok) throw new Error('Failed to fetch agent sandboxed tools')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent sandboxed tools')
     return res.json()
   },
 
@@ -3333,7 +3400,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to add sandboxed tool to agent')
+    if (!res.ok) await handleApiError(res, 'Failed to add sandboxed tool to agent')
     return res.json()
   },
 
@@ -3343,7 +3410,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to update agent sandboxed tool')
+    if (!res.ok) await handleApiError(res, 'Failed to update agent sandboxed tool')
     return res.json()
   },
 
@@ -3351,7 +3418,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/custom-tools/${mappingId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to remove sandboxed tool from agent')
+    if (!res.ok) await handleApiError(res, 'Failed to remove sandboxed tool from agent')
   },
 
   // Phase 6.4: Scheduler System
@@ -3368,13 +3435,13 @@ export const api = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/scheduler/?${searchParams}`)
-    if (!res.ok) throw new Error('Failed to fetch scheduled events')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch scheduled events')
     return res.json()
   },
 
   async getScheduledEvent(eventId: number): Promise<ScheduledEvent> {
     const res = await authenticatedFetch(`${API_URL}/api/scheduler/${eventId}`)
-    if (!res.ok) throw new Error('Failed to fetch scheduled event')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch scheduled event')
     return res.json()
   },
 
@@ -3389,7 +3456,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(event),
     })
-    if (!res.ok) throw new Error('Failed to create scheduled event')
+    if (!res.ok) await handleApiError(res, 'Failed to create scheduled event')
     return res.json()
   },
 
@@ -3408,7 +3475,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(conversation),
     })
-    if (!res.ok) throw new Error('Failed to create conversation')
+    if (!res.ok) await handleApiError(res, 'Failed to create conversation')
     return res.json()
   },
 
@@ -3425,7 +3492,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(notification),
     })
-    if (!res.ok) throw new Error('Failed to create notification')
+    if (!res.ok) await handleApiError(res, 'Failed to create notification')
     return res.json()
   },
 
@@ -3439,7 +3506,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(update),
     })
-    if (!res.ok) throw new Error('Failed to update scheduled event')
+    if (!res.ok) await handleApiError(res, 'Failed to update scheduled event')
     return res.json()
   },
 
@@ -3447,12 +3514,12 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/scheduler/${eventId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to cancel scheduled event')
+    if (!res.ok) await handleApiError(res, 'Failed to cancel scheduled event')
   },
 
   async getConversationLogs(eventId: number, limit = 100): Promise<ConversationLog[]> {
     const res = await authenticatedFetch(`${API_URL}/api/scheduler/conversation/${eventId}/logs?limit=${limit}`)
-    if (!res.ok) throw new Error('Failed to fetch conversation logs')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch conversation logs')
     return res.json()
   },
 
@@ -3462,7 +3529,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ guidance_text: guidance }),
     })
-    if (!res.ok) throw new Error('Failed to provide conversation guidance')
+    if (!res.ok) await handleApiError(res, 'Failed to provide conversation guidance')
   },
 
   async cancelConversation(eventId: number, reason?: string): Promise<void> {
@@ -3471,12 +3538,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cancellation_reason: reason }),
     })
-    if (!res.ok) throw new Error('Failed to cancel conversation')
+    if (!res.ok) await handleApiError(res, 'Failed to cancel conversation')
   },
 
   async getSchedulerStats(): Promise<SchedulerStats> {
     const res = await authenticatedFetch(`${API_URL}/api/scheduler/stats/summary`)
-    if (!res.ok) throw new Error('Failed to fetch scheduler stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch scheduler stats')
     return res.json()
   },
 
@@ -3485,20 +3552,20 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/scheduler/cleanup?${statusParams}`, {
       method: 'POST'
     })
-    if (!res.ok) throw new Error('Failed to cleanup events')
+    if (!res.ok) await handleApiError(res, 'Failed to cleanup events')
     return res.json()
   },
 
   // Phase 6.6-6.7: Multi-Step Flows API
   async getFlows(): Promise<FlowDefinition[]> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/`)
-    if (!res.ok) throw new Error('Failed to fetch flows')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch flows')
     return res.json()
   },
 
   async getFlow(flowId: number): Promise<FlowDefinition> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/${flowId}`)
-    if (!res.ok) throw new Error('Failed to fetch flow')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch flow')
     return res.json()
   },
 
@@ -3508,7 +3575,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(flow),
     })
-    if (!res.ok) throw new Error('Failed to create flow')
+    if (!res.ok) await handleApiError(res, 'Failed to create flow')
     return res.json()
   },
 
@@ -3518,7 +3585,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(update),
     })
-    if (!res.ok) throw new Error('Failed to update flow')
+    if (!res.ok) await handleApiError(res, 'Failed to update flow')
     return res.json()
   },
 
@@ -3538,7 +3605,7 @@ export const api = {
 
   async getFlowNodes(flowId: number): Promise<FlowNode[]> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/${flowId}/nodes`)
-    if (!res.ok) throw new Error('Failed to fetch flow nodes')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch flow nodes')
     return res.json()
   },
 
@@ -3552,7 +3619,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(node),
     })
-    if (!res.ok) throw new Error('Failed to create flow node')
+    if (!res.ok) await handleApiError(res, 'Failed to create flow node')
     return res.json()
   },
 
@@ -3562,7 +3629,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(update),
     })
-    if (!res.ok) throw new Error('Failed to update flow node')
+    if (!res.ok) await handleApiError(res, 'Failed to update flow node')
     return res.json()
   },
 
@@ -3570,12 +3637,12 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/flows/${flowId}/nodes/${nodeId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete flow node')
+    if (!res.ok) await handleApiError(res, 'Failed to delete flow node')
   },
 
   async validateFlow(flowId: number): Promise<{ valid: boolean; errors: string[] }> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/${flowId}/validate`)
-    if (!res.ok) throw new Error('Failed to validate flow')
+    if (!res.ok) await handleApiError(res, 'Failed to validate flow')
     return res.json()
   },
 
@@ -3585,7 +3652,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ trigger_context: triggerContext || {} }),
     })
-    if (!res.ok) throw new Error('Failed to run flow')
+    if (!res.ok) await handleApiError(res, 'Failed to run flow')
     return res.json()
   },
 
@@ -3594,19 +3661,19 @@ export const api = {
     if (flowId) params.append('flow_definition_id', flowId.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/flows/runs?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch flow runs')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch flow runs')
     return res.json()
   },
 
   async getFlowRun(runId: number): Promise<FlowRun> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/runs/${runId}`)
-    if (!res.ok) throw new Error('Failed to fetch flow run')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch flow run')
     return res.json()
   },
 
   async getFlowNodeRuns(runId: number): Promise<FlowNodeRun[]> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/runs/${runId}/nodes`)
-    if (!res.ok) throw new Error('Failed to fetch flow node runs')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch flow node runs')
     return res.json()
   },
 
@@ -3615,7 +3682,7 @@ export const api = {
     if (toolId) params.append('tool_id', toolId)
 
     const res = await authenticatedFetch(`${API_URL}/api/flows/tool-metadata?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch tool metadata')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch tool metadata')
     return res.json()
   },
 
@@ -3623,7 +3690,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/flows/runs/${runId}/cancel`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error('Failed to cancel flow run')
+    if (!res.ok) await handleApiError(res, 'Failed to cancel flow run')
   },
 
   // Phase 8.0: Unified Flow API (enhanced methods)
@@ -3633,13 +3700,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(flow),
     })
-    if (!res.ok) throw new Error('Failed to create flow')
+    if (!res.ok) await handleApiError(res, 'Failed to create flow')
     return res.json()
   },
 
   async getFlowDetail(flowId: number): Promise<FlowDefinition & { steps: FlowNode[] }> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/${flowId}/detail`)
-    if (!res.ok) throw new Error('Failed to fetch flow detail')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch flow detail')
     return res.json()
   },
 
@@ -3658,7 +3725,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(update),
     })
-    if (!res.ok) throw new Error('Failed to patch flow')
+    if (!res.ok) await handleApiError(res, 'Failed to patch flow')
     return res.json()
   },
 
@@ -3668,14 +3735,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ trigger_context_json: triggerContext }),
     })
-    if (!res.ok) throw new Error('Failed to execute flow')
+    if (!res.ok) await handleApiError(res, 'Failed to execute flow')
     return res.json()
   },
 
   // Phase 8.0: Flow Steps (unified terminology)
   async getFlowSteps(flowId: number): Promise<FlowNode[]> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/${flowId}/steps`)
-    if (!res.ok) throw new Error('Failed to fetch flow steps')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch flow steps')
     return res.json()
   },
 
@@ -3699,7 +3766,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(step),
     })
-    if (!res.ok) throw new Error('Failed to create flow step')
+    if (!res.ok) await handleApiError(res, 'Failed to create flow step')
     return res.json()
   },
 
@@ -3709,7 +3776,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(update),
     })
-    if (!res.ok) throw new Error('Failed to update flow step')
+    if (!res.ok) await handleApiError(res, 'Failed to update flow step')
     return res.json()
   },
 
@@ -3717,7 +3784,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/flows/${flowId}/steps/${stepId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete flow step')
+    if (!res.ok) await handleApiError(res, 'Failed to delete flow step')
   },
 
   async reorderFlowSteps(flowId: number, positions: { step_id: number; position: number; name?: string }[]): Promise<FlowNode[]> {
@@ -3726,7 +3793,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(positions),
     })
-    if (!res.ok) throw new Error('Failed to reorder flow steps')
+    if (!res.ok) await handleApiError(res, 'Failed to reorder flow steps')
     return res.json()
   },
 
@@ -3736,13 +3803,13 @@ export const api = {
     if (recipient) params.append('recipient', recipient)
 
     const res = await authenticatedFetch(`${API_URL}/api/flows/conversations/active?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch active conversation threads')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch active conversation threads')
     return res.json()
   },
 
   async getConversationThread(threadId: number): Promise<ConversationThread> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/conversations/${threadId}`)
-    if (!res.ok) throw new Error('Failed to fetch conversation thread')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch conversation thread')
     return res.json()
   },
 
@@ -3753,13 +3820,13 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/flows/conversations/${threadId}/complete?${params}`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error('Failed to complete conversation thread')
+    if (!res.ok) await handleApiError(res, 'Failed to complete conversation thread')
   },
 
   // Phase 8.0: Flow Stats
   async getFlowStats(): Promise<FlowStats> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/stats`)
-    if (!res.ok) throw new Error('Failed to fetch flow stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch flow stats')
     return res.json()
   },
 
@@ -3775,7 +3842,7 @@ export const api = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/shared-memory?${searchParams}`)
-    if (!res.ok) throw new Error('Failed to fetch shared knowledge')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch shared knowledge')
     return res.json()
   },
 
@@ -3792,19 +3859,19 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to share knowledge')
+    if (!res.ok) await handleApiError(res, 'Failed to share knowledge')
     return res.json()
   },
 
   async getSharedMemoryStats(agentId: number): Promise<SharedMemoryStats> {
     const res = await authenticatedFetch(`${API_URL}/api/shared-memory/stats?agent_id=${agentId}`)
-    if (!res.ok) throw new Error('Failed to fetch shared memory stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch shared memory stats')
     return res.json()
   },
 
   async getSharedMemoryTopics(agentId: number): Promise<string[]> {
     const res = await authenticatedFetch(`${API_URL}/api/shared-memory/topics?agent_id=${agentId}`)
-    if (!res.ok) throw new Error('Failed to fetch shared memory topics')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch shared memory topics')
     return res.json()
   },
 
@@ -3820,7 +3887,7 @@ export const api = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/shared-memory/search?${searchParams}`)
-    if (!res.ok) throw new Error('Failed to search shared knowledge')
+    if (!res.ok) await handleApiError(res, 'Failed to search shared knowledge')
     return res.json()
   },
 
@@ -3830,13 +3897,13 @@ export const api = {
     if (activeOnly) params.append('active_only', 'true')
 
     const res = await authenticatedFetch(`${API_URL}/api/hub/integrations?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch hub integrations')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch hub integrations')
     return res.json()
   },
 
   async getAgentIntegration(agentId: number): Promise<{ integration_id: number | null; type?: string; name?: string }> {
     const res = await authenticatedFetch(`${API_URL}/api/hub/agents/${agentId}/integration`)
-    if (!res.ok) throw new Error('Failed to fetch agent integration')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent integration')
     return res.json()
   },
 
@@ -3844,14 +3911,14 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/hub/agents/${agentId}/integration/${integrationId}`, {
       method: 'PUT',
     })
-    if (!res.ok) throw new Error('Failed to assign integration')
+    if (!res.ok) await handleApiError(res, 'Failed to assign integration')
   },
 
   async removeIntegrationFromAgent(agentId: number): Promise<void> {
     const res = await authenticatedFetch(`${API_URL}/api/hub/agents/${agentId}/integration`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to remove integration')
+    if (!res.ok) await handleApiError(res, 'Failed to remove integration')
   },
 
   // Phase 7.6: Authentication
@@ -3945,7 +4012,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     })
-    if (!res.ok) throw new Error('Failed to request password reset')
+    if (!res.ok) await handleApiError(res, 'Failed to request password reset')
     return res.json()
   },
 
@@ -4052,13 +4119,13 @@ export const api = {
 
   async getMCPHealth(id: number): Promise<MCPHealthStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/${id}/health`)
-    if (!res.ok) throw new Error('Failed to fetch MCP health')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch MCP health')
     return res.json()
   },
 
   async getMCPQRCode(id: number): Promise<QRCodeResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/${id}/qr-code`)
-    if (!res.ok) throw new Error('Failed to fetch QR code')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch QR code')
     return res.json()
   },
 
@@ -4077,13 +4144,13 @@ export const api = {
   // Phase 10.1.1: Telegram Bot Integration
   async getTelegramInstances(): Promise<TelegramBotInstance[]> {
     const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/`)
-    if (!res.ok) throw new Error('Failed to fetch Telegram instances')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Telegram instances')
     return res.json()
   },
 
   async getTelegramInstance(id: number): Promise<TelegramBotInstance> {
     const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/${id}`)
-    if (!res.ok) throw new Error('Failed to fetch Telegram instance')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Telegram instance')
     return res.json()
   },
 
@@ -4104,7 +4171,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/${id}/start`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error('Failed to start Telegram instance')
+    if (!res.ok) await handleApiError(res, 'Failed to start Telegram instance')
     return res.json()
   },
 
@@ -4112,7 +4179,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/${id}/stop`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error('Failed to stop Telegram instance')
+    if (!res.ok) await handleApiError(res, 'Failed to stop Telegram instance')
     return res.json()
   },
 
@@ -4120,20 +4187,20 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/${id}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete Telegram instance')
+    if (!res.ok) await handleApiError(res, 'Failed to delete Telegram instance')
     return res.json()
   },
 
   async getTelegramHealth(id: number): Promise<TelegramHealthStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/${id}/health`)
-    if (!res.ok) throw new Error('Failed to fetch Telegram health')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Telegram health')
     return res.json()
   },
 
   // v0.6.0: Slack Integration
   async getSlackIntegrations(): Promise<SlackIntegration[]> {
     const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/`)
-    if (!res.ok) throw new Error('Failed to fetch Slack integrations')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Slack integrations')
     return res.json()
   },
 
@@ -4167,27 +4234,27 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete Slack integration')
+    if (!res.ok) await handleApiError(res, 'Failed to delete Slack integration')
   },
 
   async testSlackConnection(id: number): Promise<{ success: boolean; message: string; details?: any }> {
     const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}/test`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error('Failed to test Slack connection')
+    if (!res.ok) await handleApiError(res, 'Failed to test Slack connection')
     return res.json()
   },
 
   async getSlackChannels(id: number): Promise<any[]> {
     const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}/channels`)
-    if (!res.ok) throw new Error('Failed to fetch Slack channels')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Slack channels')
     return res.json()
   },
 
   // v0.6.0: Discord Integration
   async getDiscordIntegrations(): Promise<DiscordIntegration[]> {
     const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/`)
-    if (!res.ok) throw new Error('Failed to fetch Discord integrations')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Discord integrations')
     return res.json()
   },
 
@@ -4221,27 +4288,27 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete Discord integration')
+    if (!res.ok) await handleApiError(res, 'Failed to delete Discord integration')
   },
 
   async testDiscordConnection(id: number): Promise<{ success: boolean; bot_user?: string; guilds?: number; error?: string }> {
     const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}/test`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error('Failed to test Discord connection')
+    if (!res.ok) await handleApiError(res, 'Failed to test Discord connection')
     return res.json()
   },
 
   async getDiscordGuilds(id: number): Promise<any[]> {
     const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}/guilds`)
-    if (!res.ok) throw new Error('Failed to fetch Discord guilds')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Discord guilds')
     return res.json()
   },
 
   // Playground Feature
   async getPlaygroundAgents(): Promise<PlaygroundAgentInfo[]> {
     const res = await authenticatedFetch(`${API_URL}/api/playground/agents`)
-    if (!res.ok) throw new Error('Failed to fetch playground agents')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch playground agents')
     return res.json()
   },
 
@@ -4251,13 +4318,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent_id, message, thread_id }),
     })
-    if (!res.ok) throw new Error('Failed to send playground message')
+    if (!res.ok) await handleApiError(res, 'Failed to send playground message')
     return res.json()
   },
 
   async getPlaygroundHistory(agent_id: number, limit: number = 50): Promise<PlaygroundHistoryResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/playground/history/${agent_id}?limit=${limit}`)
-    if (!res.ok) throw new Error('Failed to fetch playground history')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch playground history')
     return res.json()
   },
 
@@ -4265,14 +4332,14 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/playground/history/${agent_id}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to clear playground history')
+    if (!res.ok) await handleApiError(res, 'Failed to clear playground history')
     return res.json()
   },
 
   // Phase 14.0: Audio capabilities and upload
   async getAgentAudioCapabilities(agent_id: number): Promise<AudioCapabilities> {
     const res = await authenticatedFetch(`${API_URL}/api/playground/agents/${agent_id}/audio-capabilities`)
-    if (!res.ok) throw new Error('Failed to fetch audio capabilities')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch audio capabilities')
     return res.json()
   },
 
@@ -4287,7 +4354,7 @@ export const api = {
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       body: formData,
     })
-    if (!res.ok) throw new Error('Failed to upload audio')
+    if (!res.ok) await handleApiError(res, 'Failed to upload audio')
     return res.json()
   },
 
@@ -4314,13 +4381,13 @@ export const api = {
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       body: formData,
     })
-    if (!res.ok) throw new Error('Failed to upload document')
+    if (!res.ok) await handleApiError(res, 'Failed to upload document')
     return res.json()
   },
 
   async getPlaygroundDocuments(agent_id: number): Promise<{ documents: PlaygroundDocument[] }> {
     const res = await authenticatedFetch(`${API_URL}/api/playground/documents?agent_id=${agent_id}`)
-    if (!res.ok) throw new Error('Failed to fetch documents')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch documents')
     return res.json()
   },
 
@@ -4328,7 +4395,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/playground/documents/${doc_id}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete document')
+    if (!res.ok) await handleApiError(res, 'Failed to delete document')
     return res.json()
   },
 
@@ -4336,7 +4403,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/playground/documents?agent_id=${agent_id}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to clear documents')
+    if (!res.ok) await handleApiError(res, 'Failed to clear documents')
     return res.json()
   },
 
@@ -4349,7 +4416,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/playground/documents/search?${params}`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error('Failed to search documents')
+    if (!res.ok) await handleApiError(res, 'Failed to search documents')
     return res.json()
   },
 
@@ -4372,7 +4439,7 @@ export const api = {
 
   async getAvailableEmbeddingModels(): Promise<{ models: EmbeddingModel[] }> {
     const res = await authenticatedFetch(`${API_URL}/api/playground/embedding-models`)
-    if (!res.ok) throw new Error('Failed to fetch embedding models')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch embedding models')
     return res.json()
   },
 
@@ -4404,7 +4471,7 @@ export const api = {
     const params = new URLSearchParams()
     if (includeArchived) params.append('include_archived', 'true')
     const res = await authenticatedFetch(`${API_URL}/api/projects?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch projects')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch projects')
     return res.json()
   },
 
@@ -4414,13 +4481,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to create project')
+    if (!res.ok) await handleApiError(res, 'Failed to create project')
     return res.json()
   },
 
   async getProject(projectId: number): Promise<Project> {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}`)
-    if (!res.ok) throw new Error('Failed to fetch project')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch project')
     return res.json()
   },
 
@@ -4430,7 +4497,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to update project')
+    if (!res.ok) await handleApiError(res, 'Failed to update project')
     return res.json()
   },
 
@@ -4438,7 +4505,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete project')
+    if (!res.ok) await handleApiError(res, 'Failed to delete project')
   },
 
   // Project Knowledge
@@ -4450,13 +4517,13 @@ export const api = {
       method: 'POST',
       body: formData,
     })
-    if (!res.ok) throw new Error('Failed to upload document')
+    if (!res.ok) await handleApiError(res, 'Failed to upload document')
     return res.json()
   },
 
   async getProjectDocuments(projectId: number): Promise<ProjectDocument[]> {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge`)
-    if (!res.ok) throw new Error('Failed to fetch documents')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch documents')
     return res.json()
   },
 
@@ -4464,12 +4531,12 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/${docId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete document')
+    if (!res.ok) await handleApiError(res, 'Failed to delete document')
   },
 
   async getProjectKnowledgeChunks(projectId: number, docId: number): Promise<KnowledgeChunk[]> {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/${docId}/chunks`)
-    if (!res.ok) throw new Error('Failed to fetch knowledge chunks')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch knowledge chunks')
     return res.json()
   },
 
@@ -4478,7 +4545,7 @@ export const api = {
     const params = new URLSearchParams()
     if (includeArchived) params.append('include_archived', 'true')
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/conversations?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch conversations')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch conversations')
     return res.json()
   },
 
@@ -4488,13 +4555,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
     })
-    if (!res.ok) throw new Error('Failed to create conversation')
+    if (!res.ok) await handleApiError(res, 'Failed to create conversation')
     return res.json()
   },
 
   async getProjectConversation(projectId: number, conversationId: number): Promise<ProjectConversation> {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/conversations/${conversationId}`)
-    if (!res.ok) throw new Error('Failed to fetch conversation')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch conversation')
     return res.json()
   },
 
@@ -4504,7 +4571,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message }),
     })
-    if (!res.ok) throw new Error('Failed to send message')
+    if (!res.ok) await handleApiError(res, 'Failed to send message')
     return res.json()
   },
 
@@ -4512,7 +4579,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/conversations/${conversationId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete conversation')
+    if (!res.ok) await handleApiError(res, 'Failed to delete conversation')
   },
 
   // Phase 15: Skill Projects - Session Management
@@ -4521,7 +4588,7 @@ export const api = {
     params.append('agent_id', agentId.toString())
     params.append('channel', channel)
     const res = await authenticatedFetch(`${API_URL}/api/playground/project-session?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch project session')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch project session')
     return res.json()
   },
 
@@ -4544,14 +4611,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent_id: agentId, channel }),
     })
-    if (!res.ok) throw new Error('Failed to exit project')
+    if (!res.ok) await handleApiError(res, 'Failed to exit project')
     return res.json()
   },
 
   // Phase 15: Project Agent Access
   async getProjectAgents(projectId: number): Promise<ProjectAgentAccess[]> {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/agents`)
-    if (!res.ok) throw new Error('Failed to fetch project agents')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch project agents')
     return res.json()
   },
 
@@ -4561,14 +4628,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent_ids: agentIds }),
     })
-    if (!res.ok) throw new Error('Failed to update project agents')
+    if (!res.ok) await handleApiError(res, 'Failed to update project agents')
     return res.json()
   },
 
   // Phase 15: Command Patterns
   async getCommandPatterns(): Promise<CommandPattern[]> {
     const res = await authenticatedFetch(`${API_URL}/api/project-commands`)
-    if (!res.ok) throw new Error('Failed to fetch command patterns')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch command patterns')
     return res.json()
   },
 
@@ -4578,7 +4645,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to create command pattern')
+    if (!res.ok) await handleApiError(res, 'Failed to create command pattern')
     return res.json()
   },
 
@@ -4586,13 +4653,13 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/project-commands/${patternId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete command pattern')
+    if (!res.ok) await handleApiError(res, 'Failed to delete command pattern')
   },
 
   // User-Contact Mapping
   async getUserContactMapping(): Promise<UserContactMappingStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/user-contact-mapping`)
-    if (!res.ok) throw new Error('Failed to fetch user-contact mapping')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch user-contact mapping')
     return res.json()
   },
 
@@ -4602,7 +4669,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contact_id }),
     })
-    if (!res.ok) throw new Error('Failed to set user-contact mapping')
+    if (!res.ok) await handleApiError(res, 'Failed to set user-contact mapping')
     return res.json()
   },
 
@@ -4610,14 +4677,14 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/user-contact-mapping`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete user-contact mapping')
+    if (!res.ok) await handleApiError(res, 'Failed to delete user-contact mapping')
     return res.json()
   },
 
   // Phase 5: Get all user-contact mappings for the tenant (admin-only)
   async getAllUserContactMappings(): Promise<UserContactMappingResponse[]> {
     const res = await authenticatedFetch(`${API_URL}/api/user-contact-mappings`)
-    if (!res.ok) throw new Error('Failed to fetch user-contact mappings')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch user-contact mappings')
     return res.json()
   },
 
@@ -4706,7 +4773,7 @@ export const api = {
 
   async getTenantStats(id: string): Promise<TenantStats> {
     const res = await authenticatedFetch(`${API_URL}/api/tenants/${id}/stats`)
-    if (!res.ok) throw new Error('Failed to fetch tenant stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch tenant stats')
     return res.json()
   },
 
@@ -4809,7 +4876,7 @@ export const api = {
     roles: RoleInfo[]
   }> {
     const res = await authenticatedFetch(`${API_URL}/api/team/roles`)
-    if (!res.ok) throw new Error('Failed to fetch roles')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch roles')
     return res.json()
   },
 
@@ -4834,7 +4901,7 @@ export const api = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
     if (params?.action) searchParams.append('action', params.action)
     const res = await authenticatedFetch(`${API_URL}/api/team/audit-logs?${searchParams}`)
-    if (!res.ok) throw new Error('Failed to fetch audit logs')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch audit logs')
     return res.json()
   },
 
@@ -4876,7 +4943,7 @@ export const api = {
     if (params?.from_date) searchParams.append('from_date', params.from_date)
     if (params?.to_date) searchParams.append('to_date', params.to_date)
     const res = await authenticatedFetch(`${API_URL}/api/audit-logs?${searchParams}`)
-    if (!res.ok) throw new Error('Failed to fetch audit events')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch audit events')
     return res.json()
   },
 
@@ -4888,7 +4955,7 @@ export const api = {
     by_category: Record<string, number>
   }> {
     const res = await authenticatedFetch(`${API_URL}/api/audit-logs/stats`)
-    if (!res.ok) throw new Error('Failed to fetch audit stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch audit stats')
     return res.json()
   },
 
@@ -4908,7 +4975,7 @@ export const api = {
     if (params?.from_date) searchParams.append('from_date', params.from_date)
     if (params?.to_date) searchParams.append('to_date', params.to_date)
     const res = await authenticatedFetch(`${API_URL}/api/audit-logs/export?${searchParams}`)
-    if (!res.ok) throw new Error('Failed to export audit logs')
+    if (!res.ok) await handleApiError(res, 'Failed to export audit logs')
     return res.blob()
   },
 
@@ -4932,7 +4999,7 @@ export const api = {
     last_error_at: string | null
   }> {
     const res = await authenticatedFetch(`${API_URL}/api/settings/syslog/`)
-    if (!res.ok) throw new Error('Failed to get syslog configuration')
+    if (!res.ok) await handleApiError(res, 'Failed to get syslog configuration')
     return res.json()
   },
 
@@ -5025,7 +5092,7 @@ export const api = {
     if (tenantSlug) params.append('tenant_slug', tenantSlug)
 
     const res = await fetch(`${API_URL}/api/auth/google/status?${params}`)
-    if (!res.ok) throw new Error('Failed to get SSO status')
+    if (!res.ok) await handleApiError(res, 'Failed to get SSO status')
     return res.json()
   },
 
@@ -5075,13 +5142,13 @@ export const api = {
 
   async getPlatformSSOStatus(): Promise<PlatformSSOStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/settings/sso/status`)
-    if (!res.ok) throw new Error('Failed to get platform SSO status')
+    if (!res.ok) await handleApiError(res, 'Failed to get platform SSO status')
     return res.json()
   },
 
   async getSSOConfig(): Promise<SSOConfig> {
     const res = await authenticatedFetch(`${API_URL}/api/settings/sso/`)
-    if (!res.ok) throw new Error('Failed to get SSO configuration')
+    if (!res.ok) await handleApiError(res, 'Failed to get SSO configuration')
     return res.json()
   },
 
@@ -5116,7 +5183,7 @@ export const api = {
     description: string | null
   }>> {
     const res = await authenticatedFetch(`${API_URL}/api/settings/sso/roles`)
-    if (!res.ok) throw new Error('Failed to get available roles')
+    if (!res.ok) await handleApiError(res, 'Failed to get available roles')
     return res.json()
   },
 
@@ -5145,19 +5212,19 @@ export const api = {
     if (options?.page_size) params.append('page_size', String(options.page_size))
 
     const res = await authenticatedFetch(`${API_URL}/api/admin/users/?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch users')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch users')
     return res.json()
   },
 
   async getGlobalUserStats(): Promise<GlobalUserStats> {
     const res = await authenticatedFetch(`${API_URL}/api/admin/users/stats`)
-    if (!res.ok) throw new Error('Failed to fetch user stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch user stats')
     return res.json()
   },
 
   async getGlobalUser(userId: number): Promise<GlobalUser> {
     const res = await authenticatedFetch(`${API_URL}/api/admin/users/${userId}`)
-    if (!res.ok) throw new Error('Failed to fetch user')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch user')
     return res.json()
   },
 
@@ -5235,7 +5302,7 @@ export const api = {
     if (includePrivate) params.append('include_private', 'true')
 
     const res = await authenticatedFetch(`${API_URL}/api/plans?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch plans')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch plans')
     return res.json()
   },
 
@@ -5247,19 +5314,19 @@ export const api = {
     if (includeInactive) params.append('include_inactive', 'true')
 
     const res = await authenticatedFetch(`${API_URL}/api/plans/all?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch plans')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch plans')
     return res.json()
   },
 
   async getPlan(planId: number): Promise<SubscriptionPlan> {
     const res = await authenticatedFetch(`${API_URL}/api/plans/${planId}`)
-    if (!res.ok) throw new Error('Failed to fetch plan')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch plan')
     return res.json()
   },
 
   async getPlanStats(): Promise<PlanStats> {
     const res = await authenticatedFetch(`${API_URL}/api/plans/stats`)
-    if (!res.ok) throw new Error('Failed to fetch plan stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch plan stats')
     return res.json()
   },
 
@@ -5324,7 +5391,7 @@ export const api = {
 
   async getToolboxStatus(): Promise<ToolboxContainerStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/toolbox/status`)
-    if (!res.ok) throw new Error('Failed to fetch toolbox status')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch toolbox status')
     return res.json()
   },
 
@@ -5376,7 +5443,7 @@ export const api = {
 
   async getToolboxPackages(): Promise<ToolboxPackage[]> {
     const res = await authenticatedFetch(`${API_URL}/api/toolbox/packages`)
-    if (!res.ok) throw new Error('Failed to fetch packages')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch packages')
     return res.json()
   },
 
@@ -5417,7 +5484,7 @@ export const api = {
 
   async getAvailableToolboxTools(): Promise<{ tools: AvailableToolboxTool[] }> {
     const res = await authenticatedFetch(`${API_URL}/api/toolbox/available-tools`)
-    if (!res.ok) throw new Error('Failed to fetch available tools')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch available tools')
     return res.json()
   },
 
@@ -5427,7 +5494,7 @@ export const api = {
     params.append('language_code', languageCode)
     if (category) params.append('category', category)
     const res = await authenticatedFetch(`${API_URL}/api/commands?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch slash commands')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch slash commands')
     return res.json()
   },
 
@@ -5435,7 +5502,7 @@ export const api = {
     const params = new URLSearchParams()
     params.append('language_code', languageCode)
     const res = await authenticatedFetch(`${API_URL}/api/commands/by-category?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch commands by category')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch commands by category')
     return res.json()
   },
 
@@ -5445,7 +5512,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...data, channel: data.channel || 'playground' }),
     })
-    if (!res.ok) throw new Error('Failed to execute command')
+    if (!res.ok) await handleApiError(res, 'Failed to execute command')
     return res.json()
   },
 
@@ -5454,14 +5521,14 @@ export const api = {
     params.append('query', query)
     params.append('limit', limit.toString())
     const res = await authenticatedFetch(`${API_URL}/api/commands/autocomplete?${params}`)
-    if (!res.ok) throw new Error('Failed to autocomplete commands')
+    if (!res.ok) await handleApiError(res, 'Failed to autocomplete commands')
     return res.json()
   },
 
   // Phase 16: Project Memory API
   async getProjectMemoryStats(projectId: number): Promise<ProjectMemoryStats> {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/memory/stats`)
-    if (!res.ok) throw new Error('Failed to fetch memory stats')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch memory stats')
     return res.json()
   },
 
@@ -5470,7 +5537,7 @@ export const api = {
     if (topic) params.append('topic', topic)
     if (senderKey) params.append('sender_key', senderKey)
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/memory/facts?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch facts')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch facts')
     return res.json()
   },
 
@@ -5480,7 +5547,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
-    if (!res.ok) throw new Error('Failed to add fact')
+    if (!res.ok) await handleApiError(res, 'Failed to add fact')
     return res.json()
   },
 
@@ -5488,7 +5555,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/memory/facts/${factId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete fact')
+    if (!res.ok) await handleApiError(res, 'Failed to delete fact')
     return res.json()
   },
 
@@ -5499,7 +5566,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/memory/facts?${params}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to clear facts')
+    if (!res.ok) await handleApiError(res, 'Failed to clear facts')
     return res.json()
   },
 
@@ -5509,7 +5576,7 @@ export const api = {
     params.append('offset', offset.toString())
     if (senderKey) params.append('sender_key', senderKey)
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/memory/semantic?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch semantic memory')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch semantic memory')
     return res.json()
   },
 
@@ -5519,7 +5586,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/memory/semantic?${params}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to clear semantic memory')
+    if (!res.ok) await handleApiError(res, 'Failed to clear semantic memory')
     return res.json()
   },
 
@@ -5528,7 +5595,7 @@ export const api = {
     params.append('include_semantic', includeSemantic.toString())
     params.append('include_facts', includeFacts.toString())
     const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/memory/export?${params}`)
-    if (!res.ok) throw new Error('Failed to export memory')
+    if (!res.ok) await handleApiError(res, 'Failed to export memory')
     return res.json()
   },
 
@@ -5539,7 +5606,7 @@ export const api = {
     if (includeArchived) params.append('include_archived', 'true')
     if (folder) params.append('folder', folder)
     const res = await authenticatedFetch(`${API_URL}/api/playground/threads?${params}`)
-    if (!res.ok) throw new Error('Failed to list threads')
+    if (!res.ok) await handleApiError(res, 'Failed to list threads')
     return res.json()
   },
 
@@ -5549,7 +5616,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     })
-    if (!res.ok) throw new Error('Failed to create thread')
+    if (!res.ok) await handleApiError(res, 'Failed to create thread')
     return res.json()
   },
 
@@ -5557,7 +5624,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/playground/threads/${threadId}`, {
       signal: options?.signal
     })
-    if (!res.ok) throw new Error('Failed to get thread')
+    if (!res.ok) await handleApiError(res, 'Failed to get thread')
     return res.json()
   },
 
@@ -5567,7 +5634,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     })
-    if (!res.ok) throw new Error('Failed to update thread')
+    if (!res.ok) await handleApiError(res, 'Failed to update thread')
     return res.json()
   },
 
@@ -5575,13 +5642,13 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/playground/threads/${threadId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete thread')
+    if (!res.ok) await handleApiError(res, 'Failed to delete thread')
     return res.json()
   },
 
   async exportThread(threadId: number): Promise<ThreadExport> {
     const res = await authenticatedFetch(`${API_URL}/api/playground/threads/${threadId}/export`)
-    if (!res.ok) throw new Error('Failed to export thread')
+    if (!res.ok) await handleApiError(res, 'Failed to export thread')
     return res.json()
   },
 
@@ -5595,7 +5662,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     })
-    if (!res.ok) throw new Error('Failed to edit message')
+    if (!res.ok) await handleApiError(res, 'Failed to edit message')
     return res.json()
   },
 
@@ -5608,7 +5675,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     })
-    if (!res.ok) throw new Error('Failed to regenerate message')
+    if (!res.ok) await handleApiError(res, 'Failed to regenerate message')
     return res.json()
   },
 
@@ -5621,7 +5688,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     })
-    if (!res.ok) throw new Error('Failed to delete message')
+    if (!res.ok) await handleApiError(res, 'Failed to delete message')
     return res.json()
   },
 
@@ -5634,7 +5701,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     })
-    if (!res.ok) throw new Error('Failed to bookmark message')
+    if (!res.ok) await handleApiError(res, 'Failed to bookmark message')
     return res.json()
   },
 
@@ -5647,7 +5714,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     })
-    if (!res.ok) throw new Error('Failed to branch conversation')
+    if (!res.ok) await handleApiError(res, 'Failed to branch conversation')
     return res.json()
   },
 
@@ -5657,7 +5724,7 @@ export const api = {
     params.append('thread_id', threadId.toString())
     params.append('message_id', messageId)
     const res = await authenticatedFetch(`${API_URL}/api/playground/messages/copy?${params}`)
-    if (!res.ok) throw new Error('Failed to copy message')
+    if (!res.ok) await handleApiError(res, 'Failed to copy message')
     return res.json()
   },
 
@@ -5673,7 +5740,7 @@ export const api = {
     if (filters?.offset) params.append('offset', filters.offset.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/playground/search?${params}`)
-    if (!res.ok) throw new Error('Search failed')
+    if (!res.ok) await handleApiError(res, 'Search failed')
     return res.json()
   },
 
@@ -5684,7 +5751,7 @@ export const api = {
     if (limit) params.append('limit', limit.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/playground/search/semantic?${params}`)
-    if (!res.ok) throw new Error('Semantic search failed')
+    if (!res.ok) await handleApiError(res, 'Semantic search failed')
     return res.json()
   },
 
@@ -5698,7 +5765,7 @@ export const api = {
     if (filters?.limit) params.append('limit', filters.limit.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/playground/search/combined?${params}`)
-    if (!res.ok) throw new Error('Combined search failed')
+    if (!res.ok) await handleApiError(res, 'Combined search failed')
     return res.json()
   },
 
@@ -5708,7 +5775,7 @@ export const api = {
     params.append('limit', limit.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/playground/search/suggestions?${params}`)
-    if (!res.ok) throw new Error('Failed to get search suggestions')
+    if (!res.ok) await handleApiError(res, 'Failed to get search suggestions')
     return res.json()
   },
 
@@ -5719,13 +5786,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent_id: agentId }),
     })
-    if (!res.ok) throw new Error('Failed to extract knowledge')
+    if (!res.ok) await handleApiError(res, 'Failed to extract knowledge')
     return res.json()
   },
 
   async getThreadKnowledge(threadId: number): Promise<any> {
     const res = await authenticatedFetch(`${API_URL}/api/playground/threads/${threadId}/knowledge`)
-    if (!res.ok) throw new Error('Failed to get thread knowledge')
+    if (!res.ok) await handleApiError(res, 'Failed to get thread knowledge')
     return res.json()
   },
 
@@ -5734,7 +5801,7 @@ export const api = {
     if (threadId) params.append('thread_id', threadId.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/playground/tags?${params}`)
-    if (!res.ok) throw new Error('Failed to list tags')
+    if (!res.ok) await handleApiError(res, 'Failed to list tags')
     return res.json()
   },
 
@@ -5744,7 +5811,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tag, color }),
     })
-    if (!res.ok) throw new Error('Failed to update tag')
+    if (!res.ok) await handleApiError(res, 'Failed to update tag')
     return res.json()
   },
 
@@ -5752,7 +5819,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/playground/tags/${tagId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete tag')
+    if (!res.ok) await handleApiError(res, 'Failed to delete tag')
     return res.json()
   },
 
@@ -5766,7 +5833,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     })
-    if (!res.ok) throw new Error('Failed to update insight')
+    if (!res.ok) await handleApiError(res, 'Failed to update insight')
     return res.json()
   },
 
@@ -5774,7 +5841,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/playground/insights/${insightId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete insight')
+    if (!res.ok) await handleApiError(res, 'Failed to delete insight')
     return res.json()
   },
 
@@ -5782,7 +5849,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/playground/links/${linkId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete conversation link')
+    if (!res.ok) await handleApiError(res, 'Failed to delete conversation link')
     return res.json()
   },
 
@@ -5791,7 +5858,7 @@ export const api = {
     if (insightType) params.append('insight_type', insightType)
 
     const res = await authenticatedFetch(`${API_URL}/api/playground/threads/${threadId}/insights?${params}`)
-    if (!res.ok) throw new Error('Failed to get insights')
+    if (!res.ok) await handleApiError(res, 'Failed to get insights')
     return res.json()
   },
 
@@ -5800,7 +5867,7 @@ export const api = {
     params.append('limit', limit.toString())
 
     const res = await authenticatedFetch(`${API_URL}/api/playground/threads/${threadId}/related?${params}`)
-    if (!res.ok) throw new Error('Failed to get related threads')
+    if (!res.ok) await handleApiError(res, 'Failed to get related threads')
     return res.json()
   },
 
@@ -5809,7 +5876,7 @@ export const api = {
     params.append('format', format)
 
     const res = await authenticatedFetch(`${API_URL}/api/playground/threads/${threadId}/export-knowledge?${params}`)
-    if (!res.ok) throw new Error('Failed to export knowledge')
+    if (!res.ok) await handleApiError(res, 'Failed to export knowledge')
     return res.json()
   },
 
@@ -5822,7 +5889,7 @@ export const api = {
     if (includeInactive) params.append('include_inactive', 'true')
 
     const res = await authenticatedFetch(`${API_URL}/api/shell/security-patterns?${params}`)
-    if (!res.ok) throw new Error('Failed to fetch security patterns')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch security patterns')
     return res.json()
   },
 
@@ -5865,13 +5932,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ pattern, test_commands: testCommands })
     })
-    if (!res.ok) throw new Error('Failed to test pattern')
+    if (!res.ok) await handleApiError(res, 'Failed to test pattern')
     return res.json()
   },
 
   async getSecurityPatternStats(): Promise<SecurityPatternStats> {
     const res = await authenticatedFetch(`${API_URL}/api/shell/security-patterns/stats`)
-    if (!res.ok) throw new Error('Failed to get pattern stats')
+    if (!res.ok) await handleApiError(res, 'Failed to get pattern stats')
     return res.json()
   },
 
@@ -5881,7 +5948,7 @@ export const api = {
 
   async getSentinelConfig(): Promise<SentinelConfig> {
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/config`)
-    if (!res.ok) throw new Error('Failed to get Sentinel config')
+    if (!res.ok) await handleApiError(res, 'Failed to get Sentinel config')
     return res.json()
   },
 
@@ -5900,7 +5967,7 @@ export const api = {
   async getSentinelAgentConfig(agentId: number): Promise<SentinelAgentConfig | null> {
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/config/agent/${agentId}`)
     if (res.status === 404) return null
-    if (!res.ok) throw new Error('Failed to get agent Sentinel config')
+    if (!res.ok) await handleApiError(res, 'Failed to get agent Sentinel config')
     return res.json()
   },
 
@@ -5920,7 +5987,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/config/agent/${agentId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to delete agent Sentinel config')
+    if (!res.ok) await handleApiError(res, 'Failed to delete agent Sentinel config')
     return res.json()
   },
 
@@ -5942,13 +6009,13 @@ export const api = {
 
     const url = `${API_URL}/api/sentinel/logs${searchParams.toString() ? `?${searchParams}` : ''}`
     const res = await authenticatedFetch(url)
-    if (!res.ok) throw new Error('Failed to get Sentinel logs')
+    if (!res.ok) await handleApiError(res, 'Failed to get Sentinel logs')
     return res.json()
   },
 
   async getSentinelStats(days: number = 7): Promise<SentinelStats> {
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/stats?days=${days}`)
-    if (!res.ok) throw new Error('Failed to get Sentinel stats')
+    if (!res.ok) await handleApiError(res, 'Failed to get Sentinel stats')
     return res.json()
   },
 
@@ -5966,7 +6033,7 @@ export const api = {
 
   async getSentinelPrompts(): Promise<SentinelPrompt[]> {
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/prompts`)
-    if (!res.ok) throw new Error('Failed to get Sentinel prompts')
+    if (!res.ok) await handleApiError(res, 'Failed to get Sentinel prompts')
     return res.json()
   },
 
@@ -5975,19 +6042,19 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ prompt }),
     })
-    if (!res.ok) throw new Error('Failed to update Sentinel prompt')
+    if (!res.ok) await handleApiError(res, 'Failed to update Sentinel prompt')
     return res.json()
   },
 
   async getSentinelLLMProviders(): Promise<SentinelLLMProvider[]> {
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/llm/providers`)
-    if (!res.ok) throw new Error('Failed to get LLM providers')
+    if (!res.ok) await handleApiError(res, 'Failed to get LLM providers')
     return res.json()
   },
 
   async getSentinelLLMModels(provider: string): Promise<{ provider: string; models: string[] }> {
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/llm/models/${provider}`)
-    if (!res.ok) throw new Error('Failed to get LLM models')
+    if (!res.ok) await handleApiError(res, 'Failed to get LLM models')
     return res.json()
   },
 
@@ -5996,13 +6063,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ provider, model }),
     })
-    if (!res.ok) throw new Error('Failed to test LLM connection')
+    if (!res.ok) await handleApiError(res, 'Failed to test LLM connection')
     return res.json()
   },
 
   async getSentinelDetectionTypes(): Promise<Record<string, SentinelDetectionType>> {
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/detection-types`)
-    if (!res.ok) throw new Error('Failed to get detection types')
+    if (!res.ok) await handleApiError(res, 'Failed to get detection types')
     return res.json()
   },
 
@@ -6024,13 +6091,13 @@ export const api = {
 
     const url = `${API_URL}/api/sentinel/exceptions${searchParams.toString() ? `?${searchParams}` : ''}`
     const res = await authenticatedFetch(url)
-    if (!res.ok) throw new Error('Failed to get Sentinel exceptions')
+    if (!res.ok) await handleApiError(res, 'Failed to get Sentinel exceptions')
     return res.json()
   },
 
   async getSentinelException(exceptionId: number): Promise<SentinelException> {
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/exceptions/${exceptionId}`)
-    if (!res.ok) throw new Error('Failed to get Sentinel exception')
+    if (!res.ok) await handleApiError(res, 'Failed to get Sentinel exception')
     return res.json()
   },
 
@@ -6190,13 +6257,13 @@ export const api = {
   async getQueueStatus(agentId?: number): Promise<{ items: QueueItem[] }> {
     const params = agentId ? `?agent_id=${agentId}` : ''
     const res = await authenticatedFetch(`${API_URL}/api/queue/status${params}`)
-    if (!res.ok) throw new Error('Failed to fetch queue status')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch queue status')
     return res.json()
   },
 
   async getQueueItem(queueId: number): Promise<QueueItem> {
     const res = await authenticatedFetch(`${API_URL}/api/queue/item/${queueId}`)
-    if (!res.ok) throw new Error('Failed to fetch queue item')
+    if (!res.ok) await handleApiError(res, 'Failed to fetch queue item')
     return res.json()
   },
 
@@ -6204,7 +6271,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/queue/item/${queueId}`, {
       method: 'DELETE',
     })
-    if (!res.ok) throw new Error('Failed to cancel queue item')
+    if (!res.ok) await handleApiError(res, 'Failed to cancel queue item')
     return res.json()
   },
 
@@ -6526,6 +6593,65 @@ export const api = {
   async getAllowedBinaries(): Promise<{ binaries: string[] }> {
     const res = await authenticatedFetch(`${API_URL}/api/mcp-servers/allowed-binaries`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch allowed binaries')
+    return res.json()
+  },
+
+  // ==================== Agent Communication (v0.6.0 Item 15) ====================
+
+  async getAgentCommPermissions(): Promise<AgentCommPermission[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/agent-communication/permissions`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent communication permissions')
+    return res.json()
+  },
+
+  async createAgentCommPermission(data: { source_agent_id: number; target_agent_id: number; max_depth?: number; rate_limit_rpm?: number }): Promise<AgentCommPermission> {
+    const res = await authenticatedFetch(`${API_URL}/api/agent-communication/permissions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create agent communication permission')
+    return res.json()
+  },
+
+  async updateAgentCommPermission(id: number, data: { is_enabled?: boolean; max_depth?: number; rate_limit_rpm?: number }): Promise<AgentCommPermission> {
+    const res = await authenticatedFetch(`${API_URL}/api/agent-communication/permissions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update agent communication permission')
+    return res.json()
+  },
+
+  async deleteAgentCommPermission(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/agent-communication/permissions/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete agent communication permission')
+  },
+
+  async getAgentCommSessions(params?: { limit?: number; offset?: number; status?: string; agent_id?: number }): Promise<AgentCommSession[]> {
+    const searchParams = new URLSearchParams()
+    if (params?.limit) searchParams.set('limit', String(params.limit))
+    if (params?.offset) searchParams.set('offset', String(params.offset))
+    if (params?.status) searchParams.set('status', params.status)
+    if (params?.agent_id) searchParams.set('agent_id', String(params.agent_id))
+    const res = await authenticatedFetch(`${API_URL}/api/agent-communication/sessions?${searchParams}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent communication sessions')
+    const data = await res.json()
+    return data.items || []
+  },
+
+  async getAgentCommSessionDetail(id: number): Promise<AgentCommSession> {
+    const res = await authenticatedFetch(`${API_URL}/api/agent-communication/sessions/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent communication session')
+    return res.json()
+  },
+
+  async getAgentCommStats(): Promise<AgentCommStats> {
+    const res = await authenticatedFetch(`${API_URL}/api/agent-communication/stats`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent communication stats')
     return res.json()
   },
 }

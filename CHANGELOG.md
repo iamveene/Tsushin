@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.0] - 2026-03-30
 
 ### Added
+- **Agent-to-Agent Communication (Item 39)**: Agents within the same tenant can now communicate directly. New `agent_communication` skill exposes 3 actions: `ask` (sync Q&A), `list_agents` (discover capabilities), and `delegate` (full handoff). Includes permission management, rate limiting, loop detection, Sentinel `agent_escalation` detection, and full audit logging. New "Communication" tab in Agent Studio with session log, permissions CRUD, and statistics dashboard.
 - **Image generation for Playground channel**: Generated images from the `generate_image` tool are now rendered inline in Playground chat messages. Images can be clicked to open in a new tab.
 - **Image generation for Telegram channel**: Generated images are sent as photos via the Telegram Bot API with optional captions.
 - **Image serving endpoint**: New `GET /api/playground/images/{image_id}` endpoint serves generated images to the Playground frontend, following the same pattern as the existing audio serving endpoint.
