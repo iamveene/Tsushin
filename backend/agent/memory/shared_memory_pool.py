@@ -129,7 +129,8 @@ class SharedMemoryPool:
         topic: Optional[str] = None,
         min_confidence: float = 0.0,
         limit: int = 20,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        decay_config=None
     ) -> List[Dict]:
         """
         Get knowledge accessible to a specific agent.
@@ -140,6 +141,7 @@ class SharedMemoryPool:
             min_confidence: Minimum confidence threshold
             limit: Maximum results
             tenant_id: Tenant ID for multi-tenancy filter (CRIT-010 security fix)
+            decay_config: Optional DecayConfig for temporal decay filtering
 
         Returns:
             List of knowledge items
@@ -182,8 +184,15 @@ class SharedMemoryPool:
             # Execute query
             results = query.limit(limit * 2).all()  # Get extra for filtering
 
+            decay_enabled = (
+                decay_config is not None
+                and getattr(decay_config, 'enabled', False)
+            )
+
             # Convert to dict and apply confidence + access_level filters
             knowledge = []
+            accessed_ids = []
+
             for item in results:
                 # Check access level for items with empty accessible_to (public knowledge)
                 if item.accessible_to == []:
@@ -194,11 +203,51 @@ class SharedMemoryPool:
 
                 # Check confidence
                 confidence = item.meta_data.get("confidence", 1.0)
-                if confidence >= min_confidence:
-                    knowledge.append(self._to_dict(item))
+
+                if decay_enabled:
+                    from .temporal_decay import (
+                        apply_decay_to_confidence, compute_freshness_label, should_archive
+                    )
+                    now = datetime.utcnow()
+                    last_accessed = getattr(item, 'last_accessed_at', None)
+                    eff_confidence = apply_decay_to_confidence(
+                        confidence, last_accessed, now, decay_config.decay_lambda
+                    )
+                    if should_archive(eff_confidence, decay_config.archive_threshold):
+                        continue
+                    if eff_confidence < min_confidence:
+                        continue
+
+                    item_dict = self._to_dict(item)
+                    freshness = compute_freshness_label(
+                        last_accessed, now, decay_config.decay_lambda,
+                        decay_config.archive_threshold
+                    )
+                    item_dict['effective_confidence'] = round(eff_confidence, 4)
+                    item_dict['freshness'] = freshness['freshness']
+                    item_dict['decay_factor'] = freshness['decay_factor']
+                    knowledge.append(item_dict)
+                    accessed_ids.append(item.id)
+                else:
+                    if confidence >= min_confidence:
+                        knowledge.append(self._to_dict(item))
 
                 if len(knowledge) >= limit:
                     break
+
+            # Update last_accessed_at for returned items (when decay is enabled)
+            if decay_enabled and accessed_ids:
+                try:
+                    self.db.query(SharedMemory).filter(
+                        SharedMemory.id.in_(accessed_ids)
+                    ).update(
+                        {SharedMemory.last_accessed_at: datetime.utcnow()},
+                        synchronize_session='fetch'
+                    )
+                    self.db.commit()
+                except Exception as e:
+                    self.logger.warning(f"Failed to update last_accessed_at for shared knowledge: {e}")
+                    self.db.rollback()
 
             self.logger.info(
                 f"Retrieved {len(knowledge)} knowledge items for agent {agent_id}"

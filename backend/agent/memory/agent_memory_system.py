@@ -20,6 +20,7 @@ from .semantic_memory import SemanticMemoryService
 from .fact_extractor import FactExtractor
 from .knowledge_service import KnowledgeService
 from .shared_memory_pool import SharedMemoryPool
+from .temporal_decay import DecayConfig
 
 
 class AgentMemorySystem:
@@ -77,6 +78,9 @@ class AgentMemorySystem:
         # Fact extraction configuration
         self.auto_extract_facts = config.get("auto_extract_facts", True)
         self.extraction_threshold = config.get("fact_extraction_threshold", 5)  # messages
+
+        # Temporal decay configuration (Item 37)
+        self.decay_config = DecayConfig.from_config_dict(config)
 
         # Load existing memory from database on startup
         self._load_memory_from_db()
@@ -186,12 +190,16 @@ class AgentMemorySystem:
             'shared_knowledge': []      # Cross-agent knowledge
         }
 
+        # Determine active decay config
+        active_decay = self.decay_config if self.decay_config.enabled else None
+
         # Layer 1 + 2: Get hybrid context from semantic memory
         memory_context = self.semantic_memory.get_context(
             sender_key=user_id,
             current_message=current_message,
             max_semantic_results=self.config.get("semantic_search_results", 5),
-            similarity_threshold=self.config.get("semantic_similarity_threshold", 0.3)
+            similarity_threshold=self.config.get("semantic_similarity_threshold", 0.3),
+            decay_config=active_decay
         )
 
         context['working_memory'] = memory_context.get('recent_messages', [])
@@ -199,31 +207,35 @@ class AgentMemorySystem:
 
         # Layer 3: Get semantic knowledge about user
         if include_knowledge:
-            facts = self._get_user_facts(user_id)
+            facts = self._get_user_facts(user_id, decay_config=active_decay)
             context['semantic_facts'] = facts
 
         # Layer 4: Shared memory (cross-agent knowledge)
         if include_shared:
             shared_knowledge = self.shared_memory_pool.get_accessible_knowledge(
                 agent_id=self.agent_id,
-                limit=self.config.get("shared_memory_results", 5)
+                limit=self.config.get("shared_memory_results", 5),
+                decay_config=active_decay
             )
             context['shared_knowledge'] = shared_knowledge
 
         return context
 
-    def _get_user_facts(self, user_id: str) -> Dict:
+    def _get_user_facts(self, user_id: str, decay_config=None) -> Dict:
         """
         Get learned facts about a user from semantic knowledge base (Layer 3).
 
         Args:
             user_id: User identifier
+            decay_config: Optional DecayConfig for temporal decay
 
         Returns:
             Dictionary of facts organized by topic
         """
-        # Check cache first
-        if user_id in self.knowledge_cache:
+        # When decay is enabled, skip cache (need fresh decay calculations)
+        decay_enabled = decay_config is not None and getattr(decay_config, 'enabled', False)
+
+        if not decay_enabled and user_id in self.knowledge_cache:
             return self.knowledge_cache[user_id]
 
         # Query database
@@ -232,24 +244,50 @@ class AgentMemorySystem:
         facts_by_topic = {}
 
         try:
-            results = self.db.query(SemanticKnowledge).filter(
-                SemanticKnowledge.agent_id == self.agent_id,
-                SemanticKnowledge.user_id == user_id
-            ).all()
+            if decay_enabled:
+                # Use KnowledgeService with decay for proper filtering
+                fact_list = self.knowledge_service.get_user_facts(
+                    agent_id=self.agent_id,
+                    user_id=user_id,
+                    decay_config=decay_config
+                )
+                for fact in fact_list:
+                    topic = fact['topic']
+                    if topic not in facts_by_topic:
+                        facts_by_topic[topic] = {}
 
-            for fact in results:
-                topic = fact.topic
-                if topic not in facts_by_topic:
-                    facts_by_topic[topic] = {}
+                    fact_data = {
+                        'value': fact['value'],
+                        'confidence': fact['confidence'],
+                        'learned_at': fact.get('learned_at'),
+                    }
+                    if 'effective_confidence' in fact:
+                        fact_data['effective_confidence'] = fact['effective_confidence']
+                    if 'freshness' in fact:
+                        fact_data['freshness'] = fact['freshness']
+                    if 'decay_factor' in fact:
+                        fact_data['decay_factor'] = fact['decay_factor']
 
-                facts_by_topic[topic][fact.key] = {
-                    'value': fact.value,
-                    'confidence': fact.confidence,
-                    'learned_at': fact.learned_at.isoformat() if fact.learned_at else None
-                }
+                    facts_by_topic[topic][fact['key']] = fact_data
+            else:
+                results = self.db.query(SemanticKnowledge).filter(
+                    SemanticKnowledge.agent_id == self.agent_id,
+                    SemanticKnowledge.user_id == user_id
+                ).all()
 
-            # Cache the results
-            self.knowledge_cache[user_id] = facts_by_topic
+                for fact in results:
+                    topic = fact.topic
+                    if topic not in facts_by_topic:
+                        facts_by_topic[topic] = {}
+
+                    facts_by_topic[topic][fact.key] = {
+                        'value': fact.value,
+                        'confidence': fact.confidence,
+                        'learned_at': fact.learned_at.isoformat() if fact.learned_at else None
+                    }
+
+                # Cache the results (only when not using decay)
+                self.knowledge_cache[user_id] = facts_by_topic
 
         except Exception as e:
             self.logger.error(f"Failed to load user facts: {e}")
@@ -403,10 +441,20 @@ class AgentMemorySystem:
                 similarity = msg.get('similarity', 0)
                 content = msg['content']
                 sender_info = msg.get('sender_name', '')
+                freshness = msg.get('freshness', '')
+                decayed_score = msg.get('decayed_score')
+
+                # Build label parts
+                label_parts = [f"{similarity:.0%}"]
+                if decayed_score is not None:
+                    label_parts.append(f"eff:{decayed_score:.0%}")
+                if freshness:
+                    label_parts.append(freshness)
                 if sender_info:
-                    lines.append(f"[PAST - {similarity:.0%} - {sender_info}] {content}")
-                else:
-                    lines.append(f"[PAST - {similarity:.0%}] {content}")
+                    label_parts.append(sender_info)
+
+                label = " - ".join(label_parts)
+                lines.append(f"[PAST - {label}] {content}")
 
         # Semantic Knowledge (learned facts)
         if context['semantic_facts']:
@@ -421,7 +469,17 @@ class AgentMemorySystem:
                 for key, data in facts.items():
                     value = data['value']
                     confidence = data.get('confidence', 1.0)
-                    lines.append(f"  - {key}: {value} (confidence: {confidence:.0%})")
+                    eff_conf = data.get('effective_confidence')
+                    freshness = data.get('freshness', '')
+
+                    if eff_conf is not None:
+                        conf_str = f"confidence: {confidence:.0%}, effective: {eff_conf:.0%}"
+                        if freshness:
+                            conf_str += f", {freshness}"
+                    else:
+                        conf_str = f"confidence: {confidence:.0%}"
+
+                    lines.append(f"  - {key}: {value} ({conf_str})")
 
         # Adaptive Personality Context (Phase 4.8 Week 3)
         if adaptive_personality_enabled and user_id:
@@ -562,6 +620,36 @@ class AgentMemorySystem:
         except Exception as e:
             self.logger.error(f"Failed to count facts: {e}")
             stats['knowledge_facts_total'] = 0
+
+        # Decay configuration and freshness distribution
+        stats['decay_config'] = {
+            'enabled': self.decay_config.enabled,
+            'decay_lambda': self.decay_config.decay_lambda,
+            'archive_threshold': self.decay_config.archive_threshold,
+            'mmr_lambda': self.decay_config.mmr_lambda,
+        }
+
+        if self.decay_config.enabled:
+            try:
+                from .temporal_decay import compute_freshness_label
+                now = datetime.utcnow()
+                facts = self.db.query(SemanticKnowledge).filter(
+                    SemanticKnowledge.agent_id == self.agent_id
+                ).all()
+
+                freshness_dist = {'fresh': 0, 'fading': 0, 'stale': 0, 'archived': 0}
+                for fact in facts:
+                    last_accessed = getattr(fact, 'last_accessed_at', None)
+                    label = compute_freshness_label(
+                        last_accessed, now,
+                        self.decay_config.decay_lambda,
+                        self.decay_config.archive_threshold
+                    )
+                    freshness_dist[label['freshness']] += 1
+
+                stats['freshness_distribution'] = freshness_dist
+            except Exception as e:
+                self.logger.warning(f"Failed to compute freshness distribution: {e}")
 
         return stats
 

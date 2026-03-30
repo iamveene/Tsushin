@@ -1177,13 +1177,24 @@ async def get_memory_layers(
 
     try:
         knowledge_service = KnowledgeService(db)
-        # get_user_facts returns a list of fact dicts with topic, key, value, confidence, id
+
+        # Item 37: Apply temporal decay if enabled for this agent
+        decay_config = None
+        try:
+            from agent.memory.temporal_decay import DecayConfig
+            decay_config = DecayConfig.from_agent(agent)
+            if not decay_config.enabled:
+                decay_config = None
+        except Exception:
+            pass
+
         user_facts = knowledge_service.get_user_facts(
             agent_id=agent_id,
-            user_id=sender_key
+            user_id=sender_key,
+            decay_config=decay_config
         )
         for fact in user_facts:
-            facts.append({
+            fact_entry = {
                 "id": fact.get("id"),
                 "topic": fact.get("topic", "unknown"),
                 "key": fact.get("key", ""),
@@ -1191,7 +1202,18 @@ async def get_memory_layers(
                 "fact_type": "user",
                 "confidence": fact.get("confidence", 1.0),
                 "source": "learned"
-            })
+            }
+            # Item 37: Include freshness data when decay is active
+            if fact.get("effective_confidence") is not None:
+                fact_entry["effective_confidence"] = fact["effective_confidence"]
+            if fact.get("freshness"):
+                fact_entry["freshness"] = fact["freshness"]
+            if fact.get("decay_factor") is not None:
+                fact_entry["decay_factor"] = fact["decay_factor"]
+            if fact.get("last_accessed_at"):
+                fact_entry["last_accessed_at"] = fact["last_accessed_at"]
+
+            facts.append(fact_entry)
         logger.info(f"Found {len(facts)} user facts for sender_key={sender_key}, agent_id={agent_id}")
     except Exception as e:
         logger.warning(f"Could not load facts: {e}")

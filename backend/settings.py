@@ -200,6 +200,13 @@ if not MCP_MESSAGES_DB_PATH:
     )
 
 
+# Item 38: Channel Health Monitor
+CHANNEL_HEALTH_CHECK_INTERVAL = int(get_env("TSN_CHANNEL_HEALTH_CHECK_INTERVAL", None, "30"))
+CHANNEL_CB_FAILURE_THRESHOLD = int(get_env("TSN_CHANNEL_CB_FAILURE_THRESHOLD", None, "3"))
+CHANNEL_CB_RECOVERY_TIMEOUT = int(get_env("TSN_CHANNEL_CB_RECOVERY_TIMEOUT", None, "60"))
+CHANNEL_HEALTH_ENABLED = get_env("TSN_CHANNEL_HEALTH_ENABLED", None, "true").lower() in ("true", "1", "yes")
+
+
 # Create log directory if it doesn't exist
 log_dir = Path(LOG_FILE).parent
 log_dir.mkdir(parents=True, exist_ok=True)

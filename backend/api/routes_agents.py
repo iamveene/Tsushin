@@ -131,6 +131,12 @@ class AgentResponse(BaseModel):
     semantic_search_results: Optional[int]  # Number of semantic results (1-50)
     semantic_similarity_threshold: Optional[float]  # Similarity threshold (0.0-1.0)
 
+    # Item 37: Temporal Memory Decay
+    memory_decay_enabled: Optional[bool] = None
+    memory_decay_lambda: Optional[float] = None
+    memory_decay_archive_threshold: Optional[float] = None
+    memory_decay_mmr_lambda: Optional[float] = None
+
     is_active: bool
     is_default: bool
     skills_count: Optional[int] = 0  # Number of enabled skills
@@ -170,6 +176,12 @@ class AgentCreate(BaseModel):
     context_char_limit: Optional[int] = Field(None, ge=100, le=100000, description="Context character limit (100-100000), null uses system default")
     # Note: enable_semantic_search is managed via AgentSkill table (/api/agent-skills endpoint)
 
+    # Item 37: Temporal Memory Decay
+    memory_decay_enabled: Optional[bool] = Field(False, description="Enable temporal memory decay")
+    memory_decay_lambda: Optional[float] = Field(0.01, ge=0.001, le=1.0, description="Decay rate (0.01 ~ 69-day half-life)")
+    memory_decay_archive_threshold: Optional[float] = Field(0.05, ge=0.0, le=1.0, description="Auto-archive below this threshold")
+    memory_decay_mmr_lambda: Optional[float] = Field(0.5, ge=0.0, le=1.0, description="MMR diversity weight (0=diverse, 1=relevant)")
+
     # Phase 10: Channel Configuration
     enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
@@ -201,6 +213,12 @@ class AgentUpdate(BaseModel):
     context_message_count: Optional[int] = Field(None, ge=1, le=5000, description="Group context messages (1-5000), null uses system default")
     context_char_limit: Optional[int] = Field(None, ge=100, le=100000, description="Context character limit (100-100000), null uses system default")
     # Note: enable_semantic_search is managed via AgentSkill table (/api/agent-skills endpoint)
+
+    # Item 37: Temporal Memory Decay
+    memory_decay_enabled: Optional[bool] = Field(None, description="Enable temporal memory decay")
+    memory_decay_lambda: Optional[float] = Field(None, ge=0.001, le=1.0, description="Decay rate")
+    memory_decay_archive_threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Auto-archive threshold")
+    memory_decay_mmr_lambda: Optional[float] = Field(None, ge=0.0, le=1.0, description="MMR diversity weight")
 
     # Phase 10: Channel Configuration
     enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack")
@@ -469,6 +487,12 @@ def list_agents(
             "semantic_search_results": agent.semantic_search_results,
             "semantic_similarity_threshold": agent.semantic_similarity_threshold,
 
+            # Item 37: Temporal Memory Decay
+            "memory_decay_enabled": getattr(agent, 'memory_decay_enabled', None),
+            "memory_decay_lambda": getattr(agent, 'memory_decay_lambda', None),
+            "memory_decay_archive_threshold": getattr(agent, 'memory_decay_archive_threshold', None),
+            "memory_decay_mmr_lambda": getattr(agent, 'memory_decay_mmr_lambda', None),
+
             "is_active": agent.is_active,
             "is_default": agent.is_default,
             "skills_count": skills_count,
@@ -581,6 +605,12 @@ def get_agent(
         "enable_semantic_search": agent.enable_semantic_search,
         "semantic_search_results": agent.semantic_search_results,
         "semantic_similarity_threshold": agent.semantic_similarity_threshold,
+
+        # Item 37: Temporal Memory Decay
+        "memory_decay_enabled": getattr(agent, 'memory_decay_enabled', None),
+        "memory_decay_lambda": getattr(agent, 'memory_decay_lambda', None),
+        "memory_decay_archive_threshold": getattr(agent, 'memory_decay_archive_threshold', None),
+        "memory_decay_mmr_lambda": getattr(agent, 'memory_decay_mmr_lambda', None),
 
         "is_active": agent.is_active,
         "is_default": agent.is_default,
@@ -748,6 +778,7 @@ def update_agent(
         "trigger_group_filters", "trigger_number_filters",
         "context_message_count", "context_char_limit", "enabled_channels",
         "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id", "discord_integration_id",
+        "memory_decay_enabled", "memory_decay_lambda", "memory_decay_archive_threshold", "memory_decay_mmr_lambda",
         "is_active", "is_default",
     }
     update_data = agent.model_dump(exclude_unset=True)
@@ -759,7 +790,16 @@ def update_agent(
     db.commit()
     db.refresh(db_agent)
 
-    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.AGENT_UPDATE, "agent", str(agent_id), {"name": db_agent.contact.friendly_name if db_agent.contact_id else str(agent_id)}, request)
+    try:
+        from models import Contact
+        contact_name = str(agent_id)
+        if db_agent.contact_id:
+            contact = db.query(Contact).filter(Contact.id == db_agent.contact_id).first()
+            if contact:
+                contact_name = contact.friendly_name
+        log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.AGENT_UPDATE, "agent", str(agent_id), {"name": contact_name}, request)
+    except Exception:
+        pass  # Audit logging should never break the update
 
     # Pass all required parameters when calling get_agent internally
     return get_agent(agent_id, db, current_user, ctx)

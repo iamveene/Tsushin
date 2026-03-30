@@ -90,16 +90,46 @@ async def get_memory_stats(
         - total_messages: Total messages across all conversations
         - total_embeddings: Number of vector embeddings
         - storage_size_mb: Estimated storage size
+        - decay_config: Temporal decay configuration (Item 37)
+        - freshness_distribution: Counts per freshness label (when decay enabled)
 
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
         service = MemoryManagementService(db, agent_id)
         stats = await service.get_memory_stats()
-        return stats.to_dict()
+        result = stats.to_dict()
+
+        # Item 37: Add decay config and freshness distribution
+        from agent.memory.temporal_decay import DecayConfig, compute_freshness_label
+        decay_config = DecayConfig.from_agent(agent)
+        result['decay_config'] = {
+            'enabled': decay_config.enabled,
+            'decay_lambda': decay_config.decay_lambda,
+            'archive_threshold': decay_config.archive_threshold,
+            'mmr_lambda': decay_config.mmr_lambda,
+        }
+
+        if decay_config.enabled:
+            from models import SemanticKnowledge
+            from datetime import datetime
+            now = datetime.utcnow()
+            facts = db.query(SemanticKnowledge).filter(
+                SemanticKnowledge.agent_id == agent_id
+            ).all()
+            freshness_dist = {'fresh': 0, 'fading': 0, 'stale': 0, 'archived': 0}
+            for fact in facts:
+                last_accessed = getattr(fact, 'last_accessed_at', None)
+                label = compute_freshness_label(
+                    last_accessed, now, decay_config.decay_lambda, decay_config.archive_threshold
+                )
+                freshness_dist[label['freshness']] += 1
+            result['freshness_distribution'] = freshness_dist
+
+        return result
     except Exception as e:
         logger.error(f"Error getting memory stats for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -284,4 +314,60 @@ async def reset_agent_memory(
         raise
     except Exception as e:
         logger.error(f"Error resetting memory for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ArchiveDecayedRequest(BaseModel):
+    dry_run: bool = Field(True, description="Preview only, don't actually archive")
+
+
+@router.post("/agents/{agent_id}/memory/archive-decayed")
+async def archive_decayed_facts(
+    agent_id: int,
+    request: ArchiveDecayedRequest = ArchiveDecayedRequest(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("agents.write")),
+    ctx: TenantContext = Depends(get_tenant_context)
+):
+    """
+    Archive (delete) facts whose decayed confidence falls below the agent's archive threshold.
+
+    Item 37: Temporal Memory Decay.
+
+    Use dry_run=true (default) to preview what would be archived.
+    Use dry_run=false to actually delete.
+
+    Returns:
+        - total_facts: Total facts for this agent
+        - archived_count: Number of facts archived (or would be)
+        - archived_facts: List of archived fact details
+        - dry_run: Whether this was a preview
+    """
+    agent = verify_agent_access(agent_id, db, ctx)
+
+    try:
+        from agent.memory.temporal_decay import DecayConfig
+        from agent.memory.knowledge_service import KnowledgeService
+
+        decay_config = DecayConfig.from_agent(agent)
+        if not decay_config.enabled:
+            return {
+                "total_facts": 0,
+                "archived_count": 0,
+                "archived_facts": [],
+                "dry_run": request.dry_run,
+                "message": "Temporal decay is not enabled for this agent"
+            }
+
+        knowledge_service = KnowledgeService(db)
+        result = knowledge_service.archive_decayed_facts(
+            agent_id=agent_id,
+            decay_lambda=decay_config.decay_lambda,
+            archive_threshold=decay_config.archive_threshold,
+            dry_run=request.dry_run
+        )
+        return result
+
+    except Exception as e:
+        logger.error(f"Error archiving decayed facts for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

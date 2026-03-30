@@ -114,7 +114,8 @@ class SemanticMemoryService:
         sender_key: str,
         current_message: str,
         max_semantic_results: int = 5,
-        similarity_threshold: float = 0.3
+        similarity_threshold: float = 0.3,
+        decay_config=None
     ) -> Dict:
         """
         Get hybrid context: recent messages + semantically relevant messages.
@@ -124,6 +125,7 @@ class SemanticMemoryService:
             current_message: Current message to find context for
             max_semantic_results: Max semantic search results
             similarity_threshold: Minimum similarity score (0-1, lower distance = more similar)
+            decay_config: Optional DecayConfig for temporal decay and MMR reranking
 
         Returns:
             Dictionary containing:
@@ -141,30 +143,129 @@ class SemanticMemoryService:
         recent = self.ring_buffer.get_messages(sender_key)
         context['recent_messages'] = recent
 
+        # Determine if decay is active
+        decay_enabled = (
+            decay_config is not None
+            and getattr(decay_config, 'enabled', False)
+        )
+
         # Get semantically relevant messages (if enabled)
         if self.enable_semantic and current_message:
             try:
-                results = self.vector_store.search_similar(
-                    query_text=current_message,
-                    sender_key=sender_key,
-                    limit=max_semantic_results
-                )
+                if decay_enabled:
+                    # Over-fetch for decay filtering + MMR reranking
+                    fetch_limit = max_semantic_results * 3
+                    results, query_embedding, result_embeddings = \
+                        self.vector_store.search_similar_with_embeddings(
+                            query_text=current_message,
+                            sender_key=sender_key,
+                            limit=fetch_limit
+                        )
+                else:
+                    results = self.vector_store.search_similar(
+                        query_text=current_message,
+                        sender_key=sender_key,
+                        limit=max_semantic_results
+                    )
 
-                # Filter by similarity threshold
-                # ChromaDB returns distance (lower = more similar)
-                # Convert to similarity: similarity = 1 / (1 + distance)
                 semantic_messages = []
-                for result in results:
-                    distance = result['distance']
-                    similarity = 1 / (1 + distance)
+                accessed_ids = []
 
-                    if similarity >= similarity_threshold:
-                        semantic_messages.append({
+                if decay_enabled:
+                    from .temporal_decay import (
+                        apply_decay_to_score, compute_freshness_label,
+                        should_archive, mmr_rerank
+                    )
+                    now = datetime.utcnow()
+
+                    # Build candidates with decayed scores
+                    candidates = []
+                    for idx, result in enumerate(results):
+                        distance = result['distance']
+                        raw_similarity = 1 / (1 + distance)
+
+                        if raw_similarity < similarity_threshold:
+                            continue
+
+                        # Parse last_accessed_at from metadata
+                        la_str = result.get('last_accessed_at')
+                        last_accessed = None
+                        if la_str:
+                            try:
+                                last_accessed = datetime.fromisoformat(la_str.replace('Z', ''))
+                            except (ValueError, AttributeError):
+                                pass
+
+                        decayed = apply_decay_to_score(
+                            raw_similarity, last_accessed, now, decay_config.decay_lambda
+                        )
+
+                        if should_archive(decayed, decay_config.archive_threshold):
+                            continue
+
+                        freshness = compute_freshness_label(
+                            last_accessed, now, decay_config.decay_lambda,
+                            decay_config.archive_threshold
+                        )
+
+                        emb = result_embeddings[idx] if idx < len(result_embeddings) else []
+
+                        candidates.append({
                             'role': result.get('role', 'user'),
                             'content': result['text'],
-                            'similarity': similarity,
-                            'message_id': result['message_id']
+                            'similarity': raw_similarity,
+                            'decayed_score': decayed,
+                            'message_id': result['message_id'],
+                            'embedding': emb,
+                            'freshness': freshness['freshness'],
+                            'decay_factor': freshness['decay_factor'],
+                            'days_since_access': freshness['days_since_access'],
                         })
+
+                    # Apply MMR reranking
+                    if candidates and query_embedding:
+                        reranked = mmr_rerank(
+                            candidates, query_embedding,
+                            mmr_lambda=decay_config.mmr_lambda,
+                            top_k=max_semantic_results
+                        )
+                    else:
+                        reranked = candidates[:max_semantic_results]
+
+                    for c in reranked:
+                        sem_msg = {
+                            'role': c['role'],
+                            'content': c['content'],
+                            'similarity': c['similarity'],
+                            'decayed_score': c['decayed_score'],
+                            'message_id': c['message_id'],
+                            'freshness': c['freshness'],
+                            'decay_factor': c['decay_factor'],
+                            'days_since_access': c['days_since_access'],
+                        }
+                        semantic_messages.append(sem_msg)
+                        accessed_ids.append(c['message_id'])
+
+                    # Update access times for returned results
+                    if accessed_ids:
+                        try:
+                            self.vector_store.update_access_time(accessed_ids)
+                        except Exception as e:
+                            self.logger.warning(f"Failed to update access times: {e}")
+
+                else:
+                    # Original behavior (no decay)
+                    for result in results:
+                        distance = result['distance']
+                        similarity = 1 / (1 + distance)
+
+                        if similarity >= similarity_threshold:
+                            semantic_messages.append({
+                                'role': result.get('role', 'user'),
+                                'content': result['text'],
+                                'similarity': similarity,
+                                'message_id': result['message_id']
+                            })
 
                 context['semantic_messages'] = semantic_messages
                 self.logger.debug(f"Found {len(semantic_messages)} semantic matches above threshold")

@@ -341,6 +341,12 @@ class Agent(Base):
     semantic_similarity_threshold = Column(Float, default=0.5)  # Minimum similarity threshold (0.0-1.0)
     chroma_db_path = Column(String(500), nullable=True)  # Per-agent ChromaDB path
 
+    # v0.6.0 Item 37: Temporal Memory Decay
+    memory_decay_enabled = Column(Boolean, default=False)  # Master switch (existing agents unaffected)
+    memory_decay_lambda = Column(Float, default=0.01)  # Exponential decay rate (0.01 ≈ 69-day half-life)
+    memory_decay_archive_threshold = Column(Float, default=0.05)  # Auto-archive below this effective score
+    memory_decay_mmr_lambda = Column(Float, default=0.5)  # MMR diversity weight (0=max diversity, 1=pure relevance)
+
     # Phase 10: Channel Configuration
     # Determines which channels this agent can interact through
     enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack, discord
@@ -559,6 +565,7 @@ class SemanticKnowledge(Base):
     confidence = Column(Float, default=1.0)  # Confidence score (0.0-1.0)
     learned_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_accessed_at = Column(DateTime, default=datetime.utcnow)  # v0.6.0 Item 37: Temporal Decay
 
 
 class SharedMemory(Base):
@@ -578,6 +585,7 @@ class SharedMemory(Base):
     tenant_id = Column(String(50), nullable=True, index=True)  # CRIT-010: Multi-tenancy isolation
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_accessed_at = Column(DateTime, default=datetime.utcnow)  # v0.6.0 Item 37: Temporal Decay
 
 
 class AgentRun(Base):
@@ -2696,6 +2704,11 @@ class WhatsAppMCPInstance(Base):
     health_status = Column(String(20), default="unknown")  # unknown, healthy, unhealthy
     last_health_check = Column(DateTime, nullable=True)
 
+    # v0.6.0 Item 38: Circuit Breaker State
+    circuit_breaker_state = Column(String(20), default="closed")  # closed, open, half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
+
     # QR Code for WhatsApp authentication
     qr_code_data = Column(Text, nullable=True)  # Base64-encoded QR code image
     qr_code_expires_at = Column(DateTime, nullable=True)
@@ -2762,6 +2775,11 @@ class TelegramBotInstance(Base):
     status = Column(String(20), default="inactive")  # inactive, active, error
     health_status = Column(String(20), default="unknown")  # unknown, healthy, unhealthy
     last_health_check = Column(DateTime, nullable=True)
+
+    # v0.6.0 Item 38: Circuit Breaker State
+    circuit_breaker_state = Column(String(20), default="closed")  # closed, open, half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
 
     # Webhook configuration (optional, polling is default)
@@ -2811,10 +2829,17 @@ class SlackIntegration(Base):
     bot_user_id = Column(String(50))                         # Bot's Slack user ID
     is_active = Column(Boolean, default=True)
     status = Column(String(20), default="inactive")          # inactive/connected/error
+    health_status = Column(String(20), default="unknown")    # v0.6.0 Item 38: unknown/healthy/unhealthy
+    last_health_check = Column(DateTime, nullable=True)      # v0.6.0 Item 38
     dm_policy = Column(String(20), default="allowlist")      # open/allowlist/disabled
     allowed_channels = Column(JSON, default=[])              # List of allowed channel_ids
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
+
+    # v0.6.0 Item 38: Circuit Breaker State
+    circuit_breaker_state = Column(String(20), default="closed")  # closed, open, half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
 
     __table_args__ = (
         Index("idx_slack_integration_tenant", "tenant_id"),
@@ -2841,11 +2866,18 @@ class DiscordIntegration(Base):
     bot_user_id = Column(String(50))                            # Bot's Discord user ID
     is_active = Column(Boolean, default=True)
     status = Column(String(20), default="inactive")             # inactive/connected/error
+    health_status = Column(String(20), default="unknown")       # v0.6.0 Item 38: unknown/healthy/unhealthy
+    last_health_check = Column(DateTime, nullable=True)         # v0.6.0 Item 38
     dm_policy = Column(String(20), default="allowlist")         # open/allowlist/disabled
     allowed_guilds = Column(JSON, default=[])                   # List of allowed guild (server) IDs
     guild_channel_config = Column(JSON, default={})             # Per-guild channel configuration
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
+
+    # v0.6.0 Item 38: Circuit Breaker State
+    circuit_breaker_state = Column(String(20), default="closed")  # closed, open, half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
 
     __table_args__ = (
         Index("idx_discord_integration_tenant", "tenant_id"),
@@ -3232,6 +3264,154 @@ class MessageQueue(Base):
     __table_args__ = (
         Index("ix_mq_tenant_agent_status", "tenant_id", "agent_id", "status"),
         Index("ix_mq_pending_priority", "status", "priority", "queued_at"),
+    )
+
+
+# ============================================================================
+# v0.6.0 Item 38: Channel Health Monitor with Circuit Breakers
+# ============================================================================
+
+class ChannelHealthEvent(Base):
+    """
+    v0.6.0 Item 38: Records circuit breaker state transitions for audit trail.
+    Each row represents a single CLOSED→OPEN, OPEN→HALF_OPEN, or HALF_OPEN→CLOSED transition.
+    """
+    __tablename__ = "channel_health_event"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    channel_type = Column(String(20), nullable=False)           # whatsapp, telegram, slack, discord
+    instance_id = Column(Integer, nullable=False, index=True)   # FK conceptual to respective instance table
+    event_type = Column(String(50), nullable=True)              # e.g. "closed_to_open"
+    old_state = Column(String(20), nullable=False)              # closed, open, half_open
+    new_state = Column(String(20), nullable=False)
+    reason = Column(Text, nullable=True)                        # Human-readable transition reason
+    health_status = Column(String(20), nullable=True)           # healthy, unhealthy, degraded
+    latency_ms = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_health_event_tenant_channel", "tenant_id", "channel_type"),
+        Index("ix_health_event_instance_created", "instance_id", "created_at"),
+    )
+
+
+class ChannelAlertConfig(Base):
+    """
+    v0.6.0 Item 38: Per-tenant alert configuration for channel health notifications.
+    Supports webhook and email alert channels with configurable cooldown.
+    """
+    __tablename__ = "channel_alert_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, unique=True, index=True)
+    webhook_url = Column(String(500), nullable=True)            # Slack/Discord/generic webhook URL
+    email_recipients = Column(JSON, default=list)               # List of email addresses
+    alert_on_open = Column(Boolean, default=True)               # Alert when CB opens
+    alert_on_recovery = Column(Boolean, default=True)           # Alert when CB closes (recovered)
+    cooldown_seconds = Column(Integer, default=300)             # Min time between alerts for same instance
+    is_enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ============================================================================
+# Agent-to-Agent Communication (v0.6.0 Item 15)
+# Enables agents within the same tenant to message each other,
+# delegate tasks, and discover capabilities.
+# ============================================================================
+
+class AgentCommunicationPermission(Base):
+    """
+    Controls which agents are allowed to communicate with which other agents.
+    Both agents must share the same tenant_id.
+    """
+    __tablename__ = "agent_communication_permission"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    source_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    is_enabled = Column(Boolean, default=True)
+    max_depth = Column(Integer, default=3)  # Max delegation depth for this pair
+    rate_limit_rpm = Column(Integer, default=30)  # Rate limit for this pair
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    source_agent = relationship("Agent", foreign_keys=[source_agent_id], backref="outgoing_comm_permissions")
+    target_agent = relationship("Agent", foreign_keys=[target_agent_id], backref="incoming_comm_permissions")
+
+    __table_args__ = (
+        UniqueConstraint("source_agent_id", "target_agent_id", name="uq_agent_comm_perm_pair"),
+        Index("ix_agent_comm_perm_tenant", "tenant_id"),
+    )
+
+
+class AgentCommunicationSession(Base):
+    """
+    Tracks a complete inter-agent communication exchange.
+    Supports nested delegation via parent_session_id chain.
+    """
+    __tablename__ = "agent_communication_session"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    initiator_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    original_sender_key = Column(String(255), nullable=True)  # End-user who triggered this
+    original_message_preview = Column(String(200), nullable=True)  # First 200 chars of user message
+    session_type = Column(String(20), default="sync")  # sync / async / delegation
+    status = Column(String(20), default="pending")  # pending / in_progress / completed / failed / timeout / blocked
+    depth = Column(Integer, default=0)  # Current delegation depth (0 = first call)
+    max_depth = Column(Integer, default=3)
+    timeout_seconds = Column(Integer, default=30)
+    total_messages = Column(Integer, default=0)
+    error_text = Column(Text, nullable=True)
+    parent_session_id = Column(Integer, ForeignKey("agent_communication_session.id", ondelete="SET NULL"), nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    initiator_agent = relationship("Agent", foreign_keys=[initiator_agent_id])
+    target_agent_rel = relationship("Agent", foreign_keys=[target_agent_id])
+    parent_session = relationship("AgentCommunicationSession", remote_side="AgentCommunicationSession.id", backref="child_sessions")
+    messages = relationship("AgentCommunicationMessage", back_populates="session", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_agent_comm_session_tenant_status", "tenant_id", "status"),
+        Index("ix_agent_comm_session_initiator", "initiator_agent_id", "started_at"),
+    )
+
+
+class AgentCommunicationMessage(Base):
+    """
+    Individual messages within an inter-agent communication session.
+    """
+    __tablename__ = "agent_communication_message"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("agent_communication_session.id", ondelete="CASCADE"), nullable=False, index=True)
+    from_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    to_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    direction = Column(String(10), nullable=False)  # request / response
+    message_content = Column(Text, nullable=False)
+    message_preview = Column(String(500), nullable=True)  # First 500 chars for listings
+    context_transferred = Column(JSON, nullable=True)  # Metadata passed along
+    model_used = Column(String(100), nullable=True)
+    token_usage_json = Column(JSON, nullable=True)
+    execution_time_ms = Column(Integer, nullable=True)
+    sentinel_analyzed = Column(Boolean, default=False)
+    sentinel_result = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    session = relationship("AgentCommunicationSession", back_populates="messages")
+    from_agent = relationship("Agent", foreign_keys=[from_agent_id])
+    to_agent = relationship("Agent", foreign_keys=[to_agent_id])
+
+    __table_args__ = (
+        Index("ix_agent_comm_msg_session", "session_id", "created_at"),
     )
 
 

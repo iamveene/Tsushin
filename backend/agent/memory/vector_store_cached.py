@@ -199,6 +199,14 @@ class CachedVectorStore:
         stats['cache_stats'] = self.get_cache_stats()
         return stats
 
+    def update_access_time(self, message_ids):
+        """Delegate access time update to underlying vector store."""
+        return self.vector_store.update_access_time(message_ids)
+
+    def search_similar_with_embeddings(self, *args, **kwargs):
+        """Delegate search with embeddings to underlying vector store (not cached)."""
+        return self.vector_store.search_similar_with_embeddings(*args, **kwargs)
+
     # Expose underlying attributes for compatibility
     @property
     def embedding_service(self):

@@ -86,6 +86,11 @@ class MultiAgentMemoryManager:
                     'model_name': agent.model_name,
                     'temperature': getattr(agent, 'temperature', None),
                     'max_tokens': getattr(agent, 'max_tokens', None),
+                    # Item 37: Temporal memory decay fields
+                    'memory_decay_enabled': getattr(agent, 'memory_decay_enabled', False),
+                    'memory_decay_lambda': getattr(agent, 'memory_decay_lambda', None),
+                    'memory_decay_archive_threshold': getattr(agent, 'memory_decay_archive_threshold', None),
+                    'memory_decay_mmr_lambda': getattr(agent, 'memory_decay_mmr_lambda', None),
                 })
                 self.logger.info(f"Fetched agent {agent_id} LLM config: provider={agent.model_provider}, model={agent.model_name}")
                 return agent_config
