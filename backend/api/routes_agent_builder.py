@@ -54,6 +54,7 @@ SKILL_METADATA = {
     "adaptive_personality": {"category": "special", "name": "Adaptive Personality", "description": "Dynamic tone adaptation"},
     "knowledge_sharing": {"category": "special", "name": "Knowledge Sharing", "description": "Share knowledge across agents"},
     "agent_switcher": {"category": "special", "name": "Agent Switcher", "description": "Switch between agents in DM"},
+    "agent_communication": {"category": "special", "name": "Agent Communication", "description": "Ask other agents questions or delegate tasks"},
 }
 
 EXCLUDED_SKILL_TYPES = {"automation"}
