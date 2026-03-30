@@ -813,6 +813,7 @@ class TsushinInstaller:
         # Auto-generate security keys
         jwt_secret = secrets.token_urlsafe(32)
         asana_encryption_key = Fernet.generate_key().decode()
+        postgres_password = secrets.token_urlsafe(24)
 
         # Get absolute path for HOST_BACKEND_DATA_PATH
         host_backend_data_path = str(self.backend_data_dir.absolute())
@@ -840,6 +841,7 @@ TSN_LOG_LEVEL=INFO
 TSN_POLL_INTERVAL_MS=3000
 
 # Database
+POSTGRES_PASSWORD={postgres_password}
 INTERNAL_DB_PATH=/app/data/agent.db
 TSN_CHROMA_DIR=/app/data/chroma
 TSN_WORKSPACE_DIR=/app/data/workspace
