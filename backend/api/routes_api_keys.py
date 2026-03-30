@@ -90,6 +90,9 @@ SUPPORTED_SERVICES = {
     'google_flights': 'Google Flights (SerpApi)',
     'serpapi': 'SerpAPI (Google Search)',
     'vertex_ai': 'Vertex AI (Google Cloud)',
+    'vertex_ai_project_id': 'Vertex AI Project ID',
+    'vertex_ai_region': 'Vertex AI Region',
+    'vertex_ai_sa_email': 'Vertex AI Service Account Email',
 }
 
 

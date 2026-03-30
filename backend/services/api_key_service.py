@@ -32,6 +32,9 @@ ENV_KEY_MAP = {
     'deepseek': 'DEEPSEEK_API_KEY',
     'elevenlabs': 'ELEVENLABS_API_KEY',
     'vertex_ai': 'VERTEX_AI_PRIVATE_KEY',  # Service account private key (PEM)
+    'vertex_ai_project_id': 'VERTEX_AI_PROJECT_ID',
+    'vertex_ai_region': 'VERTEX_AI_REGION',
+    'vertex_ai_sa_email': 'VERTEX_AI_SERVICE_ACCOUNT_EMAIL',
 }
 
 
