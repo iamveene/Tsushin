@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from models import AgentKnowledge, KnowledgeChunk, Agent
 from models_rbac import User
 from agent.knowledge.knowledge_service import KnowledgeService
-from auth_dependencies import get_current_user_required, get_tenant_context, TenantContext
+from auth_dependencies import get_current_user_required, get_tenant_context, TenantContext, require_permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -157,7 +157,8 @@ async def upload_knowledge(
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.write")),
 ):
     """
     Upload a document to the agent's knowledge base (requires authentication).
@@ -247,7 +248,8 @@ async def upload_knowledge(
 def list_knowledge(
     agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get all knowledge documents for an agent (requires authentication)."""
     # Verify agent exists and user has access
@@ -267,7 +269,8 @@ def list_knowledge(
 def get_knowledge_stats(
     agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get statistics about agent's knowledge base (requires authentication)."""
     # Verify agent exists and user has access
@@ -286,7 +289,8 @@ def get_knowledge_detail(
     agent_id: int,
     knowledge_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get details of a specific knowledge document (requires authentication)."""
     # Verify agent exists and user has access
@@ -313,7 +317,8 @@ def get_knowledge_chunks(
     agent_id: int,
     knowledge_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get all chunks for a knowledge document (requires authentication)."""
     # Verify agent exists and user has access
@@ -341,7 +346,8 @@ def delete_knowledge(
     agent_id: int,
     knowledge_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.delete")),
 ):
     """Delete a knowledge document and all its chunks (requires authentication)."""
     # Verify agent exists and user has access
@@ -373,7 +379,8 @@ def search_knowledge(
     agent_id: int,
     request: SearchRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """
     Search agent's knowledge base using semantic similarity (requires authentication).
@@ -404,7 +411,8 @@ def reprocess_knowledge(
     knowledge_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.write")),
 ):
     """Reprocess a knowledge document (re-chunk and re-embed, requires authentication)."""
     # Verify agent exists and user has access

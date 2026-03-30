@@ -145,6 +145,11 @@ def seed_rbac_defaults(session):
         ("api_clients.read", "api_clients", "read", "View API clients"),
         ("api_clients.write", "api_clients", "write", "Create and manage API clients"),
         ("api_clients.delete", "api_clients", "delete", "Revoke API clients"),
+        # Scheduler (v0.6.0)
+        ("scheduler.read", "scheduler", "read", "View scheduled events"),
+        ("scheduler.create", "scheduler", "create", "Create scheduled events"),
+        ("scheduler.edit", "scheduler", "edit", "Edit scheduled events"),
+        ("scheduler.cancel", "scheduler", "cancel", "Cancel scheduled events"),
     ]
 
     # Create permissions
@@ -192,6 +197,7 @@ def seed_rbac_defaults(session):
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
             "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
+            "scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel",  # v0.6.0: Scheduler
         ],
         "admin": [
             "agents.read", "agents.write", "agents.delete", "agents.execute",
@@ -210,6 +216,7 @@ def seed_rbac_defaults(session):
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
             "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
+            "scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel",  # v0.6.0: Scheduler
         ],
         "member": [
             "agents.read", "agents.write", "agents.execute",
@@ -225,6 +232,7 @@ def seed_rbac_defaults(session):
             "analytics.read",
             "tools.read", "tools.execute",  # Phase 9.3: Members can read and execute but not manage tools
             "watcher.read",  # Dashboard access
+            "scheduler.read", "scheduler.create", "scheduler.edit",  # v0.6.0: Scheduler (no cancel)
         ],
         "readonly": [
             "agents.read", "contacts.read", "memory.read", "flows.read",
@@ -233,6 +241,7 @@ def seed_rbac_defaults(session):
             "users.read", "org.settings.read", "analytics.read",
             "tools.read",  # Phase 9.3: Read-only can view tools
             "watcher.read",  # Dashboard access (view only)
+            "scheduler.read",  # v0.6.0: Scheduler (view only)
         ],
     }
 
@@ -519,6 +528,59 @@ def ensure_rbac_permissions(session):
                 perms_added = True
         if perms_added:
             session.commit()
+
+    # v0.6.0: Ensure scheduler permissions exist
+    scheduler_permissions_data = [
+        ("scheduler.read", "scheduler", "read", "View scheduled events"),
+        ("scheduler.create", "scheduler", "create", "Create scheduled events"),
+        ("scheduler.edit", "scheduler", "edit", "Edit scheduled events"),
+        ("scheduler.cancel", "scheduler", "cancel", "Cancel scheduled events"),
+    ]
+
+    # Role assignments: owner/admin get all, member gets read/create/edit, readonly gets read
+    scheduler_role_assignments = {
+        "owner": ["scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel"],
+        "admin": ["scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel"],
+        "member": ["scheduler.read", "scheduler.create", "scheduler.edit"],
+        "readonly": ["scheduler.read"],
+    }
+
+    scheduler_perms_added = False
+    for name, resource, action, description in scheduler_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+
+            for role_name, role_perms in scheduler_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        rp = RolePermission(role_id=role.id, permission_id=perm.id)
+                        session.add(rp)
+                        print(f"[RBAC] Assigned {name} to role: {role_name}")
+
+            scheduler_perms_added = True
+        else:
+            for role_name, role_perms in scheduler_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            scheduler_perms_added = True
+
+    if scheduler_perms_added:
+        session.commit()
+        print("[RBAC] Scheduler permissions ensured successfully")
 
 
 def seed_slash_commands(session):

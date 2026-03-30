@@ -14,7 +14,7 @@ export function usePermission() {
     isGlobalAdmin: user?.is_global_admin || false,
     canManageUsers: hasPermission('users.manage'),
     canInviteUsers: hasPermission('users.invite'),
-    canManageBilling: hasPermission('billing.manage'),
+    canManageBilling: hasPermission('billing.write'),
     canEditOrg: hasPermission('org.settings.write'),
     canCreateAgents: hasPermission('agents.write'),
     canExecuteAgents: hasPermission('agents.execute'),

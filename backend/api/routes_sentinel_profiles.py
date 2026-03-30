@@ -390,6 +390,7 @@ def _build_assignment_response(
 async def list_assignments(
     agent_id: Optional[int] = Query(None, description="Filter by agent ID"),
     skill_type: Optional[str] = Query(None, description="Filter by skill type"),
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -460,6 +461,7 @@ async def remove_assignment(
 async def get_effective_config(
     agent_id: Optional[int] = Query(None, description="Agent ID for resolution"),
     skill_type: Optional[str] = Query(None, description="Skill type for resolution"),
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -532,6 +534,7 @@ async def get_effective_config(
 
 @router.get("/hierarchy")
 async def get_hierarchy(
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -549,6 +552,7 @@ async def get_hierarchy(
 @router.get("", response_model=List[SentinelProfileResponse])
 async def list_profiles(
     include_system: bool = Query(True, description="Include system built-in profiles"),
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -586,6 +590,7 @@ async def create_profile(
 @router.get("/{profile_id}", response_model=SentinelProfileDetailResponse)
 async def get_profile(
     profile_id: int,
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
