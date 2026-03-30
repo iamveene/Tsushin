@@ -31,7 +31,7 @@ class AIClient:
         Initialize AI client with database session for API key loading.
 
         Args:
-            provider: AI provider ('anthropic', 'openai', 'gemini', 'ollama', 'openrouter', 'groq', 'grok', 'deepseek')
+            provider: AI provider ('anthropic', 'openai', 'gemini', 'ollama', 'openrouter', 'groq', 'grok', 'deepseek', 'vertex_ai')
             model_name: Model identifier
             db: Database session for loading API keys (optional, falls back to env vars)
             token_tracker: TokenTracker instance for usage tracking (Phase 7.2)
