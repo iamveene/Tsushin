@@ -93,6 +93,7 @@ export function usePlaygroundWebSocket(
         content: streamingMessageRef.current,
         timestamp: message.timestamp || new Date().toISOString(),
         message_id: message.message_id || `msg_${Date.now()}`,
+        image_url: message.image_url || undefined,  // Phase 6: Image generation
         metadata: {
           tokenCount: message.token_usage?.total,
           duration,

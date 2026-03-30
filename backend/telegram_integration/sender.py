@@ -58,6 +58,19 @@ class TelegramSender:
             reply_to_message_id=reply_to
         )
 
+    async def send_photo(
+        self,
+        chat_id: int,
+        photo_path: str,
+        caption: Optional[str] = None
+    ) -> bool:
+        """Send photo/image message."""
+        return await self.client.send_photo(
+            chat_id=chat_id,
+            photo=photo_path,
+            caption=caption
+        )
+
     async def send_audio(
         self,
         chat_id: int,

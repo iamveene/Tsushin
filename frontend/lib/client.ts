@@ -1377,6 +1377,7 @@ export interface PlaygroundChatResponse {
   thread_renamed?: boolean
   new_thread_title?: string
   kb_used?: KBUsageItem[]  // KB usage tracking
+  image_url?: string  // Phase 6: Generated image URL
 }
 
 export interface PlaygroundMessage {
@@ -1394,6 +1395,7 @@ export interface PlaygroundMessage {
   is_bookmarked?: boolean  // Phase 14.2: Bookmark flag
   bookmarked_at?: string  // Phase 14.2: Bookmark timestamp
   kb_used?: KBUsageItem[]  // KB usage tracking
+  image_url?: string  // Phase 6: Generated image URL
 }
 
 // Phase 14.0: Audio capabilities response

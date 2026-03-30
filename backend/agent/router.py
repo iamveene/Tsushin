@@ -477,6 +477,15 @@ class AgentRouter:
                     self.logger.error("TelegramSender not initialized")
                     return False
 
+                # Phase 6: Send photo if media_path is provided (image generation)
+                if media_path:
+                    self.logger.info(f"Sending photo to Telegram chat {recipient}: {media_path}")
+                    return await self.telegram_sender.send_photo(
+                        chat_id=int(recipient),
+                        photo_path=media_path,
+                        caption=message_text or None
+                    )
+
                 return await self.telegram_sender.send_message(
                     chat_id=int(recipient),
                     message=message_text
