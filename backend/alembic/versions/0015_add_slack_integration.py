@@ -45,10 +45,10 @@ def upgrade():
         op.create_index('idx_slack_integration_status', 'slack_integration', ['status'])
 
     # --- agents.slack_integration_id ---
-    if 'agents' in existing_tables:
-        cols = [c['name'] for c in inspector.get_columns('agents')]
+    if 'agent' in existing_tables:
+        cols = [c['name'] for c in inspector.get_columns('agent')]
         if 'slack_integration_id' not in cols:
-            op.add_column('agents',
+            op.add_column('agent',
                           sa.Column('slack_integration_id', sa.Integer(), nullable=True))
 
     # --- config.slack_encryption_key ---
@@ -64,10 +64,10 @@ def downgrade():
     inspector = sa.inspect(bind)
     existing_tables = inspector.get_table_names()
 
-    if 'agents' in existing_tables:
-        cols = [c['name'] for c in inspector.get_columns('agents')]
+    if 'agent' in existing_tables:
+        cols = [c['name'] for c in inspector.get_columns('agent')]
         if 'slack_integration_id' in cols:
-            op.drop_column('agents', 'slack_integration_id')
+            op.drop_column('agent', 'slack_integration_id')
 
     if 'config' in existing_tables:
         cols = [c['name'] for c in inspector.get_columns('config')]
