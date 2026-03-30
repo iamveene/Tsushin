@@ -24,7 +24,7 @@ import {
 import '@xyflow/react/dist/style.css'
 
 import { nodeTypes } from './nodes'
-import { GraphNode, GraphEdge, AgentNodeData, AgentSecurityNodeData, SkillSecurityNodeData, ChannelNodeData, SkillNodeData, KnowledgeSummaryNodeData, SkillCategoryNodeData, SkillProviderNodeData, SecurityDetectionMode } from './types'
+import { GraphNode, GraphEdge, AgentNodeData, AgentSecurityNodeData, SkillSecurityNodeData, ChannelNodeData, SkillNodeData, KnowledgeSummaryNodeData, SkillCategoryNodeData, SkillProviderNodeData, SecurityDetectionMode, A2ASessionInfo } from './types'
 import type { LayoutOptions } from './layout'
 import { DEFAULT_LAYOUT_OPTIONS } from './layout'
 // Import useAutoLayout directly to avoid SSR issues (this file is dynamically imported)
@@ -48,6 +48,10 @@ export interface ActivityState {
   recentKbUse: Map<number, { docCount: number; chunkCount: number; timestamp: number }>
   fadingAgents: Set<number>
   fadingChannels: Set<string>
+  // A2A real-time session state (Group 5)
+  activeA2ASessions?: Map<string, A2ASessionInfo>
+  fadingA2ASessions?: Set<string>
+  agentA2ADepths?: Map<number, number>
 }
 
 interface GraphCanvasProps {
@@ -906,18 +910,20 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
       if (!activityState) return
 
       setNodes(prev => prev.map(node => {
-        // Agent nodes - set isProcessing, hasActiveSkill, hasActiveKb, isFading
+        // Agent nodes - set isProcessing, hasActiveSkill, hasActiveKb, isFading, a2aDepth
         if (node.data.type === 'agent') {
           const agentData = node.data as AgentNodeData
           const isProcessing = activityState.processingAgents.has(agentData.id)
           const isFading = activityState.fadingAgents.has(agentData.id)
           const hasActiveSkill = activityState.recentSkillUse.has(agentData.id)
           const hasActiveKb = activityState.recentKbUse.has(agentData.id)
+          const a2aDepth = activityState.agentA2ADepths?.get(agentData.id) ?? 0
           if (isProcessing !== (agentData.isProcessing ?? false) ||
               isFading !== (agentData.isFading ?? false) ||
               hasActiveSkill !== (agentData.hasActiveSkill ?? false) ||
-              hasActiveKb !== (agentData.hasActiveKb ?? false)) {
-            return { ...node, data: { ...agentData, isProcessing, isFading, hasActiveSkill, hasActiveKb } }
+              hasActiveKb !== (agentData.hasActiveKb ?? false) ||
+              a2aDepth !== (agentData.a2aDepth ?? 0)) {
+            return { ...node, data: { ...agentData, isProcessing, isFading, hasActiveSkill, hasActiveKb, a2aDepth } }
           }
         }
 
@@ -1059,6 +1065,26 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
           if (agentId !== null && activityState.recentSkillUse.has(agentId)) {
             const isFading = activityState.fadingAgents.has(agentId)
             className = isFading ? 'edge-fading-teal' : 'edge-active-teal'
+          }
+        }
+
+        // A2A edges — amber glow when an active/fading A2A session involves both endpoints
+        if (edge.id.startsWith('a2a-') && activityState.activeA2ASessions?.size) {
+          const srcAgentId = getAgentId(source)
+          const tgtAgentId = getAgentId(target)
+          if (srcAgentId !== null && tgtAgentId !== null) {
+            activityState.activeA2ASessions.forEach((session, sessionKey) => {
+              if (className) return // already set
+              const matches = (session.initiatorId === srcAgentId && session.targetId === tgtAgentId) ||
+                (session.initiatorId === tgtAgentId && session.targetId === srcAgentId)
+              if (!matches) return
+              const isFading = activityState.fadingA2ASessions?.has(sessionKey) ?? false
+              if (isFading) {
+                className = 'edge-fading-amber'
+              } else {
+                className = session.sessionType === 'delegate' ? 'edge-active-amber-delegation' : 'edge-active-amber'
+              }
+            })
           }
         }
 

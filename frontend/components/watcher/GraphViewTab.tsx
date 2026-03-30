@@ -104,7 +104,10 @@ export default function GraphViewTab() {
     recentKbUse,
     fadingAgents,
     fadingChannels,
-    isConnected: isActivityConnected
+    isConnected: isActivityConnected,
+    activeA2ASessions,
+    fadingA2ASessions,
+    agentA2ADepths,
   } = useWatcherActivity(token, {
     enabled: viewType === 'agents' // Only connect when viewing agents
   })
@@ -113,8 +116,12 @@ export default function GraphViewTab() {
   // GraphCanvas merges this into React Flow's internal node state via useEffect
   const activityState = useMemo(() => {
     if (viewType !== 'agents') return undefined
-    return { processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels }
-  }, [viewType, processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels])
+    return {
+      processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels,
+      activeA2ASessions, fadingA2ASessions, agentA2ADepths,
+    }
+  }, [viewType, processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels,
+      activeA2ASessions, fadingA2ASessions, agentA2ADepths])
 
   // Global refresh integration - listen for refresh events from header button
   useEffect(() => {

@@ -55,6 +55,9 @@ function AgentNode(props: NodeProps<AgentNodeData>) {
   const isFading = data.isFading ?? false
   const hasActiveSkill = data.hasActiveSkill ?? false
 
+  // A2A: depth badge during active agent-to-agent delegation chains
+  const a2aDepth = data.a2aDepth ?? 0
+
   // Phase 5: Check if agent has expandable content
   const hasExpandableContent = (data.skillsCount ?? 0) > 0 || data.hasKnowledgeBase
 
@@ -151,6 +154,16 @@ function AgentNode(props: NodeProps<AgentNodeData>) {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
                 </svg>
                 {data.skillsCount}
+              </span>
+            )}
+
+            {/* A2A depth badge — shown when this agent is part of an active delegation chain */}
+            {a2aDepth > 0 && (
+              <span
+                className="a2a-depth-badge flex items-center gap-0.5 px-1 h-4 rounded text-[10px] font-bold animate-pulse"
+                title={`A2A Delegation Depth: ${a2aDepth}`}
+              >
+                A{a2aDepth}
               </span>
             )}
           </div>
