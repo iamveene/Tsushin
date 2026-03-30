@@ -20,22 +20,31 @@ export function useA2ANetworkData(enabled: boolean): A2ANetworkData {
 
   const fetchData = useCallback(async () => {
     if (!enabled) return
+    let cancelled = false
     setIsLoading(true)
     setError(null)
     try {
       const result = await api.getCommEnabledAgents()
-      setCommEnabledAgents(result.agents)
-      setPermissions(result.permissions)
+      if (!cancelled) {
+        setCommEnabledAgents(result.agents)
+        setPermissions(result.permissions)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch A2A network data')
+      if (!cancelled) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch A2A network data')
+      }
     } finally {
-      setIsLoading(false)
+      if (!cancelled) setIsLoading(false)
     }
+    // Return cancellation — used by useEffect cleanup
+    return () => { cancelled = true }
   }, [enabled])
 
   useEffect(() => {
     if (enabled) {
-      fetchData()
+      let cancel: (() => void) | undefined
+      fetchData().then(cleanup => { cancel = cleanup })
+      return () => { cancel?.() }
     } else {
       setCommEnabledAgents([])
       setPermissions([])

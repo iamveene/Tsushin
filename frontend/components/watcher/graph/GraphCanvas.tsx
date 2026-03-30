@@ -62,6 +62,10 @@ interface GraphCanvasProps {
   onReady?: (methods: GraphCanvasRef) => void
   // Phase 8: Real-time activity state for node animations
   activityState?: ActivityState
+  // A2A: Static permission edges to merge into the graph
+  a2aEdges?: GraphEdge[]
+  // A2A: Whether to show static A2A permission edges
+  showA2ALinks?: boolean
 }
 
 /**
@@ -79,6 +83,8 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
       onExpandedCountChange,
       onReady,
       activityState,
+      a2aEdges = [],
+      showA2ALinks = true,
     },
     ref
   ) {
@@ -1079,6 +1085,32 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
       [onNodeClick]
     )
 
+    // A2A: Sync A2A permission edges into internal React Flow state.
+    // A2A edges live inside the store (not a separate overlay) so React Flow can
+    // render them consistently. We protect them from removal by wrapping onEdgesChange
+    // to drop any 'remove' changes targeting A2A edges.
+    useEffect(() => {
+      if (showA2ALinks && a2aEdges.length > 0) {
+        setEdges(prev => {
+          const nonA2A = prev.filter(e => !(e.data as Record<string, unknown> | undefined)?.isA2A)
+          return [...nonA2A, ...a2aEdges]
+        })
+      } else {
+        setEdges(prev => prev.filter(e => !(e.data as Record<string, unknown> | undefined)?.isA2A))
+      }
+    }, [a2aEdges, showA2ALinks, setEdges])
+
+    // Wrap onEdgesChange to prevent A2A edges from being removed by React Flow
+    const guardedOnEdgesChange = useCallback(
+      (changes: Parameters<typeof onEdgesChange>[0]) => {
+        const filtered = changes.filter(
+          c => !(c.type === 'remove' && c.id.startsWith('a2a-'))
+        )
+        if (filtered.length > 0) onEdgesChange(filtered)
+      },
+      [onEdgesChange]
+    )
+
     return (
       <div
         className="w-full h-full rounded-xl overflow-hidden border border-tsushin-border"
@@ -1089,7 +1121,7 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
           nodes={nodes}
           edges={edges}
           onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
+          onEdgesChange={guardedOnEdgesChange}
           onNodeClick={handleNodeClick}
           nodeTypes={nodeTypes}
           fitView={autoFit}
