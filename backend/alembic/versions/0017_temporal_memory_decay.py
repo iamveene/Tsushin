@@ -45,8 +45,8 @@ def upgrade():
         if 'last_accessed_at' not in cols:
             op.add_column('semantic_knowledge',
                           sa.Column('last_accessed_at', sa.DateTime(), nullable=True))
-            # Backfill with updated_at
-            op.execute("UPDATE semantic_knowledge SET last_accessed_at = updated_at WHERE last_accessed_at IS NULL")
+            # Backfill with updated_at (fallback to created_at, then NOW())
+            op.execute("UPDATE semantic_knowledge SET last_accessed_at = COALESCE(updated_at, learned_at, NOW()) WHERE last_accessed_at IS NULL")
 
     # --- SharedMemory table: last_accessed_at ---
     if 'shared_memory' in tables:
@@ -55,8 +55,8 @@ def upgrade():
         if 'last_accessed_at' not in cols:
             op.add_column('shared_memory',
                           sa.Column('last_accessed_at', sa.DateTime(), nullable=True))
-            # Backfill with updated_at
-            op.execute("UPDATE shared_memory SET last_accessed_at = updated_at WHERE last_accessed_at IS NULL")
+            # Backfill with updated_at (fallback to created_at, then NOW())
+            op.execute("UPDATE shared_memory SET last_accessed_at = COALESCE(updated_at, created_at, NOW()) WHERE last_accessed_at IS NULL")
 
 
 def downgrade():
