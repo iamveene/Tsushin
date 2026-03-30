@@ -310,7 +310,7 @@ export default function GraphLeftPanel({
         {hasAnyFilter && (
           <>
             <div className="border-t border-tsushin-border pt-4">
-              <span className="text-xs font-medium text-tsushin-muted uppercase tracking-wider">Filters</span>
+              <span className="text-xs font-medium text-tsushin-muted uppercase tracking-wider">Filters &amp; Overlays</span>
             </div>
 
             {/* Show Inactive Agents Toggle - Only for Agents view */}

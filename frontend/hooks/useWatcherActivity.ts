@@ -121,6 +121,8 @@ export function useWatcherActivity(
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const reconnectAttemptsRef = useRef(0)
+  // connectRef ensures the reconnect timer always calls the latest connect, not a stale closure
+  const connectRef = useRef<() => void>(() => {})
   const maxReconnectAttempts = 5
   const pingIntervalMs = 30000 // 30 seconds
 
@@ -566,7 +568,7 @@ export function useWatcherActivity(
           reconnectAttemptsRef.current++
 
           reconnectTimeoutRef.current = setTimeout(() => {
-            connect()
+            connectRef.current()
           }, delay)
         }
       }
@@ -575,6 +577,9 @@ export function useWatcherActivity(
       updateConnectionState('error')
     }
   }, [token, options.enabled, getWebSocketUrl, updateConnectionState, handleMessage])
+
+  // Keep connectRef current so the reconnect timer never uses a stale connect closure
+  useEffect(() => { connectRef.current = connect }, [connect])
 
   const disconnect = useCallback(() => {
     console.log('[WatcherActivity] Disconnecting...')
@@ -617,7 +622,10 @@ export function useWatcherActivity(
     return () => {
       disconnect()
     }
-  }, [token, options.enabled]) // eslint-disable-line react-hooks/exhaustive-deps
+  // connect/disconnect intentionally omitted from deps — effect re-runs on token/enabled changes
+  // which are the only conditions that should trigger reconnection; connectRef handles stale closure
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, options.enabled])
 
   return {
     connectionState,

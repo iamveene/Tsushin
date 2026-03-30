@@ -370,7 +370,7 @@
 .a2a-depth-badge {
   background-color: #F59E0B;
   color: #000;
-  border-radius: 50%;
+  border-radius: 4px;
   font-size: 10px;
   font-weight: 700;
   padding: 1px 4px;

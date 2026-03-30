@@ -203,6 +203,8 @@ export interface BuilderGhostAgentData {
   avatar?: string | null
   permissionId?: number
   isGhost: true
+  /** Communication direction relative to the agent being built */
+  direction?: 'outbound' | 'inbound' | 'bidirectional'
   onGhostDoubleClick?: (agentId: number) => void
 }
 
