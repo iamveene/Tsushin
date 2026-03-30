@@ -91,6 +91,7 @@ class TestConnectionResponse(BaseModel):
 
 class UrlValidationRequest(BaseModel):
     url: str
+    vendor: Optional[str] = None
 
 
 class UrlValidationResponse(BaseModel):
@@ -104,40 +105,26 @@ VALID_VENDORS = {"openai", "anthropic", "gemini", "groq", "grok", "deepseek", "o
 
 
 def _encrypt_provider_key(plaintext_key: str, tenant_id: str, instance_id: int, db: Session) -> Optional[str]:
-    """Encrypt a provider instance API key for storage."""
+    """Encrypt a provider instance API key for storage.
+    Uses the same identifier pattern as ProviderInstanceService for consistency.
+    """
     try:
-        from hub.security import TokenEncryption
-        from services.encryption_key_service import get_api_key_encryption_key
-
-        encryption_key = get_api_key_encryption_key(db)
-        if not encryption_key:
-            logger.error("Failed to get encryption key for provider instance key encryption")
-            return None
-
-        encryptor = TokenEncryption(encryption_key.encode())
-        identifier = f"provider_instance_{instance_id}_{tenant_id}"
-        return encryptor.encrypt(plaintext_key, identifier)
+        from services.provider_instance_service import ProviderInstanceService
+        return ProviderInstanceService._encrypt_key(plaintext_key, tenant_id, db)
     except Exception as e:
         logger.error(f"Failed to encrypt provider instance key: {e}")
         return None
 
 
 def _decrypt_provider_key(instance: ProviderInstance, db: Session) -> Optional[str]:
-    """Decrypt a provider instance API key."""
+    """Decrypt a provider instance API key.
+    Uses the same identifier pattern as ProviderInstanceService for consistency.
+    """
     if not instance.api_key_encrypted:
         return None
     try:
-        from hub.security import TokenEncryption
-        from services.encryption_key_service import get_api_key_encryption_key
-
-        encryption_key = get_api_key_encryption_key(db)
-        if not encryption_key:
-            logger.error("Failed to get encryption key for provider instance key decryption")
-            return None
-
-        encryptor = TokenEncryption(encryption_key.encode())
-        identifier = f"provider_instance_{instance.id}_{instance.tenant_id}"
-        return encryptor.decrypt(instance.api_key_encrypted, identifier)
+        from services.provider_instance_service import ProviderInstanceService
+        return ProviderInstanceService._decrypt_key(instance.api_key_encrypted, instance.tenant_id, db)
     except Exception as e:
         logger.error(f"Failed to decrypt provider instance key for instance {instance.id}: {e}")
         return None
@@ -632,6 +619,13 @@ async def discover_models(
         import httpx
         base_url = instance.base_url.rstrip("/") if instance.base_url else "https://openrouter.ai/api/v1"
 
+        # Validate URL to prevent SSRF
+        from utils.ssrf_validator import validate_url, SSRFValidationError
+        try:
+            validate_url(base_url)
+        except SSRFValidationError as e:
+            raise HTTPException(status_code=400, detail=f"SSRF blocked: {e}")
+
         headers = {}
         api_key = _decrypt_provider_key(instance, db)
         if not api_key:
@@ -746,8 +740,11 @@ def validate_provider_url(
     """
     from utils.ssrf_validator import validate_url, SSRFValidationError
 
+    # Allow private IPs for local providers (ollama, custom)
+    allow_private = data.vendor and data.vendor.lower() in ("ollama", "custom")
+
     try:
-        validate_url(data.url)
+        validate_url(data.url, allow_private=allow_private)
         return UrlValidationResponse(valid=True)
     except SSRFValidationError as e:
         return UrlValidationResponse(valid=False, error=str(e))

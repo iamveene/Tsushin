@@ -584,6 +584,7 @@ class ShellSecurityService:
             List of warning strings describing detected network imports.
         """
         NETWORK_PATTERNS = [
+            # Python imports
             (r'\bimport\s+requests\b', 'requests'),
             (r'\bfrom\s+requests\b', 'requests'),
             (r'\bimport\s+urllib\b', 'urllib'),
@@ -593,8 +594,19 @@ class ShellSecurityService:
             (r'\bimport\s+aiohttp\b', 'aiohttp'),
             (r'\bimport\s+socket\b', 'socket'),
             (r'\bimport\s+http\.client\b', 'http.client'),
+            # Shell commands
             (r'\bcurl\s+', 'curl command'),
             (r'\bwget\s+', 'wget command'),
+            # Bash network tools
+            (r'\bnc\s', 'nc (netcat) command'),
+            (r'\bncat\s', 'ncat command'),
+            (r'/dev/tcp/', '/dev/tcp redirection'),
+            (r'/dev/udp/', '/dev/udp redirection'),
+            (r'\bsocat\s', 'socat command'),
+            (r'\bfetch\s', 'fetch command'),
+            # Node.js imports
+            (r'require\([\'"](?:http|https|net|dgram|node-fetch|axios|got|request)[\'"\)]', 'Node.js network module'),
+            (r'import\s+.*from\s+[\'"](?:http|https|net|node-fetch|axios)[\'"]', 'Node.js network import'),
         ]
 
         warnings = []

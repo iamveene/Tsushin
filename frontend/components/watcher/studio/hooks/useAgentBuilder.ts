@@ -432,18 +432,21 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
             memoryIsolationMode: config.memoryIsolationMode !== undefined ? (config.memoryIsolationMode as string) : prev.agent.memoryIsolationMode,
             enableSemanticSearch: config.enableSemanticSearch !== undefined ? (config.enableSemanticSearch as boolean) : prev.agent.enableSemanticSearch,
           }
+          next.isDirty = true
           break
         case 'builder-skill': {
           const skillType = config.skillType as string
           next.attachedSkills = prev.attachedSkills.map(s =>
             s.skillType === skillType ? { ...s, config: config.skillConfig as Record<string, unknown> } : s
           )
+          next.isDirty = true
           break
         }
         case 'builder-tool': {
           const toolId = config.toolId as number
           const isEnabled = config.isEnabled as boolean
           next.toolEnabledOverrides = { ...prev.toolEnabledOverrides, [toolId]: isEnabled }
+          next.isDirty = true
           break
         }
       }

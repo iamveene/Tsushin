@@ -94,6 +94,18 @@ class AgentCreateRequest(BaseModel):
             return v
         return strip_html_tags(v).strip() or None
 
+    @field_validator("system_prompt")
+    @classmethod
+    def sanitize_system_prompt(cls, v: str) -> str:
+        """Strip HTML tags from system_prompt to prevent stored XSS."""
+        return strip_html_tags(v)
+
+    @field_validator("keywords")
+    @classmethod
+    def sanitize_keywords(cls, v: List[str]) -> List[str]:
+        """Strip HTML tags from each keyword to prevent stored XSS."""
+        return [strip_html_tags(k) for k in v]
+
     @field_validator("enabled_channels")
     @classmethod
     def validate_enabled_channels(cls, v: List[str]) -> List[str]:
@@ -141,6 +153,22 @@ class AgentUpdateRequest(BaseModel):
         if v is None:
             return v
         return strip_html_tags(v).strip() or None
+
+    @field_validator("system_prompt")
+    @classmethod
+    def sanitize_system_prompt(cls, v: str | None) -> str | None:
+        """Strip HTML tags from system_prompt to prevent stored XSS."""
+        if v is None:
+            return v
+        return strip_html_tags(v)
+
+    @field_validator("keywords")
+    @classmethod
+    def sanitize_keywords(cls, v: List[str] | None) -> List[str] | None:
+        """Strip HTML tags from each keyword to prevent stored XSS."""
+        if v is None:
+            return v
+        return [strip_html_tags(k) for k in v]
 
     @field_validator("enabled_channels")
     @classmethod
@@ -289,41 +317,29 @@ async def list_agents(
     Supports filtering by active status, name search, and enabled channel.
     Requires `agents.read` permission.
     """
+    from sqlalchemy import func
+
     query = db.query(Agent).filter(Agent.tenant_id == caller.tenant_id)
 
     if is_active is not None:
         query = query.filter(Agent.is_active == is_active)
 
-    agents = query.order_by(Agent.id).all()
-
-    # Filter by search term (name matching)
+    # Push search filter to DB using join
     if search:
-        search_lower = search.lower()
-        filtered = []
-        for agent in agents:
-            contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
-            if contact and search_lower in (contact.friendly_name or "").lower():
-                filtered.append(agent)
-        agents = filtered
+        query = query.join(Contact, Agent.contact_id == Contact.id).filter(
+            Contact.friendly_name.ilike(f"%{search}%")
+        )
 
-    # Filter by channel
+    # Filter by channel at DB level where possible
     if channel:
-        filtered = []
-        for agent in agents:
-            channels = agent.enabled_channels
-            if isinstance(channels, str):
-                try:
-                    channels = json.loads(channels)
-                except (json.JSONDecodeError, TypeError):
-                    channels = []
-            if channels and channel in channels:
-                filtered.append(agent)
-        agents = filtered
+        # enabled_channels stored as JSON array — use LIKE for DB-level filtering
+        query = query.filter(Agent.enabled_channels.ilike(f'%"{channel}"%'))
 
-    total = len(agents)
-    start = (page - 1) * per_page
-    end = start + per_page
-    page_agents = agents[start:end]
+    # Get total count before pagination
+    total = query.count()
+
+    # Apply SQL-level pagination
+    page_agents = query.order_by(Agent.id).offset((page - 1) * per_page).limit(per_page).all()
 
     return {
         "data": [_enrich_agent(a, db) for a in page_agents],

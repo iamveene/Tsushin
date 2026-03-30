@@ -271,6 +271,7 @@ class ApiClientService:
         rate_limit_rpm: Optional[int] = None,
         expires_at: Optional[datetime] = None,
         custom_scopes: Optional[List[str]] = None,
+        updater_permissions: Optional[List[str]] = None,
     ) -> ApiClient:
         """Update API client fields."""
         if name is not None:
@@ -280,12 +281,27 @@ class ApiClientService:
         if role is not None:
             if role not in VALID_ROLES:
                 raise ValueError(f"Invalid role: {role}")
+            # Privilege escalation guard (same as create_client)
+            if updater_permissions is not None:
+                new_scopes = custom_scopes if role == "custom" else API_ROLE_SCOPES.get(role, [])
+                escalated = set(new_scopes) - set(updater_permissions)
+                if escalated:
+                    raise ValueError(
+                        f"Privilege escalation denied: cannot grant permissions you don't hold: {', '.join(sorted(escalated))}"
+                    )
             client.role = role
         if rate_limit_rpm is not None:
             client.rate_limit_rpm = rate_limit_rpm
         if expires_at is not None:
             client.expires_at = expires_at
         if custom_scopes is not None:
+            # Privilege escalation guard for custom scopes
+            if updater_permissions is not None:
+                escalated = set(custom_scopes) - set(updater_permissions)
+                if escalated:
+                    raise ValueError(
+                        f"Privilege escalation denied: cannot grant permissions you don't hold: {', '.join(sorted(escalated))}"
+                    )
             client.custom_scopes = custom_scopes
 
         client.updated_at = datetime.utcnow()

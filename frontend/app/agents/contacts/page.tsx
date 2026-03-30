@@ -14,8 +14,6 @@ import Modal from '@/components/ui/Modal'
 import { useToast } from '@/contexts/ToastContext'
 import { SmartphoneIcon, WhatsAppIcon, TelegramIcon, UserIcon, FileTextIcon, RefreshIcon, SlackIcon, DiscordIcon } from '@/components/ui/icons'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-
 interface ContactFormData {
   friendly_name: string
   whatsapp_id: string

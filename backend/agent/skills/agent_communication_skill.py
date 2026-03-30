@@ -247,6 +247,10 @@ class AgentCommunicationSkill(BaseSkill):
         from services.agent_communication_service import AgentCommunicationService
         svc = AgentCommunicationService(self.db_session, tenant_id, self._token_tracker)
 
+        # Forward depth/parent_session_id to prevent infinite recursion
+        current_depth = config.get("comm_depth", 0)
+        parent_session_id = config.get("comm_parent_session_id")
+
         result = await svc.send_message(
             source_agent_id=agent_id,
             target_agent_id=target_agent.id,
@@ -256,6 +260,8 @@ class AgentCommunicationSkill(BaseSkill):
             original_message_preview=message.body[:200],
             session_type="sync",
             timeout=config.get("default_timeout", 30),
+            depth=current_depth + 1,
+            parent_session_id=parent_session_id,
         )
 
         if not result.success:
@@ -307,6 +313,10 @@ class AgentCommunicationSkill(BaseSkill):
         from services.agent_communication_service import AgentCommunicationService
         svc = AgentCommunicationService(self.db_session, tenant_id, self._token_tracker)
 
+        # Forward depth/parent_session_id to prevent infinite recursion
+        current_depth = config.get("comm_depth", 0)
+        parent_session_id = config.get("comm_parent_session_id")
+
         result = await svc.send_message(
             source_agent_id=agent_id,
             target_agent_id=target_agent.id,
@@ -316,6 +326,8 @@ class AgentCommunicationSkill(BaseSkill):
             original_message_preview=message.body[:200],
             session_type="delegation",
             timeout=config.get("default_timeout", 30),
+            depth=current_depth + 1,
+            parent_session_id=parent_session_id,
         )
 
         if not result.success:

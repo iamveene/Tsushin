@@ -419,9 +419,33 @@ def update_mcp_server(
         config.auth_header_name = data.auth_header_name
 
     if data.stdio_binary is not None:
+        if data.stdio_binary:
+            # Reject path traversal in binary name
+            if '/' in data.stdio_binary or '..' in data.stdio_binary or '\\' in data.stdio_binary:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Binary name contains path characters: '{data.stdio_binary}'"
+                )
+
+            from hub.mcp.stdio_transport import ALLOWED_MCP_STDIO_BINARIES
+            # Validate binary is in allowlist
+            if data.stdio_binary not in ALLOWED_MCP_STDIO_BINARIES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Binary '{data.stdio_binary}' not allowed. Must be one of: {', '.join(ALLOWED_MCP_STDIO_BINARIES)}"
+                )
         config.stdio_binary = data.stdio_binary
 
     if data.stdio_args is not None:
+        # Validate stdio_args for shell metacharacters
+        if data.stdio_args:
+            import re as _re
+            for arg in data.stdio_args:
+                if _re.search(r'[;&|`$(){}]', arg):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"stdio_args contains shell metacharacters: '{arg}'"
+                    )
         config.stdio_args = data.stdio_args
 
     if data.trust_level is not None:
@@ -671,7 +695,8 @@ def list_mcp_tools(
     config = _get_server_or_404(server_id, db, ctx)
 
     tools = db.query(MCPDiscoveredTool).filter(
-        MCPDiscoveredTool.server_id == server_id
+        MCPDiscoveredTool.server_id == server_id,
+        MCPDiscoveredTool.tenant_id == ctx.tenant_id,
     ).order_by(MCPDiscoveredTool.tool_name).all()
 
     return [_to_tool_response(t) for t in tools]
@@ -692,6 +717,7 @@ def toggle_mcp_tool(
     tool = db.query(MCPDiscoveredTool).filter(
         MCPDiscoveredTool.id == tool_id,
         MCPDiscoveredTool.server_id == server_id,
+        MCPDiscoveredTool.tenant_id == ctx.tenant_id,
     ).first()
 
     if not tool:

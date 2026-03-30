@@ -265,8 +265,8 @@ async def _scan_instructions(instructions: str, db, tenant_id: str = None, senti
             }
         return {"scan_status": "clean", "last_scan_result": {**profile_meta}}
     except Exception as e:
-        logger.warning(f"Sentinel scan failed, defaulting to clean: {e}")
-        return {"scan_status": "clean", "last_scan_result": None}
+        logger.error(f"Sentinel scan failed, defaulting to pending: {e}")
+        return {"scan_status": "pending", "last_scan_result": None}
 
 
 def _snapshot_skill(skill: CustomSkill) -> dict:
@@ -372,6 +372,14 @@ async def create_custom_skill(
     # Validate script_language if provided
     if payload.script_language and payload.script_language not in ('python', 'bash', 'nodejs'):
         raise HTTPException(status_code=400, detail="script_language must be one of: python, bash, nodejs")
+
+    # Validate script_entrypoint (prevent path traversal / injection)
+    if payload.script_entrypoint:
+        if not re.fullmatch(r'[\w.-]+\.(py|sh|js)', payload.script_entrypoint):
+            raise HTTPException(
+                status_code=400,
+                detail="script_entrypoint must be a simple filename ending in .py, .sh, or .js"
+            )
 
     # Validate MCP server for mcp_server type
     if payload.skill_type_variant == 'mcp_server':
@@ -502,6 +510,14 @@ async def update_custom_skill(
     # Validate script_language if provided
     if payload.script_language and payload.script_language not in ('python', 'bash', 'nodejs'):
         raise HTTPException(status_code=400, detail="script_language must be one of: python, bash, nodejs")
+
+    # Validate script_entrypoint (prevent path traversal / injection)
+    if payload.script_entrypoint:
+        if not re.fullmatch(r'[\w.-]+\.(py|sh|js)', payload.script_entrypoint):
+            raise HTTPException(
+                status_code=400,
+                detail="script_entrypoint must be a simple filename ending in .py, .sh, or .js"
+            )
 
     query = db.query(CustomSkill).filter(CustomSkill.id == skill_id)
     query = ctx.filter_by_tenant(query, CustomSkill.tenant_id)
@@ -962,7 +978,12 @@ async def update_custom_skill_assignment(
     db.commit()
     db.refresh(assignment)
 
-    skill = db.query(CustomSkill).filter(CustomSkill.id == assignment.custom_skill_id).first()
+    skill = db.query(CustomSkill).filter(
+        CustomSkill.id == assignment.custom_skill_id,
+        CustomSkill.tenant_id == ctx.tenant_id,
+    ).first()
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill not found")
 
     logger.info(f"Custom skill assignment {assignment_id} updated for agent {agent_id}")
     return AgentCustomSkillResponse(

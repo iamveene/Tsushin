@@ -96,6 +96,17 @@ def readiness_check():
     import logging
 
     logger = logging.getLogger(__name__)
+
+    # Guard against cold-start path where engine is not yet initialized
+    if _engine is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "postgresql": {"status": "unhealthy", "error": "engine not initialized"},
+            },
+        )
+
     components = {}
 
     # --- PostgreSQL check ---

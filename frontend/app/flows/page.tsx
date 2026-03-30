@@ -1577,6 +1577,7 @@ function CursorSafeTextarea({
       }}
       onBlur={(e) => {
         isFocusedRef.current = false
+        onValueChange(localValue)
         externalOnBlur?.(e)
       }}
       onChange={(e) => {

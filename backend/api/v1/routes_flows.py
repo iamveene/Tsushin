@@ -632,6 +632,26 @@ async def create_step(
     if existing:
         raise HTTPException(status_code=400, detail=f"Position {request.position} is already occupied")
 
+    # Validate agent_id belongs to caller's tenant
+    if request.agent_id is not None:
+        from models import Agent
+        ref_agent = db.query(Agent).filter(
+            Agent.id == request.agent_id,
+            Agent.tenant_id == caller.tenant_id,
+        ).first()
+        if not ref_agent:
+            raise HTTPException(status_code=400, detail="Agent not found")
+
+    # Validate persona_id belongs to caller's tenant
+    if request.persona_id is not None:
+        from models import Persona
+        ref_persona = db.query(Persona).filter(
+            Persona.id == request.persona_id,
+            Persona.tenant_id == caller.tenant_id,
+        ).first()
+        if not ref_persona:
+            raise HTTPException(status_code=400, detail="Persona not found")
+
     db_step = FlowNode(
         flow_definition_id=flow_id,
         type=request.type,
@@ -712,8 +732,22 @@ async def update_step(
     if request.conversation_objective is not None:
         step.conversation_objective = request.conversation_objective
     if request.agent_id is not None:
+        from models import Agent
+        ref_agent = db.query(Agent).filter(
+            Agent.id == request.agent_id,
+            Agent.tenant_id == caller.tenant_id,
+        ).first()
+        if not ref_agent:
+            raise HTTPException(status_code=400, detail="Agent not found")
         step.agent_id = request.agent_id
     if request.persona_id is not None:
+        from models import Persona
+        ref_persona = db.query(Persona).filter(
+            Persona.id == request.persona_id,
+            Persona.tenant_id == caller.tenant_id,
+        ).first()
+        if not ref_persona:
+            raise HTTPException(status_code=400, detail="Persona not found")
         step.persona_id = request.persona_id
     if request.on_failure is not None:
         step.on_failure = request.on_failure

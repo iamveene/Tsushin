@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Default models for testing each provider (cheap/fast models)
 PROVIDER_TEST_MODELS = {
     "groq": "llama-3.1-8b-instant",
-    "grok": "grok-3-mini",
+    "grok": "grok-3",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-3-5-haiku-20241022",
     "gemini": "gemini-2.5-flash",

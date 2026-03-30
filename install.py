@@ -289,6 +289,15 @@ class TsushinInstaller:
         )
         self.config['GROK_API_KEY'] = grok_key or ""
 
+        deepseek_key = self.prompt_with_validation(
+            "Enter DeepSeek API Key (optional, reasoning models): ",
+            validator=lambda x: len(x) >= 20 if x else True,
+            error_msg="API key must be at least 20 characters",
+            optional=True,
+            mask=True
+        )
+        self.config['DEEPSEEK_API_KEY'] = deepseek_key or ""
+
         elevenlabs_key = self.prompt_with_validation(
             "Enter ElevenLabs API Key (optional, voice synthesis): ",
             validator=lambda x: len(x) >= 20 if x else True,
@@ -664,7 +673,8 @@ class TsushinInstaller:
         domain = self.config.get('SSL_DOMAIN', 'localhost')
 
         # Build Caddyfile based on SSL mode
-        routing_block = f"""    handle /api/* {{
+        routing_block = f"""    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    handle /api/* {{
         reverse_proxy backend:8081
     }}
     handle /ws/* {{
@@ -846,6 +856,7 @@ OPENAI_API_KEY={self.config['OPENAI_API_KEY']}
 ANTHROPIC_API_KEY={self.config['ANTHROPIC_API_KEY']}
 GROQ_API_KEY={self.config.get('GROQ_API_KEY', '')}
 GROK_API_KEY={self.config.get('GROK_API_KEY', '')}
+DEEPSEEK_API_KEY={self.config.get('DEEPSEEK_API_KEY', '')}
 ELEVENLABS_API_KEY={self.config.get('ELEVENLABS_API_KEY', '')}
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 

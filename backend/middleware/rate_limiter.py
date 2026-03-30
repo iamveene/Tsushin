@@ -57,8 +57,14 @@ class SlidingWindowRateLimiter:
         cutoff = now - window_seconds
 
         with self._lock:
-            active = [t for t in self._windows.get(key, []) if t > cutoff]
-            return max(0, max_requests - len(active))
+            if key in self._windows:
+                self._windows[key] = [t for t in self._windows[key] if t > cutoff]
+                # Evict empty keys to prevent unbounded dict growth
+                if not self._windows[key]:
+                    del self._windows[key]
+                    return max_requests
+                return max(0, max_requests - len(self._windows[key]))
+            return max_requests
 
 
 # Global rate limiter instance

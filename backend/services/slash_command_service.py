@@ -30,11 +30,9 @@ class SlashCommandService:
     - Command caching for performance
     """
 
-    # Cache for compiled patterns
-    _pattern_cache: Dict[str, List[Tuple[re.Pattern, Dict]]] = {}
-
     def __init__(self, db: Session):
         self.db = db
+        self._pattern_cache: Dict[str, List[Tuple[re.Pattern, Dict]]] = {}
         self.logger = logging.getLogger(__name__)
 
     # =========================================================================

@@ -77,7 +77,7 @@ class WhatsAppChannelAdapter(ChannelAdapter):
 
         mcp_url, api_secret = self._resolve_mcp_instance(agent_id) if agent_id else (None, None)
 
-        if agent_id and mcp_url and not self._check_mcp_connection(agent_id, mcp_url):
+        if agent_id and mcp_url and not await self._check_mcp_connection(agent_id, mcp_url):
             return SendResult(
                 success=False,
                 error=f"MCP not connected for agent {agent_id}"
@@ -172,7 +172,7 @@ class WhatsAppChannelAdapter(ChannelAdapter):
             self.logger.error(f"Error resolving MCP URL for agent {agent_id}: {e}", exc_info=True)
             return (default_url, None)
 
-    def _check_mcp_connection(self, agent_id: int, mcp_api_url: str) -> bool:
+    async def _check_mcp_connection(self, agent_id: int, mcp_api_url: str) -> bool:
         """Check if MCP instance is connected before sending.
         Mirrors router._check_mcp_connection logic exactly.
         """
@@ -183,7 +183,8 @@ class WhatsAppChannelAdapter(ChannelAdapter):
             return True
 
         try:
-            response = httpx.get(f"{mcp_api_url}/health", timeout=5.0)
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{mcp_api_url}/health")
 
             if response.status_code == 200:
                 data = response.json()

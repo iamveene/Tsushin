@@ -155,12 +155,12 @@ export default function PlaygroundPage() {
         }
 
         // Refresh thread if active (to get proper message IDs from backend)
-        if (activeThreadId) {
-          api.getThread(activeThreadId).then(threadData => {
-            // Only update if messages have changed
-            if (JSON.stringify(threadData.messages) !== JSON.stringify(messages)) {
-              setMessages(threadData.messages || [])
-            }
+        // Use ref to avoid stale closure over activeThreadId
+        const currentThreadId = activeThreadIdRef.current
+        if (currentThreadId) {
+          api.getThread(currentThreadId).then(threadData => {
+            // Only update if messages have changed — use functional update to avoid stale closure over messages
+            setMessages(prev => JSON.stringify(threadData.messages) !== JSON.stringify(prev) ? threadData.messages : prev)
           }).catch(err => {
             console.error('Failed to refresh thread after streaming:', err)
           })
@@ -1402,7 +1402,8 @@ export default function PlaygroundPage() {
   // Fetch available tools for the current agent
   const fetchAvailableTools = async (agentId: number) => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/tools/${agentId}`, {
+      const apiBase = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || '')
+      const response = await fetch(`${apiBase}/api/playground/tools/${agentId}`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
         }
@@ -1421,17 +1422,9 @@ export default function PlaygroundPage() {
   // Fetch available agents for invoke/switch commands
   const fetchAvailableAgents = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/agents`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-        }
-      })
-
-      if (response.ok) {
-        const agentsData = await response.json()
-        const agentNames = agentsData.map((agent: any) => agent.name)
-        setAvailableAgents(agentNames)
-      }
+      const agentsData = await api.getPlaygroundAgents()
+      const agentNames = agentsData.map((agent) => agent.name)
+      setAvailableAgents(agentNames)
     } catch (error) {
       console.error('Failed to fetch available agents:', error)
     }
