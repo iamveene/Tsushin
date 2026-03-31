@@ -10,7 +10,7 @@ MED-009 FIX: One-time code exchange for SSO callback (removes JWT from URL).
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -38,6 +38,28 @@ def get_encryption_key(db: Session) -> Optional[str]:
     """Get encryption key from database or environment for decrypting OAuth secrets."""
     from services.encryption_key_service import get_google_encryption_key
     return get_google_encryption_key(db)
+
+
+def _set_session_cookie(response: JSONResponse, token: str) -> None:
+    """
+    SEC-005: Set the httpOnly session cookie on the response.
+    Secure flag: controlled by TSN_SSL_MODE env var (defaults to True for HTTPS installs).
+    SameSite=lax: sent on top-level navigations, protects against CSRF.
+    max_age=86400: matches JWT 24-hour expiry.
+    """
+    import os
+    ssl_mode = os.environ.get("TSN_SSL_MODE", "").lower()
+    use_secure = ssl_mode not in ("", "off", "none", "disabled")
+    response.set_cookie(
+        key="tsushin_session",
+        value=token,
+        httponly=True,
+        secure=use_secure,
+        samesite="lax",
+        max_age=86400,  # 24 h — matches JWT expiry
+        path="/",
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -234,17 +256,22 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
         # Get user permissions for frontend
         permissions = auth_service.get_user_permissions(user.id)
 
-        return AuthResponse(
-            access_token=token,
-            user={
+        # SEC-005: Return token in JSON body (for WebSocket/backwards compat) AND
+        # set it as an httpOnly cookie so the browser never touches it via JS.
+        response = JSONResponse(content={
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {
                 "id": user.id,
                 "email": user.email,
                 "full_name": user.full_name,
                 "tenant_id": user.tenant_id,
                 "is_global_admin": user.is_global_admin,
                 "permissions": permissions,
-            }
-        )
+            },
+        })
+        _set_session_cookie(response, token)
+        return response
     except AuthenticationError as e:
         # Audit: failed login (only if user exists — password mismatch)
         failed_user = db.query(User).filter(User.email == login_request.email, User.deleted_at.is_(None)).first()
@@ -277,17 +304,21 @@ async def signup(request: Request, signup_request: SignupRequest, db: Session = 
         # Get user permissions for frontend
         permissions = auth_service.get_user_permissions(user.id)
 
-        return AuthResponse(
-            access_token=token,
-            user={
+        # SEC-005: Set httpOnly session cookie on signup
+        response = JSONResponse(status_code=201, content={
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {
                 "id": user.id,
                 "email": user.email,
                 "full_name": user.full_name,
                 "tenant_id": user.tenant_id,
                 "is_global_admin": user.is_global_admin,
                 "permissions": permissions,
-            }
-        )
+            },
+        })
+        _set_session_cookie(response, token)
+        return response
     except AuthenticationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -669,9 +700,10 @@ async def logout(request: Request, current_user: User = Depends(get_current_user
     """
     if current_user.tenant_id:
         log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.AUTH_LOGOUT, "user", str(current_user.id), {"email": current_user.email}, request)
-    return MessageResponse(
-        message="Logged out successfully"
-    )
+    # SEC-005: Clear the httpOnly session cookie
+    response = JSONResponse(content={"message": "Logged out successfully"})
+    response.delete_cookie(key="tsushin_session", path="/")
+    return response
 
 
 # Invitation Endpoints
@@ -838,17 +870,21 @@ async def accept_invitation(
     auth_service = AuthService(db)
     permissions = auth_service.get_user_permissions(user.id)
 
-    return AuthResponse(
-        access_token=access_token,
-        user={
+    # SEC-005: Set httpOnly session cookie on invitation accept
+    response = JSONResponse(content={
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
             "id": user.id,
             "email": user.email,
             "full_name": user.full_name,
             "tenant_id": user.tenant_id,
             "is_global_admin": user.is_global_admin,
             "permissions": permissions,
-        }
-    )
+        },
+    })
+    _set_session_cookie(response, access_token)
+    return response
 
 
 # ========================================================================

@@ -5,6 +5,7 @@ Provides unified auth dependency that supports both UI JWT tokens and API client
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional, Set, List
 
 from fastapi import Depends, HTTPException, Header, Request, status
@@ -117,11 +118,26 @@ def _resolve_api_client_jwt(payload: dict, db: Session) -> ApiCaller:
             detail="API client has been revoked or does not exist",
         )
 
-    if client.expires_at and client.expires_at < __import__("datetime").datetime.utcnow():
+    if client.expires_at and client.expires_at < datetime.utcnow():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API client has expired",
         )
+
+    # Reject JWTs issued before the last secret rotation
+    token_secret_ts = payload.get("secret_rotated_at")
+    if client.secret_rotated_at is not None:
+        if token_secret_ts is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="API client token predates secret rotation — please re-authenticate",
+            )
+        token_rotated_at = datetime.fromisoformat(token_secret_ts)
+        if token_rotated_at < client.secret_rotated_at:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="API client token has been invalidated by secret rotation",
+            )
 
     return ApiCaller(
         tenant_id=tenant_id,

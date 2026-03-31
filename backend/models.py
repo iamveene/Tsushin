@@ -386,6 +386,7 @@ class ContactAgentMapping(Base):
     id = Column(Integer, primary_key=True)
     contact_id = Column(Integer, nullable=False, index=True)  # FK to Contact
     agent_id = Column(Integer, nullable=False)  # FK to Agent
+    tenant_id = Column(String(100), nullable=True, index=True)  # BUG-LOG-012: Tenant isolation
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -501,6 +502,7 @@ class ApiClient(Base):
     client_id = Column(String(50), unique=True, nullable=False, index=True)  # tsn_ci_<random>
     client_secret_hash = Column(String(255), nullable=False)  # Argon2 hash of tsn_cs_<random>
     client_secret_prefix = Column(String(12), nullable=False)  # First 12 chars for display/lookup
+    secret_rotated_at = Column(DateTime, nullable=True)  # tracks last rotation for JWT invalidation
     role = Column(String(30), default='api_agent_only')  # api_owner, api_admin, api_member, api_readonly, api_agent_only, custom
     custom_scopes = Column(JSON, nullable=True)  # Only when role='custom': ["agents.read", "agents.execute"]
     is_active = Column(Boolean, default=True)

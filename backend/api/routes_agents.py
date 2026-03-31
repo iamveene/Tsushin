@@ -999,8 +999,10 @@ def create_contact_agent_mapping(
         }
         return ContactAgentMappingResponse(**mapping_dict)
     else:
-        # Create new mapping
-        new_mapping = ContactAgentMapping(**mapping.model_dump())
+        # Create new mapping (BUG-LOG-012: include tenant_id for isolation)
+        mapping_data = mapping.model_dump()
+        mapping_data["tenant_id"] = current_user.tenant_id
+        new_mapping = ContactAgentMapping(**mapping_data)
         db.add(new_mapping)
         db.commit()
         db.refresh(new_mapping)

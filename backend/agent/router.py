@@ -682,22 +682,38 @@ class AgentRouter:
         # NOT hardcoded in code. Use POST /api/contacts + POST /api/contact-agent-mappings
         # CRITICAL FIX 2026-01-08: Also search by WhatsApp ID for contact lookup
         if not is_group:
+            # BUG-LOG-012 FIX: Resolve tenant_id for tenant-scoped contact lookup
+            _routing_tenant_id = None
+            if self.mcp_instance_id:
+                try:
+                    _mcp = self.db.query(WhatsAppMCPInstance).get(self.mcp_instance_id)
+                    _routing_tenant_id = _mcp.tenant_id if _mcp else None
+                except Exception:
+                    pass
+
             # Try to find contact by phone number OR WhatsApp ID
             # Normalize sender to handle WhatsApp IDs (e.g., "193853382488108")
             sender_normalized = sender.split('@')[0].lstrip('+')
 
             # Method 1: Search by phone number (traditional)
-            contact = self.db.query(Contact).filter(
+            # BUG-LOG-012 FIX: Scope contact lookup by tenant when possible
+            contact_q = self.db.query(Contact).filter(
                 or_(
                     Contact.phone_number == sender,
                     Contact.phone_number == sender_normalized,
                     Contact.phone_number == f"+{sender_normalized}"
                 )
-            ).first()
+            )
+            if _routing_tenant_id:
+                contact_q = contact_q.filter(Contact.tenant_id == _routing_tenant_id)
+            contact = contact_q.first()
 
             # Method 2: If not found, search by WhatsApp ID
             if not contact:
-                contact = self.db.query(Contact).filter(Contact.whatsapp_id == sender_normalized).first()
+                whatsapp_q = self.db.query(Contact).filter(Contact.whatsapp_id == sender_normalized)
+                if _routing_tenant_id:
+                    whatsapp_q = whatsapp_q.filter(Contact.tenant_id == _routing_tenant_id)
+                contact = whatsapp_q.first()
                 if contact:
                     self.logger.info(f"Contact found by WhatsApp ID: {contact.friendly_name} (ID: {sender_normalized})")
 
@@ -1699,7 +1715,31 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                     except Exception as notif_e:
                         self.logger.warning(f"Failed to send Sentinel notification: {notif_e}")
             except Exception as e:
-                self.logger.warning(f"Sentinel pre-check failed, allowing message: {e}")
+                # BUG-LOG-020 FIX: Configurable fail behavior instead of always fail-open
+                fail_behavior = "open"
+                try:
+                    from models import Config as ConfigModel
+                    cfg = self.db.query(ConfigModel).first()
+                    if cfg:
+                        fail_behavior = getattr(cfg, "sentinel_fail_behavior", None) or "open"
+                except Exception:
+                    pass
+
+                if fail_behavior == "closed":
+                    self.logger.error(
+                        f"🛡️ SENTINEL FAIL-CLOSED: Blocking message due to Sentinel error: {e}"
+                    )
+                    recipient = message.get("chat_id") or message.get("sender")
+                    channel = message.get("channel", "whatsapp")
+                    await self._send_message(
+                        recipient=recipient,
+                        message_text="Message blocked: security analysis unavailable. Please try again later.",
+                        channel=channel,
+                        agent_id=agent_id
+                    )
+                    return
+                else:
+                    self.logger.warning(f"Sentinel pre-check failed, allowing message (fail-open): {e}")
 
         # MemGuard Layer A: Pre-storage memory poisoning check
         if tenant_id:

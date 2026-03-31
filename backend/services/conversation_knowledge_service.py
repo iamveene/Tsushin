@@ -117,7 +117,7 @@ class ConversationKnowledgeService:
         user_id: int
     ) -> List[Dict[str, str]]:
         """Get all messages from a thread."""
-        from models import Memory
+        from models import Memory, Agent as AgentModel
 
         # Find memory record for this thread
         # sender_key pattern for playground threads: sender_playground_u{user_id}_a{agent_id}_t{thread_id}
@@ -125,8 +125,17 @@ class ConversationKnowledgeService:
 
         self.logger.info(f"[Phase 14.6] Querying Memory with pattern: {sender_key_pattern}")
 
+        # BUG-LOG-003 FIX: Scope memory query to agents belonging to the caller's tenant
+        # Memory has no tenant_id column, so we filter by agent_id ∈ tenant's agents
+        tenant_agent_ids = [
+            row[0] for row in self.db.query(AgentModel.id).filter(
+                AgentModel.tenant_id == tenant_id
+            ).all()
+        ]
+
         memory_records = self.db.query(Memory).filter(
-            Memory.sender_key.like(sender_key_pattern)
+            Memory.sender_key.like(sender_key_pattern),
+            Memory.agent_id.in_(tenant_agent_ids) if tenant_agent_ids else False
         ).all()
 
         self.logger.info(f"[Phase 14.6] Found {len(memory_records)} memory records for thread {thread_id}")

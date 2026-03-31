@@ -329,11 +329,13 @@ class AgentSwitcherSkill(BaseSkill):
             mapping.agent_id = agent_id
             mapping.updated_at = datetime.utcnow()
         else:
-            # Create new mapping
+            # Create new mapping (BUG-LOG-012: include tenant_id)
+            _tenant_id = (self._config or {}).get("tenant_id")
             logger.info(f"AgentSwitcherSkill: Creating new mapping - Contact {contact_id} → Agent {agent_id}")
             mapping = ContactAgentMapping(
                 contact_id=contact_id,
                 agent_id=agent_id,
+                tenant_id=_tenant_id,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
