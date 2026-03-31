@@ -66,11 +66,15 @@ The installer will guide you through configuration, deploy Docker containers, an
 |----------|:-----:|:-------:|-------|
 | Google Gemini | No | Required | Default provider |
 | Anthropic Claude | No | Required | Claude 3.5+ |
-| OpenAI | No | Required | GPT-4, GPT-4 Turbo |
+| OpenAI | No | Required | GPT-4o, GPT-4 Turbo |
 | Groq | No | Required | Ultra-fast inference (Llama, Mixtral) |
 | Grok (xAI) | No | Required | Grok 3, Grok 3 Mini |
+| DeepSeek | No | Required | DeepSeek-V3, DeepSeek-R1 |
 | Ollama | Yes | Not needed | 100% local, free |
 | OpenRouter | No | Required | 100+ models via single API |
+
+- **Multi-instance support**: Multiple named instances per provider with independent API keys and base URLs
+- **Custom URL rebase**: Connect to LiteLLM, vLLM, LocalAI, or any OpenAI-compatible proxy
 
 **TTS Providers:**
 
@@ -185,12 +189,13 @@ Real-time monitoring and analytics platform.
 ### Hub Integrations
 | Category | Integrations |
 |----------|-------------|
-| AI Providers | Gemini, Claude, OpenAI, Groq, Grok, Ollama, OpenRouter |
-| Communication | WhatsApp, Telegram |
+| AI Providers | Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter |
+| Communication | WhatsApp, Telegram, Slack, Discord |
 | Productivity | Asana, Google Calendar |
 | Developer Tools | Shell, Browser Automation |
 | Tool APIs | Brave Search, SerpAPI, Amadeus |
 | TTS Providers | Kokoro, OpenAI, ElevenLabs |
+| MCP Servers | SSE, HTTP Streamable, Stdio transports |
 
 ### Playground
 Interactive agent chat interface for development and testing.
@@ -233,6 +238,14 @@ Programmatic REST API for external applications.
 - Per-contact slash command permissions (enabled/disabled/tenant default)
 - Tenant-level default policy: `enabled_for_known`, `enabled_for_all`, `disabled`
 - `@agent /command` support in WhatsApp/Telegram groups
+
+### Custom Skills
+- **Instruction skills**: Inject domain knowledge and behavioral rules into agent prompts
+- **Script skills**: Python/Bash/Node.js scripts executed in per-tenant sandboxed containers
+- **MCP Server skills**: Connect external MCP servers as tool providers (SSE, HTTP, Stdio transports)
+- Sentinel scanning at save time with dedicated "Custom Skill Scan" profile
+- Agent assignment with per-skill config, flow builder integration
+- Binary allowlist for Stdio transport (uvx, npx, node)
 
 ### SSL/HTTPS
 - Caddy reverse proxy with 3 modes: Let's Encrypt, manual certs, self-signed
@@ -301,8 +314,8 @@ Programmatic REST API for external applications.
 │                                                                              │
 │  ┌──────────────────────────────┐     ┌──────────────────────────────────┐   │
 │  │       SANDBOXED TOOLS        │     │           CHANNELS               │   │
-│  │  Per-tenant Docker isolation  │     │  WhatsApp (MCP)  │  Telegram    │   │
-│  │  9 pre-installed tools        │     │  Playground      │              │   │
+│  │  Per-tenant Docker isolation  │     │  WhatsApp │ Telegram │ Slack    │   │
+│  │  9 pre-installed tools        │     │  Discord  │ Playground          │   │
 │  └──────────────────────────────┘     └──────────────────────────────────┘   │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘

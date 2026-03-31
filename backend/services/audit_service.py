@@ -110,7 +110,7 @@ class AuditService:
         if admin_id:
             query = query.filter(GlobalAdminAuditLog.global_admin_id == admin_id)
         if action:
-            query = query.filter(GlobalAdminAuditLog.action == action)
+            query = query.filter(GlobalAdminAuditLog.action.ilike(f"%{action}%"))
         if target_tenant_id:
             query = query.filter(GlobalAdminAuditLog.target_tenant_id == target_tenant_id)
         if resource_type:
@@ -139,7 +139,7 @@ class AuditService:
         if admin_id:
             query = query.filter(GlobalAdminAuditLog.global_admin_id == admin_id)
         if action:
-            query = query.filter(GlobalAdminAuditLog.action == action)
+            query = query.filter(GlobalAdminAuditLog.action.ilike(f"%{action}%"))
         if target_tenant_id:
             query = query.filter(GlobalAdminAuditLog.target_tenant_id == target_tenant_id)
 
@@ -346,7 +346,7 @@ class TenantAuditService:
         query = self.db.query(AuditEvent).filter(AuditEvent.tenant_id == tenant_id)
 
         if action:
-            query = query.filter(AuditEvent.action.like(f"{action}%"))
+            query = query.filter(AuditEvent.action.ilike(f"%{action}%"))
         if resource_type:
             query = query.filter(AuditEvent.resource_type == resource_type)
         if user_id:
@@ -377,7 +377,7 @@ class TenantAuditService:
         query = self.db.query(sa_func.count(AuditEvent.id)).filter(AuditEvent.tenant_id == tenant_id)
 
         if action:
-            query = query.filter(AuditEvent.action.like(f"{action}%"))
+            query = query.filter(AuditEvent.action.ilike(f"%{action}%"))
         if resource_type:
             query = query.filter(AuditEvent.resource_type == resource_type)
         if user_id:
