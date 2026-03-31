@@ -3,11 +3,14 @@ Phase 5.0: Knowledge Base - API Routes
 REST API endpoints for managing agent document knowledge base.
 """
 
+import io
 import logging
 import os
 import re
 import tempfile
+import zipfile
 from typing import List
+import filetype as ft
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -210,6 +213,38 @@ async def upload_knowledge(
                 detail=f"File too large. Maximum size is {MAX_FILE_SIZE_BYTES // (1024*1024)} MB"
             )
 
+        # SEC-019: Validate actual file content via magic bytes (prevent extension spoofing)
+        # txt/csv/json have no reliable magic bytes — extension check is sufficient for those
+        MIME_MAP = {
+            ".pdf": "application/pdf",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        expected_mime = MIME_MAP.get(file_ext)
+        if expected_mime is not None:
+            kind = ft.guess(content)
+            if kind is None or kind.mime != expected_mime:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File content does not match declared type '{file_ext}'"
+                )
+
+        # SEC-019: ZIP bomb protection for DOCX (DOCX is a ZIP-based format)
+        if file_ext == ".docx":
+            MAX_UNCOMPRESSED = 100 * 1024 * 1024  # 100 MB uncompressed limit
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                    total_uncompressed = sum(info.file_size for info in zf.infolist())
+                    if total_uncompressed > MAX_UNCOMPRESSED:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="DOCX file exceeds maximum uncompressed size limit"
+                        )
+            except zipfile.BadZipFile:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid DOCX file (bad ZIP structure)"
+                )
+
         # Save uploaded file to temporary location
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
             tmp_file.write(content)
@@ -239,6 +274,8 @@ async def upload_knowledge(
 
         return KnowledgeResponse.from_orm(knowledge)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error uploading knowledge: {e}")
         raise HTTPException(status_code=500, detail=str(e))

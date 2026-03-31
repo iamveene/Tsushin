@@ -3,11 +3,14 @@ Authentication Dependencies
 Phase 7.6.4 - Reusable FastAPI Dependencies
 
 Provides common dependencies for authentication and authorization.
+
+SEC-005: Supports httpOnly cookie auth (tsushin_session) with Bearer token fallback
+for API clients and WebSocket connections that cannot use cookies.
 """
 
 from datetime import datetime
 from typing import Optional
-from fastapi import Depends, HTTPException, status, Header
+from fastapi import Depends, HTTPException, Request, status, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -15,27 +18,56 @@ from db import get_db
 from models_rbac import User
 from auth_service import AuthService
 
-security = HTTPBearer(auto_error=False)  # Optional auth
+security = HTTPBearer(auto_error=False)  # Optional auth — kept for OpenAPI docs
+
+
+def _extract_token(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials],
+) -> Optional[str]:
+    """
+    SEC-005: Extract JWT from httpOnly cookie (preferred) or Authorization Bearer (fallback).
+
+    Priority:
+    1. tsushin_session httpOnly cookie — set by backend on login/signup
+    2. Authorization: Bearer <token> — for API clients, WebSocket auth, curl
+
+    Returns the raw token string or None if no auth is present.
+    """
+    # Priority 1: httpOnly cookie (browser sessions)
+    token = request.cookies.get("tsushin_session")
+    if token:
+        return token
+
+    # Priority 2: Bearer token (API clients, WebSocket, mobile)
+    if credentials:
+        return credentials.credentials
+
+    return None
 
 
 def get_current_user_optional(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db)
 ) -> Optional[User]:
     """
     Get current user from JWT token (optional - returns None if not authenticated)
 
+    SEC-005: Checks httpOnly cookie first, then Authorization Bearer header.
+
     Args:
+        request: FastAPI request (for cookie access)
         credentials: HTTP authorization credentials (optional)
         db: Database session
 
     Returns:
         User object if authenticated, None otherwise
     """
-    if not credentials:
+    token = _extract_token(request, credentials)
+    if not token:
         return None
 
-    token = credentials.credentials
     auth_service = AuthService(db)
 
     # Verify token
@@ -53,13 +85,17 @@ def get_current_user_optional(
 
 
 def get_current_user_required(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
     """
     Get current user from JWT token (required - raises 401 if not authenticated)
 
+    SEC-005: Checks httpOnly cookie first, then Authorization Bearer header.
+
     Args:
+        request: FastAPI request (for cookie access)
         credentials: HTTP authorization credentials
         db: Database session
 
@@ -69,14 +105,14 @@ def get_current_user_required(
     Raises:
         HTTPException: 401 if not authenticated or token invalid
     """
-    if not credentials:
+    token = _extract_token(request, credentials)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token = credentials.credentials
     auth_service = AuthService(db)
 
     # Verify token

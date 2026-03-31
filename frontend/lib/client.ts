@@ -50,14 +50,15 @@ async function handleApiError(res: Response, defaultMessage: string): Promise<ne
  * Automatically adds Authorization header if token is present in localStorage
  */
 function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  // Get token from localStorage (only in browser)
+  // SEC-005: Primary auth is httpOnly cookie (sent automatically via credentials: 'include').
+  // Bearer token from localStorage is a FALLBACK for non-cookie scenarios (API clients, mobile).
   const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
 
   const headers: HeadersInit = {
     ...options.headers,
   }
 
-  // Add Authorization header if token exists
+  // Add Authorization header as fallback if token exists (cookie takes priority on backend)
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
@@ -80,6 +81,7 @@ function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Res
   return fetch(url, {
     ...options,
     headers,
+    credentials: 'include',  // SEC-005: Send httpOnly session cookie automatically
   })
 }
 

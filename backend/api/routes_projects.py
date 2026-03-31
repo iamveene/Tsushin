@@ -453,7 +453,7 @@ async def get_project_knowledge_chunks(
     current_user: User = Depends(get_current_user_required)
 ):
     """Get chunks for a project knowledge document."""
-    from models import ProjectKnowledgeChunk
+    from models import ProjectKnowledge, ProjectKnowledgeChunk
 
     service = ProjectService(db)
 
@@ -466,6 +466,14 @@ async def get_project_knowledge_chunks(
 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify doc_id belongs to this project (prevents cross-tenant IDOR)
+    doc = db.query(ProjectKnowledge).filter(
+        ProjectKnowledge.id == doc_id,
+        ProjectKnowledge.project_id == project_id
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found in this project")
 
     # Get chunks
     chunks = db.query(ProjectKnowledgeChunk).filter(
@@ -838,7 +846,7 @@ async def update_project_agents(
 
     Replaces all agent access with the provided list.
     """
-    from models import Project, AgentProjectAccess
+    from models import Agent as AgentModel, Project, AgentProjectAccess
 
     # Verify project exists in tenant
     project = db.query(Project).filter(
@@ -848,6 +856,18 @@ async def update_project_agents(
 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # BUG-LOG-014 FIX: Verify all agents belong to the caller's tenant
+    if data.agent_ids:
+        valid_agent_ids = set(
+            row[0] for row in db.query(AgentModel.id).filter(
+                AgentModel.id.in_(data.agent_ids),
+                AgentModel.tenant_id == current_user.tenant_id
+            ).all()
+        )
+        invalid_ids = set(data.agent_ids) - valid_agent_ids
+        if invalid_ids:
+            raise HTTPException(status_code=404, detail=f"Agents not found: {list(invalid_ids)}")
 
     # Remove existing access
     db.query(AgentProjectAccess).filter(

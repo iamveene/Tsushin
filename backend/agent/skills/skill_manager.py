@@ -536,6 +536,15 @@ class SkillManager:
                     config['tenant_id'] = config.get('tenant_id') or agent_obj.tenant_id
             config['agent_id'] = agent_id
 
+            # BUG-LOG-006 FIX: Propagate A2A comm_depth and parent_session_id from message
+            # so agent_communication_skill can enforce depth limits on chained delegations
+            if message:
+                if hasattr(message, 'metadata') and message.metadata:
+                    if 'comm_depth' in message.metadata:
+                        config['comm_depth'] = message.metadata['comm_depth']
+                    if 'comm_parent_session_id' in message.metadata:
+                        config['comm_parent_session_id'] = message.metadata['comm_parent_session_id']
+
             # Validate arguments against input schema
             mcp_def = skill_class.get_mcp_tool_definition()
             if mcp_def and mcp_def.get("inputSchema"):

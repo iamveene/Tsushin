@@ -201,6 +201,7 @@ class ApiClientService:
                 "tenant_id": client.tenant_id,
                 "client_id": client.client_id,
                 "scopes": scopes,
+                "secret_rotated_at": client.secret_rotated_at.isoformat() if client.secret_rotated_at else None,
             },
             expires_delta=expires_delta,
         )
@@ -232,6 +233,7 @@ class ApiClientService:
         raw_secret = f"tsn_cs_{secrets.token_urlsafe(32)}"
         client.client_secret_hash = hash_password(raw_secret)
         client.client_secret_prefix = raw_secret[:12]
+        client.secret_rotated_at = datetime.utcnow()
         client.updated_at = datetime.utcnow()
         self.db.commit()
 

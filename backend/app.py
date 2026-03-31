@@ -1075,24 +1075,32 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS - Configurable origins via TSN_CORS_ORIGINS env var
-# Default: "*" (allow all) for backward compatibility / development
+# Default: "*" (reflect requesting origin) for backward compatibility / development
 # Production: set TSN_CORS_ORIGINS=https://app.example.com,https://admin.example.com
+# SEC-005: credentials=True is required for httpOnly cookie auth
 _cors_origins_str = os.getenv("TSN_CORS_ORIGINS", "*")
+_cors_origin_regex = None
 if _cors_origins_str.strip() == "*":
-    _cors_origins = ["*"]
-    _cors_allow_credentials = False  # Must be False when using wildcard per CORS spec
+    # SEC-005 / CORS FIX: Use origin reflection instead of literal "*" wildcard.
+    # Literal "*" with credentials=True is rejected by browsers.
+    # allow_origin_regex=".*" reflects the requesting origin with credentials support.
+    _cors_origins = []
+    _cors_origin_regex = ".*"
+    _cors_allow_credentials = True
 else:
     _cors_origins = [origin.strip() for origin in _cors_origins_str.split(",") if origin.strip()]
+    _cors_origin_regex = None
     _cors_allow_credentials = True  # Safe to allow credentials with explicit origins
 
-logger.info(f"CORS origins: {_cors_origins} (credentials={_cors_allow_credentials})")
+logger.info(f"CORS origins: {_cors_origins or 'reflect-all'} (credentials={_cors_allow_credentials})")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=_cors_allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Requested-With"],
     max_age=86400,  # Cache preflight for 24 hours
 )
 
@@ -1142,19 +1150,23 @@ async def add_security_headers(request: Request, call_next):
 def _cors_headers_for_request(request: Request) -> dict:
     """Build CORS headers consistent with the configured origins."""
     origin = request.headers.get("origin", "")
-    if _cors_origins == ["*"]:
-        return {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        }
+    if _cors_origin_regex:
+        # Reflect requesting origin (SEC-005: supports credentials with any origin)
+        if origin:
+            return {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, X-API-Key, X-Requested-With",
+            }
+        return {}
     # Only reflect the origin if it's in the allowed list
     if origin in _cors_origins:
         return {
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-API-Key, X-Requested-With",
         }
     # Origin not allowed — omit CORS headers entirely
     return {}
@@ -1307,12 +1319,21 @@ async def playground_websocket_endpoint(websocket: WebSocket, db: Session = Depe
         await websocket.accept()
         logger.info("WebSocket connection accepted, waiting for auth message...")
 
-        # HIGH-001 FIX: Support both first-message auth (secure) and query param auth (legacy)
-        # New clients send token in first message; old clients may still use query params
-        query_params = dict(websocket.query_params)
-        token = query_params.get("token")
+        # SEC-005: Support cookie auth (primary), first-message auth, and query param auth (legacy)
+        token = None
 
-        if token:
+        # Priority 1: httpOnly cookie (sent automatically with WS upgrade)
+        cookie_token = websocket.cookies.get("tsushin_session")
+        if cookie_token:
+            token = cookie_token
+            logger.info("WebSocket auth via httpOnly cookie")
+
+        # Priority 2: Query param (legacy, deprecated)
+        if not token:
+            query_params = dict(websocket.query_params)
+            token = query_params.get("token")
+
+        if token and not cookie_token:
             # Legacy mode: token in query params (will be deprecated)
             logger.warning("WebSocket using legacy query param auth (insecure) - please update client")
         else:

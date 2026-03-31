@@ -201,8 +201,10 @@ class ContactResolver:
 
         except Exception as e:
             self.logger.error(f"Error creating anonymous contact for sender {sender}: {e}")
-            # Fallback: return a hash-based ID
-            return hash(sender) % 1000000
+            # BUG-LOG-018 FIX: Re-raise instead of returning phantom hash-based ID
+            # that corrupts memory isolation and produces FK constraint failures.
+            # Callers should handle the exception or use sender-string-based memory key.
+            raise
 
     def get_memory_key(
         self,

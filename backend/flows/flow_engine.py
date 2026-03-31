@@ -20,6 +20,7 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from models import (
     FlowDefinition, FlowNode, FlowRun, FlowNodeRun,
@@ -1865,13 +1866,24 @@ class SubflowStepHandler(FlowStepHandler):
             else:
                 child_context[target_key] = source_value
 
+        # SEC: Validate target flow belongs to same tenant (BUG-LOG-002)
+        target_flow = self.db.query(FlowDefinition).filter(
+            FlowDefinition.id == target_flow_id,
+            FlowDefinition.tenant_id == flow_run.tenant_id
+        ).first()
+        if not target_flow:
+            raise FlowValidationError(
+                f"Subflow {target_flow_id} not found or belongs to different tenant"
+            )
+
         logger.info(f"Starting subflow {target_flow_id}")
 
         child_run = await self.flow_engine.run_flow(
             flow_definition_id=target_flow_id,
             trigger_context=child_context,
             initiator="subflow",
-            parent_run_id=flow_run.id
+            parent_run_id=flow_run.id,
+            tenant_id=flow_run.tenant_id
         )
 
         return {
@@ -2271,10 +2283,10 @@ class FlowEngine:
         while True:
             idempotency_key = self.generate_idempotency_key(flow_run.id, step.id, retry_count)
 
-            # Check if already executed (idempotency)
+            # BUG-LOG-010: Use SELECT FOR UPDATE to prevent TOCTOU race
             existing = self.db.query(FlowNodeRun).filter(
                 FlowNodeRun.idempotency_key == idempotency_key
-            ).first()
+            ).with_for_update(skip_locked=True).first()
 
             if existing and existing.status == "completed":
                 logger.info(f"Step {step.id} already executed (idempotency key: {idempotency_key})")
@@ -2290,9 +2302,19 @@ class FlowEngine:
                 idempotency_key=idempotency_key,
                 retry_count=retry_count
             )
-            self.db.add(step_run)
-            self.db.commit()
-            self.db.refresh(step_run)
+            try:
+                self.db.add(step_run)
+                self.db.commit()
+                self.db.refresh(step_run)
+            except IntegrityError:
+                self.db.rollback()
+                existing = self.db.query(FlowNodeRun).filter(
+                    FlowNodeRun.idempotency_key == idempotency_key
+                ).first()
+                if existing:
+                    logger.info(f"BUG-LOG-010: Concurrent insert detected for step {step.id}, returning existing record")
+                    return existing
+                raise
 
             try:
                 # Get handler for step type (case-insensitive)
@@ -2450,7 +2472,8 @@ class FlowEngine:
         initiator: str = "api",
         trigger_type: str = "immediate",
         triggered_by: Optional[str] = None,
-        parent_run_id: Optional[int] = None
+        parent_run_id: Optional[int] = None,
+        tenant_id: Optional[int] = None
     ) -> FlowRun:
         """
         Main execution entry point.
@@ -2468,10 +2491,27 @@ class FlowEngine:
         """
         logger.info(f"Starting flow run for definition {flow_definition_id}")
 
-        # Load flow definition
-        flow = self.db.query(FlowDefinition).filter(FlowDefinition.id == flow_definition_id).first()
+        # Load flow definition (with tenant filter when provided — BUG-LOG-002)
+        query = self.db.query(FlowDefinition).filter(FlowDefinition.id == flow_definition_id)
+        if tenant_id:
+            query = query.filter(FlowDefinition.tenant_id == tenant_id)
+        flow = query.first()
         if not flow:
             raise FlowValidationError(f"Flow definition {flow_definition_id} not found")
+
+        # BUG-LOG-007: Clean up stale flow runs stuck in "running"
+        stale_cutoff = datetime.utcnow() - timedelta(hours=1)
+        stale_runs = self.db.query(FlowRun).filter(
+            FlowRun.status == "running",
+            FlowRun.started_at < stale_cutoff
+        ).all()
+        for stale in stale_runs:
+            stale.status = "failed"
+            stale.error_text = "Recovered: flow was stuck in running state (process crash or timeout)"
+            stale.completed_at = datetime.utcnow()
+        if stale_runs:
+            self.db.commit()
+            logger.info(f"BUG-LOG-007: Recovered {len(stale_runs)} stale flow runs")
 
         # Get tenant from flow
         tenant_id = flow.tenant_id
@@ -2529,6 +2569,12 @@ class FlowEngine:
             completed_step_runs: List[FlowNodeRun] = []
 
             for step in steps:
+                # BUG-LOG-011: Check for cancellation between steps
+                self.db.refresh(flow_run)
+                if flow_run.status in ("cancelled", "failed"):
+                    logger.info(f"Flow run {flow_run.id} was {flow_run.status} externally, stopping execution")
+                    break
+
                 logger.info(f"Executing step {step.position}: {step.type} ({step.name or 'unnamed'})")
 
                 # Phase 13.1: Build comprehensive step context with all previous step outputs
@@ -2566,7 +2612,10 @@ class FlowEngine:
 
             # Mark as completed if not already failed
             if flow_run.status != "failed":
-                flow_run.status = "completed"
+                if flow_run.failed_steps > 0:
+                    flow_run.status = "completed_with_errors"
+                else:
+                    flow_run.status = "completed"
 
             flow_run.completed_at = datetime.utcnow()
 
