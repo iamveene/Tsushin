@@ -45,6 +45,9 @@ class Config(Base):
     # Emergency Stop (Bug Fix 2026-01-06)
     emergency_stop = Column(Boolean, default=False)
 
+    # Sentinel fail behavior (LOG-020): "open" allows messages on Sentinel error, "closed" blocks them
+    sentinel_fail_behavior = Column(String(10), default="open")
+
     # Conversation delay (global, WhatsApp-only)
     whatsapp_conversation_delay_seconds = Column(Float, default=5.0)
 
