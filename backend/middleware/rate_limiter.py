@@ -66,6 +66,20 @@ class SlidingWindowRateLimiter:
                 return max(0, max_requests - len(self._windows[key]))
             return max_requests
 
+    def reset_time(self, key: str, window_seconds: int = 60) -> int:
+        """Get the UTC epoch timestamp when the oldest request in the window expires."""
+        now = time.time()
+        cutoff = now - window_seconds
+
+        with self._lock:
+            if key in self._windows:
+                active = [t for t in self._windows[key] if t > cutoff]
+                if active:
+                    # The oldest request expires at its timestamp + window_seconds
+                    return int(min(active) + window_seconds)
+            # No active requests — reset is a full window from now
+            return int(now + window_seconds)
+
 
 # Global rate limiter instance
 api_rate_limiter = SlidingWindowRateLimiter()
@@ -177,6 +191,7 @@ class ApiV1RateLimitMiddleware(BaseHTTPMiddleware):
                         "Retry-After": "60",
                         "X-RateLimit-Limit": str(rate_limit),
                         "X-RateLimit-Remaining": str(remaining),
+                        "X-RateLimit-Reset": str(api_rate_limiter.reset_time(rate_key)),
                         "X-Request-Id": request_id,
                     },
                 )
@@ -197,5 +212,6 @@ class ApiV1RateLimitMiddleware(BaseHTTPMiddleware):
             remaining = api_rate_limiter.remaining(rate_key, rate_limit)
             response.headers["X-RateLimit-Limit"] = str(rate_limit)
             response.headers["X-RateLimit-Remaining"] = str(remaining)
+            response.headers["X-RateLimit-Reset"] = str(api_rate_limiter.reset_time(rate_key))
 
         return response

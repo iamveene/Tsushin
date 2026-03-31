@@ -37,10 +37,13 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     status: str
     message: Optional[str] = None
+    response: Optional[str] = None  # Alias for message (backward compat)
     agent_name: Optional[str] = None
     thread_id: Optional[int] = None
     tool_used: Optional[str] = None
     execution_time_ms: Optional[int] = None
+    processing_time_ms: Optional[int] = None  # Alias for execution_time_ms
+    tokens_used: Optional[int] = None
     timestamp: str
     error: Optional[str] = None
 
@@ -200,16 +203,30 @@ async def _process_sync(agent, agent_name, request, caller, db):
             agent_name=agent_name,
             thread_id=thread_id,
             execution_time_ms=execution_time_ms,
+            processing_time_ms=execution_time_ms,
             timestamp=datetime.utcnow().isoformat() + "Z",
         )
 
+    # Extract token usage from result (agent returns tokens dict with "total" key)
+    tokens = result.get("tokens")
+    tokens_used = None
+    if isinstance(tokens, dict):
+        tokens_used = tokens.get("total")
+    elif isinstance(tokens, (int, float)):
+        tokens_used = int(tokens)
+
+    response_text = result.get("message") or result.get("answer")
+
     return ChatResponse(
         status="success",
-        message=result.get("message") or result.get("answer"),
+        message=response_text,
+        response=response_text,
         agent_name=agent_name,
         thread_id=thread_id,
         tool_used=result.get("tool_used"),
         execution_time_ms=execution_time_ms,
+        processing_time_ms=execution_time_ms,
+        tokens_used=tokens_used,
         timestamp=datetime.utcnow().isoformat() + "Z",
     )
 

@@ -734,6 +734,7 @@ class PlaygroundService:
                 "message": result.get("answer") or "",
                 "tool_used": result.get("tool_used"),
                 "execution_time": result.get("execution_time"),
+                "tokens": result.get("tokens"),  # Token usage from AI provider
                 "agent_name": agent_name,
                 "kb_used": result.get("kb_used", []),  # KB usage tracking
                 "timestamp": datetime.utcnow().isoformat() + "Z",
