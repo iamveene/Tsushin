@@ -329,8 +329,11 @@ class AgentSwitcherSkill(BaseSkill):
             mapping.agent_id = agent_id
             mapping.updated_at = datetime.utcnow()
         else:
-            # Create new mapping (BUG-LOG-012: include tenant_id)
+            # Create new mapping (BUG-LOG-012: include tenant_id from skill config or agent)
             _tenant_id = (self._config or {}).get("tenant_id")
+            if not _tenant_id:
+                agent_obj = self.db_session.query(Agent).filter(Agent.id == agent_id).first()
+                _tenant_id = agent_obj.tenant_id if agent_obj else None
             logger.info(f"AgentSwitcherSkill: Creating new mapping - Contact {contact_id} → Agent {agent_id}")
             mapping = ContactAgentMapping(
                 contact_id=contact_id,
