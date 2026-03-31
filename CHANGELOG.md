@@ -5,7 +5,39 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2026-03-30
+## [0.6.0] - 2026-03-31
+
+### Fixed
+
+#### Critical/High Bug Remediation Sprint (2026-03-31)
+
+**Security (5 fixes):**
+- **(SEC-005) httpOnly Cookie Auth — Phase 1**: Backend sets `tsushin_session` httpOnly cookie on login/signup/invite-accept. `auth_dependencies.py` checks cookie first, Bearer token as fallback. WebSocket accepts cookie auth from upgrade request. Logout endpoint clears cookie. Frontend `authenticatedFetch()` sends `credentials: 'include'`.
+- **(SEC-010) API Client JWT Revocation on Secret Rotation**: Added `secret_rotated_at` column to `ApiClient`. JWT claim includes rotation timestamp. `_resolve_api_client_jwt` rejects tokens issued before last rotation. DB migration included.
+- **(SEC-019) File Upload Magic Bytes Validation**: PDF and DOCX uploads validated via `filetype` library magic bytes check. ZIP bomb protection for DOCX with 100MB uncompressed size limit. Extension-only validation for text formats (txt/csv/json).
+- **(LOG-020) Sentinel Configurable Fail Behavior**: Sentinel pre-check exception handling now supports `sentinel_fail_behavior` config field (`"open"` | `"closed"`). Fail-closed blocks message and logs structured error instead of silently allowing.
+- **CORS Hardening**: Replaced wildcard `"*"` with origin reflection (`allow_origin_regex=".*"`) for `credentials: true` support. Restricted `allow_methods` and `allow_headers` from `"*"` to explicit lists. Exception handlers updated to match.
+
+**Multi-Tenancy Isolation (6 fixes):**
+- **(LOG-002) Cross-Tenant Subflow Execution**: `SubflowStepHandler` validates target flow belongs to same tenant before execution. `run_flow()` accepts optional `tenant_id` filter.
+- **(LOG-003) Cross-Tenant Memory Query Leakage**: `_get_thread_messages()` in `conversation_knowledge_service.py` now scopes Memory queries by agent_ids belonging to the caller's tenant.
+- **(LOG-004) Cross-Tenant Document Chunk IDOR**: `get_project_knowledge_chunks()` verifies `doc_id` belongs to the verified `project_id` before returning chunks.
+- **(LOG-012) ContactAgentMapping Tenant Isolation**: Added `tenant_id` column with DB migration + backfill from agent's tenant. Router contact lookup scoped by MCP instance's tenant.
+- **(LOG-014) Cross-Tenant Agent-to-Project Assignment**: `update_project_agents()` validates each `agent_id` belongs to the caller's tenant before creating `AgentProjectAccess` records.
+- **(LOG-018) Anonymous Contact Hash Fallback**: Replaced `hash(sender) % 1000000` phantom ID fallback with re-raise. Callers use sender-string-based memory key.
+
+**Flow Engine (3 fixes):**
+- **(LOG-007) Stale Flow Run Recovery**: `run_flow()` resets "running" flows older than 1 hour to "failed" on startup. `on_failure=continue` with failed steps now reports `"completed_with_errors"` instead of `"completed"`.
+- **(LOG-010) Step Idempotency TOCTOU**: SELECT FOR UPDATE with `skip_locked=True` + IntegrityError handling prevents concurrent step execution race.
+- **(LOG-011) Flow Cancellation**: `db.refresh(flow_run)` between steps detects external cancellation and breaks the execution loop.
+
+**Logic (2 fixes):**
+- **(LOG-006) A2A Depth Limit Enforcement**: `SkillManager.execute_tool_call()` propagates `comm_depth` and `comm_parent_session_id` from message metadata into skill config for chained delegation depth tracking.
+- **Already fixed (validated):** SEC-001 (admin password reset JWT invalidation), SEC-008 (update_client privilege escalation check), SEC-016 (shell queue_command tenant policies).
+
+---
+
+## [0.6.0-rc1] - 2026-03-30
 
 ### Added
 
