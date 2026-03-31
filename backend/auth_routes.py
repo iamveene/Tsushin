@@ -1085,11 +1085,14 @@ async def exchange_sso_code(
     try:
         jwt_token, redirect_after = _exchange_sso_callback_code(db, exchange_request.code)
 
-        return SSOCodeExchangeResponse(
-            access_token=jwt_token,
-            token_type="bearer",
-            redirect_after=redirect_after
-        )
+        # SEC-005: Set httpOnly session cookie on SSO code exchange
+        response = JSONResponse(content={
+            "access_token": jwt_token,
+            "token_type": "bearer",
+            "redirect_after": redirect_after,
+        })
+        _set_session_cookie(response, jwt_token)
+        return response
 
     except ValueError as e:
         logger.warning(f"SSO code exchange failed: {e}")

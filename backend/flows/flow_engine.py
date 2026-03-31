@@ -2473,7 +2473,7 @@ class FlowEngine:
         trigger_type: str = "immediate",
         triggered_by: Optional[str] = None,
         parent_run_id: Optional[int] = None,
-        tenant_id: Optional[int] = None
+        tenant_id: Optional[str] = None
     ) -> FlowRun:
         """
         Main execution entry point.

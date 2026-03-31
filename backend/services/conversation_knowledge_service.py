@@ -133,9 +133,13 @@ class ConversationKnowledgeService:
             ).all()
         ]
 
+        if not tenant_agent_ids:
+            self.logger.warning(f"[Phase 14.6] No agents found for tenant {tenant_id}, returning empty")
+            return []
+
         memory_records = self.db.query(Memory).filter(
             Memory.sender_key.like(sender_key_pattern),
-            Memory.agent_id.in_(tenant_agent_ids) if tenant_agent_ids else False
+            Memory.agent_id.in_(tenant_agent_ids)
         ).all()
 
         self.logger.info(f"[Phase 14.6] Found {len(memory_records)} memory records for thread {thread_id}")
