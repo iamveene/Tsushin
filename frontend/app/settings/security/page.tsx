@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, SSOConfig, PlatformSSOStatus, SSOConfigUpdate } from '@/lib/client'
+import { api, authenticatedFetch, SSOConfig, PlatformSSOStatus, SSOConfigUpdate } from '@/lib/client'
 import Link from 'next/link'
 import ToggleSwitch from '@/components/ui/ToggleSwitch'
 
@@ -62,13 +62,7 @@ export default function SecuritySettingsPage() {
   // Fetch Google credentials from centralized location
   const fetchGoogleCredentials = useCallback(async () => {
     try {
-      const token = localStorage.getItem('tsushin_auth_token')
-      const response = await fetch(`${apiUrl}/api/hub/google/credentials`, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/credentials`)
 
       if (response.ok) {
         const data = await response.json()
@@ -84,13 +78,7 @@ export default function SecuritySettingsPage() {
   // Fetch encryption keys from config
   const fetchEncryptionKeys = useCallback(async () => {
     try {
-      const token = localStorage.getItem('tsushin_auth_token')
-      const response = await fetch(`${apiUrl}/api/config`, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/config`)
 
       if (response.ok) {
         const config = await response.json()
@@ -143,18 +131,13 @@ export default function SecuritySettingsPage() {
     setEncryptionKeySuccess(null)
 
     try {
-      const token = localStorage.getItem('tsushin_auth_token')
       const updateData: any = {}
 
       if (googleEncryptionKey) updateData.google_encryption_key = googleEncryptionKey
       if (asanaEncryptionKey) updateData.asana_encryption_key = asanaEncryptionKey
 
-      const response = await fetch(`${apiUrl}/api/config`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/config`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
         body: JSON.stringify(updateData)
       })
 
