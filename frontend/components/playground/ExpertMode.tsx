@@ -8,7 +8,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { PlaygroundAgentInfo, PlaygroundMessage, SlashCommand, ProjectSession, Project, AudioCapabilities, PlaygroundThread } from '@/lib/client'
+import { PlaygroundAgentInfo, PlaygroundMessage, SlashCommand, ProjectSession, Project, AudioCapabilities, PlaygroundThread, authenticatedFetch } from '@/lib/client'
 import { ConnectionState } from '@/lib/websocket'
 import { formatTime } from '@/lib/dateUtils'
 import {
@@ -262,15 +262,9 @@ export default function ExpertMode({
       setLoadingTools(true)
       try {
         const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
-        const token = localStorage.getItem('tsushin_auth_token')
 
         // Use agent-specific tools endpoint instead of global toolbox
-        const response = await fetch(`${baseUrl}/api/playground/tools/${selectedAgentId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        })
+        const response = await authenticatedFetch(`${baseUrl}/api/playground/tools/${selectedAgentId}`)
 
         if (response.ok) {
           const data = await response.json()

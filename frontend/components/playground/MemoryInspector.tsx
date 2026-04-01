@@ -21,6 +21,7 @@ import {
   DocumentIcon
 } from '@/components/ui/icons'
 import { formatDateTime } from '@/lib/dateUtils'
+import { authenticatedFetch } from '@/lib/client'
 
 interface MemoryMessage {
   role: string
@@ -102,11 +103,7 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
         url.searchParams.set('sender_key', senderKey)
       }
 
-      const response = await fetch(url.toString(), {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-        }
-      })
+      const response = await authenticatedFetch(url.toString())
 
       if (response.ok) {
         const data = await response.json()
@@ -137,11 +134,8 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
         url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/agents/${agentId}/knowledge/${fact.id}`
       }
 
-      const response = await fetch(url, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-        }
+      const response = await authenticatedFetch(url, {
+        method: 'DELETE'
       })
 
       if (response.ok) {
@@ -199,12 +193,8 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
         }
       }
 
-      const response = await fetch(url, {
+      const response = await authenticatedFetch(url, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`,
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify(body)
       })
 
@@ -271,12 +261,8 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
         }
       }
 
-      const response = await fetch(url, {
+      const response = await authenticatedFetch(url, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`,
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify(body)
       })
 

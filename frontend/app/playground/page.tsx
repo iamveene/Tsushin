@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, PlaygroundAgentInfo, PlaygroundMessage, AudioCapabilities, PlaygroundDocument, PlaygroundSettings, ProjectSession, Project, SlashCommand, PlaygroundThread } from '@/lib/client'
+import { api, authenticatedFetch, PlaygroundAgentInfo, PlaygroundMessage, AudioCapabilities, PlaygroundDocument, PlaygroundSettings, ProjectSession, Project, SlashCommand, PlaygroundThread } from '@/lib/client'
 import { formatTime } from '@/lib/dateUtils'
 import DocumentPanel from '@/components/playground/DocumentPanel'
 import PlaygroundSettingsModal from '@/components/playground/PlaygroundSettings'
@@ -1403,11 +1403,7 @@ export default function PlaygroundPage() {
   const fetchAvailableTools = async (agentId: number) => {
     try {
       const apiBase = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || '')
-      const response = await fetch(`${apiBase}/api/playground/tools/${agentId}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-        }
-      })
+      const response = await authenticatedFetch(`${apiBase}/api/playground/tools/${agentId}`)
 
       if (response.ok) {
         const tools = await response.json()

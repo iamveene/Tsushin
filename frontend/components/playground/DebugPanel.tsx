@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect } from 'react'
+import { authenticatedFetch } from '@/lib/client'
 import {
   BugIcon,
   BotIcon,
@@ -75,13 +76,8 @@ export default function DebugPanel({ agentId }: DebugPanelProps) {
     setError(null)
 
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/debug/${agentId}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-          }
-        }
+      const response = await authenticatedFetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/debug/${agentId}`
       )
 
       if (response.ok) {
