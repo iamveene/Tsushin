@@ -6,6 +6,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { authenticatedFetch } from '@/lib/client'
 
 interface TokenStats {
   total_tokens: number
@@ -68,12 +69,9 @@ export default function BillingTab() {
     try {
       console.log('[BillingTab] Loading analytics data...')
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const authHeaders = {
-        'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-      }
       const [statsRes, agentsRes] = await Promise.all([
-        fetch(`${API_URL}/api/analytics/token-usage/summary?days=${days}`, { headers: authHeaders }).then(r => r.json()),
-        fetch(`${API_URL}/api/analytics/token-usage/by-agent?days=${days}`, { headers: authHeaders }).then(r => r.json())
+        authenticatedFetch(`${API_URL}/api/analytics/token-usage/summary?days=${days}`).then(r => r.json()),
+        authenticatedFetch(`${API_URL}/api/analytics/token-usage/by-agent?days=${days}`).then(r => r.json())
       ])
       console.log('[BillingTab] Stats response:', statsRes)
       console.log('[BillingTab] Agents response:', agentsRes)

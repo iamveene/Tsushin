@@ -49,7 +49,7 @@ async function handleApiError(res: Response, defaultMessage: string): Promise<ne
  * Helper function to create authenticated fetch requests
  * Automatically adds Authorization header if token is present in localStorage
  */
-function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+export function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
   // SEC-005: Primary auth is httpOnly cookie (sent automatically via credentials: 'include').
   // Bearer token from localStorage is a FALLBACK for non-cookie scenarios (API clients, mobile).
   const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
@@ -4382,11 +4382,8 @@ export const api = {
     const formData = new FormData()
     formData.append('audio', audioBlob, 'recording.webm')
 
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-
-    const res = await fetch(`${API_URL}/api/playground/audio?agent_id=${agent_id}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/playground/audio?agent_id=${agent_id}`, {
       method: 'POST',
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       body: formData,
     })
     if (!res.ok) await handleApiError(res, 'Failed to upload audio')
@@ -4409,11 +4406,8 @@ export const api = {
     if (options?.chunkSize) params.append('chunk_size', options.chunkSize.toString())
     if (options?.chunkOverlap) params.append('chunk_overlap', options.chunkOverlap.toString())
 
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-
-    const res = await fetch(`${API_URL}/api/playground/documents?${params}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/playground/documents?${params}`, {
       method: 'POST',
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       body: formData,
     })
     if (!res.ok) await handleApiError(res, 'Failed to upload document')

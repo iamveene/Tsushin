@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import RefreshButton from '@/components/RefreshButton'
+import { authenticatedFetch } from '@/lib/client'
 import { useAuth, useRequireAuth } from '@/contexts/AuthContext'
 import { useOnboarding } from '@/contexts/OnboardingContext'
 import { useToast } from '@/contexts/ToastContext'
@@ -85,9 +86,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
   // Emergency stop status polling
   const checkEmergencyStopStatus = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/api/system/status`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}` }
-      })
+      const response = await authenticatedFetch(`${API_URL}/api/system/status`)
       if (response.ok) {
         const data = await response.json()
         setEmergencyStop(data.emergency_stop || false)
@@ -115,9 +114,8 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
     setCheckingEmergencyStop(true)
     try {
       const endpoint = emergencyStop ? '/api/system/resume' : '/api/system/emergency-stop'
-      const response = await fetch(`${API_URL}${endpoint}`, {
+      const response = await authenticatedFetch(`${API_URL}${endpoint}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}` }
       })
       if (response.ok) {
         const data = await response.json()
