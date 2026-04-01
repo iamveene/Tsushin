@@ -56,7 +56,7 @@ class User(Base):
     # SSO / Authentication fields
     auth_provider = Column(String(20), default='local', index=True)  # local, google
     google_id = Column(String(255), unique=True, nullable=True, index=True)
-    avatar_url = Column(String(500), nullable=True)
+    avatar_url = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login_at = Column(DateTime, nullable=True)

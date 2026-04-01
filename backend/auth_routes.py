@@ -1057,8 +1057,10 @@ async def google_sso_callback(
         )
     except Exception as e:
         logger.exception(f"Unexpected error during Google SSO: {e}")
+        import urllib.parse
+        error_detail = urllib.parse.quote(str(e) or "Authentication failed")
         return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/auth/login?error=Authentication+failed",
+            url=f"{settings.FRONTEND_URL}/auth/login?error={error_detail}",
             status_code=302
         )
 

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Google SSO Enrollment Fixes (2026-04-01)
+
+- **(BUG-246) Soft delete locks SSO re-enrollment**: Team member removal now uses hard delete instead of soft delete. Soft delete left `google_id` linked to a deactivated record, permanently blocking re-enrollment. SSO lookups now also filter `deleted_at` as defense-in-depth. Comprehensive FK cleanup across 12+ tables on user removal.
+- **(BUG-247) Avatar URL exceeds column length**: Google profile avatar URLs can exceed 800 characters. `avatar_url` column changed from `VARCHAR(500)` to `TEXT`. Generic SSO error handler now surfaces actual error detail instead of opaque "Authentication failed".
+
+### Changed
+
+#### Google SSO Auto-Provisioning UI (2026-04-01)
+
+- Auto-provision defaults to **off** (pre-registration required). Users must be added via Team > Invite before signing in with Google SSO.
+- Added contextual disclaimer in Settings > Security explaining enrollment behavior for both modes (auto-provision on vs off).
+- Updated "How Google Sign-In Works" info section with complete enrollment flow documentation.
+
 #### Critical/High Bug Remediation Sprint (2026-03-31)
 
 **Security (5 fixes):**
