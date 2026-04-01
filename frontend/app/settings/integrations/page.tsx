@@ -9,6 +9,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
+import { authenticatedFetch } from '@/lib/client'
 
 interface GoogleCredentials {
   id: number
@@ -36,21 +37,11 @@ export default function IntegrationsSettingsPage() {
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
 
-  const getAuthHeaders = useCallback(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }, [])
-
   // ---- Google OAuth functions ----
 
   const fetchGoogleCredentials = useCallback(async () => {
     try {
-      const response = await fetch(`${apiUrl}/api/hub/google/credentials`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/credentials`)
       if (response.ok) {
         setGoogleCredentials(await response.json())
       } else if (response.status === 404) {
@@ -59,7 +50,7 @@ export default function IntegrationsSettingsPage() {
     } catch (err) {
       console.error('Error fetching Google credentials:', err)
     }
-  }, [apiUrl, getAuthHeaders])
+  }, [apiUrl])
 
   const handleSaveGoogleCredentials = async () => {
     if (!googleClientId.trim()) { setError('Client ID is required'); return }
@@ -67,8 +58,8 @@ export default function IntegrationsSettingsPage() {
 
     setSaving(true); setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/hub/google/credentials`, {
-        method: 'POST', headers: getAuthHeaders(),
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/credentials`, {
+        method: 'POST',
         body: JSON.stringify({ client_id: googleClientId.trim(), client_secret: googleClientSecret.trim() || undefined })
       })
       if (!response.ok) {
@@ -88,7 +79,7 @@ export default function IntegrationsSettingsPage() {
     if (!confirm('Are you sure you want to remove Google OAuth credentials?\n\nThis will disconnect all Google integrations (Gmail, Calendar) and disable Google SSO.')) return
     setSaving(true); setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/hub/google/credentials`, { method: 'DELETE', headers: getAuthHeaders() })
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/credentials`, { method: 'DELETE' })
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
         throw new Error(errorData.detail || `HTTP ${response.status}`)

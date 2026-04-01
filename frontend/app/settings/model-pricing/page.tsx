@@ -10,6 +10,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
+import { authenticatedFetch } from '@/lib/client'
 
 interface ModelPricing {
   id?: number
@@ -58,20 +59,10 @@ export default function ModelPricingPage() {
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
 
-  const getAuthHeaders = useCallback(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }, [])
-
   const fetchPricing = useCallback(async () => {
     try {
       setLoading(true)
-      const response = await fetch(`${apiUrl}/api/settings/model-pricing`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/settings/model-pricing`)
 
       if (response.ok) {
         const data: PricingResponse = await response.json()
@@ -85,7 +76,7 @@ export default function ModelPricingPage() {
     } finally {
       setLoading(false)
     }
-  }, [apiUrl, getAuthHeaders])
+  }, [apiUrl])
 
   useEffect(() => {
     if (!authLoading && user) {
@@ -109,11 +100,10 @@ export default function ModelPricingPage() {
     setSuccess(null)
 
     try {
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${apiUrl}/api/settings/model-pricing/${model.model_provider}/${model.model_name}`,
         {
           method: 'PUT',
-          headers: getAuthHeaders(),
           body: JSON.stringify({
             model_provider: model.model_provider,
             model_name: model.model_name,
@@ -149,12 +139,9 @@ export default function ModelPricingPage() {
     setSuccess(null)
 
     try {
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${apiUrl}/api/settings/model-pricing/${model.model_provider}/${model.model_name}`,
-        {
-          method: 'DELETE',
-          headers: getAuthHeaders()
-        }
+        { method: 'DELETE' }
       )
 
       if (response.ok) {
@@ -181,9 +168,8 @@ export default function ModelPricingPage() {
     setSuccess(null)
 
     try {
-      const response = await fetch(`${apiUrl}/api/settings/model-pricing/reset`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/settings/model-pricing/reset`, {
+        method: 'POST'
       })
 
       if (response.ok) {

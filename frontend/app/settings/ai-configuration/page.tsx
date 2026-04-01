@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
+import { authenticatedFetch } from '@/lib/client'
 
 interface ProviderOption {
   value: string
@@ -121,14 +122,6 @@ export default function AIConfigurationPage() {
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
 
-  const getAuthHeaders = useCallback(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }, [])
-
   // Fetch current config, providers, and models
   const fetchData = useCallback(async () => {
     try {
@@ -136,9 +129,7 @@ export default function AIConfigurationPage() {
       setError(null)
 
       // Fetch current config
-      const configRes = await fetch(`${apiUrl}/api/config/system-ai`, {
-        headers: getAuthHeaders()
-      })
+      const configRes = await authenticatedFetch(`${apiUrl}/api/config/system-ai`)
 
       if (configRes.ok) {
         const configData = await configRes.json()
@@ -150,9 +141,7 @@ export default function AIConfigurationPage() {
       }
 
       // Fetch available providers
-      const providersRes = await fetch(`${apiUrl}/api/config/system-ai/providers`, {
-        headers: getAuthHeaders()
-      })
+      const providersRes = await authenticatedFetch(`${apiUrl}/api/config/system-ai/providers`)
 
       if (providersRes.ok) {
         const providersData = await providersRes.json()
@@ -160,9 +149,7 @@ export default function AIConfigurationPage() {
       }
 
       // Fetch all models by provider
-      const modelsRes = await fetch(`${apiUrl}/api/config/system-ai/models`, {
-        headers: getAuthHeaders()
-      })
+      const modelsRes = await authenticatedFetch(`${apiUrl}/api/config/system-ai/models`)
 
       if (modelsRes.ok) {
         const modelsData = await modelsRes.json()
@@ -175,7 +162,7 @@ export default function AIConfigurationPage() {
     } finally {
       setLoading(false)
     }
-  }, [apiUrl, getAuthHeaders])
+  }, [apiUrl])
 
   useEffect(() => {
     if (!authLoading && user) {
@@ -209,9 +196,8 @@ export default function AIConfigurationPage() {
     setError(null)
 
     try {
-      const response = await fetch(`${apiUrl}/api/config/system-ai/test`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/config/system-ai/test`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           provider: selectedProvider,
           model_name: selectedModel
@@ -245,9 +231,8 @@ export default function AIConfigurationPage() {
     setSuccess(null)
 
     try {
-      const response = await fetch(`${apiUrl}/api/config/system-ai`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/config/system-ai`, {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           provider: selectedProvider,
           model_name: selectedModel
