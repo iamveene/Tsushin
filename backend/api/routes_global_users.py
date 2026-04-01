@@ -535,15 +535,37 @@ async def delete_user(
 
     if hard_delete:
         # BUG-080 FIX: Clear all FK references before deletion
+        from models_rbac import AuditEvent
+        from models import UserContactMapping
+        from sqlalchemy import text as sa_text
+
+        # SET NULL on nullable FK columns
+        db.query(AuditEvent).filter(AuditEvent.user_id == user.id).update(
+            {AuditEvent.user_id: None}, synchronize_session=False
+        )
+        db.query(UserRole).filter(UserRole.assigned_by == user.id).update(
+            {UserRole.assigned_by: None}, synchronize_session=False
+        )
+        for tbl, col in [
+            ("shell_security_pattern", "created_by"), ("shell_security_pattern", "updated_by"),
+            ("sentinel_config", "created_by"), ("sentinel_config", "updated_by"),
+            ("sentinel_profile", "created_by"), ("sentinel_profile", "updated_by"),
+            ("sentinel_exception", "created_by"), ("sentinel_exception", "updated_by"),
+            ("api_client", "created_by"),
+            ("whatsapp_mcp_instance", "created_by"),
+            ("telegram_bot_instance", "created_by"),
+            ("google_oauth_credentials", "created_by"),
+        ]:
+            db.execute(sa_text(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = :uid"), {"uid": user.id})
+        db.execute(sa_text("UPDATE system_integration SET configured_by_global_admin = NULL WHERE configured_by_global_admin = :uid"), {"uid": user.id})
+        db.execute(sa_text("UPDATE tenant SET created_by_global_admin = NULL WHERE created_by_global_admin = :uid"), {"uid": user.id})
+
+        # Delete from tables with non-nullable FK
         db.query(UserRole).filter(UserRole.user_id == user.id).delete()
         db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
         db.query(UserInvitation).filter(UserInvitation.invited_by == user.id).delete()
         db.query(GlobalAdminAuditLog).filter(GlobalAdminAuditLog.global_admin_id == user.id).delete()
-
-        # SET NULL on nullable audit FK references
-        db.query(UserRole).filter(UserRole.assigned_by == user.id).update(
-            {UserRole.assigned_by: None}, synchronize_session=False
-        )
+        db.query(UserContactMapping).filter(UserContactMapping.user_id == user.id).delete()
 
         # Hard delete
         db.delete(user)

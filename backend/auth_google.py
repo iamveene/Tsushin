@@ -394,8 +394,8 @@ class GoogleSSOService:
         Raises:
             GoogleSSOError: If user cannot be created/found
         """
-        # Try to find by Google ID first
-        user = self.db.query(User).filter(User.google_id == google_id).first()
+        # Try to find by Google ID first (exclude deleted users)
+        user = self.db.query(User).filter(User.google_id == google_id, User.deleted_at.is_(None)).first()
         if user:
             # Update profile info
             user.avatar_url = avatar_url
@@ -405,8 +405,8 @@ class GoogleSSOService:
             self.db.commit()
             return user, False
 
-        # Try to find by email
-        user = self.db.query(User).filter(User.email == email).first()
+        # Try to find by email (exclude deleted users)
+        user = self.db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
         if user:
             # Link Google account to existing user
             user.google_id = google_id

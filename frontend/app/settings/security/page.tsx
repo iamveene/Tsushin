@@ -395,6 +395,24 @@ export default function SecuritySettingsPage() {
                   />
                 </div>
 
+                {/* Auto-provision disclaimer */}
+                <div className={`rounded-md p-3 text-sm ${autoProvision ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200' : 'bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400'}`}>
+                  {autoProvision ? (
+                    <div>
+                      <p className="font-medium text-amber-900 dark:text-amber-100 mb-1">Auto-provisioning is enabled</p>
+                      <p>Any user with a Google account{' '}
+                        {/* domain restriction note */}
+                        can self-enroll and access your workspace on first sign-in. Their account will be created automatically with the default role selected below. You do not need to add them beforehand.
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="font-medium text-gray-700 dark:text-gray-300 mb-1">Pre-registration required (recommended)</p>
+                      <p>Users must be added to the team first (via Settings &gt; Team &gt; Invite) before they can sign in with Google SSO. This gives you full control over who can access your workspace.</p>
+                    </div>
+                  )}
+                </div>
+
                 {autoProvision && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -578,11 +596,12 @@ export default function SecuritySettingsPage() {
           <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-2">
             How Google Sign-In Works
           </h4>
-          <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1 list-disc list-inside">
-            <li>Users can sign in with their Google account from the login page</li>
-            <li>If a user's email is already registered, their accounts will be linked</li>
-            <li>With auto-provisioning, new users are created automatically</li>
-            <li>Domain restrictions limit which email addresses can sign in</li>
+          <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-2 list-disc list-inside">
+            <li><strong>Default (recommended):</strong> Users must be added to your team first via Settings &gt; Team &gt; Invite. Once added, they can sign in with Google SSO using the same email.</li>
+            <li><strong>With auto-provisioning:</strong> Any Google user (matching allowed domains, if set) can self-enroll on first sign-in — no invitation needed.</li>
+            <li>If a user&apos;s email is already registered, their Google account will be linked automatically on first SSO sign-in.</li>
+            <li>Domain restrictions limit which email addresses can sign in, regardless of provisioning mode.</li>
+            <li>Removing a user fully deletes their account, allowing them to be re-added and re-enrolled later.</li>
           </ul>
         </div>
       </div>

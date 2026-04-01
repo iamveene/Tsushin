@@ -658,7 +658,7 @@ async def remove_team_member(
     current_user: User = Depends(require_permission("users.remove")),
 ):
     """
-    Remove a team member (soft delete).
+    Remove a team member (hard delete).
 
     Requires: users.remove permission
 
@@ -692,18 +692,45 @@ async def remove_team_member(
             detail="Cannot remove owner"
         )
 
-    # Soft delete
-    now = datetime.utcnow()
-    target_user.deleted_at = now
-    target_user.is_active = False
-    target_user.email = f"{target_user.email}.deleted.{int(now.timestamp())}"
+    # Hard delete — soft delete causes SSO lockout since google_id
+    # remains linked to the deactivated record, preventing re-enrollment
+    removed_email = target_user.email
 
-    # Remove role assignment
-    ctx.db.query(UserRole).filter(
-        UserRole.user_id == user_id,
-        UserRole.tenant_id == ctx.tenant_id
-    ).delete()
+    # Clear all FK references before deletion
+    from models_rbac import PasswordResetToken, UserInvitation, GlobalAdminAuditLog, AuditEvent
+    from models import UserContactMapping
+    from sqlalchemy import text
 
+    # SET NULL on nullable FK columns
+    ctx.db.query(AuditEvent).filter(AuditEvent.user_id == user_id).update(
+        {AuditEvent.user_id: None}, synchronize_session=False
+    )
+    ctx.db.query(UserRole).filter(UserRole.assigned_by == user_id).update(
+        {UserRole.assigned_by: None}, synchronize_session=False
+    )
+    # Nullable created_by/updated_by columns across various tables
+    for tbl, col in [
+        ("shell_security_pattern", "created_by"), ("shell_security_pattern", "updated_by"),
+        ("sentinel_config", "created_by"), ("sentinel_config", "updated_by"),
+        ("sentinel_profile", "created_by"), ("sentinel_profile", "updated_by"),
+        ("sentinel_exception", "created_by"), ("sentinel_exception", "updated_by"),
+        ("api_client", "created_by"),
+        ("whatsapp_mcp_instance", "created_by"),
+        ("telegram_bot_instance", "created_by"),
+        ("google_oauth_credentials", "created_by"),
+    ]:
+        ctx.db.execute(text(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = :uid"), {"uid": user_id})
+    ctx.db.execute(text("UPDATE system_integration SET configured_by_global_admin = NULL WHERE configured_by_global_admin = :uid"), {"uid": user_id})
+    ctx.db.execute(text("UPDATE tenant SET created_by_global_admin = NULL WHERE created_by_global_admin = :uid"), {"uid": user_id})
+
+    # Delete from tables with non-nullable FK
+    ctx.db.query(UserRole).filter(UserRole.user_id == user_id).delete()
+    ctx.db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user_id).delete()
+    ctx.db.query(UserInvitation).filter(UserInvitation.invited_by == user_id).delete()
+    ctx.db.query(GlobalAdminAuditLog).filter(GlobalAdminAuditLog.global_admin_id == user_id).delete()
+    ctx.db.query(UserContactMapping).filter(UserContactMapping.user_id == user_id).delete()
+
+    ctx.db.delete(target_user)
     ctx.db.commit()
 
-    log_tenant_event(ctx.db, ctx.tenant_id, ctx.user.id, TenantAuditActions.TEAM_REMOVE, "user", str(user_id), {"email": target_user.email}, request)
+    log_tenant_event(ctx.db, ctx.tenant_id, ctx.user.id, TenantAuditActions.TEAM_REMOVE, "user", str(user_id), {"email": removed_email}, request)
