@@ -5,7 +5,7 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2026-03-31
+## [0.6.0] - 2026-04-01
 
 ### Fixed
 
@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Settings > Integrations UI**: Branded provider cards for Groq, Grok, ElevenLabs, and DeepSeek. Configure/Edit/Remove modals, Test Connection with inline results, encryption at rest, multi-tenancy key isolation.
 - **Test Connection Endpoints**: `POST /api/integrations/{service}/test` for all providers. Provider-specific validation (ElevenLabs via `/v1/user`, Groq/Grok via minimal test message).
 - **Hub AI Providers UX Cleanup**: ElevenLabs added to vendor lists and instance modal. Grok/Groq now have distinct icons. API key precedence indicator (legacy vs instance key).
+- **Vertex AI Provider (Phase 1+2)**: Google Cloud Model Garden integration. Phase 1: Gemini models via Vertex AI endpoint (us-east5 region). Phase 2: Claude models via Google Cloud (Anthropic-on-Vertex). Service account auth with Application Default Credentials. Region-aware endpoint routing. Full streaming support. Hub integration with Vertex AI provider card.
 - **Hub Local Services Management**: Kokoro TTS start/stop/status controls via Docker API. Ollama auto-create/enable/disable toggle, inline URL editing, test connection, model refresh. Ollama removed from Provider Instances vendor list (only in Local Services).
 
 #### Security
