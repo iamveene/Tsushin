@@ -158,12 +158,22 @@ export default function PlaygroundPage() {
         // Use ref to avoid stale closure over activeThreadId
         const currentThreadId = activeThreadIdRef.current
         if (currentThreadId) {
-          api.getThread(currentThreadId).then(threadData => {
-            // Only update if messages have changed — use functional update to avoid stale closure over messages
-            setMessages(prev => JSON.stringify(threadData.messages) !== JSON.stringify(prev) ? threadData.messages : prev)
-          }).catch(err => {
-            console.error('Failed to refresh thread after streaming:', err)
-          })
+          // Small delay to allow backend to commit the message before refreshing
+          setTimeout(() => {
+            api.getThread(currentThreadId).then(threadData => {
+              // Defense-in-depth: only update if backend has at least as many messages as local state
+              // This prevents replacing fresh conversation with stale/cross-thread data
+              setMessages(prev => {
+                if (!threadData.messages || threadData.messages.length < prev.length) {
+                  console.log('[Playground] Skipping thread refresh: backend has fewer messages than local state')
+                  return prev
+                }
+                return JSON.stringify(threadData.messages) !== JSON.stringify(prev) ? threadData.messages : prev
+              })
+            }).catch(err => {
+              console.error('Failed to refresh thread after streaming:', err)
+            })
+          }, 500)
         }
       },
       onThreadCreated: (threadId, title) => {

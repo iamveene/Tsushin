@@ -323,7 +323,8 @@ class PlaygroundService:
                     metadata={
                         "source": "playground",
                         "agent_id": agent_id,
-                        "user_id": user_id
+                        "user_id": user_id,
+                        "thread_id": thread_id
                     }
                 )
                 self.logger.info(f"Added user message to memory before processing (WhatsApp consistency)")
@@ -601,7 +602,8 @@ class PlaygroundService:
                 # Build metadata for memory storage
                 memory_metadata = {
                     "source": "playground",
-                    "agent_id": agent_id
+                    "agent_id": agent_id,
+                    "thread_id": thread_id
                 }
                 memory_content = result["answer"]  # Always store FULL content for UI display
 

@@ -271,10 +271,20 @@ class PlaygroundThreadService:
                 ).first()
 
                 if memory and memory.messages_json:
-                    # Shared memory contains ALL messages - need to filter by thread
-                    # For now, return all messages (this is a known limitation of shared mode)
-                    messages = memory.messages_json
-                    self.logger.info(f"[get_thread] Loaded {len(messages)} messages from shared memory")
+                    # Shared memory contains ALL messages — filter by thread_id metadata
+                    all_shared = memory.messages_json
+                    thread_messages = [
+                        msg for msg in all_shared
+                        if isinstance(msg.get("metadata"), dict)
+                        and msg["metadata"].get("thread_id") == thread_id
+                    ]
+                    if thread_messages:
+                        messages = thread_messages
+                        self.logger.info(f"[get_thread] Filtered shared memory: {len(all_shared)} → {len(thread_messages)} messages for thread {thread_id}")
+                    else:
+                        # Fallback: if no messages have thread_id metadata (legacy), return all
+                        messages = all_shared
+                        self.logger.warning(f"[get_thread] No thread_id metadata in shared memory, returning all {len(all_shared)} messages")
             else:
                 # FIX 2026-01-31: Enhanced sender_key lookup with comprehensive fallbacks
                 # Build comprehensive list of possible sender_keys
@@ -333,9 +343,14 @@ class PlaygroundThreadService:
                         self.logger.debug(f"✗ No messages with key: {key}")
 
                 # LIKE-based fallback: try partial matches on sender_key
+                # IMPORTANT: Include thread_id in patterns first to avoid cross-thread contamination
                 if not memory or not memory.messages_json:
                     self.logger.info(f"[get_thread] Exact keys failed, trying LIKE patterns for agent {thread.agent_id}")
                     like_patterns = [
+                        # Thread-specific patterns FIRST (prevents cross-thread message loading)
+                        f"sender_playground%u{user_id}%a{thread.agent_id}%t{thread_id}%",
+                        f"playground%u{user_id}%a{thread.agent_id}%t{thread_id}%",
+                        # Broad patterns LAST (only if thread-specific fails)
                         f"sender_playground%u{user_id}%a{thread.agent_id}%",
                         f"sender_playground_user_{user_id}",
                         f"playground_user_{user_id}",
@@ -370,7 +385,23 @@ class PlaygroundThreadService:
                                 break
 
                 if memory and memory.messages_json:
-                    messages = memory.messages_json
+                    # Filter messages by thread_id metadata if available
+                    # This prevents cross-thread contamination when broad LIKE patterns matched
+                    raw_messages = memory.messages_json
+                    thread_filtered = [
+                        msg for msg in raw_messages
+                        if not isinstance(msg.get("metadata"), dict)
+                        or msg["metadata"].get("thread_id") is None
+                        or msg["metadata"].get("thread_id") == thread_id
+                    ]
+                    # Use filtered if it found thread-specific messages, otherwise fall back to all
+                    # (handles legacy messages without thread_id metadata)
+                    if thread_filtered:
+                        messages = thread_filtered
+                        if len(thread_filtered) < len(raw_messages):
+                            self.logger.info(f"[get_thread] Filtered {len(raw_messages)} → {len(thread_filtered)} messages by thread_id={thread_id}")
+                    else:
+                        messages = raw_messages
                 elif thread.conversation_history:
                     # Fallback to thread's conversation_history if Memory is empty
                     # This handles older threads or threads created differently
