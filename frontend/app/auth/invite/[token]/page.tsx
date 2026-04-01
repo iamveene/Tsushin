@@ -38,7 +38,7 @@ const GoogleIcon = () => (
 export default function AcceptInvitationPage() {
   const params = useParams()
   const router = useRouter()
-  const { loginWithGoogle } = useAuth()
+  const { loginWithGoogle, setAuthFromToken } = useAuth()
   const token = params.token as string
 
   const [invitationInfo, setInvitationInfo] = useState<InvitationInfo | null>(null)
@@ -131,10 +131,10 @@ export default function AcceptInvitationPage() {
         full_name: formData.full_name,
       })
 
-      // Store the token and redirect to home
-      localStorage.setItem('tsushin_auth_token', response.access_token)
+      // Store the token via AuthContext (handles localStorage + user state)
+      await setAuthFromToken(response.access_token)
 
-      // Show success briefly then redirect
+      // Redirect to home
       router.push('/')
     } catch (err: any) {
       setFormErrors([err.message || 'Failed to accept invitation'])
