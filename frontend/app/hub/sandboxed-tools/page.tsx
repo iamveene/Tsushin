@@ -13,6 +13,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
+import { authenticatedFetch } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import Link from 'next/link'
 import {
@@ -276,9 +277,7 @@ export default function CustomToolsPage() {
   const loadContainerStatus = async (showRefreshing = false) => {
     if (showRefreshing) setIsRefreshing(true)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/status`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/status`)
       if (response.ok) {
         const data = await response.json()
         setContainerStatus(data)
@@ -312,18 +311,14 @@ export default function CustomToolsPage() {
   const loadTools = async () => {
     setToolsLoading(true)
     try {
-      const response = await fetch(`${apiUrl}/api/custom-tools/`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/`)
       if (response.ok) {
         const data = await response.json()
         // Fetch commands for each tool
         const toolsWithCommands = await Promise.all(
           data.map(async (tool: CustomTool) => {
             try {
-              const cmdResponse = await fetch(`${apiUrl}/api/custom-tools/${tool.id}/commands`, {
-                headers: getAuthHeaders()
-              })
+              const cmdResponse = await authenticatedFetch(`${apiUrl}/api/custom-tools/${tool.id}/commands`)
               if (cmdResponse.ok) {
                 const commands = await cmdResponse.json()
                 return { ...tool, commands }
@@ -346,9 +341,7 @@ export default function CustomToolsPage() {
   const loadPackages = async () => {
     setPackagesLoading(true)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/packages`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/packages`)
       if (response.ok) {
         const data = await response.json()
         setPackages(data)
@@ -360,22 +353,13 @@ export default function CustomToolsPage() {
     }
   }
 
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem('tsushin_auth_token')
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }
-
   // Container actions
   const handleContainerAction = async (action: 'start' | 'stop' | 'restart') => {
     setContainerLoading(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/${action}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/${action}`, {
+        method: 'POST'
       })
       if (response.ok) {
         const data = await response.json()
@@ -402,9 +386,8 @@ export default function CustomToolsPage() {
     setContainerLoading(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/commit`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/commit`, {
+        method: 'POST'
       })
       if (response.ok) {
         setSuccess('Container committed to image successfully')
@@ -428,9 +411,8 @@ export default function CustomToolsPage() {
     setContainerLoading(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/reset`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/reset`, {
+        method: 'POST'
       })
       if (response.ok) {
         setSuccess('Container reset to base image')
@@ -458,9 +440,8 @@ export default function CustomToolsPage() {
     setSaving(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/packages/install`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/packages/install`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify(packageForm)
       })
       if (response.ok) {
@@ -491,9 +472,8 @@ export default function CustomToolsPage() {
     setError(null)
     try {
       // Step 1: Create the tool
-      const response = await fetch(`${apiUrl}/api/custom-tools/`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           name: toolForm.name,
           tool_type: toolForm.tool_type,
@@ -513,9 +493,8 @@ export default function CustomToolsPage() {
 
       // Step 2: Create commands and parameters
       for (const cmd of toolForm.commands) {
-        const cmdResponse = await fetch(`${apiUrl}/api/custom-tools/commands/`, {
+        const cmdResponse = await authenticatedFetch(`${apiUrl}/api/custom-tools/commands/`, {
           method: 'POST',
-          headers: getAuthHeaders(),
           body: JSON.stringify({
             tool_id: createdTool.id,
             command_name: cmd.command_name,
@@ -530,9 +509,8 @@ export default function CustomToolsPage() {
 
           // Create parameters for this command
           for (const param of cmd.parameters) {
-            await fetch(`${apiUrl}/api/custom-tools/parameters/`, {
+            await authenticatedFetch(`${apiUrl}/api/custom-tools/parameters/`, {
               method: 'POST',
-              headers: getAuthHeaders(),
               body: JSON.stringify({
                 command_id: createdCommand.id,
                 parameter_name: param.parameter_name,
@@ -559,9 +537,8 @@ export default function CustomToolsPage() {
 
   const handleToggleTool = async (tool: CustomTool) => {
     try {
-      const response = await fetch(`${apiUrl}/api/custom-tools/${tool.id}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/${tool.id}`, {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ ...tool, is_enabled: !tool.is_enabled })
       })
       if (response.ok) {
@@ -576,9 +553,8 @@ export default function CustomToolsPage() {
     if (!confirm('Delete this tool?')) return
 
     try {
-      const response = await fetch(`${apiUrl}/api/custom-tools/${toolId}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/${toolId}`, {
+        method: 'DELETE'
       })
       if (response.ok) {
         setSuccess('Tool deleted')
@@ -596,9 +572,8 @@ export default function CustomToolsPage() {
     setSaving(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/custom-tools/${editingTool.id}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/${editingTool.id}`, {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           name: editingTool.name,
           tool_type: editingTool.tool_type,

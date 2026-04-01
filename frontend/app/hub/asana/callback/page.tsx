@@ -2,20 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { authenticatedFetch } from '@/lib/client'
 
 export default function AsanaCallbackPage() {
   const searchParams = useSearchParams()
   const [status, setStatus] = useState<'processing' | 'success' | 'error'>('processing')
   const [message, setMessage] = useState('')
-
-  // Helper function to get authentication headers
-  const getAuthHeaders = () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }
 
   useEffect(() => {
     handleCallback()
@@ -41,9 +33,8 @@ export default function AsanaCallbackPage() {
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/hub/asana/oauth/callback`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/callback`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ code, state })
       })
 

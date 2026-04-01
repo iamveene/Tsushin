@@ -16,7 +16,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { api, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, Config, ProviderInstance } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, Config, ProviderInstance } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
 import SlackSetupModal from '@/components/SlackSetupModal'
@@ -357,15 +357,6 @@ export default function HubPage() {
   const canEditSettings = hasPermission('org.settings.write')
   const canReadSettings = hasPermission('org.settings.read')
 
-  // Helper function to get authentication headers
-  const getAuthHeaders = () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }
-
   useEffect(() => {
     loadAllData()
     const interval = setInterval(() => {
@@ -550,9 +541,7 @@ export default function HubPage() {
   const fetchAPIKeys = async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/api-keys`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/api-keys`)
       if (!response.ok) {
         const errorText = await response.text()
         console.error('Failed to fetch API keys:', response.status, errorText)
@@ -726,9 +715,7 @@ export default function HubPage() {
   const fetchKokoroHealth = async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/tts-providers/kokoro/status`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/tts-providers/kokoro/status`)
       if (response.ok) {
         const data = await response.json()
         setKokoroHealth(data)
@@ -782,9 +769,7 @@ export default function HubPage() {
         await new Promise(r => setTimeout(r, retryInterval))
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
         try {
-          const resp = await fetch(`${apiUrl}/api/tts-providers/kokoro/status`, {
-            headers: getAuthHeaders()
-          })
+          const resp = await authenticatedFetch(`${apiUrl}/api/tts-providers/kokoro/status`)
           if (resp.ok) {
             const data = await resp.json()
             if (data.available) {
@@ -921,9 +906,7 @@ export default function HubPage() {
   const fetchToolboxStatus = async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/toolbox/status`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/status`)
       if (response.ok) {
         const data = await response.json()
         setToolboxStatus(data)
@@ -960,9 +943,7 @@ export default function HubPage() {
       const url = refreshHealth
         ? `${apiUrl}/api/hub/integrations?refresh_health=true`
         : `${apiUrl}/api/hub/integrations`
-      const response = await fetch(url, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(url)
       if (response.ok) {
         const data = await response.json()
         setHubIntegrations(data)
@@ -1098,9 +1079,8 @@ export default function HubPage() {
     setVertexSaving(true)
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/api-keys`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/api-keys`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           service: 'vertex_ai',
           api_key: vertexPrivateKey.trim(),
@@ -1113,21 +1093,18 @@ export default function HubPage() {
       }
       // Also save project_id, region, sa_email as structured metadata via separate keys
       // Save vertex_ai_project_id
-      await fetch(`${apiUrl}/api/api-keys`, {
+      await authenticatedFetch(`${apiUrl}/api/api-keys`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ service: 'vertex_ai_project_id', api_key: vertexProjectId.trim(), is_active: true })
       })
       // Save vertex_ai_region
-      await fetch(`${apiUrl}/api/api-keys`, {
+      await authenticatedFetch(`${apiUrl}/api/api-keys`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ service: 'vertex_ai_region', api_key: vertexRegion.trim(), is_active: true })
       })
       // Save vertex_ai_sa_email
-      await fetch(`${apiUrl}/api/api-keys`, {
+      await authenticatedFetch(`${apiUrl}/api/api-keys`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ service: 'vertex_ai_sa_email', api_key: vertexSaEmail.trim(), is_active: true })
       })
 
@@ -1147,9 +1124,8 @@ export default function HubPage() {
     setVertexTestResult(null)
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/integrations/vertex_ai/test`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/integrations/vertex_ai/test`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({})
       })
       const result = await response.json()
@@ -1171,9 +1147,8 @@ export default function HubPage() {
     setError(null)
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/api-keys`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/api-keys`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify(modalData)
       })
 
@@ -1201,9 +1176,8 @@ export default function HubPage() {
     setError(null)
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/api-keys/${service}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/api-keys/${service}`, {
+        method: 'DELETE'
       })
 
       if (!response.ok) {
@@ -1557,9 +1531,8 @@ export default function HubPage() {
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/hub/asana/oauth/authorize`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/authorize`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ redirect_url: '/hub', workspace_name: workspaceName.trim() })
       })
 
@@ -1584,9 +1557,8 @@ export default function HubPage() {
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      await fetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
+        method: 'POST'
       })
       loadHubIntegrations()
       setSuccessMessage('Asana disconnected')
@@ -1600,9 +1572,7 @@ export default function HubPage() {
   const loadGoogleCredentials = async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/hub/google/credentials`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/credentials`)
       if (response.ok) {
         const data = await response.json()
         setGoogleCredentials(data)
@@ -1626,9 +1596,8 @@ export default function HubPage() {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
       const params = new URLSearchParams({ redirect_url: '/hub' })
-      const response = await fetch(`${apiUrl}/api/hub/google/calendar/oauth/authorize?${params}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/authorize?${params}`, {
+        method: 'POST'
       })
 
       if (!response.ok) {
@@ -1652,9 +1621,8 @@ export default function HubPage() {
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      await fetch(`${apiUrl}/api/hub/google/calendar/oauth/disconnect/${integrationId}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/disconnect/${integrationId}`, {
+        method: 'POST'
       })
       loadHubIntegrations()
       setSuccessMessage('Google Calendar disconnected')
@@ -1675,9 +1643,8 @@ export default function HubPage() {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
       const params = new URLSearchParams({ redirect_url: '/hub' })
-      const response = await fetch(`${apiUrl}/api/hub/google/gmail/oauth/authorize?${params}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/authorize?${params}`, {
+        method: 'POST'
       })
 
       if (!response.ok) {
@@ -1701,9 +1668,8 @@ export default function HubPage() {
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      await fetch(`${apiUrl}/api/hub/google/gmail/oauth/disconnect/${integrationId}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/disconnect/${integrationId}`, {
+        method: 'POST'
       })
       loadHubIntegrations()
       setSuccessMessage('Gmail disconnected')
@@ -1718,9 +1684,8 @@ export default function HubPage() {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
       const params = new URLSearchParams({ redirect_url: '/hub' })
-      const response = await fetch(`${apiUrl}/api/hub/google/reauthorize/${integrationId}?${params}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/reauthorize/${integrationId}?${params}`, {
+        method: 'POST'
       })
 
       if (!response.ok) {

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo, FormEvent } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
-import api, { SecurityPattern, SecurityPatternCreate, SecurityPatternUpdate, PatternTestResult, SentinelConfig, SentinelLog, SentinelStats, SentinelConfigUpdate } from '@/lib/client'
+import api, { authenticatedFetch, SecurityPattern, SecurityPatternCreate, SecurityPatternUpdate, PatternTestResult, SentinelConfig, SentinelLog, SentinelStats, SentinelConfigUpdate } from '@/lib/client'
 import { copyToClipboard } from '@/lib/clipboard'
 import {
   TerminalIcon,
@@ -140,26 +140,18 @@ export default function ShellDashboardPage() {
   const [sentinelLoading, setSentinelLoading] = useState(false)
   const [savingSentinel, setSavingSentinel] = useState(false)
 
-  const getAuthHeaders = () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }
-
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
 
   const loadIntegrations = useCallback(async () => {
     try {
-      const resp = await fetch(`${apiUrl}/api/shell/integrations?active_only=false`, { headers: getAuthHeaders() })
+      const resp = await authenticatedFetch(`${apiUrl}/api/shell/integrations?active_only=false`)
       if (resp.ok) setIntegrations(await resp.json())
     } catch (e) { console.error('Failed to load integrations:', e) }
   }, [apiUrl])
 
   const loadCommands = useCallback(async () => {
     try {
-      const resp = await fetch(`${apiUrl}/api/shell/commands?limit=50`, { headers: getAuthHeaders() })
+      const resp = await authenticatedFetch(`${apiUrl}/api/shell/commands?limit=50`)
       if (resp.ok) setCommands(await resp.json())
     } catch (e) { console.error('Failed to load commands:', e) }
   }, [apiUrl])
@@ -167,8 +159,8 @@ export default function ShellDashboardPage() {
   const loadApprovals = useCallback(async () => {
     try {
       const [pendingResp, statsResp] = await Promise.all([
-        fetch(`${apiUrl}/api/shell/approvals/pending`, { headers: getAuthHeaders() }),
-        fetch(`${apiUrl}/api/shell/approvals/stats`, { headers: getAuthHeaders() })
+        authenticatedFetch(`${apiUrl}/api/shell/approvals/pending`),
+        authenticatedFetch(`${apiUrl}/api/shell/approvals/stats`)
       ])
       if (pendingResp.ok) setPendingApprovals(await pendingResp.json())
       if (statsResp.ok) setApprovalStats(await statsResp.json())
@@ -364,9 +356,8 @@ export default function ShellDashboardPage() {
     if (!newBeaconName.trim()) return
     setCreating(true)
     try {
-      const resp = await fetch(`${apiUrl}/api/shell/integrations`, {
+      const resp = await authenticatedFetch(`${apiUrl}/api/shell/integrations`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ name: newBeaconName.trim(), poll_interval: 5, mode: 'beacon' })
       })
       if (resp.ok) {
@@ -387,9 +378,8 @@ export default function ShellDashboardPage() {
 
   const handleApprove = async (commandId: string) => {
     try {
-      const resp = await fetch(`${apiUrl}/api/shell/approvals/${commandId}/approve`, {
+      const resp = await authenticatedFetch(`${apiUrl}/api/shell/approvals/${commandId}/approve`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({})
       })
       if (resp.ok) {
@@ -408,9 +398,8 @@ export default function ShellDashboardPage() {
     const reason = prompt('Rejection reason:')
     if (!reason) return
     try {
-      const resp = await fetch(`${apiUrl}/api/shell/approvals/${commandId}/reject`, {
+      const resp = await authenticatedFetch(`${apiUrl}/api/shell/approvals/${commandId}/reject`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ reason })
       })
       if (resp.ok) {
@@ -434,9 +423,8 @@ export default function ShellDashboardPage() {
       return
     }
     try {
-      const resp = await fetch(`${apiUrl}/api/shell/integrations/${beaconId}?graceful=true`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
+      const resp = await authenticatedFetch(`${apiUrl}/api/shell/integrations/${beaconId}?graceful=true`, {
+        method: 'DELETE'
       })
       if (resp.ok) {
         const data = await resp.json()
@@ -455,9 +443,8 @@ export default function ShellDashboardPage() {
 
   const handlePersistenceToggle = async (beaconId: number, action: 'install' | 'uninstall') => {
     try {
-      const resp = await fetch(`${apiUrl}/api/shell/integrations/${beaconId}/persistence?action=${action}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const resp = await authenticatedFetch(`${apiUrl}/api/shell/integrations/${beaconId}/persistence?action=${action}`, {
+        method: 'POST'
       })
       if (resp.ok) {
         setSuccess(`Persistence ${action} command sent to beacon`)
@@ -477,9 +464,8 @@ export default function ShellDashboardPage() {
       return
     }
     try {
-      const resp = await fetch(`${apiUrl}/api/shell/integrations/${beaconId}/shutdown`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const resp = await authenticatedFetch(`${apiUrl}/api/shell/integrations/${beaconId}/shutdown`, {
+        method: 'POST'
       })
       if (resp.ok) {
         setSuccess('Shutdown command sent - beacon will stop on next check-in')
@@ -509,9 +495,8 @@ export default function ShellDashboardPage() {
     }
 
     try {
-      const resp = await fetch(`${apiUrl}/api/shell/integrations/${beaconId}`, {
+      const resp = await authenticatedFetch(`${apiUrl}/api/shell/integrations/${beaconId}`, {
         method: 'PATCH',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ yolo_mode: enabled })
       })
       if (resp.ok) {
