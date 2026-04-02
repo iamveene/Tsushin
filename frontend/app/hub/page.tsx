@@ -1827,7 +1827,7 @@ export default function HubPage() {
         </div>
       </div>
 
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 pb-8 space-y-6">
         {/* Alerts */}
         {successMessage && (
           <div className="p-4 bg-tsushin-success/10 border border-tsushin-success/30 rounded-xl text-tsushin-success flex justify-between items-center animate-fade-in-down">
@@ -1861,7 +1861,7 @@ export default function HubPage() {
         )}
 
         {/* Tabs */}
-        <div className="glass-card rounded-xl overflow-hidden">
+        <div className="glass-card rounded-xl overflow-clip">
           <div className="border-b border-tsushin-border/50 overflow-x-auto">
             <nav className="flex min-w-max">
               {tabs.map(tab => (

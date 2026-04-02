@@ -170,10 +170,17 @@ class AIClient:
 
         # Validate API key for cloud providers (skip Ollama and Vertex AI which handle their own auth)
         if provider not in ('ollama', 'vertex_ai') and not api_key:
-            raise ValueError(
-                f"No API key found for provider: {provider}. "
-                f"Configure via Hub → API Keys or set environment variable."
-            )
+            # Fallback: try the default provider instance for this vendor
+            if db and tenant_id:
+                from services.provider_instance_service import ProviderInstanceService
+                default_instance = ProviderInstanceService.get_default_instance(self.provider, tenant_id, db)
+                if default_instance:
+                    api_key = ProviderInstanceService.resolve_api_key(default_instance, db)
+            if not api_key:
+                raise ValueError(
+                    f"No API key found for provider: {provider}. "
+                    f"Configure via Hub → API Keys or set environment variable."
+                )
 
         # Initialize async clients (Phase 6.11.1)
         if self.provider == "anthropic":
