@@ -1014,8 +1014,12 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
                 print()
                 print_success("Containers started successfully")
             else:
-                print_error("Failed to start containers")
-                sys.exit(1)
+                # docker-compose v1 may report errors for dependency timing issues
+                # (e.g., frontend waiting on backend health). This is recoverable —
+                # the health_check() step will retry and _ensure_frontend_started()
+                # will bring up any missing services.
+                print_warning("Docker Compose reported errors (may be recoverable)")
+                print_info("Will attempt recovery during health checks...")
 
         except Exception as e:
             print_error(f"Docker Compose failed: {e}")
