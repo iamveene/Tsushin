@@ -4,11 +4,9 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { api } from '@/lib/client'
-import { useAuth } from '@/contexts/AuthContext'
 
 export default function SetupPage() {
   const router = useRouter()
-  const { setAuthFromToken } = useAuth()
   const [checking, setChecking] = useState(true)
   const [orgName, setOrgName] = useState('')
   const [email, setEmail] = useState('')
@@ -56,8 +54,10 @@ export default function SetupPage() {
       })
 
       if (result.access_token) {
-        await setAuthFromToken(result.access_token)
-        router.replace('/')
+        // Store the token directly — avoid AuthContext race condition
+        // during initial mount, then redirect to dashboard.
+        localStorage.setItem('tsushin_auth_token', result.access_token)
+        window.location.href = '/'
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Setup failed')
