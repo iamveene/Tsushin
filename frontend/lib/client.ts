@@ -6713,6 +6713,10 @@ export const api = {
     gemini_api_key?: string
     openai_api_key?: string
     anthropic_api_key?: string
+    groq_api_key?: string
+    grok_api_key?: string
+    deepseek_api_key?: string
+    openrouter_api_key?: string
   }): Promise<any> {
     const res = await fetch(`${API_URL}/api/auth/setup-wizard`, {
       method: 'POST',

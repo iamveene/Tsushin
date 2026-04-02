@@ -14,6 +14,13 @@ export default function SetupPage() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [geminiApiKey, setGeminiApiKey] = useState('')
+  const [openaiApiKey, setOpenaiApiKey] = useState('')
+  const [anthropicApiKey, setAnthropicApiKey] = useState('')
+  const [groqApiKey, setGroqApiKey] = useState('')
+  const [grokApiKey, setGrokApiKey] = useState('')
+  const [deepseekApiKey, setDeepseekApiKey] = useState('')
+  const [openrouterApiKey, setOpenrouterApiKey] = useState('')
+  const [providerKeysOpen, setProviderKeysOpen] = useState(true)
   const [createDefaultAgents, setCreateDefaultAgents] = useState(true)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -51,6 +58,12 @@ export default function SetupPage() {
         admin_full_name: fullName,
         create_default_agents: createDefaultAgents,
         gemini_api_key: geminiApiKey || undefined,
+        openai_api_key: openaiApiKey || undefined,
+        anthropic_api_key: anthropicApiKey || undefined,
+        groq_api_key: groqApiKey || undefined,
+        grok_api_key: grokApiKey || undefined,
+        deepseek_api_key: deepseekApiKey || undefined,
+        openrouter_api_key: openrouterApiKey || undefined,
       })
 
       if (result.success) {
@@ -189,22 +202,135 @@ export default function SetupPage() {
               />
             </div>
 
-            {/* AI Provider Key */}
+            {/* AI Provider Keys */}
             <div className="border-t border-gray-800 pt-4">
-              <label htmlFor="geminiApiKey" className="block text-sm font-medium text-gray-300 mb-1">
-                Gemini API Key <span className="text-gray-500">(recommended)</span>
-              </label>
-              <input
-                id="geminiApiKey"
-                type="password"
-                value={geminiApiKey}
-                onChange={(e) => setGeminiApiKey(e.target.value)}
-                placeholder="AIza... (configure more providers later in Hub)"
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                Required for agents to respond. Get one at ai.google.dev. You can add more providers later.
-              </p>
+              <button
+                type="button"
+                onClick={() => setProviderKeysOpen(!providerKeysOpen)}
+                className="w-full flex items-center justify-between text-left"
+              >
+                <div>
+                  <h3 className="text-sm font-medium text-gray-300">AI Provider API Keys</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">Configure at least one provider. More can be added later in Hub.</p>
+                </div>
+                <svg
+                  className={`w-4 h-4 text-gray-500 transition-transform ${providerKeysOpen ? 'rotate-180' : ''}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {providerKeysOpen && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                  <div>
+                    <label htmlFor="geminiApiKey" className="block text-sm font-medium text-gray-300 mb-1">
+                      Google Gemini <span className="text-teal-500 text-xs">(recommended)</span>
+                    </label>
+                    <input
+                      id="geminiApiKey"
+                      type="password"
+                      value={geminiApiKey}
+                      onChange={(e) => setGeminiApiKey(e.target.value)}
+                      placeholder="AIza..."
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                    />
+                    <p className="mt-0.5 text-xs text-gray-600">ai.google.dev</p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="openaiApiKey" className="block text-sm font-medium text-gray-300 mb-1">
+                      OpenAI
+                    </label>
+                    <input
+                      id="openaiApiKey"
+                      type="password"
+                      value={openaiApiKey}
+                      onChange={(e) => setOpenaiApiKey(e.target.value)}
+                      placeholder="sk-..."
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                    />
+                    <p className="mt-0.5 text-xs text-gray-600">platform.openai.com</p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="anthropicApiKey" className="block text-sm font-medium text-gray-300 mb-1">
+                      Anthropic Claude
+                    </label>
+                    <input
+                      id="anthropicApiKey"
+                      type="password"
+                      value={anthropicApiKey}
+                      onChange={(e) => setAnthropicApiKey(e.target.value)}
+                      placeholder="sk-ant-..."
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                    />
+                    <p className="mt-0.5 text-xs text-gray-600">console.anthropic.com</p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="groqApiKey" className="block text-sm font-medium text-gray-300 mb-1">
+                      Groq
+                    </label>
+                    <input
+                      id="groqApiKey"
+                      type="password"
+                      value={groqApiKey}
+                      onChange={(e) => setGroqApiKey(e.target.value)}
+                      placeholder="gsk_..."
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                    />
+                    <p className="mt-0.5 text-xs text-gray-600">console.groq.com</p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="grokApiKey" className="block text-sm font-medium text-gray-300 mb-1">
+                      Grok (xAI)
+                    </label>
+                    <input
+                      id="grokApiKey"
+                      type="password"
+                      value={grokApiKey}
+                      onChange={(e) => setGrokApiKey(e.target.value)}
+                      placeholder="xai-..."
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                    />
+                    <p className="mt-0.5 text-xs text-gray-600">console.x.ai</p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="deepseekApiKey" className="block text-sm font-medium text-gray-300 mb-1">
+                      DeepSeek
+                    </label>
+                    <input
+                      id="deepseekApiKey"
+                      type="password"
+                      value={deepseekApiKey}
+                      onChange={(e) => setDeepseekApiKey(e.target.value)}
+                      placeholder="sk-..."
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                    />
+                    <p className="mt-0.5 text-xs text-gray-600">platform.deepseek.com</p>
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label htmlFor="openrouterApiKey" className="block text-sm font-medium text-gray-300 mb-1">
+                      OpenRouter
+                    </label>
+                    <input
+                      id="openrouterApiKey"
+                      type="password"
+                      value={openrouterApiKey}
+                      onChange={(e) => setOpenrouterApiKey(e.target.value)}
+                      placeholder="sk-or-..."
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                    />
+                    <p className="mt-0.5 text-xs text-gray-600">openrouter.ai</p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center">

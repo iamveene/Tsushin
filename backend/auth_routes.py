@@ -128,6 +128,10 @@ class SetupWizardRequest(BaseModel):
     gemini_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
+    groq_api_key: Optional[str] = None
+    grok_api_key: Optional[str] = None
+    deepseek_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
     create_default_agents: bool = True
 
 
@@ -482,6 +486,26 @@ async def setup_wizard(
             api_keys_stored.append("anthropic")
             logger.info(f"Setup wizard: Stored Anthropic API key for tenant {tenant.id}")
 
+        if setup_request.groq_api_key:
+            store_api_key("groq", setup_request.groq_api_key, tenant.id, db)
+            api_keys_stored.append("groq")
+            logger.info(f"Setup wizard: Stored Groq API key for tenant {tenant.id}")
+
+        if setup_request.grok_api_key:
+            store_api_key("grok", setup_request.grok_api_key, tenant.id, db)
+            api_keys_stored.append("grok")
+            logger.info(f"Setup wizard: Stored Grok API key for tenant {tenant.id}")
+
+        if setup_request.deepseek_api_key:
+            store_api_key("deepseek", setup_request.deepseek_api_key, tenant.id, db)
+            api_keys_stored.append("deepseek")
+            logger.info(f"Setup wizard: Stored DeepSeek API key for tenant {tenant.id}")
+
+        if setup_request.openrouter_api_key:
+            store_api_key("openrouter", setup_request.openrouter_api_key, tenant.id, db)
+            api_keys_stored.append("openrouter")
+            logger.info(f"Setup wizard: Stored OpenRouter API key for tenant {tenant.id}")
+
         # Step 4: Create default agents if requested
         agents_created = []
         if setup_request.create_default_agents:
@@ -497,6 +521,18 @@ async def setup_wizard(
             elif "anthropic" in api_keys_stored:
                 model_provider = "anthropic"
                 model_name = "claude-3-5-haiku-20241022"
+            elif "groq" in api_keys_stored:
+                model_provider = "groq"
+                model_name = "llama-3.3-70b-versatile"
+            elif "grok" in api_keys_stored:
+                model_provider = "grok"
+                model_name = "grok-3-mini"
+            elif "deepseek" in api_keys_stored:
+                model_provider = "deepseek"
+                model_name = "deepseek-chat"
+            elif "openrouter" in api_keys_stored:
+                model_provider = "openrouter"
+                model_name = "google/gemini-2.5-flash"
             else:
                 # Fallback to gemini (will fail later if no key, but allows user to add later)
                 model_provider = "gemini"
