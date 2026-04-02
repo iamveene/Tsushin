@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Async Embeddings Migration (2026-04-02)
+
+- **Event loop blocking**: Migrated all 12 sync `embed_text()` / `embed_batch_chunked()` call sites to async variants (`embed_text_async()`, `embed_batch_chunked_async()`) using `asyncio.to_thread()`. Health checks and WebSocket connections no longer stall during embedding-heavy agent processing.
+- **SentenceTransformer singleton consolidation**: Removed 4 services that bypassed the shared `EmbeddingService` singleton and instantiated their own `SentenceTransformer` model (combined_knowledge_service, project_memory_service, playground_document_service, project_service). All embedding calls now route through `get_shared_embedding_service()`.
+- **Thread-safe singleton**: Added double-checked locking with `threading.Lock` to `get_shared_embedding_service()` to prevent race conditions from concurrent `asyncio.to_thread()` calls.
+- **Dockerfile workers**: Reverted `--workers 2` to `--workers 1` — async embeddings eliminate the need for a second worker, halving model memory usage.
+
 #### Fresh Install QA (2026-04-02)
 
 **Install Flow (3 fixes):**
