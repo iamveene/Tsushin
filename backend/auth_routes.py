@@ -520,7 +520,7 @@ async def setup_wizard(
                 model_name = "gpt-4o-mini"
             elif "anthropic" in api_keys_stored:
                 model_provider = "anthropic"
-                model_name = "claude-3-5-haiku-20241022"
+                model_name = "claude-haiku-4-5-20251001"
             elif "groq" in api_keys_stored:
                 model_provider = "groq"
                 model_name = "llama-3.3-70b-versatile"
