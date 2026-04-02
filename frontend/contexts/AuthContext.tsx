@@ -16,6 +16,7 @@ interface User {
   email: string
   full_name: string
   tenant_id: number
+  tenant_name?: string | null
   is_global_admin: boolean
   is_active?: boolean
   email_verified?: boolean
@@ -73,7 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const userData = await api.getCurrentUser(token)
           setUser(userData)
         } catch (error) {
-          console.error('Failed to load user:', error)
+          console.debug('Session expired or invalid token:', error)
           removeToken()
           setUser(null)
         }

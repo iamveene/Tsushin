@@ -17,6 +17,7 @@ interface TourStep {
   title: string
   content: string
   highlightFeatures?: string[]
+  targetSelector?: string | null
   actionButton?: {
     label: string
     action: () => void
@@ -32,6 +33,7 @@ export default function OnboardingWizard() {
   const tourSteps: TourStep[] = [
     {
       title: 'Welcome to Tsushin!',
+      targetSelector: null,
       content: 'Tsushin is a powerful multi-agent platform that helps you build, deploy, and manage AI agents across multiple communication channels.',
       highlightFeatures: [
         'Multi-agent orchestration',
@@ -46,6 +48,7 @@ export default function OnboardingWizard() {
     },
     {
       title: 'Watcher - Real-Time Monitoring',
+      targetSelector: 'nav a[href="/"]',
       content: 'The Watcher dashboard provides real-time visibility into all conversations across your agents and channels. Monitor message streams, track agent activity, and gain insights into user interactions.',
       highlightFeatures: [
         'Real-time message stream',
@@ -56,6 +59,7 @@ export default function OnboardingWizard() {
     },
     {
       title: 'Studio - Agent Management',
+      targetSelector: 'a[href="/agents"]',
       content: 'The Studio is where you create, configure, and manage your AI agents. Define agent personalities, assign skills, and control how agents interact with users.',
       highlightFeatures: [
         'Create custom agents',
@@ -70,11 +74,12 @@ export default function OnboardingWizard() {
     },
     {
       title: 'Hub - Integrations & API Keys',
-      content: 'The Hub centralizes all your external service integrations. Configure API keys for AI providers, connect OAuth services like Gmail and Calendar, and manage integration settings.',
+      targetSelector: 'a[href="/hub"]',
+      content: 'The Hub centralizes all your external service integrations. Connect AI providers (Gemini, OpenAI, Anthropic, Groq, Vertex AI), set up Google OAuth for Gmail and Calendar, and manage encrypted API key storage.',
       highlightFeatures: [
-        'AI Provider API keys (Gemini, OpenAI, Anthropic)',
+        'AI Provider API keys (Gemini, OpenAI, Anthropic, Groq, Vertex AI)',
         'Google OAuth (Gmail, Calendar)',
-        'Asana integration',
+        'Encrypted API key storage',
         'System AI configuration'
       ],
       actionButton: {
@@ -84,6 +89,7 @@ export default function OnboardingWizard() {
     },
     {
       title: 'Flows - Automation & Scheduling',
+      targetSelector: 'a[href="/flows"]',
       content: 'Flows enable you to create automated workflows, scheduled tasks, and multi-step agent orchestrations. Build complex automation without code.',
       highlightFeatures: [
         'Visual flow builder',
@@ -98,6 +104,7 @@ export default function OnboardingWizard() {
     },
     {
       title: 'Playground - Safe Testing Environment',
+      targetSelector: 'a[href="/playground"]',
       content: 'The Playground is your safe space to test agents, experiment with prompts, and validate configurations without consuming production message credits or affecting real users.',
       highlightFeatures: [
         'Test agents in isolation',
@@ -112,30 +119,29 @@ export default function OnboardingWizard() {
     },
     {
       title: 'Communication Channels',
-      content: 'Tsushin supports multiple communication channels for different use cases:',
+      targetSelector: null,
+      content: 'Tsushin supports multiple communication channels. Connect WhatsApp via MCP instances with QR code scanning, Telegram via bot tokens, and use automatic agent routing to direct messages to the right agent.',
       highlightFeatures: [
-        'Playground - Internal testing and development',
-        'WhatsApp - Production messaging via MCP integration',
-        'Telegram - Alternative production channel',
+        'WhatsApp MCP instances with QR code scanning',
+        'Telegram bot tokens',
+        'Automatic agent routing',
         'Each channel can be independently enabled per agent'
       ]
     },
     {
-      title: 'Contact Management',
-      content: 'Contacts allow you to map real users (phone numbers, IDs) to agents, enabling personalized context and agent-specific handling. Configure which agents respond to which contacts.',
+      title: 'Security & API Access',
+      targetSelector: null,
+      content: 'Tsushin includes built-in AI security controls and a public API for programmatic access. Protect your agents with security profiles and connect external systems via OAuth2.',
       highlightFeatures: [
-        'Map phone numbers to agents',
-        'Personalized agent responses',
-        'Contact-specific context',
-        'Role-based access (user, agent, system)'
-      ],
-      actionButton: {
-        label: 'View Contacts',
-        action: () => router.push('/contacts')
-      }
+        'Sentinel AI security and MemGuard protection',
+        'Security profiles with SSRF protection',
+        'API v1 for programmatic access',
+        'OAuth2 client credentials for integrations'
+      ]
     },
     {
       title: "You're All Set!",
+      targetSelector: null,
       content: 'You now have a comprehensive understanding of the Tsushin platform. Start by creating your first agent in the Studio, or test the default agents in the Playground.',
       highlightFeatures: [
         'Default agents are already configured',
@@ -172,6 +178,25 @@ export default function OnboardingWizard() {
     window.addEventListener('keydown', handleKeyPress)
     return () => window.removeEventListener('keydown', handleKeyPress)
   }, [state.isActive, state.isMinimized, state.currentStep, state.totalSteps, nextStep, previousStep, minimize])
+
+  // Highlight target UI elements when step changes
+  useEffect(() => {
+    // Clear previous highlights
+    document.querySelectorAll('.tour-highlight').forEach(el => el.classList.remove('tour-highlight'))
+
+    const step = tourSteps[state.currentStep - 1]
+    if (step?.targetSelector) {
+      const el = document.querySelector(step.targetSelector)
+      if (el) {
+        el.classList.add('tour-highlight')
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      }
+    }
+
+    return () => {
+      document.querySelectorAll('.tour-highlight').forEach(el => el.classList.remove('tour-highlight'))
+    }
+  }, [state.currentStep])
 
   // BUG-122: Don't render tour on unauthenticated pages (placed after all hooks)
   if (isAuthPage) {

@@ -70,7 +70,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
   }, [isMobileMenuOpen])
 
   // Hide header/footer on auth pages
-  const isAuthPage = pathname?.startsWith('/auth')
+  const isAuthPage = pathname?.startsWith('/auth') || pathname?.startsWith('/setup')
   const isPlaygroundPage = pathname?.startsWith('/playground')
 
   // Require authentication for all non-auth pages
@@ -313,7 +313,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                         Global Admin
                       </span>
                     ) : (
-                      <span className="truncate max-w-[100px]">{user.tenant_id}</span>
+                      <span className="truncate max-w-[100px]">{user.tenant_name || user.tenant_id}</span>
                     )}
                   </div>
                 </div>
@@ -428,7 +428,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                           Global Admin
                         </span>
                       ) : (
-                        <span className="truncate block">{user.tenant_id}</span>
+                        <span className="truncate block">{user.tenant_name || user.tenant_id}</span>
                       )}
                     </div>
                   </div>

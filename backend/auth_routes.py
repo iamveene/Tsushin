@@ -256,6 +256,12 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
         # Get user permissions for frontend
         permissions = auth_service.get_user_permissions(user.id)
 
+        # BUG-251: Resolve tenant display name
+        tenant_name = None
+        if user.tenant_id:
+            tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id).first()
+            tenant_name = tenant.name if tenant else None
+
         # SEC-005: Return token in JSON body (for WebSocket/backwards compat) AND
         # set it as an httpOnly cookie so the browser never touches it via JS.
         response = JSONResponse(content={
@@ -266,6 +272,7 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
                 "email": user.email,
                 "full_name": user.full_name,
                 "tenant_id": user.tenant_id,
+                "tenant_name": tenant_name,
                 "is_global_admin": user.is_global_admin,
                 "permissions": permissions,
             },
@@ -324,6 +331,13 @@ async def signup(request: Request, signup_request: SignupRequest, db: Session = 
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+
+
+@router.get("/setup-status")
+async def setup_status(db: Session = Depends(get_db)):
+    """Check if the system needs initial setup (no users exist)."""
+    user_count = db.query(User).count()
+    return {"needs_setup": user_count == 0}
 
 
 @router.post("/setup-wizard", status_code=status.HTTP_201_CREATED)
@@ -614,11 +628,18 @@ async def get_current_user_info(current_user: User = Depends(get_current_user_re
     auth_service = AuthService(db)
     permissions = auth_service.get_user_permissions(current_user.id)
 
+    # BUG-251: Resolve tenant display name from tenant_id
+    tenant_name = None
+    if current_user.tenant_id:
+        tenant = db.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+        tenant_name = tenant.name if tenant else None
+
     return {
         "id": current_user.id,
         "email": current_user.email,
         "full_name": current_user.full_name,
         "tenant_id": current_user.tenant_id,
+        "tenant_name": tenant_name,
         "is_global_admin": current_user.is_global_admin,
         "is_active": current_user.is_active,
         "email_verified": current_user.email_verified,

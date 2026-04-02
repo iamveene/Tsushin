@@ -8,7 +8,7 @@
 import React, { Suspense, useState, useEffect } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { Input } from '@/components/ui/form-input'
 import { api } from '@/lib/client'
@@ -38,12 +38,20 @@ const GoogleIcon = () => (
 function LoginContent() {
   const { login, loginWithGoogle } = useAuth()
   const searchParams = useSearchParams()
+  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleSSOEnabled, setGoogleSSOEnabled] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
+
+  // Redirect to /setup if system needs initial setup
+  useEffect(() => {
+    api.getSetupStatus().then(({ needs_setup }) => {
+      if (needs_setup) router.replace('/setup')
+    })
+  }, [router])
 
   // Check if Google SSO is enabled
   useEffect(() => {

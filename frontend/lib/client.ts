@@ -6689,6 +6689,39 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to fetch comm-enabled agents')
     return res.json()
   },
+
+  // ========================================================================
+  // Setup / Installation API
+  // ========================================================================
+
+  async getSetupStatus(): Promise<{ needs_setup: boolean }> {
+    try {
+      const res = await fetch(`${API_URL}/api/auth/setup-status`)
+      if (!res.ok) return { needs_setup: false }
+      return res.json()
+    } catch {
+      return { needs_setup: false }
+    }
+  },
+
+  async setupWizard(data: {
+    tenant_name: string
+    admin_email: string
+    admin_password: string
+    admin_full_name: string
+    create_default_agents?: boolean
+  }): Promise<any> {
+    const res = await fetch(`${API_URL}/api/auth/setup-wizard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Setup failed' }))
+      throw new Error(err.detail || 'Setup failed')
+    }
+    return res.json()
+  },
 }
 
 // Default export for convenience (used by prompts page and others)
