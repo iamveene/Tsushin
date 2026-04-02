@@ -71,7 +71,7 @@ class EmbeddingService:
 
     def embed_text(self, text: str) -> List[float]:
         """
-        Generate embedding for a single text.
+        Generate embedding for a single text (sync version).
 
         Args:
             text: Text to embed
@@ -79,20 +79,26 @@ class EmbeddingService:
         Returns:
             List of floats representing the embedding vector (384 dimensions for MiniLM)
         """
+        return self._embed_text_sync(text)
+
+    def _embed_text_sync(self, text: str) -> List[float]:
+        """Synchronous embedding — use embed_text_async in async contexts."""
         try:
-            # Handle empty text
             if not text:
-                text = " "  # Use single space for empty text
-
-            # Generate embedding
+                text = " "
             embedding = self.model.encode(text, convert_to_numpy=True)
-
-            # Convert to list of floats
             return embedding.tolist()
-
         except Exception as e:
             self.logger.error(f"Error generating embedding: {e}")
             raise
+
+    async def embed_text_async(self, text: str) -> List[float]:
+        """
+        Async-safe embedding — runs the CPU-bound encode in a thread pool
+        to avoid blocking the event loop.
+        """
+        import asyncio
+        return await asyncio.to_thread(self._embed_text_sync, text)
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """
