@@ -1334,15 +1334,13 @@ async def playground_websocket_endpoint(websocket: WebSocket, db: Session = Depe
         if not token:
             query_params = dict(websocket.query_params)
             token = query_params.get("token")
+            if token:
+                logger.warning("WebSocket using legacy query param auth (insecure) - please update client")
 
-        if token and not cookie_token:
-            # Legacy mode: token in query params (will be deprecated)
-            logger.warning("WebSocket using legacy query param auth (insecure) - please update client")
-        else:
-            # Secure mode: wait for auth message with token
+        # Priority 3: First-message auth (only if no cookie/query param token)
+        if not token:
             logger.info("Waiting for auth message...")
             try:
-                # Wait for first message (should be auth)
                 auth_data = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
                 auth_message = json.loads(auth_data)
 
