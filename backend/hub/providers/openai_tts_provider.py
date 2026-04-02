@@ -117,17 +117,11 @@ class OpenAITTSProvider(TTSProvider):
         if self._api_key:
             return self._api_key
 
-        # Try database first
+        # Database only — no env var fallback
         if self.db:
             key = get_api_key("openai", self.db)
             if key:
                 self._api_key = key
-                return key
-
-        # Fall back to environment variable
-        key = os.getenv("OPENAI_API_KEY")
-        if key:
-            self._api_key = key
 
         return self._api_key
 

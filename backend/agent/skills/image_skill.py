@@ -528,13 +528,13 @@ class ImageSkill(BaseSkill):
             return {"success": False, "error": str(e)}
 
     async def _get_api_key(self) -> Optional[str]:
-        """Get Gemini API key from database or environment."""
+        """Get Gemini API key from database."""
         try:
             if self._db_session:
-                return get_api_key("gemini", self._db_session) or os.getenv("GEMINI_API_KEY")
-            return os.getenv("GEMINI_API_KEY")
+                return get_api_key("gemini", self._db_session)
+            return None
         except Exception:
-            return os.getenv("GEMINI_API_KEY")
+            return None
 
     # =========================================================================
     # HELPER METHODS

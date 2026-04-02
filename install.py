@@ -851,16 +851,8 @@ TSN_LOG_FILE=/app/logs/tsushin.log
 # Host path for MCP container volume mounts (CRITICAL for Docker-in-Docker)
 HOST_BACKEND_DATA_PATH={host_backend_data_path}
 
-# AI Provider Keys
-GEMINI_API_KEY={self.config['GEMINI_API_KEY']}
-GOOGLE_API_KEY={self.config['GEMINI_API_KEY']}
-OPENAI_API_KEY={self.config['OPENAI_API_KEY']}
-ANTHROPIC_API_KEY={self.config['ANTHROPIC_API_KEY']}
-GROQ_API_KEY={self.config.get('GROQ_API_KEY', '')}
-GROK_API_KEY={self.config.get('GROK_API_KEY', '')}
-DEEPSEEK_API_KEY={self.config.get('DEEPSEEK_API_KEY', '')}
-ELEVENLABS_API_KEY={self.config.get('ELEVENLABS_API_KEY', '')}
-OLLAMA_BASE_URL=http://host.docker.internal:11434
+# AI Provider Keys — stored in database via setup wizard, not in .env
+# Configure additional providers via Settings > Integrations after install
 
 # Security (auto-generated)
 JWT_SECRET_KEY={jwt_secret}

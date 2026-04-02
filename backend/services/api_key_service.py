@@ -3,17 +3,15 @@ Phase 4.6: API Key Service
 Phase SEC-001: Added encryption at rest for API keys (CRIT-003 fix).
 
 Centralized service for loading API keys from database.
-Recommended: Configure via Hub → API Keys UI (encrypted at rest).
+Configure via Settings → Integrations or Hub → API Keys UI (encrypted at rest).
 
 Priority order:
 1. Tenant-specific database key (if tenant_id provided)
 2. System-wide database key (tenant_id = NULL)
-3. Environment variable fallback (for fresh installs / quick setup)
 
-For production use, database keys via Hub UI are recommended (encryption at rest).
+No env var fallback — all keys must be stored in the database.
 """
 
-import os
 from typing import Optional
 from sqlalchemy.orm import Session
 from models import ApiKey
@@ -21,21 +19,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Environment variable names for each service (used as fallback when no DB key exists)
-ENV_KEY_MAP = {
-    'anthropic': 'ANTHROPIC_API_KEY',
-    'openai': 'OPENAI_API_KEY',
-    'gemini': 'GEMINI_API_KEY',
-    'openrouter': 'OPENROUTER_API_KEY',
-    'groq': 'GROQ_API_KEY',
-    'grok': 'GROK_API_KEY',
-    'deepseek': 'DEEPSEEK_API_KEY',
-    'elevenlabs': 'ELEVENLABS_API_KEY',
-    'vertex_ai': 'VERTEX_AI_PRIVATE_KEY',  # Service account private key (PEM)
-    'vertex_ai_project_id': 'VERTEX_AI_PROJECT_ID',
-    'vertex_ai_region': 'VERTEX_AI_REGION',
-    'vertex_ai_sa_email': 'VERTEX_AI_SERVICE_ACCOUNT_EMAIL',
-}
+# No env var fallback — all API keys must be configured via UI/DB.
+# This ensures DB misconfigurations surface immediately instead of being
+# masked by stale env vars.
 
 
 def _decrypt_api_key(api_key_record: ApiKey, db: Session) -> Optional[str]:
@@ -120,7 +106,6 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
     Priority order:
     1. Tenant-specific database key (if tenant_id provided)
     2. System-wide database key (tenant_id = NULL)
-    3. Environment variable fallback (e.g. GEMINI_API_KEY)
 
     Args:
         service: Service name ('anthropic', 'openai', 'gemini', 'openrouter', 'brave_search', 'amadeus', 'serpapi')
@@ -130,10 +115,6 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
     Returns:
         API key string or None if not found
         Note: For 'amadeus', returns 'key:secret' concatenated with colon
-
-    Note:
-        For production, configure via Hub → API Keys UI (encrypted at rest).
-        Environment variables are supported as fallback for fresh installs.
     """
     if not db:
         logger.error(f"❌ get_api_key called with db=None for service={service}")
@@ -168,17 +149,8 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
     except Exception as e:
         logger.warning(f"Failed to load system-wide API key from database for {service}: {e}")
 
-    # Step 3: Environment variable fallback
-    env_var = ENV_KEY_MAP.get(service)
-    if env_var:
-        env_value = os.getenv(env_var)
-        if env_value:
-            logger.info(f"Using environment variable {env_var} for {service} (no database key configured)")
-            return env_value
-
-    # Step 4: Truly not found anywhere
-    env_hint = f" or set {env_var}" if env_var else ""
-    logger.warning(f"No API key found for {service}. Configure via Hub → API Keys{env_hint}.")
+    # Not found — no env var fallback, keys must be in DB
+    logger.warning(f"No API key found for {service}. Configure via Settings → Integrations or Hub → API Keys.")
     return None
 
 

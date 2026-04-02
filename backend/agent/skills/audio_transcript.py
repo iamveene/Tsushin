@@ -117,8 +117,8 @@ class AudioTranscriptSkill(BaseSkill):
             db = SessionLocal()
 
             try:
-                # Validate configuration - check database first, then config, then env
-                api_key = get_api_key("openai", db) or config.get("api_key") or os.getenv("OPENAI_API_KEY")
+                # Validate configuration - check database first, then config
+                api_key = get_api_key("openai", db) or config.get("api_key")
                 if not api_key:
                     return SkillResult(
                         success=False,

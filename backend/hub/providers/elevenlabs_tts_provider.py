@@ -113,11 +113,6 @@ class ElevenLabsTTSProvider(TTSProvider):
                 self._api_key = key
                 return key
 
-        env_key = os.getenv('ELEVENLABS_API_KEY')
-        if env_key:
-            self._api_key = env_key
-            return env_key
-
         return None
 
     def get_provider_name(self) -> str:
