@@ -750,7 +750,10 @@ class TsushinInstaller:
             caddyfile_content = f"""{domain} {{\n    tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem\n{routing_block}\n}}\n"""
 
         elif ssl_mode == 'selfsigned':
-            caddyfile_content = f"""{domain} {{\n    tls internal\n{routing_block}\n}}\n"""
+            # default_sni ensures Caddy serves the cert even when clients don't
+            # send SNI (e.g., curl/browsers connecting via bare IP address)
+            global_block = f"""{{\n    default_sni {domain}\n}}\n\n"""
+            caddyfile_content = f"""{global_block}{domain} {{\n    tls internal\n{routing_block}\n}}\n"""
 
         else:
             return
