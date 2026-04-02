@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Fresh Install QA (2026-04-02)
+
+**Install Flow (3 fixes):**
+- **(BUG-248) /setup page**: Created frontend setup wizard at `/setup` for first-run account creation. Login page auto-redirects to `/setup` when database is empty. Added `GET /api/auth/setup-status` endpoint.
+- **(BUG-249) --defaults auto-bootstrap**: `python3 install.py --defaults` now creates tenant + admin with random credentials and displays them post-install.
+- **(BUG-250) .local email validation**: Patched `email-validator` to allow `.local` TLD for dev environments.
+
+**Installer Security (1 fix):**
+- **(BUG-256) HTTPS default**: Self-signed HTTPS is now the default for localhost installs, Let's Encrypt for remote. HTTP requires explicit opt-in with plaintext credential warning. `TSN_CORS_ORIGINS` and `TSN_SSL_MODE` auto-configured in `.env`.
+
+**UI/UX (6 fixes):**
+- **(BUG-251) Tenant display name**: Header shows tenant name instead of raw ID slug (`tenant_2026...`).
+- **(BUG-252) Markdown rendering**: Playground renders markdown in agent responses (bold, bullets, code blocks) via ReactMarkdown.
+- **(BUG-253) Thread titles**: Smarter auto-naming strips greetings and extracts topic instead of truncating first 50 chars.
+- **(BUG-254) Console noise**: Expected 401 errors downgraded to `console.debug`, verbose playground logs gated behind `NODE_ENV`.
+- **(BUG-255) Tour highlighting**: Onboarding tour now highlights target UI elements with pulsing teal outline.
+- **(BUG-257) Tour content**: Updated with current AI providers, channel setup guidance, Sentinel security, and API v1 access.
+
 #### Google SSO Enrollment Fixes (2026-04-01)
 
 - **(BUG-246) Soft delete locks SSO re-enrollment**: Team member removal now uses hard delete instead of soft delete. Soft delete left `google_id` linked to a deactivated record, permanently blocking re-enrollment. SSO lookups now also filter `deleted_at` as defense-in-depth. Comprehensive FK cleanup across 12+ tables on user removal.
