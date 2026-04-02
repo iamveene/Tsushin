@@ -6710,6 +6710,9 @@ export const api = {
     admin_password: string
     admin_full_name: string
     create_default_agents?: boolean
+    gemini_api_key?: string
+    openai_api_key?: string
+    anthropic_api_key?: string
   }): Promise<any> {
     const res = await fetch(`${API_URL}/api/auth/setup-wizard`, {
       method: 'POST',
