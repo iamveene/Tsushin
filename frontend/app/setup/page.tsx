@@ -13,14 +13,40 @@ export default function SetupPage() {
   const [fullName, setFullName] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [geminiApiKey, setGeminiApiKey] = useState('')
-  const [openaiApiKey, setOpenaiApiKey] = useState('')
-  const [anthropicApiKey, setAnthropicApiKey] = useState('')
-  const [groqApiKey, setGroqApiKey] = useState('')
-  const [grokApiKey, setGrokApiKey] = useState('')
-  const [deepseekApiKey, setDeepseekApiKey] = useState('')
-  const [openrouterApiKey, setOpenrouterApiKey] = useState('')
+  const [providerKeys, setProviderKeys] = useState<Array<{provider: string, key: string}>>([])
+  const [selectedProvider, setSelectedProvider] = useState('gemini')
+  const [currentKey, setCurrentKey] = useState('')
   const [providerKeysOpen, setProviderKeysOpen] = useState(true)
+
+  const PROVIDERS: Record<string, { label: string; field: string; placeholder: string }> = {
+    gemini:     { label: 'Google Gemini',    field: 'gemini_api_key',     placeholder: 'AIza...' },
+    openai:     { label: 'OpenAI',           field: 'openai_api_key',     placeholder: 'sk-...' },
+    anthropic:  { label: 'Anthropic Claude', field: 'anthropic_api_key',  placeholder: 'sk-ant-...' },
+    groq:       { label: 'Groq',             field: 'groq_api_key',       placeholder: 'gsk_...' },
+    grok:       { label: 'Grok (xAI)',       field: 'grok_api_key',       placeholder: 'xai-...' },
+    deepseek:   { label: 'DeepSeek',         field: 'deepseek_api_key',   placeholder: 'sk-...' },
+    openrouter: { label: 'OpenRouter',       field: 'openrouter_api_key', placeholder: 'sk-or-...' },
+  }
+
+  const maskKey = (key: string) => {
+    if (key.length <= 6) return key.replace(/./g, '*')
+    return key.slice(0, key.indexOf('-') + 1 || 4) + '...' + key.slice(-3)
+  }
+
+  const handleAddProvider = () => {
+    if (!currentKey.trim()) return
+    if (providerKeys.some(p => p.provider === selectedProvider)) return
+    setProviderKeys([...providerKeys, { provider: selectedProvider, key: currentKey.trim() }])
+    setCurrentKey('')
+    // Auto-select next available provider
+    const usedProviders = new Set([...providerKeys.map(p => p.provider), selectedProvider])
+    const nextAvailable = Object.keys(PROVIDERS).find(p => !usedProviders.has(p))
+    if (nextAvailable) setSelectedProvider(nextAvailable)
+  }
+
+  const handleRemoveProvider = (provider: string) => {
+    setProviderKeys(providerKeys.filter(p => p.provider !== provider))
+  }
   const [createDefaultAgents, setCreateDefaultAgents] = useState(true)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -51,19 +77,19 @@ export default function SetupPage() {
 
     setLoading(true)
     try {
+      const keyFields: Record<string, string | undefined> = {}
+      for (const { provider, key } of providerKeys) {
+        const field = PROVIDERS[provider]?.field
+        if (field && key) keyFields[field] = key
+      }
+
       const result = await api.setupWizard({
         tenant_name: orgName,
         admin_email: email,
         admin_password: password,
         admin_full_name: fullName,
         create_default_agents: createDefaultAgents,
-        gemini_api_key: geminiApiKey || undefined,
-        openai_api_key: openaiApiKey || undefined,
-        anthropic_api_key: anthropicApiKey || undefined,
-        groq_api_key: groqApiKey || undefined,
-        grok_api_key: grokApiKey || undefined,
-        deepseek_api_key: deepseekApiKey || undefined,
-        openrouter_api_key: openrouterApiKey || undefined,
+        ...keyFields,
       })
 
       if (result.success) {
@@ -224,111 +250,75 @@ export default function SetupPage() {
               </button>
 
               {providerKeysOpen && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
-                  <div>
-                    <label htmlFor="geminiApiKey" className="block text-sm font-medium text-gray-300 mb-1">
-                      Google Gemini <span className="text-teal-500 text-xs">(recommended)</span>
-                    </label>
-                    <input
-                      id="geminiApiKey"
-                      type="password"
-                      value={geminiApiKey}
-                      onChange={(e) => setGeminiApiKey(e.target.value)}
-                      placeholder="AIza..."
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                    />
-                    <p className="mt-0.5 text-xs text-gray-600">ai.google.dev</p>
-                  </div>
+                <div className="mt-4 space-y-3">
+                  {/* Added provider chips */}
+                  {providerKeys.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {providerKeys.map((entry, idx) => (
+                        <div
+                          key={entry.provider}
+                          className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 flex items-center gap-2 text-sm"
+                        >
+                          <span className="text-gray-300">
+                            {PROVIDERS[entry.provider]?.label}:
+                          </span>
+                          <span className="text-gray-500 font-mono text-xs">
+                            {maskKey(entry.key)}
+                          </span>
+                          {idx === 0 && (
+                            <span className="text-teal-400 text-xs font-medium ml-1">Primary</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveProvider(entry.provider)}
+                            className="ml-1 text-gray-500 hover:text-red-400 transition-colors"
+                            aria-label={`Remove ${PROVIDERS[entry.provider]?.label}`}
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
-                  <div>
-                    <label htmlFor="openaiApiKey" className="block text-sm font-medium text-gray-300 mb-1">
-                      OpenAI
-                    </label>
-                    <input
-                      id="openaiApiKey"
-                      type="password"
-                      value={openaiApiKey}
-                      onChange={(e) => setOpenaiApiKey(e.target.value)}
-                      placeholder="sk-..."
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                    />
-                    <p className="mt-0.5 text-xs text-gray-600">platform.openai.com</p>
-                  </div>
+                  {/* Provider + key input row */}
+                  {providerKeys.length < Object.keys(PROVIDERS).length && (
+                    <div className="flex gap-2">
+                      <select
+                        value={selectedProvider}
+                        onChange={(e) => setSelectedProvider(e.target.value)}
+                        className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent min-w-[160px]"
+                      >
+                        {Object.entries(PROVIDERS)
+                          .filter(([key]) => !providerKeys.some(p => p.provider === key))
+                          .map(([key, { label }]) => (
+                            <option key={key} value={key}>{label}</option>
+                          ))}
+                      </select>
+                      <input
+                        type="password"
+                        value={currentKey}
+                        onChange={(e) => setCurrentKey(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddProvider() } }}
+                        placeholder={PROVIDERS[selectedProvider]?.placeholder || 'API key'}
+                        className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddProvider}
+                        disabled={!currentKey.trim()}
+                        className="px-4 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  )}
 
-                  <div>
-                    <label htmlFor="anthropicApiKey" className="block text-sm font-medium text-gray-300 mb-1">
-                      Anthropic Claude
-                    </label>
-                    <input
-                      id="anthropicApiKey"
-                      type="password"
-                      value={anthropicApiKey}
-                      onChange={(e) => setAnthropicApiKey(e.target.value)}
-                      placeholder="sk-ant-..."
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                    />
-                    <p className="mt-0.5 text-xs text-gray-600">console.anthropic.com</p>
-                  </div>
-
-                  <div>
-                    <label htmlFor="groqApiKey" className="block text-sm font-medium text-gray-300 mb-1">
-                      Groq
-                    </label>
-                    <input
-                      id="groqApiKey"
-                      type="password"
-                      value={groqApiKey}
-                      onChange={(e) => setGroqApiKey(e.target.value)}
-                      placeholder="gsk_..."
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                    />
-                    <p className="mt-0.5 text-xs text-gray-600">console.groq.com</p>
-                  </div>
-
-                  <div>
-                    <label htmlFor="grokApiKey" className="block text-sm font-medium text-gray-300 mb-1">
-                      Grok (xAI)
-                    </label>
-                    <input
-                      id="grokApiKey"
-                      type="password"
-                      value={grokApiKey}
-                      onChange={(e) => setGrokApiKey(e.target.value)}
-                      placeholder="xai-..."
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                    />
-                    <p className="mt-0.5 text-xs text-gray-600">console.x.ai</p>
-                  </div>
-
-                  <div>
-                    <label htmlFor="deepseekApiKey" className="block text-sm font-medium text-gray-300 mb-1">
-                      DeepSeek
-                    </label>
-                    <input
-                      id="deepseekApiKey"
-                      type="password"
-                      value={deepseekApiKey}
-                      onChange={(e) => setDeepseekApiKey(e.target.value)}
-                      placeholder="sk-..."
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                    />
-                    <p className="mt-0.5 text-xs text-gray-600">platform.deepseek.com</p>
-                  </div>
-
-                  <div className="sm:col-span-2">
-                    <label htmlFor="openrouterApiKey" className="block text-sm font-medium text-gray-300 mb-1">
-                      OpenRouter
-                    </label>
-                    <input
-                      id="openrouterApiKey"
-                      type="password"
-                      value={openrouterApiKey}
-                      onChange={(e) => setOpenrouterApiKey(e.target.value)}
-                      placeholder="sk-or-..."
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                    />
-                    <p className="mt-0.5 text-xs text-gray-600">openrouter.ai</p>
-                  </div>
+                  <p className="text-xs text-gray-500">
+                    Configure at least one provider. The first added will be the default.
+                  </p>
                 </div>
               )}
             </div>
