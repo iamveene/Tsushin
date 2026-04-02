@@ -42,6 +42,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info(f"Starting {settings.SERVICE_NAME} v{settings.SERVICE_VERSION}")
 
+import email_config  # noqa: F401
+
 from db import get_engine, init_database
 from models import Config
 from mcp_reader.watcher import MCPWatcher

@@ -44,25 +44,34 @@ class PlaygroundThreadService:
         """
         return f"playground_u{user_id}_a{agent_id}_t{thread_id}"
 
-    def _generate_thread_title(self, first_message: Optional[str] = None) -> str:
-        """
-        Generate thread title from first message or timestamp.
+    def _generate_thread_title(self, message: str, max_length: int = 50) -> str:
+        """Generate a clean thread title from the first user message."""
+        text = message.strip()
 
-        Args:
-            first_message: First user message (optional)
+        # Strip common greetings
+        greetings = ['hello', 'hi', 'hey', 'good morning', 'good afternoon',
+                     'good evening', 'greetings', 'howdy']
+        lower = text.lower()
+        for g in greetings:
+            if lower.startswith(g):
+                text = text[len(g):].lstrip(' ,!.').strip()
+                break
 
-        Returns:
-            Thread title
-        """
-        if first_message:
-            # Use first 50 chars of message
-            title = first_message[:50]
-            if len(first_message) > 50:
-                title += "..."
-            return title
-        else:
-            # Use timestamp
-            return f"Conversation at {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+        if not text:
+            return None  # Keep default title
+
+        # Take first sentence
+        for sep in ['. ', '? ', '! ', '\n']:
+            idx = text.find(sep)
+            if 0 < idx < max_length:
+                text = text[:idx]
+                break
+
+        # Truncate if too long
+        if len(text) > max_length:
+            text = text[:max_length].rsplit(' ', 1)[0] + '...'
+
+        return text[0].upper() + text[1:] if text else None
 
     async def create_thread(
         self,
@@ -590,6 +599,13 @@ class PlaygroundThreadService:
             # Clean message: remove line breaks, trim whitespace
             cleaned_message = " ".join(first_message.split())
             new_title = self._generate_thread_title(cleaned_message)
+
+            # If title generation returns None (e.g., message was just a greeting), skip rename
+            if new_title is None:
+                return {
+                    "status": "skipped",
+                    "message": "Message did not produce a meaningful title"
+                }
 
             # Update thread title
             thread.title = new_title

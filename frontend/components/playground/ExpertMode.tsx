@@ -773,7 +773,13 @@ export default function ExpertMode({
                               ? 'bg-[var(--pg-accent)] text-[var(--pg-void)] rounded-tr-sm'
                               : 'bg-[var(--pg-surface)] border border-[var(--pg-border)] text-[var(--pg-text)] rounded-tl-sm'
                           }`}>
-                            <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                            {isUser ? (
+                              <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                            ) : (
+                              <div className="markdown-content break-words">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                              </div>
+                            )}
                             {msg.image_url && (
                               <img
                                 src={msg.image_url}

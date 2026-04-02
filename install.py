@@ -571,28 +571,30 @@ class TsushinInstaller:
         print(f"{Colors.BOLD}SSL/HTTPS Configuration{Colors.ENDC}\n")
 
         # Determine available SSL modes based on access type
+        # HTTPS is the default — Tsushin is a security-first platform
         if access_type == "localhost":
             print_info("SSL modes available for localhost installations:")
-            print("  1. No SSL (HTTP only) — development/internal use [default]")
-            print("  2. Self-signed certificate — HTTPS for local development")
+            print("  1. Self-signed certificate (HTTPS) — recommended [default]")
+            print("  2. No SSL (HTTP only) — development/testing only")
             print()
             choice = safe_input(f"{Colors.BOLD}SSL Mode [1]:{Colors.ENDC} ").strip() or "1"
-            mode_map = {"1": "disabled", "2": "selfsigned"}
+            mode_map = {"1": "selfsigned", "2": "disabled"}
         else:
             print_info("SSL modes available for remote installations:")
-            print("  1. No SSL (HTTP only) — development/internal use [default]")
-            print("  2. Auto HTTPS (Let's Encrypt) — free, requires domain + ports 80/443")
+            print("  1. Auto HTTPS (Let's Encrypt) — recommended [default]")
+            print("  2. Self-signed certificate — development/testing")
             print("  3. Manual certificates — provide your own .crt and .key files")
-            print("  4. Self-signed certificate — HTTPS for development/testing")
+            print("  4. No SSL (HTTP only) — development only (insecure)")
             print()
             choice = safe_input(f"{Colors.BOLD}SSL Mode [1]:{Colors.ENDC} ").strip() or "1"
-            mode_map = {"1": "disabled", "2": "letsencrypt", "3": "manual", "4": "selfsigned"}
+            mode_map = {"1": "letsencrypt", "2": "selfsigned", "3": "manual", "4": "disabled"}
 
-        ssl_mode = mode_map.get(choice, "disabled")
+        ssl_mode = mode_map.get(choice, "selfsigned")
         self.config['SSL_MODE'] = ssl_mode
 
         if ssl_mode == "disabled":
-            print_info("SSL disabled. Services will be accessible via HTTP only.")
+            print_warning("HTTP mode is insecure — credentials and API keys will be transmitted in plaintext.")
+            print_warning("Only use HTTP for isolated development/testing environments.")
             return
 
         # Domain/hostname prompt
@@ -922,6 +924,8 @@ ASANA_REDIRECT_URI={frontend_url}/hub/asana/callback
 SSL_MODE={ssl_mode}
 SSL_DOMAIN={self.config.get('SSL_DOMAIN', '')}
 SSL_EMAIL={self.config.get('SSL_EMAIL', '')}
+TSN_SSL_MODE={ssl_mode}
+TSN_CORS_ORIGINS={frontend_url}
 HTTP_PORT=80
 HTTPS_PORT=443
 
@@ -1288,10 +1292,22 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
         """Populate self.config with random secrets and sensible defaults for unattended install."""
         self.config['TSN_APP_PORT'] = '8081'
         self.config['FRONTEND_PORT'] = '3030'
-        self.config['SSL_MODE'] = 'disabled'
-        self.config['SSL_DOMAIN'] = ''
+        self.config['SSL_MODE'] = 'selfsigned'
+        self.config['SSL_DOMAIN'] = 'localhost'
         self.config['SSL_EMAIL'] = ''
-        self.config['NEXT_PUBLIC_API_URL'] = 'http://localhost:8081'
+        self.config['NEXT_PUBLIC_API_URL'] = 'https://localhost'
+
+        # Default tenant and admin credentials
+        self.config['TENANT_NAME'] = 'DefaultTenant'
+        self.config['ADMIN_EMAIL'] = 'admin@tsushin.dev'
+        self.config['ADMIN_PASSWORD'] = secrets.token_urlsafe(12)
+        self.config['ADMIN_FULL_NAME'] = 'Tenant Admin'
+        self.config['GLOBAL_ADMIN_EMAIL'] = 'globaladmin@tsushin.dev'
+        self.config['GLOBAL_ADMIN_PASSWORD'] = secrets.token_urlsafe(12)
+        self.config['GLOBAL_ADMIN_FULL_NAME'] = 'Global Admin'
+        self.config['GEMINI_API_KEY'] = ''
+        self.config['OPENAI_API_KEY'] = ''
+        self.config['ANTHROPIC_API_KEY'] = ''
 
     def run(self):
         """Main installation flow"""
@@ -1308,10 +1324,22 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
             self._populate_defaults()
             self.check_prerequisites()
             self.prepare_data_directories()
+            self.generate_caddyfile()
+            self.generate_self_signed_cert()
             self.generate_env_file()
             self.run_docker_compose()
             self.build_additional_images()
             self.health_check()
+            if not self.setup_initial_tenant():
+                print_warning("Auto-bootstrap failed. Visit /setup to create your admin account.")
+            else:
+                print()
+                print_success(f"Tenant admin:    {self.config['ADMIN_EMAIL']}")
+                print_success(f"Tenant password: {self.config['ADMIN_PASSWORD']}")
+                print_success(f"Global admin:    {self.config['GLOBAL_ADMIN_EMAIL']}")
+                print_success(f"Global password: {self.config['GLOBAL_ADMIN_PASSWORD']}")
+                print()
+                print_warning("SAVE THESE CREDENTIALS — they will not be shown again.")
             self.display_success_message()
             return
 

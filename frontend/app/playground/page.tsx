@@ -127,7 +127,7 @@ export default function PlaygroundPage() {
 
   // Phase 14.9: WebSocket Hook for streaming - FORCE REBUILD v2
   const wsToken = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-  console.log('[Playground] Initializing WebSocket hook - token:', !!wsToken, 'user:', !!user, 'enabled:', useWebSocket && !!user)
+  if (process.env.NODE_ENV === 'development') console.log('[Playground] Initializing WebSocket hook - token:', !!wsToken, 'user:', !!user, 'enabled:', useWebSocket && !!user)
 
   const websocketConnection = usePlaygroundWebSocket(
     wsToken,
@@ -408,10 +408,12 @@ export default function PlaygroundPage() {
 
   // Track banner render timing
   useEffect(() => {
-    if (projectSession?.is_in_project) {
-      console.log(`[TIMING] ✅ Banner RENDERED for project: ${projectSession.project_name} at ${performance.now()}ms`)
-    } else {
-      console.log(`[TIMING] Banner cleared/hidden at ${performance.now()}ms`)
+    if (process.env.NODE_ENV === 'development') {
+      if (projectSession?.is_in_project) {
+        console.log(`[TIMING] Banner RENDERED for project: ${projectSession.project_name} at ${performance.now()}ms`)
+      } else {
+        console.log(`[TIMING] Banner cleared/hidden at ${performance.now()}ms`)
+      }
     }
   }, [projectSession?.is_in_project, projectSession?.project_name])
 
@@ -885,10 +887,10 @@ export default function PlaygroundPage() {
       }
 
       try {
-        console.log('[Phase 14.1] Loading threads for agent', selectedAgentId)
+        if (process.env.NODE_ENV === 'development') console.log('[Phase 14.1] Loading threads for agent', selectedAgentId)
         const result = await api.listThreads(selectedAgentId)
         const agentThreads = result.threads
-        console.log('[Phase 14.1] Loaded threads:', agentThreads.length)
+        if (process.env.NODE_ENV === 'development') console.log('[Phase 14.1] Loaded threads:', agentThreads.length)
 
         setThreads(agentThreads)
 
@@ -1059,7 +1061,7 @@ export default function PlaygroundPage() {
         let sentViaWebSocket = false
 
         if (useWebSocket && websocketConnection.isConnected) {
-          console.log('[Playground] Sending via WebSocket')
+          if (process.env.NODE_ENV === 'development') console.log('[Playground] Sending via WebSocket')
           sentViaWebSocket = websocketConnection.sendMessage(
             selectedAgentId,
             userMessage,
@@ -1068,7 +1070,7 @@ export default function PlaygroundPage() {
         }
 
         if (!sentViaWebSocket) {
-          console.log('[Playground] Sending via HTTP (fallback)')
+          if (process.env.NODE_ENV === 'development') console.log('[Playground] Sending via HTTP (fallback)')
 
           // Send as regular message to agent with thread isolation (HTTP fallback)
           const response = await api.sendPlaygroundMessage(
