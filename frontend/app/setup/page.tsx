@@ -4,15 +4,18 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { api } from '@/lib/client'
+import { useAuth } from '@/contexts/AuthContext'
 
 export default function SetupPage() {
   const router = useRouter()
+  const { setAuthFromToken } = useAuth()
   const [checking, setChecking] = useState(true)
   const [orgName, setOrgName] = useState('')
   const [email, setEmail] = useState('')
   const [fullName, setFullName] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [geminiApiKey, setGeminiApiKey] = useState('')
   const [createDefaultAgents, setCreateDefaultAgents] = useState(true)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -49,13 +52,11 @@ export default function SetupPage() {
         admin_password: password,
         admin_full_name: fullName,
         create_default_agents: createDefaultAgents,
+        gemini_api_key: geminiApiKey || undefined,
       })
 
       if (result.access_token) {
-        localStorage.setItem('token', result.access_token)
-        if (result.user) {
-          localStorage.setItem('user', JSON.stringify(result.user))
-        }
+        await setAuthFromToken(result.access_token)
         router.replace('/')
       }
     } catch (err) {
@@ -187,6 +188,24 @@ export default function SetupPage() {
                 placeholder="Repeat password"
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
               />
+            </div>
+
+            {/* AI Provider Key */}
+            <div className="border-t border-gray-800 pt-4">
+              <label htmlFor="geminiApiKey" className="block text-sm font-medium text-gray-300 mb-1">
+                Gemini API Key <span className="text-gray-500">(recommended)</span>
+              </label>
+              <input
+                id="geminiApiKey"
+                type="password"
+                value={geminiApiKey}
+                onChange={(e) => setGeminiApiKey(e.target.value)}
+                placeholder="AIza... (configure more providers later in Hub)"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Required for agents to respond. Get one at ai.google.dev. You can add more providers later.
+              </p>
             </div>
 
             <div className="flex items-center">
