@@ -6717,6 +6717,7 @@ export const api = {
     grok_api_key?: string
     deepseek_api_key?: string
     openrouter_api_key?: string
+    default_model?: string
   }): Promise<any> {
     const res = await fetch(`${API_URL}/api/auth/setup-wizard`, {
       method: 'POST',

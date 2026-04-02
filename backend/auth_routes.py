@@ -132,6 +132,8 @@ class SetupWizardRequest(BaseModel):
     grok_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
+    # Optional: override the default model for seeded agents
+    default_model: Optional[str] = None
     create_default_agents: bool = True
 
 
@@ -511,32 +513,18 @@ async def setup_wizard(
         if setup_request.create_default_agents:
             from services.agent_seeding import seed_default_agents
 
-            # Determine model provider based on available API keys
-            if "gemini" in api_keys_stored:
-                model_provider = "gemini"
-                model_name = "gemini-2.5-flash"
-            elif "openai" in api_keys_stored:
-                model_provider = "openai"
-                model_name = "gpt-4o-mini"
-            elif "anthropic" in api_keys_stored:
-                model_provider = "anthropic"
-                model_name = "claude-haiku-4-5-20251001"
-            elif "groq" in api_keys_stored:
-                model_provider = "groq"
-                model_name = "llama-3.3-70b-versatile"
-            elif "grok" in api_keys_stored:
-                model_provider = "grok"
-                model_name = "grok-3-mini"
-            elif "deepseek" in api_keys_stored:
-                model_provider = "deepseek"
-                model_name = "deepseek-chat"
-            elif "openrouter" in api_keys_stored:
-                model_provider = "openrouter"
-                model_name = "google/gemini-2.5-flash"
-            else:
-                # Fallback to gemini (will fail later if no key, but allows user to add later)
-                model_provider = "gemini"
-                model_name = "gemini-2.5-flash"
+            # Determine model provider based on available API keys (first key = primary)
+            provider_defaults = {
+                "gemini": "gemini-2.5-flash",
+                "openai": "gpt-4o-mini",
+                "anthropic": "claude-haiku-4-5-20251001",
+                "groq": "llama-3.3-70b-versatile",
+                "grok": "grok-3-mini",
+                "deepseek": "deepseek-chat",
+                "openrouter": "google/gemini-2.5-flash",
+            }
+            model_provider = next((p for p in provider_defaults if p in api_keys_stored), "gemini")
+            model_name = setup_request.default_model or provider_defaults.get(model_provider, "gemini-2.5-flash")
 
             agents = seed_default_agents(
                 tenant_id=tenant.id,

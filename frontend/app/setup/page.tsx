@@ -13,19 +13,20 @@ export default function SetupPage() {
   const [fullName, setFullName] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [providerKeys, setProviderKeys] = useState<Array<{provider: string, key: string}>>([])
+  const [providerKeys, setProviderKeys] = useState<Array<{provider: string, key: string, model: string}>>([])
   const [selectedProvider, setSelectedProvider] = useState('gemini')
   const [currentKey, setCurrentKey] = useState('')
+  const [currentModel, setCurrentModel] = useState('')
   const [providerKeysOpen, setProviderKeysOpen] = useState(true)
 
-  const PROVIDERS: Record<string, { label: string; field: string; placeholder: string }> = {
-    gemini:     { label: 'Google Gemini',    field: 'gemini_api_key',     placeholder: 'AIza...' },
-    openai:     { label: 'OpenAI',           field: 'openai_api_key',     placeholder: 'sk-...' },
-    anthropic:  { label: 'Anthropic Claude', field: 'anthropic_api_key',  placeholder: 'sk-ant-...' },
-    groq:       { label: 'Groq',             field: 'groq_api_key',       placeholder: 'gsk_...' },
-    grok:       { label: 'Grok (xAI)',       field: 'grok_api_key',       placeholder: 'xai-...' },
-    deepseek:   { label: 'DeepSeek',         field: 'deepseek_api_key',   placeholder: 'sk-...' },
-    openrouter: { label: 'OpenRouter',       field: 'openrouter_api_key', placeholder: 'sk-or-...' },
+  const PROVIDERS: Record<string, { label: string; field: string; placeholder: string; models: string[]; defaultModel: string }> = {
+    gemini:     { label: 'Google Gemini',    field: 'gemini_api_key',     placeholder: 'AIza...',    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'], defaultModel: 'gemini-2.5-flash' },
+    openai:     { label: 'OpenAI',           field: 'openai_api_key',     placeholder: 'sk-...',     models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o4-mini'], defaultModel: 'gpt-4o-mini' },
+    anthropic:  { label: 'Anthropic Claude', field: 'anthropic_api_key',  placeholder: 'sk-ant-...', models: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6-20250514', 'claude-opus-4-6-20250514'], defaultModel: 'claude-haiku-4-5-20251001' },
+    groq:       { label: 'Groq',             field: 'groq_api_key',       placeholder: 'gsk_...',    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'], defaultModel: 'llama-3.3-70b-versatile' },
+    grok:       { label: 'Grok (xAI)',       field: 'grok_api_key',       placeholder: 'xai-...',    models: ['grok-3-mini', 'grok-3'], defaultModel: 'grok-3-mini' },
+    deepseek:   { label: 'DeepSeek',         field: 'deepseek_api_key',   placeholder: 'sk-...',     models: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat' },
+    openrouter: { label: 'OpenRouter',       field: 'openrouter_api_key', placeholder: 'sk-or-...',  models: ['google/gemini-2.5-flash', 'anthropic/claude-sonnet-4', 'openai/gpt-4o-mini'], defaultModel: 'google/gemini-2.5-flash' },
   }
 
   const maskKey = (key: string) => {
@@ -36,8 +37,10 @@ export default function SetupPage() {
   const handleAddProvider = () => {
     if (!currentKey.trim()) return
     if (providerKeys.some(p => p.provider === selectedProvider)) return
-    setProviderKeys([...providerKeys, { provider: selectedProvider, key: currentKey.trim() }])
+    const model = currentModel || PROVIDERS[selectedProvider]?.defaultModel || ''
+    setProviderKeys([...providerKeys, { provider: selectedProvider, key: currentKey.trim(), model }])
     setCurrentKey('')
+    setCurrentModel('')
     // Auto-select next available provider
     const usedProviders = new Set([...providerKeys.map(p => p.provider), selectedProvider])
     const nextAvailable = Object.keys(PROVIDERS).find(p => !usedProviders.has(p))
@@ -83,12 +86,16 @@ export default function SetupPage() {
         if (field && key) keyFields[field] = key
       }
 
+      // Send the primary provider's model as default_model
+      const primaryModel = providerKeys.length > 0 ? providerKeys[0].model : undefined
+
       const result = await api.setupWizard({
         tenant_name: orgName,
         admin_email: email,
         admin_password: password,
         admin_full_name: fullName,
         create_default_agents: createDefaultAgents,
+        default_model: primaryModel,
         ...keyFields,
       })
 
@@ -260,13 +267,16 @@ export default function SetupPage() {
                           className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 flex items-center gap-2 text-sm"
                         >
                           <span className="text-gray-300">
-                            {PROVIDERS[entry.provider]?.label}:
+                            {PROVIDERS[entry.provider]?.label}
                           </span>
                           <span className="text-gray-500 font-mono text-xs">
+                            {entry.model}
+                          </span>
+                          <span className="text-gray-600 font-mono text-xs">
                             {maskKey(entry.key)}
                           </span>
                           {idx === 0 && (
-                            <span className="text-teal-400 text-xs font-medium ml-1">Primary</span>
+                            <span className="text-teal-400 text-xs font-medium">Primary</span>
                           )}
                           <button
                             type="button"
@@ -283,36 +293,49 @@ export default function SetupPage() {
                     </div>
                   )}
 
-                  {/* Provider + key input row */}
+                  {/* Provider + model + key input */}
                   {providerKeys.length < Object.keys(PROVIDERS).length && (
-                    <div className="flex gap-2">
-                      <select
-                        value={selectedProvider}
-                        onChange={(e) => setSelectedProvider(e.target.value)}
-                        className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent min-w-[160px]"
-                      >
-                        {Object.entries(PROVIDERS)
-                          .filter(([key]) => !providerKeys.some(p => p.provider === key))
-                          .map(([key, { label }]) => (
-                            <option key={key} value={key}>{label}</option>
+                    <div className="space-y-2">
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedProvider}
+                          onChange={(e) => { setSelectedProvider(e.target.value); setCurrentModel('') }}
+                          className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent min-w-[160px]"
+                        >
+                          {Object.entries(PROVIDERS)
+                            .filter(([key]) => !providerKeys.some(p => p.provider === key))
+                            .map(([key, { label }]) => (
+                              <option key={key} value={key}>{label}</option>
+                            ))}
+                        </select>
+                        <select
+                          value={currentModel || PROVIDERS[selectedProvider]?.defaultModel || ''}
+                          onChange={(e) => setCurrentModel(e.target.value)}
+                          className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent min-w-[180px]"
+                        >
+                          {PROVIDERS[selectedProvider]?.models.map((m) => (
+                            <option key={m} value={m}>{m}</option>
                           ))}
-                      </select>
-                      <input
-                        type="password"
-                        value={currentKey}
-                        onChange={(e) => setCurrentKey(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddProvider() } }}
-                        placeholder={PROVIDERS[selectedProvider]?.placeholder || 'API key'}
-                        className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleAddProvider}
-                        disabled={!currentKey.trim()}
-                        className="px-4 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
-                      >
-                        Add
-                      </button>
+                        </select>
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="password"
+                          value={currentKey}
+                          onChange={(e) => setCurrentKey(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddProvider() } }}
+                          placeholder={PROVIDERS[selectedProvider]?.placeholder || 'API key'}
+                          className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAddProvider}
+                          disabled={!currentKey.trim()}
+                          className="px-4 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+                        >
+                          Add
+                        </button>
+                      </div>
                     </div>
                   )}
 
