@@ -36,20 +36,6 @@ services:
     networks:
       - tsushin-network
 
-  # ==========================================================================
-  # Override: Backend — bind to localhost only (proxy handles ingress)
-  # ==========================================================================
-  backend:
-    ports:
-      - "127.0.0.1:${TSN_APP_PORT:-8081}:8081"
-
-  # ==========================================================================
-  # Override: Frontend — bind to localhost only (proxy handles ingress)
-  # ==========================================================================
-  frontend:
-    ports:
-      - "127.0.0.1:${FRONTEND_PORT:-3030}:3030"
-
 volumes:
   caddy-data:
     name: caddy-data
