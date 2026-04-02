@@ -203,12 +203,15 @@ export function useAuth() {
 export function useRequireAuth() {
   const { user, loading, hasPermission } = useAuth()
   const router = useRouter()
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : ''
 
   useEffect(() => {
-    if (!loading && !user) {
+    // Skip auth redirect for public pages (login, signup, setup, etc.)
+    const isPublicPage = pathname.startsWith('/auth') || pathname.startsWith('/setup')
+    if (!loading && !user && !isPublicPage) {
       router.push('/auth/login')
     }
-  }, [user, loading, router])
+  }, [user, loading, router, pathname])
 
   return { user, loading, hasPermission }
 }
