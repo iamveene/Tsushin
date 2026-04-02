@@ -132,6 +132,6 @@ ENV TSN_BACKUPS_DIR=/app/data/backups
 ENV TSN_LOG_FILE=/app/logs/tsushin.log
 
 # Run the application
-# 2 workers: prevents CPU-bound operations (embedding model, etc.) from blocking
-# health checks and WebSocket connections. WebSocket stays pinned to its worker.
-CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8081", "--workers", "2", "--timeout-keep-alive", "120"]
+# 1 worker: all CPU-bound embedding calls use asyncio.to_thread() so they
+# no longer block the event loop.  Single worker halves model memory.
+CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8081", "--workers", "1", "--timeout-keep-alive", "120"]

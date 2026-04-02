@@ -141,7 +141,7 @@ class AgentMemorySystem:
         metadata['agent_id'] = self.agent_id
 
         # Add to working memory + episodic memory
-        self.semantic_memory.add_message(
+        await self.semantic_memory.add_message(
             sender_key=user_id,
             role=role,
             content=content,
@@ -194,7 +194,7 @@ class AgentMemorySystem:
         active_decay = self.decay_config if self.decay_config.enabled else None
 
         # Layer 1 + 2: Get hybrid context from semantic memory
-        memory_context = self.semantic_memory.get_context(
+        memory_context = await self.semantic_memory.get_context(
             sender_key=user_id,
             current_message=current_message,
             max_semantic_results=self.config.get("semantic_search_results", 5),
@@ -662,7 +662,7 @@ class AgentMemorySystem:
         """
         try:
             # Get recent conversation from working memory
-            context = self.semantic_memory.get_context(
+            context = await self.semantic_memory.get_context(
                 sender_key=user_id,
                 current_message="",
                 max_semantic_results=0  # Only need recent messages
@@ -824,7 +824,7 @@ class AgentMemorySystem:
         """
         try:
             # Get full conversation from working memory
-            context = self.semantic_memory.get_context(
+            context = await self.semantic_memory.get_context(
                 sender_key=user_id,
                 current_message="",
                 max_semantic_results=0

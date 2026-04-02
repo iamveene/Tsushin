@@ -1151,7 +1151,7 @@ async def get_memory_layers(
             last_message = working_memory[-1].get("content", "") if working_memory else ""
 
             if last_message and vector_store:
-                results = vector_store.search_similar(
+                results = await vector_store.search_similar(
                     query_text=last_message,
                     sender_key=sender_key,
                     limit=10
@@ -1999,7 +1999,7 @@ async def search_conversations_semantic(
     from services.conversation_search_service import ConversationSearchService
 
     service = ConversationSearchService(db)
-    result = service.search_semantic(
+    result = await service.search_semantic(
         query=q,
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
@@ -2030,7 +2030,7 @@ async def search_conversations_combined(
     from services.conversation_search_service import ConversationSearchService
 
     service = ConversationSearchService(db)
-    result = service.search_combined(
+    result = await service.search_combined(
         query=q,
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,

@@ -362,7 +362,7 @@ Do not include any explanation, only the JSON array."""
             from services.conversation_search_service import ConversationSearchService
             search_service = ConversationSearchService(self.db)
 
-            semantic_results = search_service.search_semantic(
+            semantic_results = await search_service.search_semantic(
                 query=query_text,
                 tenant_id=tenant_id,
                 user_id=user_id,

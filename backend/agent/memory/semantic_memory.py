@@ -71,7 +71,7 @@ class SemanticMemoryService:
             self.vector_store = None
             self.logger.info("Semantic search disabled")
 
-    def add_message(
+    async def add_message(
         self,
         sender_key: str,
         role: str,
@@ -99,7 +99,7 @@ class SemanticMemoryService:
                 msg_metadata['timestamp'] = datetime.utcnow().isoformat() + "Z"
                 msg_metadata['role'] = role
 
-                self.vector_store.add_message(
+                await self.vector_store.add_message(
                     message_id=message_id,
                     sender_key=sender_key,
                     text=content,
@@ -109,7 +109,7 @@ class SemanticMemoryService:
             except Exception as e:
                 self.logger.error(f"Failed to add message to vector store: {e}")
 
-    def get_context(
+    async def get_context(
         self,
         sender_key: str,
         current_message: str,
@@ -156,13 +156,13 @@ class SemanticMemoryService:
                     # Over-fetch for decay filtering + MMR reranking
                     fetch_limit = max_semantic_results * 3
                     results, query_embedding, result_embeddings = \
-                        self.vector_store.search_similar_with_embeddings(
+                        await self.vector_store.search_similar_with_embeddings(
                             query_text=current_message,
                             sender_key=sender_key,
                             limit=fetch_limit
                         )
                 else:
-                    results = self.vector_store.search_similar(
+                    results = await self.vector_store.search_similar(
                         query_text=current_message,
                         sender_key=sender_key,
                         limit=max_semantic_results
@@ -377,7 +377,7 @@ class SemanticMemoryService:
 
         return "\n".join(lines) if lines else "No previous context"
 
-    def add_user_aware_message(
+    async def add_user_aware_message(
         self,
         sender_key: str,
         role: str,
@@ -407,4 +407,4 @@ class SemanticMemoryService:
                 metadata['sender_id'] = contact.id
                 metadata['sender_role'] = contact.role
 
-        self.add_message(sender_key, role, content, message_id, metadata)
+        await self.add_message(sender_key, role, content, message_id, metadata)

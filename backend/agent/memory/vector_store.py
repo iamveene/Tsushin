@@ -54,7 +54,7 @@ class VectorStore:
 
         self.logger.info(f"VectorStore initialized. Collection size: {self.collection.count()}")
 
-    def add_message(
+    async def add_message(
         self,
         message_id: str,
         sender_key: str,
@@ -72,7 +72,7 @@ class VectorStore:
         """
         try:
             # Generate embedding
-            embedding = self.embedding_service.embed_text(text)
+            embedding = await self.embedding_service.embed_text_async(text)
 
             # Prepare metadata
             msg_metadata = {
@@ -96,7 +96,7 @@ class VectorStore:
             self.logger.error(f"Error adding message to vector store: {e}")
             raise
 
-    def search_similar(
+    async def search_similar(
         self,
         query_text: str,
         limit: int = 5,
@@ -124,7 +124,7 @@ class VectorStore:
                 return []
 
             # Generate query embedding
-            query_embedding = self.embedding_service.embed_text(query_text)
+            query_embedding = await self.embedding_service.embed_text_async(query_text)
 
             # Prepare query filters
             where_filter = None
@@ -242,7 +242,7 @@ class VectorStore:
         except Exception as e:
             self.logger.error(f"Error updating access time: {e}")
 
-    def search_similar_with_embeddings(
+    async def search_similar_with_embeddings(
         self,
         query_text: str,
         limit: int = 5,
@@ -266,7 +266,7 @@ class VectorStore:
             if self.collection.count() == 0:
                 return [], [], []
 
-            query_embedding = self.embedding_service.embed_text(query_text)
+            query_embedding = await self.embedding_service.embed_text_async(query_text)
 
             where_filter = None
             if sender_key:

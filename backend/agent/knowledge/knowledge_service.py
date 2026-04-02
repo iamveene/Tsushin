@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from models import AgentKnowledge, KnowledgeChunk
 from agent.knowledge.document_processor import DocumentProcessor
-from agent.memory.embedding_service import EmbeddingService
+from agent.memory.embedding_service import get_shared_embedding_service
 import chromadb
 from chromadb.config import Settings
 
@@ -32,7 +32,7 @@ class KnowledgeService:
         """
         self.db = db
         self.processor = DocumentProcessor()
-        self.embedding_service = EmbeddingService()
+        self.embedding_service = get_shared_embedding_service()
 
         # Initialize ChromaDB client for knowledge base
         vector_dir = Path("./data/chroma/knowledge")
@@ -108,7 +108,7 @@ class KnowledgeService:
             self.db.rollback()
             raise
 
-    def process_document(self, knowledge_id: int) -> bool:
+    async def process_document(self, knowledge_id: int) -> bool:
         """
         Process a document: extract text, create chunks, generate embeddings.
 
@@ -155,7 +155,7 @@ class KnowledgeService:
 
                 # Generate embedding and store in vector store
                 try:
-                    embedding = self.embedding_service.embed_text(chunk_data["content"])
+                    embedding = await self.embedding_service.embed_text_async(chunk_data["content"])
 
                     # Get or create collection for this agent
                     collection_name = f"knowledge_agent_{knowledge.agent_id}"
@@ -198,7 +198,7 @@ class KnowledgeService:
             self.db.commit()
             return False
 
-    def search_knowledge(
+    async def search_knowledge(
         self,
         agent_id: int,
         query: str,
@@ -231,7 +231,7 @@ class KnowledgeService:
                 return []
 
             # Generate query embedding
-            query_embedding = self.embedding_service.embed_text(query)
+            query_embedding = await self.embedding_service.embed_text_async(query)
 
             # Search ChromaDB
             results = collection.query(

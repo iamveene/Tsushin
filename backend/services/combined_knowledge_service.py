@@ -29,7 +29,6 @@ class CombinedKnowledgeService:
         self.db = db
         self.logger = logging.getLogger(__name__)
         self._chroma_client = None
-        self._embedding_model = None
 
     def _get_chroma_client(self):
         """Lazy-load ChromaDB client."""
@@ -47,17 +46,6 @@ class CombinedKnowledgeService:
                 self.logger.error(f"Failed to initialize ChromaDB: {e}")
                 raise
         return self._chroma_client
-
-    def _get_embedding_model(self, model_name: str = "all-MiniLM-L6-v2"):
-        """Get embedding model for semantic search."""
-        if self._embedding_model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                self._embedding_model = SentenceTransformer(model_name)
-            except Exception as e:
-                self.logger.error(f"Failed to load embedding model: {e}")
-                raise
-        return self._embedding_model
 
     async def search_combined_knowledge(
         self,
@@ -190,8 +178,9 @@ class CombinedKnowledgeService:
                 self.logger.warning(f"[KB BADGE] Agent KB collection '{collection_name}' not found in {knowledge_dir}: {e}")
                 return []  # Collection doesn't exist
 
-            model = self._get_embedding_model()
-            query_embedding = model.encode(query).tolist()
+            from agent.memory.embedding_service import get_shared_embedding_service
+            embedding_service = get_shared_embedding_service()
+            query_embedding = await embedding_service.embed_text_async(query)
 
             results = collection.query(
                 query_embeddings=[query_embedding],
@@ -262,8 +251,9 @@ class CombinedKnowledgeService:
             # Use project-specific embedding model
             model_name = project.kb_embedding_model or "all-MiniLM-L6-v2"
             self.logger.info(f"[KB BADGE] Loading embedding model: {model_name}")
-            model = self._get_embedding_model(model_name)
-            query_embedding = model.encode(query).tolist()
+            from agent.memory.embedding_service import get_shared_embedding_service
+            embedding_service = get_shared_embedding_service(model_name)
+            query_embedding = await embedding_service.embed_text_async(query)
             self.logger.info(f"[KB BADGE] Query embedding generated, dimension: {len(query_embedding)}")
 
             results = collection.query(

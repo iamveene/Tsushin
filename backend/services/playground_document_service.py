@@ -348,9 +348,9 @@ class PlaygroundDocumentService:
                 metadata={"hnsw:space": "cosine"}
             )
 
-            # BUG-001 Fix: Use shared service with batched processing
+            # BUG-001 Fix: Use shared service with batched processing (async)
             embedding_service = get_shared_embedding_service(embedding_model)
-            embeddings = embedding_service.embed_batch_chunked(chunks, batch_size=50)
+            embeddings = await embedding_service.embed_batch_chunked_async(chunks, batch_size=50)
 
             # Validate we got embeddings for all chunks
             if len(embeddings) != len(chunks):
@@ -532,7 +532,7 @@ class PlaygroundDocumentService:
         """Search documents using semantic search."""
         try:
             import chromadb
-            from sentence_transformers import SentenceTransformer
+            from agent.memory.embedding_service import get_shared_embedding_service
             import settings
 
             persist_dir = getattr(settings, 'CHROMA_PERSIST_DIR', 'data/chroma')
@@ -546,8 +546,8 @@ class PlaygroundDocumentService:
                 return []  # No documents uploaded yet
 
             # Generate query embedding
-            model = SentenceTransformer("all-MiniLM-L6-v2")
-            query_embedding = model.encode([query], convert_to_numpy=True).tolist()[0]
+            embedding_service = get_shared_embedding_service("all-MiniLM-L6-v2")
+            query_embedding = await embedding_service.embed_text_async(query)
 
             # Search
             results = collection.query(

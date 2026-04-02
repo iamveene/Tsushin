@@ -264,7 +264,7 @@ async def upload_knowledge(
             background_tasks.add_task(service.process_document, knowledge.id)
         else:
             # Process immediately if no background tasks available
-            service.process_document(knowledge.id)
+            await service.process_document(knowledge.id)
 
         # Clean up temporary file
         try:
@@ -412,7 +412,7 @@ def delete_knowledge(
 
 
 @router.post("/agents/{agent_id}/knowledge-base/search", response_model=List[SearchResult])
-def search_knowledge(
+async def search_knowledge(
     agent_id: int,
     request: SearchRequest,
     db: Session = Depends(get_db),
@@ -432,7 +432,7 @@ def search_knowledge(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
-    results = service.search_knowledge(
+    results = await service.search_knowledge(
         agent_id=agent_id,
         query=request.query,
         max_results=request.max_results,

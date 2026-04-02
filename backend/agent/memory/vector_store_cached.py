@@ -48,7 +48,7 @@ class CachedVectorStore:
         self._max_cache_size = 500
         self.logger = logging.getLogger(__name__)
 
-    def search_similar(
+    async def search_similar(
         self,
         query_text: str,
         limit: int = 5,
@@ -86,7 +86,7 @@ class CachedVectorStore:
         self.logger.debug(f"Vector search cache MISS for query hash {cache_key[:8]}..., performing search")
 
         # Call underlying vector store search
-        results = self.vector_store.search_similar(
+        results = await self.vector_store.search_similar(
             query_text=query_text,
             limit=limit,
             sender_key=sender_key
@@ -168,9 +168,9 @@ class CachedVectorStore:
         }
 
     # Delegate all other VectorStore methods without caching
-    def add_message(self, *args, **kwargs):
+    async def add_message(self, *args, **kwargs):
         """Add message and clear cache (new data invalidates old results)"""
-        result = self.vector_store.add_message(*args, **kwargs)
+        result = await self.vector_store.add_message(*args, **kwargs)
         # Don't clear entire cache on single message add (too aggressive)
         # Cache will naturally expire via TTL
         return result
@@ -203,9 +203,9 @@ class CachedVectorStore:
         """Delegate access time update to underlying vector store."""
         return self.vector_store.update_access_time(message_ids)
 
-    def search_similar_with_embeddings(self, *args, **kwargs):
+    async def search_similar_with_embeddings(self, *args, **kwargs):
         """Delegate search with embeddings to underlying vector store (not cached)."""
-        return self.vector_store.search_similar_with_embeddings(*args, **kwargs)
+        return await self.vector_store.search_similar_with_embeddings(*args, **kwargs)
 
     # Expose underlying attributes for compatibility
     @property

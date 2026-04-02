@@ -32,7 +32,6 @@ class ProjectMemoryService:
         self.db = db
         self.logger = logging.getLogger(__name__)
         self._chroma_client = None
-        self._embedding_model = None
 
     # =========================================================================
     # ChromaDB Integration
@@ -54,17 +53,6 @@ class ProjectMemoryService:
                 self.logger.error(f"Failed to initialize ChromaDB: {e}")
                 raise
         return self._chroma_client
-
-    def _get_embedding_model(self, model_name: str = "all-MiniLM-L6-v2"):
-        """Get embedding model for semantic search."""
-        if self._embedding_model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                self._embedding_model = SentenceTransformer(model_name)
-            except Exception as e:
-                self.logger.error(f"Failed to load embedding model: {e}")
-                raise
-        return self._embedding_model
 
     def _get_project_collection(self, project_id: int, create_if_missing: bool = True):
         """Get or create ChromaDB collection for a project's semantic memory."""
@@ -123,8 +111,9 @@ class ProjectMemoryService:
             if store_embedding:
                 try:
                     # Generate embedding
-                    model = self._get_embedding_model(project.kb_embedding_model or "all-MiniLM-L6-v2")
-                    embedding = model.encode(content).tolist()
+                    from agent.memory.embedding_service import get_shared_embedding_service
+                    embedding_service = get_shared_embedding_service(project.kb_embedding_model or "all-MiniLM-L6-v2")
+                    embedding = await embedding_service.embed_text_async(content)
 
                     # Store in ChromaDB
                     collection = self._get_project_collection(project_id)
@@ -201,8 +190,9 @@ class ProjectMemoryService:
                 return []
 
             # Generate query embedding
-            model = self._get_embedding_model(project.kb_embedding_model or "all-MiniLM-L6-v2")
-            query_embedding = model.encode(query).tolist()
+            from agent.memory.embedding_service import get_shared_embedding_service
+            embedding_service = get_shared_embedding_service(project.kb_embedding_model or "all-MiniLM-L6-v2")
+            query_embedding = await embedding_service.embed_text_async(query)
 
             # Build where clause
             where = None

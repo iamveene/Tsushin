@@ -10,13 +10,14 @@ on large document uploads.
 
 import logging
 import gc
+import threading
 from typing import List, Optional
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
 # Singleton cache for embedding models
 _model_cache: dict = {}
-_model_lock = None  # Will be initialized lazily if threading is used
+_model_lock = threading.Lock()
 
 
 def get_shared_embedding_service(model_name: str = "all-MiniLM-L6-v2") -> "EmbeddingService":
@@ -24,6 +25,7 @@ def get_shared_embedding_service(model_name: str = "all-MiniLM-L6-v2") -> "Embed
     Get a shared embedding service instance (singleton pattern).
 
     This prevents loading the model multiple times and causing memory spikes.
+    Thread-safe: concurrent calls from asyncio.to_thread() are serialized.
 
     Args:
         model_name: Name of the sentence-transformers model
@@ -33,9 +35,14 @@ def get_shared_embedding_service(model_name: str = "all-MiniLM-L6-v2") -> "Embed
     """
     global _model_cache
 
-    if model_name not in _model_cache:
-        _model_cache[model_name] = EmbeddingService(model_name)
-        logging.getLogger(__name__).info(f"Created shared embedding service for model: {model_name}")
+    if model_name in _model_cache:
+        return _model_cache[model_name]
+
+    with _model_lock:
+        # Double-check after acquiring lock
+        if model_name not in _model_cache:
+            _model_cache[model_name] = EmbeddingService(model_name)
+            logging.getLogger(__name__).info(f"Created shared embedding service for model: {model_name}")
 
     return _model_cache[model_name]
 
@@ -185,6 +192,16 @@ class EmbeddingService:
 
         self.logger.info(f"Successfully embedded {len(all_embeddings)}/{total_texts} chunks")
         return all_embeddings
+
+    async def embed_batch_chunked_async(
+        self,
+        texts: List[str],
+        batch_size: int = 50,
+        force_gc: bool = True
+    ) -> List[List[float]]:
+        """Async-safe batched embedding — runs in a thread pool."""
+        import asyncio
+        return await asyncio.to_thread(self.embed_batch_chunked, texts, batch_size, force_gc)
 
     @staticmethod
     def cosine_similarity(embedding1: List[float], embedding2: List[float]) -> float:

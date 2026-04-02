@@ -455,7 +455,7 @@ class ConversationSearchService:
                 sanitized_parts.append(html.escape(part))
         return ''.join(sanitized_parts)
 
-    def search_semantic(
+    async def search_semantic(
         self,
         query: str,
         tenant_id: str,
@@ -493,7 +493,7 @@ class ConversationSearchService:
                     vector_store = get_vector_store(persist_directory=chroma_path)
 
                     # Search with sender_key filter for playground messages
-                    search_results = vector_store.search_similar(
+                    search_results = await vector_store.search_similar(
                         query_text=query,
                         sender_key=f"playground_u{user_id}_a{agent_id}",
                         limit=limit * 2  # Get more to filter
@@ -530,7 +530,7 @@ class ConversationSearchService:
                     try:
                         vector_store = get_vector_store(persist_directory=chroma_path)
 
-                        search_results = vector_store.search_similar(
+                        search_results = await vector_store.search_similar(
                             query_text=query,
                             sender_key=f"playground_u{user_id}",
                             limit=limit
@@ -575,7 +575,7 @@ class ConversationSearchService:
                 "total": 0
             }
 
-    def search_combined(
+    async def search_combined(
         self,
         query: str,
         tenant_id: str,
@@ -599,7 +599,7 @@ class ConversationSearchService:
             )
 
             # Get semantic results
-            sem_results = self.search_semantic(
+            sem_results = await self.search_semantic(
                 query, tenant_id, user_id, agent_id, limit // 2, 0.5
             )
 

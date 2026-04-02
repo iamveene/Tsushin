@@ -545,7 +545,7 @@ class AgentService:
             # Original: Use agent-only KB
             try:
                 self.logger.info(f"Searching agent KB with query: {search_query[:100]}")
-                knowledge_results = self.knowledge_service.search_knowledge(
+                knowledge_results = await self.knowledge_service.search_knowledge(
                     agent_id=self.agent_id,
                     query=search_query,
                     max_results=3,  # Top 3 most relevant chunks
