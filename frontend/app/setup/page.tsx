@@ -22,7 +22,7 @@ export default function SetupPage() {
   const PROVIDERS: Record<string, { label: string; field: string; placeholder: string; models: string[]; defaultModel: string }> = {
     gemini:     { label: 'Google Gemini',    field: 'gemini_api_key',     placeholder: 'AIza...',    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'], defaultModel: 'gemini-2.5-flash' },
     openai:     { label: 'OpenAI',           field: 'openai_api_key',     placeholder: 'sk-...',     models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o4-mini'], defaultModel: 'gpt-4o-mini' },
-    anthropic:  { label: 'Anthropic Claude', field: 'anthropic_api_key',  placeholder: 'sk-ant-...', models: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6-20250514', 'claude-opus-4-6-20250514'], defaultModel: 'claude-haiku-4-5-20251001' },
+    anthropic:  { label: 'Anthropic Claude', field: 'anthropic_api_key',  placeholder: 'sk-ant-...', models: ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-6'], defaultModel: 'claude-haiku-4-5' },
     groq:       { label: 'Groq',             field: 'groq_api_key',       placeholder: 'gsk_...',    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'], defaultModel: 'llama-3.3-70b-versatile' },
     grok:       { label: 'Grok (xAI)',       field: 'grok_api_key',       placeholder: 'xai-...',    models: ['grok-3-mini', 'grok-3'], defaultModel: 'grok-3-mini' },
     deepseek:   { label: 'DeepSeek',         field: 'deepseek_api_key',   placeholder: 'sk-...',     models: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat' },

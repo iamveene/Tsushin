@@ -517,7 +517,7 @@ async def setup_wizard(
             provider_defaults = {
                 "gemini": "gemini-2.5-flash",
                 "openai": "gpt-4o-mini",
-                "anthropic": "claude-haiku-4-5-20251001",
+                "anthropic": "claude-haiku-4-5",
                 "groq": "llama-3.3-70b-versatile",
                 "grok": "grok-3-mini",
                 "deepseek": "deepseek-chat",
@@ -543,7 +543,7 @@ async def setup_wizard(
             sentinel_models = {
                 "gemini": "gemini-2.5-flash-lite",
                 "openai": "gpt-4o-mini",
-                "anthropic": "claude-haiku-4-5-20251001",
+                "anthropic": "claude-haiku-4-5",
                 "groq": "llama-3.1-8b-instant",
                 "grok": "grok-3-mini",
                 "deepseek": "deepseek-chat",
