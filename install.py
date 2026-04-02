@@ -1292,14 +1292,27 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
         print(f"  Create backup:  python3 backup_installer.py create")
         print()
 
+    def _get_primary_ip(self) -> str:
+        """Detect the machine's primary non-loopback IP address."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "localhost"
+
     def _populate_defaults(self):
         """Populate self.config with random secrets and sensible defaults for unattended install."""
         self.config['TSN_APP_PORT'] = '8081'
         self.config['FRONTEND_PORT'] = '3030'
         self.config['SSL_MODE'] = 'selfsigned'
-        self.config['SSL_DOMAIN'] = 'localhost'
+        # Use machine's IP so HTTPS works from the network, not just localhost
+        host = self._get_primary_ip()
+        self.config['SSL_DOMAIN'] = host
         self.config['SSL_EMAIL'] = ''
-        self.config['NEXT_PUBLIC_API_URL'] = 'https://localhost'
+        self.config['NEXT_PUBLIC_API_URL'] = f'https://{host}'
 
         # Default tenant and admin credentials
         self.config['TENANT_NAME'] = 'DefaultTenant'
