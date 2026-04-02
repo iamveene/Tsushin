@@ -203,6 +203,16 @@ def migrate_sentinel_config_columns(db: Session) -> bool:
     success = True
     for col_name, col_def in columns_to_add:
         try:
+            # Check if column already exists before attempting ALTER TABLE
+            # to avoid noisy ERROR logs in PostgreSQL
+            result = db.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'sentinel_config' AND column_name = :col_name"
+            ), {"col_name": col_name})
+            if result.fetchone():
+                logger.debug(f"Column sentinel_config.{col_name} already exists")
+                continue
+
             db.execute(text(
                 f"ALTER TABLE sentinel_config ADD COLUMN {col_name} {col_def}"
             ))
@@ -248,6 +258,16 @@ def migrate_sentinel_analysis_log(db: Session) -> bool:
     success = True
     for col_name, col_def in columns_to_add:
         try:
+            # Check if column already exists before attempting ALTER TABLE
+            # to avoid noisy ERROR logs in PostgreSQL
+            result = db.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'sentinel_analysis_log' AND column_name = :col_name"
+            ), {"col_name": col_name})
+            if result.fetchone():
+                logger.debug(f"Column sentinel_analysis_log.{col_name} already exists")
+                continue
+
             db.execute(text(
                 f"ALTER TABLE sentinel_analysis_log ADD COLUMN {col_name} {col_def}"
             ))
@@ -392,12 +412,21 @@ def run_sentinel_migrations(db: Session) -> dict:
 
     # Migrate browser automation integration table for SSRF allowlist
     try:
-        db.execute(text(
-            "ALTER TABLE browser_automation_integration "
-            "ADD COLUMN allowed_domains_json TEXT"
+        # Check if column already exists to avoid noisy PostgreSQL errors
+        result = db.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'browser_automation_integration' "
+            "AND column_name = 'allowed_domains_json'"
         ))
-        db.commit()
-        logger.info("Added allowed_domains_json to browser_automation_integration")
+        if result.fetchone():
+            logger.debug("browser_automation_integration.allowed_domains_json already exists")
+        else:
+            db.execute(text(
+                "ALTER TABLE browser_automation_integration "
+                "ADD COLUMN allowed_domains_json TEXT"
+            ))
+            db.commit()
+            logger.info("Added allowed_domains_json to browser_automation_integration")
     except Exception as e:
         db.rollback()
         if "already exists" in str(e).lower() or "duplicate column" in str(e).lower():

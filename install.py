@@ -85,6 +85,34 @@ def print_info(text: str):
     print(f"{Colors.BLUE}ℹ{Colors.ENDC}  {text}")
 
 
+def is_interactive() -> bool:
+    """Check if stdin is connected to a terminal (interactive mode)."""
+    try:
+        return os.isatty(sys.stdin.fileno())
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def safe_input(prompt: str, default: str = "") -> str:
+    """Read input safely, returning default in non-interactive mode or on EOF."""
+    if not is_interactive():
+        return default
+    try:
+        return input(prompt)
+    except EOFError:
+        return default
+
+
+def safe_getpass(prompt: str, default: str = "") -> str:
+    """Read password safely, returning default in non-interactive mode or on EOF."""
+    if not is_interactive():
+        return default
+    try:
+        return getpass.getpass(prompt)
+    except EOFError:
+        return default
+
+
 class TsushinInstaller:
     def __init__(self):
         self.root_dir = Path(__file__).parent
@@ -92,6 +120,33 @@ class TsushinInstaller:
         self.backend_data_dir = self.root_dir / "backend" / "data"
         self.database_path = self.backend_data_dir / "agent.db"
         self.config = {}
+        self.interactive = is_interactive()
+
+    def _load_config_from_env(self):
+        """Load configuration values from an existing .env file for non-interactive mode."""
+        env_vars = {}
+        try:
+            with open(self.env_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if '=' in line:
+                        key, _, value = line.partition('=')
+                        env_vars[key.strip()] = value.strip()
+        except Exception as e:
+            print_warning(f"Could not parse .env file: {e}")
+
+        # Map .env keys to config keys used by the installer
+        self.config['TSN_APP_PORT'] = env_vars.get('TSN_APP_PORT', '8081')
+        self.config['FRONTEND_PORT'] = env_vars.get('FRONTEND_PORT', '3030')
+        self.config['SSL_MODE'] = env_vars.get('SSL_MODE', 'disabled')
+        self.config['SSL_DOMAIN'] = env_vars.get('SSL_DOMAIN', '')
+        self.config['SSL_EMAIL'] = env_vars.get('SSL_EMAIL', '')
+        self.config['NEXT_PUBLIC_API_URL'] = env_vars.get(
+            'NEXT_PUBLIC_API_URL',
+            f"http://localhost:{self.config['TSN_APP_PORT']}"
+        )
 
     def check_existing_installation(self) -> str:
         """
@@ -121,7 +176,7 @@ class TsushinInstaller:
         print("2. Update configuration only (keep data)")
         print("3. DESTRUCTIVE: Wipe and reinstall")
 
-        choice = input(f"\n{Colors.BOLD}Choice [1]:{Colors.ENDC} ").strip() or "1"
+        choice = safe_input(f"\n{Colors.BOLD}Choice [1]:{Colors.ENDC} ").strip() or "1"
 
         if choice == "1":
             print_info("Installation cancelled to preserve existing instance.")
@@ -130,7 +185,7 @@ class TsushinInstaller:
             return "update"
         elif choice == "3":
             print_warning("This will DELETE all existing data!")
-            confirm = input(f"{Colors.RED}Type 'DELETE EVERYTHING' to confirm:{Colors.ENDC} ")
+            confirm = safe_input(f"{Colors.RED}Type 'DELETE EVERYTHING' to confirm:{Colors.ENDC} ")
             if confirm != "DELETE EVERYTHING":
                 print_error("Confirmation failed. Exiting.")
                 sys.exit(0)
@@ -336,7 +391,7 @@ class TsushinInstaller:
         print_info("you need to configure the public hostname or IP address.")
         print()
 
-        access_type = input(f"{Colors.BOLD}How will you access this installation? [localhost/remote]:{Colors.ENDC} ").strip().lower()
+        access_type = safe_input(f"{Colors.BOLD}How will you access this installation? [localhost/remote]:{Colors.ENDC} ").strip().lower()
 
         if access_type == "remote":
             print()
@@ -420,11 +475,11 @@ class TsushinInstaller:
 
             # Password with confirmation
             while True:
-                global_admin_password = getpass.getpass(f"{Colors.BOLD}Global admin password (min 8 chars):{Colors.ENDC} ")
+                global_admin_password = safe_getpass(f"{Colors.BOLD}Global admin password (min 8 chars):{Colors.ENDC} ")
                 if len(global_admin_password) < 8:
                     print_error("Password must be at least 8 characters")
                     continue
-                password_confirm = getpass.getpass(f"{Colors.BOLD}Confirm password:{Colors.ENDC} ")
+                password_confirm = safe_getpass(f"{Colors.BOLD}Confirm password:{Colors.ENDC} ")
                 if global_admin_password != password_confirm:
                     print_error("Passwords do not match")
                     continue
@@ -459,11 +514,11 @@ class TsushinInstaller:
 
             # Password with confirmation
             while True:
-                admin_password = getpass.getpass(f"{Colors.BOLD}Tenant admin password (min 8 chars):{Colors.ENDC} ")
+                admin_password = safe_getpass(f"{Colors.BOLD}Tenant admin password (min 8 chars):{Colors.ENDC} ")
                 if len(admin_password) < 8:
                     print_error("Password must be at least 8 characters")
                     continue
-                password_confirm = getpass.getpass(f"{Colors.BOLD}Confirm password:{Colors.ENDC} ")
+                password_confirm = safe_getpass(f"{Colors.BOLD}Confirm password:{Colors.ENDC} ")
                 if admin_password != password_confirm:
                     print_error("Passwords do not match")
                     continue
@@ -488,9 +543,9 @@ class TsushinInstaller:
         """
         while True:
             if mask:
-                value = getpass.getpass(f"{Colors.BOLD}{prompt}{Colors.ENDC}").strip() or default
+                value = safe_getpass(f"{Colors.BOLD}{prompt}{Colors.ENDC}", default).strip() or default
             else:
-                value = input(f"{Colors.BOLD}{prompt}{Colors.ENDC}").strip() or default
+                value = safe_input(f"{Colors.BOLD}{prompt}{Colors.ENDC}", default).strip() or default
 
             if not value and optional:
                 return ""
@@ -520,7 +575,7 @@ class TsushinInstaller:
             print("  1. No SSL (HTTP only) — development/internal use [default]")
             print("  2. Self-signed certificate — HTTPS for local development")
             print()
-            choice = input(f"{Colors.BOLD}SSL Mode [1]:{Colors.ENDC} ").strip() or "1"
+            choice = safe_input(f"{Colors.BOLD}SSL Mode [1]:{Colors.ENDC} ").strip() or "1"
             mode_map = {"1": "disabled", "2": "selfsigned"}
         else:
             print_info("SSL modes available for remote installations:")
@@ -529,7 +584,7 @@ class TsushinInstaller:
             print("  3. Manual certificates — provide your own .crt and .key files")
             print("  4. Self-signed certificate — HTTPS for development/testing")
             print()
-            choice = input(f"{Colors.BOLD}SSL Mode [1]:{Colors.ENDC} ").strip() or "1"
+            choice = safe_input(f"{Colors.BOLD}SSL Mode [1]:{Colors.ENDC} ").strip() or "1"
             mode_map = {"1": "disabled", "2": "letsencrypt", "3": "manual", "4": "selfsigned"}
 
         ssl_mode = mode_map.get(choice, "disabled")
@@ -584,7 +639,7 @@ class TsushinInstaller:
             if self.check_port_in_use(port):
                 print_warning(f"Port {port} is currently in use!")
                 print_info("Let's Encrypt requires ports 80 and 443 to be available.")
-                confirm = input(f"{Colors.BOLD}Continue anyway? [y/N]:{Colors.ENDC} ").strip().lower()
+                confirm = safe_input(f"{Colors.BOLD}Continue anyway? [y/N]:{Colors.ENDC} ").strip().lower()
                 if confirm != 'y':
                     print_info("Switching to disabled SSL mode.")
                     self.config['SSL_MODE'] = 'disabled'
@@ -658,7 +713,7 @@ class TsushinInstaller:
         except socket.gaierror:
             print_warning(f"Domain {domain} does not resolve (DNS lookup failed).")
             print_warning("Let's Encrypt will fail if the domain doesn't point to this server.")
-            confirm = input(f"{Colors.BOLD}Continue anyway? [y/N]:{Colors.ENDC} ").strip().lower()
+            confirm = safe_input(f"{Colors.BOLD}Continue anyway? [y/N]:{Colors.ENDC} ").strip().lower()
             if confirm != 'y':
                 print_info("Switching to disabled SSL mode.")
                 self.config['SSL_MODE'] = 'disabled'
@@ -1231,6 +1286,33 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
         # Enable ANSI color codes on Windows 10+
         enable_ansi_colors()
 
+        # Non-interactive mode: require pre-existing .env file
+        if not self.interactive:
+            print_info("Non-interactive mode detected (stdin is not a terminal).")
+            if self.env_file.exists():
+                print_success(f"Using existing .env file: {self.env_file}")
+                print_info("Skipping interactive prompts. Proceeding with existing configuration.")
+                # Load minimal config from .env for downstream steps
+                self._load_config_from_env()
+                # Skip to deployment steps
+                self.check_prerequisites()
+                self.prepare_data_directories()
+                self.generate_caddyfile()
+                self.generate_self_signed_cert()
+                self.copy_manual_certs()
+                self.run_docker_compose()
+                self.build_additional_images()
+                self.health_check()
+                self.display_success_message()
+                return
+            else:
+                print_error("Non-interactive mode requires a pre-existing .env file.")
+                print_info("Either:")
+                print_info("  1. Run the installer interactively first to generate .env")
+                print_info("  2. Create a .env file manually before running in non-interactive mode")
+                print_info("  3. Set environment variables: TSN_APP_PORT, FRONTEND_PORT, etc.")
+                sys.exit(1)
+
         # Early check: Warn about sudo requirement on Linux
         if is_linux() and not is_root():
             # Check if user is in docker group
@@ -1241,7 +1323,7 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
                     print_info("Recommendation: Run with sudo")
                     print_info("  sudo python3 install.py")
                     print()
-                    confirm = input(f"{Colors.BOLD}Continue anyway? (not recommended) [y/N]:{Colors.ENDC} ").strip().lower()
+                    confirm = safe_input(f"{Colors.BOLD}Continue anyway? (not recommended) [y/N]:{Colors.ENDC} ").strip().lower()
                     if confirm != 'y':
                         print_info("Exiting. Please run with: sudo python3 install.py")
                         sys.exit(0)
@@ -1331,6 +1413,10 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print(f"\n\n{Colors.YELLOW}Installation cancelled by user{Colors.ENDC}")
         sys.exit(0)
+    except EOFError:
+        print(f"\n\n{Colors.YELLOW}Installation cancelled: stdin closed (non-interactive mode){Colors.ENDC}")
+        print(f"{Colors.BLUE}ℹ{Colors.ENDC}  To run non-interactively, create a .env file first, then re-run.")
+        sys.exit(1)
     except Exception as e:
         print(f"\n{Colors.RED}Installation failed: {e}{Colors.ENDC}")
         import traceback
