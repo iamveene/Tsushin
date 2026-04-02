@@ -158,30 +158,28 @@ async def _test_elevenlabs(db: Session) -> TestConnectionResponse:
 
 async def _test_vertex_ai(db: Session, tenant_id: str) -> TestConnectionResponse:
     """Test Vertex AI connection by obtaining an OAuth2 access token with the configured service account."""
-    import os
-
     try:
         from services.api_key_service import get_api_key
 
-        # Load credentials: DB (per-tenant) takes priority over env vars
-        project_id = get_api_key("vertex_ai_project_id", db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_PROJECT_ID", "")
-        region = get_api_key("vertex_ai_region", db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_REGION", "us-east5")
-        sa_email = get_api_key("vertex_ai_sa_email", db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_SERVICE_ACCOUNT_EMAIL", "")
-        private_key = get_api_key("vertex_ai", db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_PRIVATE_KEY", "")
+        # Load credentials from DB only — no env var fallback
+        project_id = get_api_key("vertex_ai_project_id", db, tenant_id=tenant_id) or ""
+        region = get_api_key("vertex_ai_region", db, tenant_id=tenant_id) or "us-east5"
+        sa_email = get_api_key("vertex_ai_sa_email", db, tenant_id=tenant_id) or ""
+        private_key = get_api_key("vertex_ai", db, tenant_id=tenant_id) or ""
 
         if not project_id or not sa_email or not private_key:
             missing = []
             if not project_id:
-                missing.append("VERTEX_AI_PROJECT_ID")
+                missing.append("project_id")
             if not sa_email:
-                missing.append("VERTEX_AI_SERVICE_ACCOUNT_EMAIL")
+                missing.append("service_account_email")
             if not private_key:
-                missing.append("VERTEX_AI_PRIVATE_KEY")
+                missing.append("private_key")
             return TestConnectionResponse(
                 success=False,
                 message=f"Missing Vertex AI configuration: {', '.join(missing)}",
                 provider="vertex_ai",
-                error=f"Set the following environment variables: {', '.join(missing)}",
+                error=f"Configure via Settings → Integrations: {', '.join(missing)}",
             )
 
         # Attempt to create credentials and refresh to get a token

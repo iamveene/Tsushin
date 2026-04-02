@@ -112,12 +112,6 @@ class FlightSearchTool:
             except Exception as e:
                 logger.warning(f"Failed to load API key from database: {e}")
 
-        # Fall back to environment variables
-        if not api_key:
-            api_key = os.getenv("AMADEUS_API_KEY")
-        if not api_secret:
-            api_secret = os.getenv("AMADEUS_API_SECRET")
-
         return api_key, api_secret
 
     async def _get_access_token(self) -> Optional[str]:

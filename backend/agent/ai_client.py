@@ -92,11 +92,11 @@ class AIClient:
                         self.ollama_api_key = api_key
                 elif instance.vendor == "vertex_ai":
                     # Vertex AI instance: api_key stores the PEM private key
-                    # Project ID, region, SA email loaded from api_key_service or env vars
-                    vertex_private_key = api_key or os.getenv("VERTEX_AI_PRIVATE_KEY", "")
-                    vertex_project_id = get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_PROJECT_ID", "")
-                    vertex_region = get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_REGION", "us-east5")
-                    vertex_sa_email = get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or os.getenv("VERTEX_AI_SERVICE_ACCOUNT_EMAIL", "")
+                    # Project ID, region, SA email loaded from api_key_service (DB only)
+                    vertex_private_key = api_key or get_api_key('vertex_ai', db, tenant_id=tenant_id) or ""
+                    vertex_project_id = get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
+                    vertex_region = get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
+                    vertex_sa_email = get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
 
                     if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
                         raise ValueError("Vertex AI instance requires project_id, service_account_email, and private_key.")
@@ -254,24 +254,17 @@ class AIClient:
             self.logger.info(f"Initialized DeepSeek client with model: {model_name}")
         elif self.provider == "vertex_ai":
             # Vertex AI uses service account credentials, not a simple API key
-            # Priority: DB (per-tenant) → env var fallback
-            vertex_private_key = api_key or os.getenv("VERTEX_AI_PRIVATE_KEY", "")
-
-            # Load project_id, region, sa_email from DB or env vars
-            vertex_project_id = os.getenv("VERTEX_AI_PROJECT_ID", "")
-            vertex_region = os.getenv("VERTEX_AI_REGION", "us-east5")
-            vertex_sa_email = os.getenv("VERTEX_AI_SERVICE_ACCOUNT_EMAIL", "")
+            # All config from DB only — no env var fallback
+            vertex_private_key = api_key or ""
+            vertex_project_id = ""
+            vertex_region = "us-east5"
+            vertex_sa_email = ""
 
             if db:
-                db_project = get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id)
-                db_region = get_api_key('vertex_ai_region', db, tenant_id=tenant_id)
-                db_sa_email = get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id)
-                if db_project:
-                    vertex_project_id = db_project
-                if db_region:
-                    vertex_region = db_region
-                if db_sa_email:
-                    vertex_sa_email = db_sa_email
+                vertex_private_key = vertex_private_key or get_api_key('vertex_ai', db, tenant_id=tenant_id) or ""
+                vertex_project_id = get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
+                vertex_region = get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
+                vertex_sa_email = get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
 
             if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
                 raise ValueError(
