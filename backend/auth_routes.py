@@ -536,7 +536,34 @@ async def setup_wizard(
             agents_created = [agent["name"] for agent in agents]
             logger.info(f"Setup wizard: Created {len(agents_created)} default agents")
 
-        # Step 5: Seed default sandboxed tools
+        # Step 5: Seed tenant Sentinel config with the chosen provider
+        try:
+            from models import SentinelConfig
+            # Sentinel lite models per provider for security analysis
+            sentinel_models = {
+                "gemini": "gemini-2.5-flash-lite",
+                "openai": "gpt-4o-mini",
+                "anthropic": "claude-haiku-4-5-20251001",
+                "groq": "llama-3.1-8b-instant",
+                "grok": "grok-3-mini",
+                "deepseek": "deepseek-chat",
+                "openrouter": "google/gemini-2.5-flash",
+            }
+            sentinel_config = SentinelConfig(
+                tenant_id=tenant.id,
+                is_enabled=True,
+                detection_mode="detect_only",
+                llm_provider=model_provider,
+                llm_model=sentinel_models.get(model_provider, "gemini-2.5-flash-lite"),
+            )
+            db.add(sentinel_config)
+            db.commit()
+            logger.info(f"Setup wizard: Seeded Sentinel config with provider={model_provider}")
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"Setup wizard: Failed to seed Sentinel config: {e}")
+
+        # Step 6: Seed default sandboxed tools
         tools_created = []
         try:
             from services.sandboxed_tool_seeding import seed_sandboxed_tools

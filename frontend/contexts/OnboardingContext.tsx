@@ -49,15 +49,20 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     hasCompletedOnboarding: false
   })
 
-  // Load completion status from localStorage on mount
+  // Load completion status and auto-start tour for first-time users
   useEffect(() => {
     const completed = localStorage.getItem(STORAGE_KEY) === 'true'
     setState(prev => ({ ...prev, hasCompletedOnboarding: completed }))
-  }, [])
 
-  // Tour is only started when the user explicitly calls startTour().
-  // No auto-start — this eliminates the race condition where the tour
-  // would fire before localStorage was read (BUG-121).
+    // Auto-start tour on first login (when user is loaded and tour not completed)
+    if (!completed && user) {
+      // Small delay to let the dashboard render first
+      const timer = setTimeout(() => {
+        setState(prev => ({ ...prev, isActive: true, currentStep: 1, isMinimized: false }))
+      }, 1000)
+      return () => clearTimeout(timer)
+    }
+  }, [user])
 
   const startTour = () => {
     setState(prev => ({
