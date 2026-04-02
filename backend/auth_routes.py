@@ -581,7 +581,8 @@ async def setup_wizard(
         # Get tenant admin permissions for frontend
         tenant_admin_permissions = auth_service.get_user_permissions(tenant_owner.id)
 
-        return {
+        # SEC-005: Set httpOnly session cookie on setup-wizard
+        response = JSONResponse(status_code=201, content={
             "success": True,
             "tenant_id": tenant.id,
             "tenant_admin_user_id": tenant_owner.id,
@@ -600,7 +601,9 @@ async def setup_wizard(
             "agents_created": agents_created,
             "tools_created": tools_created,
             "message": f"Setup complete! Tenant '{tenant.name}' created with {len(agents_created)} agents and {len(tools_created)} sandboxed tools."
-        }
+        })
+        _set_session_cookie(response, tenant_owner_token)
+        return response
 
     except Exception as e:
         logger.error(f"Setup wizard failed: {e}", exc_info=True)

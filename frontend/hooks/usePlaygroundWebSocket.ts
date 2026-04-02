@@ -20,7 +20,6 @@ interface UsePlaygroundWebSocketOptions {
 }
 
 export function usePlaygroundWebSocket(
-  token: string | null,
   options: UsePlaygroundWebSocketOptions
 ) {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected')
@@ -32,13 +31,13 @@ export function usePlaygroundWebSocket(
 
   // Initialize WebSocket connection
   useEffect(() => {
-    if (!token || !options.enabled) {
-      console.log('[WebSocket Hook] Skipping init - token:', !!token, 'enabled:', options.enabled)
+    if (!options.enabled) {
+      console.log('[WebSocket Hook] Skipping init - enabled:', options.enabled)
       return
     }
 
-    console.log('[WebSocket Hook] Initializing connection with token')
-    const ws = new PlaygroundWebSocket(token)
+    console.log('[WebSocket Hook] Initializing connection (cookie auth)')
+    const ws = new PlaygroundWebSocket()
     wsRef.current = ws
 
     // Connection state tracking
@@ -155,7 +154,7 @@ export function usePlaygroundWebSocket(
       ws.disconnect()
       wsRef.current = null
     }
-  }, [token, options.enabled])
+  }, [options.enabled])
 
   // Send message via WebSocket
   const sendMessage = useCallback((agentId: number, message: string, threadId?: number) => {

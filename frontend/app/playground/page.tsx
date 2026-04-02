@@ -125,12 +125,10 @@ export default function PlaygroundPage() {
     restoreDraft()
   }, [activeThreadId, restoreDraft])
 
-  // Phase 14.9: WebSocket Hook for streaming - FORCE REBUILD v2
-  const wsToken = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-  if (process.env.NODE_ENV === 'development') console.log('[Playground] Initializing WebSocket hook - token:', !!wsToken, 'user:', !!user, 'enabled:', useWebSocket && !!user)
+  // Phase 14.9: WebSocket Hook for streaming (SEC-005: cookie auth, no localStorage token)
+  if (process.env.NODE_ENV === 'development') console.log('[Playground] Initializing WebSocket hook - user:', !!user, 'enabled:', useWebSocket && !!user)
 
   const websocketConnection = usePlaygroundWebSocket(
-    wsToken,
     {
       enabled: useWebSocket && !!user,
       onStreamingMessage: (message) => {

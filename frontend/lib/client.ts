@@ -47,35 +47,19 @@ async function handleApiError(res: Response, defaultMessage: string): Promise<ne
 
 /**
  * Helper function to create authenticated fetch requests
- * Automatically adds Authorization header if token is present in localStorage
+ * Authenticated fetch using httpOnly session cookie (SEC-005 Phase 3)
  */
 export function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  // SEC-005: Primary auth is httpOnly cookie (sent automatically via credentials: 'include').
-  // Bearer token from localStorage is a FALLBACK for non-cookie scenarios (API clients, mobile).
-  const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-
+  // SEC-005 Phase 3: Auth relies entirely on httpOnly cookie (tsushin_session).
+  // No localStorage token read — eliminates XSS token theft vector.
   const headers: HeadersInit = {
     ...options.headers,
-  }
-
-  // Add Authorization header as fallback if token exists (cookie takes priority on backend)
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
   }
 
   // Add Content-Type for JSON requests if not already set
   // IMPORTANT: Do NOT set Content-Type for FormData - browser sets it with boundary
   if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json'
-  }
-
-  // Debug logging for project uploads
-  if (url.includes('/projects/') && url.includes('/knowledge')) {
-    console.log('[authenticatedFetch] URL:', url)
-    console.log('[authenticatedFetch] Method:', options.method)
-    console.log('[authenticatedFetch] Body type:', options.body?.constructor.name)
-    console.log('[authenticatedFetch] Headers:', headers)
-    console.log('[authenticatedFetch] Has token:', !!token)
   }
 
   return fetch(url, {
@@ -4020,7 +4004,7 @@ export const api = {
     return res.json()
   },
 
-  async getCurrentUser(token: string): Promise<{
+  async getCurrentUser(): Promise<{
     id: number
     email: string
     full_name: string
@@ -4032,11 +4016,8 @@ export const api = {
     created_at: string | null
     last_login_at: string | null
   }> {
-    const res = await authenticatedFetch(`${API_URL}/api/auth/me`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    })
+    // SEC-005 Phase 3: Auth via httpOnly cookie only — no token param needed
+    const res = await authenticatedFetch(`${API_URL}/api/auth/me`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch current user')
     return res.json()
   },
@@ -4064,12 +4045,10 @@ export const api = {
     return res.json()
   },
 
-  async logout(token: string): Promise<{ message: string }> {
+  async logout(): Promise<{ message: string }> {
+    // SEC-005 Phase 3: Auth via httpOnly cookie — backend clears the cookie
     const res = await authenticatedFetch(`${API_URL}/api/auth/logout`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
     })
     if (!res.ok) await handleApiError(res, 'Failed to logout')
     return res.json()
@@ -5100,9 +5079,11 @@ export const api = {
       is_global_admin: boolean
     }
   }> {
+    // SEC-005: credentials: 'include' ensures browser stores the httpOnly cookie from response
     const res = await fetch(`${API_URL}/api/auth/invitation/${token}/accept`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(data),
     })
     if (!res.ok) {
@@ -6719,9 +6700,11 @@ export const api = {
     openrouter_api_key?: string
     default_model?: string
   }): Promise<any> {
+    // SEC-005: credentials: 'include' ensures browser stores the httpOnly cookie from response
     const res = await fetch(`${API_URL}/api/auth/setup-wizard`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(data),
     })
     if (!res.ok) {

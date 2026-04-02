@@ -18,7 +18,6 @@ import { useGraphData } from './graph/hooks'
 import GraphLeftPanel from './graph/GraphLeftPanel'
 import type { GraphCanvasRef } from './graph/GraphCanvas'
 import { useWatcherActivity } from '@/hooks/useWatcherActivity'
-import { getToken } from '@/contexts/AuthContext'
 import './graph/graph.css'
 
 // Dynamic import to avoid SSR issues with React Flow
@@ -95,8 +94,7 @@ export default function GraphViewTab() {
     showInactiveUsers,
   })
 
-  // Phase 8: Real-time activity WebSocket
-  const token = typeof window !== 'undefined' ? getToken() : null
+  // Phase 8: Real-time activity WebSocket (SEC-005: cookie auth)
   const {
     processingAgents,
     activeChannels,
@@ -108,7 +106,7 @@ export default function GraphViewTab() {
     activeA2ASessions,
     fadingA2ASessions,
     agentA2ADepths,
-  } = useWatcherActivity(token, {
+  } = useWatcherActivity({
     enabled: viewType === 'agents' // Only connect when viewing agents
   })
 

@@ -105,7 +105,6 @@ interface UseWatcherActivityReturn {
  * @returns Activity state for Graph View
  */
 export function useWatcherActivity(
-  token: string | null,
   options: UseWatcherActivityOptions
 ): UseWatcherActivityReturn {
   const [connectionState, setConnectionState] = useState<ActivityConnectionState>('disconnected')
@@ -491,8 +490,8 @@ export function useWatcherActivity(
   }, [updateConnectionState, startCoordinatedFadeOut])
 
   const connect = useCallback(() => {
-    if (!token || !options.enabled) {
-      console.log('[WatcherActivity] Skipping connect - token:', !!token, 'enabled:', options.enabled)
+    if (!options.enabled) {
+      console.log('[WatcherActivity] Skipping connect - enabled:', options.enabled)
       return
     }
 
@@ -517,14 +516,9 @@ export function useWatcherActivity(
       wsRef.current = ws
 
       ws.onopen = () => {
-        console.log('[WatcherActivity] Connection established, authenticating...')
+        // SEC-005 Phase 3: httpOnly cookie sent automatically with WS upgrade
+        console.log('[WatcherActivity] Connection established (cookie auth)')
         updateConnectionState('authenticating')
-
-        // Send auth message with token
-        ws.send(JSON.stringify({
-          type: 'auth',
-          token
-        }))
 
         // Start ping interval
         if (pingIntervalRef.current) {
@@ -576,7 +570,7 @@ export function useWatcherActivity(
       console.error('[WatcherActivity] Failed to create WebSocket:', err)
       updateConnectionState('error')
     }
-  }, [token, options.enabled, getWebSocketUrl, updateConnectionState, handleMessage])
+  }, [options.enabled, getWebSocketUrl, updateConnectionState, handleMessage])
 
   // Keep connectRef current so the reconnect timer never uses a stale connect closure
   useEffect(() => { connectRef.current = connect }, [connect])
@@ -615,17 +609,17 @@ export function useWatcherActivity(
 
   // Connect on mount, disconnect on unmount
   useEffect(() => {
-    if (token && options.enabled) {
+    if (options.enabled) {
       connect()
     }
 
     return () => {
       disconnect()
     }
-  // connect/disconnect intentionally omitted from deps — effect re-runs on token/enabled changes
-  // which are the only conditions that should trigger reconnection; connectRef handles stale closure
+  // connect/disconnect intentionally omitted from deps — effect re-runs on enabled changes
+  // which is the only condition that should trigger reconnection; connectRef handles stale closure
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, options.enabled])
+  }, [options.enabled])
 
   return {
     connectionState,

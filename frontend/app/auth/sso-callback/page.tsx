@@ -60,11 +60,13 @@ function SSOCallbackContent() {
 
       try {
         // MED-009: Exchange the one-time code for JWT token
+        // SEC-005: credentials: 'include' ensures browser stores the httpOnly cookie from response
         const response = await fetch(`${API_URL}/api/auth/sso-exchange`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
+          credentials: 'include',
           body: JSON.stringify({ code }),
         })
 

@@ -45,19 +45,13 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-// Token storage utilities
-const TOKEN_KEY = 'tsushin_auth_token'
-
-const storeToken = (token: string) => {
-  localStorage.setItem(TOKEN_KEY, token)
-}
-
-const getToken = (): string | null => {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-const removeToken = () => {
-  localStorage.removeItem(TOKEN_KEY)
+// SEC-005 Phase 3: localStorage token storage removed entirely.
+// All auth now relies on httpOnly cookie (tsushin_session) set by backend.
+// localStorage cleanup for users upgrading from previous versions.
+const _cleanupLegacyToken = () => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('tsushin_auth_token')
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -65,19 +59,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const router = useRouter()
 
-  // Load user from token on mount
+  // Load user from httpOnly cookie on mount
   useEffect(() => {
     const loadUser = async () => {
-      const token = getToken()
-      if (token) {
-        try {
-          const userData = await api.getCurrentUser(token)
-          setUser(userData)
-        } catch (error) {
-          console.debug('Session expired or invalid token:', error)
-          removeToken()
-          setUser(null)
-        }
+      // Clean up legacy localStorage token from previous versions
+      _cleanupLegacyToken()
+      try {
+        const userData = await api.getCurrentUser()
+        setUser(userData)
+      } catch (error) {
+        // No valid session cookie — user is not authenticated
+        console.debug('No active session:', error)
+        setUser(null)
       }
       setLoading(false)
     }
@@ -86,7 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (email: string, password: string) => {
     const response = await api.login(email, password)
-    storeToken(response.access_token)
+    // SEC-005: Cookie is set by backend response — no localStorage needed
     setUser(response.user)
 
     // Redirect based on user type
@@ -112,18 +105,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const setAuthFromToken = async (token: string) => {
-    // Store the token
-    storeToken(token)
-
-    // Fetch user info
+  const setAuthFromToken = async (_token: string) => {
+    // SEC-005: The httpOnly cookie was already set by the backend response
+    // that returned this token. We just need to load the user profile via cookie.
     try {
-      const userData = await api.getCurrentUser(token)
+      const userData = await api.getCurrentUser()
       setUser(userData)
-
       // Note: Redirect is handled by the SSO callback page
     } catch (error) {
-      removeToken()
       throw error
     }
   }
@@ -140,18 +129,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       full_name: data.name,
       org_name: data.orgName,
     })
-    storeToken(response.access_token)
+    // SEC-005: Cookie is set by backend response — no localStorage needed
     setUser(response.user)
     router.push('/')
   }
 
   const logout = () => {
-    const token = getToken()
-    if (token) {
-      // Call logout endpoint (fire and forget)
-      api.logout(token).catch(console.error)
-    }
-    removeToken()
+    // SEC-005: Call logout endpoint — backend clears the httpOnly cookie
+    api.logout().catch(console.error)
+    _cleanupLegacyToken()
     setUser(null)
     router.push('/auth/login')
   }
@@ -237,6 +223,5 @@ export function useRequireGlobalAdmin() {
   return { user, loading }
 }
 
-// Export types and utilities for use elsewhere
+// Export types for use elsewhere
 export type { User }
-export { getToken }
