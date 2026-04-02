@@ -7,7 +7,8 @@ Interactive installer for Tsushin multi-agent platform.
 Configures environment, deploys Docker containers, and sets up initial tenant/agents.
 
 Usage:
-    python3 install.py
+    python3 install.py              # Interactive mode
+    python3 install.py --defaults   # Fully unattended with random secrets
 
 Requirements:
     - Python 3.8+
@@ -1263,9 +1264,15 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
             print()
 
         access_url = f"https://{self.config['SSL_DOMAIN']}" if ssl_mode != 'disabled' else frontend_url
+        setup_wizard_url = f"{access_url}/setup"
+
         print(f"{Colors.BOLD}Next Steps:{Colors.ENDC}")
         print(f"  1. Open {Colors.CYAN}{access_url}{Colors.ENDC} in your browser")
-        print(f"  2. Log in with your admin credentials")
+        if self.config.get('ADMIN_EMAIL'):
+            print(f"  2. Log in with your admin credentials")
+        else:
+            print(f"  2. Run the setup wizard to create your first admin account:")
+            print(f"     {Colors.CYAN}{setup_wizard_url}{Colors.ENDC}")
         print(f"  3. Follow the onboarding wizard to configure Google OAuth (optional)")
         print(f"  4. Start creating agents and testing in the playground!")
         print()
@@ -1277,6 +1284,15 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
         print(f"  Create backup:  python3 backup_installer.py create")
         print()
 
+    def _populate_defaults(self):
+        """Populate self.config with random secrets and sensible defaults for unattended install."""
+        self.config['TSN_APP_PORT'] = '8081'
+        self.config['FRONTEND_PORT'] = '3030'
+        self.config['SSL_MODE'] = 'disabled'
+        self.config['SSL_DOMAIN'] = ''
+        self.config['SSL_EMAIL'] = ''
+        self.config['NEXT_PUBLIC_API_URL'] = 'http://localhost:8081'
+
     def run(self):
         """Main installation flow"""
         print_header("Tsushin Platform Installer")
@@ -1285,6 +1301,19 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
 
         # Enable ANSI color codes on Windows 10+
         enable_ansi_colors()
+
+        # --defaults mode: fully unattended install with auto-generated secrets
+        if '--defaults' in sys.argv:
+            print_info("Defaults mode: generating .env with random secrets and sensible defaults.")
+            self._populate_defaults()
+            self.check_prerequisites()
+            self.prepare_data_directories()
+            self.generate_env_file()
+            self.run_docker_compose()
+            self.build_additional_images()
+            self.health_check()
+            self.display_success_message()
+            return
 
         # Non-interactive mode: require pre-existing .env file
         if not self.interactive:

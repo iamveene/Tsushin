@@ -94,11 +94,11 @@ services:
       # Docker socket for MCP container management
       - /var/run/docker.sock:/var/run/docker.sock
       # Shared audio directory for TTS (shared with MCP containers)
-      - tsushin-audio:/tmp/tsushin_audio:z
+      - tsushin-audio:/tmp/tsushin_audio
       # Shared screenshots directory for browser automation (shared with MCP containers)
-      - tsushin-screenshots:/tmp/tsushin_screenshots:z
+      - tsushin-screenshots:/tmp/tsushin_screenshots
       # Shared images directory for ImageSkill (shared with MCP containers)
-      - tsushin-images:/tmp/tsushin_images:z
+      - tsushin-images:/tmp/tsushin_images
     security_opt:
       - label:disable
     environment:
