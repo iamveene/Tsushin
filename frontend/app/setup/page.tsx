@@ -53,11 +53,10 @@ export default function SetupPage() {
         gemini_api_key: geminiApiKey || undefined,
       })
 
-      if (result.access_token) {
-        // Store the token directly — avoid AuthContext race condition
-        // during initial mount, then redirect to dashboard.
-        localStorage.setItem('tsushin_auth_token', result.access_token)
-        window.location.href = '/'
+      if (result.success) {
+        // Redirect to login — the account is ready, user just needs to sign in.
+        // Trying to auto-login causes AuthContext race conditions on full page reload.
+        router.replace('/auth/login')
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Setup failed')
