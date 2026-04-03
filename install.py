@@ -2,8 +2,9 @@
 """
 Tsushin Platform Installer
 
-Interactive installer for Tsushin multi-agent platform.
-Configures environment, deploys Docker containers, and sets up initial tenant/agents.
+Installer for the Tsushin multi-agent AI platform.
+Configures environment and deploys Docker containers.
+User/org creation and AI provider setup are handled via the /setup UI wizard.
 
 Requirements:
     - Python 3.8+
@@ -36,7 +37,8 @@ examples:
   python3 install.py                              Interactive mode (recommended for first install)
   python3 install.py --defaults                   Fully unattended with self-signed HTTPS
   python3 install.py --defaults --http            Unattended with HTTP only (no SSL)
-  python3 install.py --defaults --domain app.io   Unattended with Let's Encrypt SSL for a domain
+  python3 install.py --defaults --domain app.io --email you@email.com
+                                                  Unattended with Let's Encrypt SSL
   python3 install.py --port 9090                  Custom backend port (works in both modes)
 
 modes:
@@ -74,6 +76,12 @@ after install:
         help="Domain name for Let's Encrypt SSL (e.g., app.example.com). Only valid with --defaults",
     )
     parser.add_argument(
+        "--email",
+        type=str,
+        metavar="EMAIL",
+        help="Email for Let's Encrypt certificate notifications. Required with --domain",
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=8081,
@@ -95,6 +103,10 @@ after install:
         parser.error("--http and --domain are mutually exclusive")
     if (args.http or args.domain) and not args.defaults:
         parser.error("--http and --domain require --defaults mode")
+    if args.domain and not args.email:
+        parser.error("--domain requires --email for Let's Encrypt certificate notifications")
+    if args.email and not args.domain:
+        parser.error("--email requires --domain")
 
     return args
 
@@ -1103,54 +1115,6 @@ NEXT_PUBLIC_API_URL={backend_url}
 
         print()
 
-    def setup_initial_tenant(self):
-        """Call setup-wizard API to create tenant and agents"""
-        print_header("Setting Up Initial Tenant")
-
-        backend_url = f"http://localhost:{self.config['TSN_APP_PORT']}"
-        setup_url = f"{backend_url}/api/auth/setup-wizard"
-
-        payload = {
-            "tenant_name": self.config['TENANT_NAME'],
-            # Tenant admin
-            "admin_email": self.config['ADMIN_EMAIL'],
-            "admin_password": self.config['ADMIN_PASSWORD'],
-            "admin_full_name": self.config['ADMIN_FULL_NAME'],
-            # Global admin
-            "global_admin_email": self.config['GLOBAL_ADMIN_EMAIL'],
-            "global_admin_password": self.config['GLOBAL_ADMIN_PASSWORD'],
-            "global_admin_full_name": self.config['GLOBAL_ADMIN_FULL_NAME'],
-            # API keys
-            "gemini_api_key": self.config['GEMINI_API_KEY'] or None,
-            "openai_api_key": self.config['OPENAI_API_KEY'] or None,
-            "anthropic_api_key": self.config['ANTHROPIC_API_KEY'] or None,
-            "create_default_agents": True
-        }
-
-        try:
-            print_info("Creating tenant, administrators, and default agents...")
-            response = requests.post(setup_url, json=payload, timeout=30)
-
-            if response.status_code == 201:
-                data = response.json()
-                print_success(f"Tenant created: {data['tenant_name']}")
-                print_success(f"Global admin created: {self.config['GLOBAL_ADMIN_EMAIL']}")
-                print_success(f"Tenant admin created: {self.config['ADMIN_EMAIL']}")
-
-                if data.get('agents_created'):
-                    print_success(f"Default agents created: {', '.join(data['agents_created'])}")
-
-                print()
-                return True
-            else:
-                print_error(f"Setup failed: {response.status_code}")
-                print_error(response.text)
-                return False
-
-        except Exception as e:
-            print_error(f"Setup API call failed: {e}")
-            return False
-
     def display_success_message(self):
         """Display success message with access information"""
         print_header("Installation Complete!")
@@ -1244,6 +1208,7 @@ NEXT_PUBLIC_API_URL={backend_url}
             elif self.args.domain:
                 self.config['SSL_MODE'] = 'letsencrypt'
                 self.config['SSL_DOMAIN'] = self.args.domain
+                self.config['SSL_EMAIL'] = self.args.email
             # Resolve URLs after SSL mode is finalized
             host = self.config['PUBLIC_HOST']
             self._resolve_urls(self.config['ACCESS_TYPE'], host, self.config['TSN_APP_PORT'])
@@ -1280,9 +1245,8 @@ NEXT_PUBLIC_API_URL={backend_url}
             else:
                 print_error("Non-interactive mode requires a pre-existing .env file.")
                 print_info("Either:")
-                print_info("  1. Run the installer interactively first to generate .env")
-                print_info("  2. Create a .env file manually before running in non-interactive mode")
-                print_info("  3. Set environment variables: TSN_APP_PORT, FRONTEND_PORT, etc.")
+                print_info("  1. Run the installer interactively in a terminal to generate .env")
+                print_info("  2. Use --defaults for fully unattended install")
                 sys.exit(1)
 
         # Early check: Warn about sudo requirement on Linux
