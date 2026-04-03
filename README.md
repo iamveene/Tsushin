@@ -31,17 +31,23 @@
 git clone https://github.com/iamveene/tsushin.git
 cd tsushin
 
-# 2. Run Installer
-python3 install.py          # macOS
-python3 install.py          # Linux (ensure user is in the docker group)
-python install.py           # Windows (PowerShell or CMD)
+# 2. Run Installer (interactive — prompts for ports, access type, SSL)
+python3 install.py
 
-# 3. Access
-# Frontend: http://localhost:3030
-# Playground: http://localhost:3030/playground
+# Or fully unattended (self-signed HTTPS, auto-detects IP)
+python3 install.py --defaults
+
+# Or with Let's Encrypt SSL
+python3 install.py --defaults --domain app.example.com --email you@email.com
+
+# See all options
+python3 install.py --help
+
+# 3. Open the URL shown at the end of install
+#    Complete the /setup wizard: create your admin account + configure AI provider keys
 ```
 
-The installer will guide you through configuration, deploy Docker containers, and set up your initial tenant and agents.
+The installer sets up infrastructure only (Docker containers, networking, SSL). Organization, admin account, and AI provider API keys are configured via the `/setup` wizard in your browser after install.
 
 ---
 
