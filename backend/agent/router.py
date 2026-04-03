@@ -40,7 +40,6 @@ from services.group_sender_resolver import GroupSenderResolver
 from services.watcher_activity_service import emit_agent_processing_async
 
 # Item 38: Circuit breaker queuing — defer messages when a channel is OPEN
-from services.circuit_breaker import CircuitBreakerState
 
 # Shared utilities
 from agent.utils import summarize_tool_result
