@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href=""><img src="https://img.shields.io/badge/status-beta-orange" alt="Status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-v0.6.1-blue" alt="Version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-v0.6.0-blue" alt="Version"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
