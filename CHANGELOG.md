@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-image support**: Backend now returns all `media_paths` images (previously only first). New `image_urls` array in response alongside backward-compatible `image_url`.
 - **Image grid + lightbox**: Multiple images render in a 2-column grid. Click any image to open full-screen lightbox overlay with close on backdrop click or Escape key.
 
+#### Message Queuing on Circuit Breaker OPEN (Item 38)
+
+- **Router circuit breaker check**: `route_message()` now checks channel circuit breaker state before processing. If the channel's circuit breaker is OPEN, messages are enqueued via `MessageQueueService` instead of being processed immediately. Guarded by `TSN_CB_QUEUE_ENABLED` env var (default: true). Fail-safe: if enqueue fails, falls through to normal processing.
+
 ### Changed
 
 - **Docker env passthrough**: Added `GROQ_API_KEY`, `GROK_API_KEY`, `ELEVENLABS_API_KEY` to docker-compose.yml backend environment.
