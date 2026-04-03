@@ -80,14 +80,21 @@ export default function SetupPage() {
 
     setLoading(true)
     try {
+      // Auto-include any uncommitted key in the text field
+      let allKeys = [...providerKeys]
+      if (currentKey.trim() && !allKeys.some(p => p.provider === selectedProvider)) {
+        const model = currentModel || PROVIDERS[selectedProvider]?.defaultModel || ''
+        allKeys.push({ provider: selectedProvider, key: currentKey.trim(), model })
+      }
+
       const keyFields: Record<string, string | undefined> = {}
-      for (const { provider, key } of providerKeys) {
+      for (const { provider, key } of allKeys) {
         const field = PROVIDERS[provider]?.field
         if (field && key) keyFields[field] = key
       }
 
       // Send the primary provider's model as default_model
-      const primaryModel = providerKeys.length > 0 ? providerKeys[0].model : undefined
+      const primaryModel = allKeys.length > 0 ? allKeys[0].model : undefined
 
       const result = await api.setupWizard({
         tenant_name: orgName,
