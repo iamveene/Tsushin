@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Installer Refactor & Security Hardening (2026-04-03)
+
+- **(BUG-269) XSS token theft via localStorage**: SEC-005 Phase 3 — removed all `localStorage` JWT token storage from the frontend. Auth now relies entirely on the httpOnly `tsushin_session` cookie. Backend WebSocket handlers (playground + watcher) updated to authenticate from cookie without requiring first-message token. Setup wizard and SSO exchange endpoints now set the httpOnly cookie. All auth fetch calls include `credentials: 'include'`.
+- **(BUG-270) CORS origin wrong for remote HTTP installs**: Installer set `TSN_CORS_ORIGINS` to `http://localhost:3030` for remote installs, blocking all API calls from the actual IP. Fixed by using the public host for `frontend_url` and CORS origins.
+- **(BUG-271) docker-compose v1 ContainerConfig error**: BuildKit images lack the `ContainerConfig` key that docker-compose v1 expects on container recreate. Installer now sets `DOCKER_BUILDKIT=0` for both `run_docker_compose()` and `build_additional_images()` when using docker-compose v1.
+- **(BUG-272) Setup wizard loses API key if "Add" not clicked**: Users who typed an API key but clicked "Complete Setup" without clicking "Add" lost the key. `handleSubmit` now auto-includes any uncommitted key from the text field.
+
+### Changed
+
+#### Installer Redesign (2026-04-03)
+
+- **Infrastructure-only installer**: Removed all 7 API key prompts and 8 tenant/admin credential prompts from the installer. User/org creation and AI provider configuration are now handled exclusively by the `/setup` UI wizard after install.
+- **`--defaults` mode simplified**: No longer generates random passwords or bootstraps users. Just sets up `.env`, Docker containers, and SSL — then directs user to `/setup`.
+- **argparse with `--help`**: Added proper CLI flags: `--defaults`, `--http`, `--domain`, `--email`, `--port`, `--frontend-port` with validation and usage examples.
+- **Let's Encrypt via Caddy**: SSL is handled by Caddy with built-in ACME support (no certbot needed). `--domain` flag requires `--email` for Let's Encrypt notifications.
+
 #### Async Embeddings Migration (2026-04-02)
 
 - **Event loop blocking**: Migrated all 12 sync `embed_text()` / `embed_batch_chunked()` call sites to async variants (`embed_text_async()`, `embed_batch_chunked_async()`) using `asyncio.to_thread()`. Health checks and WebSocket connections no longer stall during embedding-heavy agent processing.
