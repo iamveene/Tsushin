@@ -16,12 +16,14 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, Config, ProviderInstance } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, Config, ProviderInstance, VectorStoreInstance } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
 import SlackSetupModal from '@/components/SlackSetupModal'
 import DiscordSetupModal from '@/components/DiscordSetupModal'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
+import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
+import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
 import {
   GeminiIcon,
   OpenAIIcon,
@@ -64,7 +66,7 @@ import {
 } from '@/components/ui/icons'
 import ToggleSwitch from '@/components/ui/ToggleSwitch'
 
-type TabType = 'ai-providers' | 'communication' | 'productivity' | 'developer' | 'tool-apis' | 'sandboxed-tools' | 'mcp-servers'
+type TabType = 'ai-providers' | 'communication' | 'productivity' | 'developer' | 'tool-apis' | 'sandboxed-tools' | 'mcp-servers' | 'vector-stores'
 
 // SVG Icons for Hub Tabs
 const BotIcon = () => (
@@ -117,6 +119,16 @@ const ServerIcon = () => (
     <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
     <line x1="6" y1="6" x2="6.01" y2="6" />
     <line x1="6" y1="18" x2="6.01" y2="18" />
+  </svg>
+)
+
+const VectorStoreIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <ellipse cx="12" cy="5" rx="9" ry="3" />
+    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+    <circle cx="18" cy="12" r="1.5" fill="currentColor" />
+    <circle cx="6" cy="18" r="1.5" fill="currentColor" />
   </svg>
 )
 
@@ -311,6 +323,13 @@ export default function HubPage() {
   const [mcpServerActionLoading, setMcpServerActionLoading] = useState<number | null>(null)
   const [allowedBinaries, setAllowedBinaries] = useState<string[]>(['uvx', 'npx', 'node'])
 
+  // v0.6.1: Vector Store Instances
+  const [vectorStoreInstances, setVectorStoreInstances] = useState<VectorStoreInstance[]>([])
+  const [vectorStoresLoading, setVectorStoresLoading] = useState(false)
+  const [showVectorStoreModal, setShowVectorStoreModal] = useState(false)
+  const [editingVectorStore, setEditingVectorStore] = useState<VectorStoreInstance | null>(null)
+  const [vectorStoreTestLoading, setVectorStoreTestLoading] = useState<number | null>(null)
+
   // UI state
   const [loading, setLoading] = useState(true)
   const [showApiKeyModal, setShowApiKeyModal] = useState(false)
@@ -370,6 +389,9 @@ export default function HubPage() {
       }
       if (activeTab === 'mcp-servers') {
         loadMcpServers()  // Phase 26
+      }
+      if (activeTab === 'vector-stores') {
+        loadVectorStoreInstances()  // v0.6.1
       }
     }, 10000)
     return () => clearInterval(interval)
@@ -517,6 +539,7 @@ export default function HubPage() {
         loadSystemConfig(),
         fetchProviderInstances(),  // Phase 21: Provider Instances
         loadMcpServers(),  // Phase 26: MCP Servers
+        loadVectorStoreInstances(),  // v0.6.1: Vector Store Instances
       ])
     } finally {
       setLoading(false)
@@ -575,6 +598,18 @@ export default function HubPage() {
       console.error('Failed to fetch MCP servers:', error)
     } finally {
       setMcpServersLoading(false)
+    }
+  }
+
+  const loadVectorStoreInstances = async () => {
+    try {
+      setVectorStoresLoading(true)
+      const instances = await api.getVectorStoreInstances()
+      setVectorStoreInstances(instances)
+    } catch (error) {
+      console.error('Failed to fetch vector store instances:', error)
+    } finally {
+      setVectorStoresLoading(false)
     }
   }
 
@@ -1815,6 +1850,7 @@ export default function HubPage() {
     { key: 'tool-apis', label: 'Tool APIs', Icon: WrenchIcon, color: 'text-tsushin-success', iconBg: 'bg-tsushin-success/10' },
     { key: 'sandboxed-tools', label: 'Sandboxed Tools', Icon: BoxIcon, color: 'text-pink-400', iconBg: 'bg-pink-400/10' },
     { key: 'mcp-servers', label: 'MCP Servers', Icon: ServerIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
+    { key: 'vector-stores', label: 'Vector Stores', Icon: VectorStoreIcon, color: 'text-emerald-400', iconBg: 'bg-emerald-400/10' },
   ]
 
   return (
@@ -3525,6 +3561,90 @@ export default function HubPage() {
                 </div>
               </div>
             )}
+
+            {/* v0.6.1: Vector Stores Tab */}
+            {activeTab === 'vector-stores' && (
+              <div className="space-y-6 animate-fade-in">
+                {/* Header */}
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h2 className="text-lg font-display font-semibold text-white">Vector Stores</h2>
+                    <p className="text-sm text-tsushin-slate">Connect external vector databases for enhanced RAG and semantic search</p>
+                  </div>
+                  <button
+                    onClick={() => { setEditingVectorStore(null); setShowVectorStoreModal(true) }}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm rounded-lg transition-colors"
+                  >
+                    + Add Vector Store
+                  </button>
+                </div>
+
+                {/* Cards grid */}
+                {vectorStoresLoading && vectorStoreInstances.length === 0 ? (
+                  <div className="text-center py-12">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-400 mx-auto mb-3" />
+                    <p className="text-tsushin-slate text-sm">Loading vector stores...</p>
+                  </div>
+                ) : vectorStoreInstances.length === 0 ? (
+                  <div className="text-center py-16">
+                    <div className="w-16 h-16 rounded-2xl bg-emerald-400/10 flex items-center justify-center mx-auto mb-4 text-emerald-400">
+                      <VectorStoreIcon />
+                    </div>
+                    <h3 className="text-white font-semibold mb-2">No Vector Stores Connected</h3>
+                    <p className="text-tsushin-slate text-sm mb-4 max-w-md mx-auto">
+                      Connect an external vector database (MongoDB Atlas, Pinecone, or Qdrant) to enable advanced RAG capabilities for your agents.
+                    </p>
+                    <button
+                      onClick={() => { setEditingVectorStore(null); setShowVectorStoreModal(true) }}
+                      className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm rounded-lg transition-colors"
+                    >
+                      + Add Vector Store
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    {vectorStoreInstances.map(instance => (
+                      <VectorStoreCard
+                        key={instance.id}
+                        instance={instance}
+                        onEdit={(inst) => { setEditingVectorStore(inst); setShowVectorStoreModal(true) }}
+                        onDelete={async (inst) => {
+                          if (!confirm(`Delete vector store "${inst.instance_name}"? Agents using this store will fall back to ChromaDB.`)) return
+                          try {
+                            await api.deleteVectorStoreInstance(inst.id)
+                            toast.success('Vector store deleted')
+                            loadVectorStoreInstances()
+                          } catch (err: any) {
+                            toast.error(err.message || 'Failed to delete')
+                          }
+                        }}
+                        onTest={async (inst) => {
+                          setVectorStoreTestLoading(inst.id)
+                          try {
+                            const result = await api.testVectorStoreConnection(inst.id)
+                            toast[result.success ? 'success' : 'error'](result.message)
+                            loadVectorStoreInstances()
+                          } catch (err: any) {
+                            toast.error(err.message || 'Test failed')
+                          } finally {
+                            setVectorStoreTestLoading(null)
+                          }
+                        }}
+                        testLoading={vectorStoreTestLoading === instance.id}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Info Box */}
+                <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-5">
+                  <h3 className="text-sm font-semibold text-emerald-300 mb-2">External Vector Stores</h3>
+                  <p className="text-xs text-tsushin-slate">
+                    Connect external vector databases to replace or complement the built-in ChromaDB. Each agent can be configured to use a specific vector store in override, complement, or shadow mode. When an external store is unavailable, the system automatically falls back to ChromaDB.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -4112,6 +4232,14 @@ export default function HubPage() {
         onClose={() => setShowDiscordSetupModal(false)}
         onSubmit={handleCreateDiscordIntegration}
         saving={saving}
+      />
+
+      {/* v0.6.1: Vector Store Config Modal */}
+      <VectorStoreConfigModal
+        isOpen={showVectorStoreModal}
+        onClose={() => { setShowVectorStoreModal(false); setEditingVectorStore(null) }}
+        onSave={loadVectorStoreInstances}
+        instance={editingVectorStore}
       />
 
       {/* Vertex AI Configuration Modal */}

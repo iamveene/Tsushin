@@ -122,12 +122,16 @@ class MultiAgentMemoryManager:
             else:
                 config_to_use = agent_config
 
+            # v0.6.1: Resolve external vector store provider if configured
+            vector_store_provider = self._resolve_vector_store(agent_id, persist_dir)
+
             memory = AgentMemorySystem(
                 agent_id=agent_id,
                 db_session=self.db,
                 config=config_to_use,
                 persist_directory=persist_dir,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                vector_store_provider=vector_store_provider,
             )
 
             self.agent_memories[agent_id] = memory
@@ -135,6 +139,47 @@ class MultiAgentMemoryManager:
             self.logger.info(f"Created AgentMemorySystem for agent {agent_id} (memory_size={memory_size})")
 
         return self.agent_memories[agent_id]
+
+    def _resolve_vector_store(self, agent_id: int, persist_dir: str):
+        """
+        v0.6.1: Resolve agent's vector store configuration to a ProviderBridgeStore.
+
+        Returns None when agent uses ChromaDB default (vector_store_instance_id IS NULL).
+        Fails open to None (ChromaDB) on any error.
+        """
+        try:
+            from models import Agent
+            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+            if not agent or not agent.vector_store_instance_id:
+                return None  # ChromaDB default
+
+            from agent.memory.providers.registry import VectorStoreRegistry
+            from agent.memory.providers.resolver import VectorStoreResolver
+            from agent.memory.providers.bridge import ProviderBridgeStore
+            from agent.memory.embedding_service import get_shared_embedding_service
+
+            registry = VectorStoreRegistry()
+            resolver = VectorStoreResolver(registry)
+            resolved = resolver.resolve(
+                agent_id=agent_id,
+                db=self.db,
+                persist_directory=persist_dir,
+                vector_store_instance_id=agent.vector_store_instance_id,
+                vector_store_mode=agent.vector_store_mode or "override",
+            )
+
+            if resolved is None:
+                return None
+
+            embedding_service = get_shared_embedding_service()
+            return ProviderBridgeStore(resolved, embedding_service)
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to resolve vector store for agent {agent_id}, "
+                f"falling back to ChromaDB: {e}"
+            )
+            return None
 
     def _get_agent_isolation_mode(self, agent_id: int) -> str:
         """

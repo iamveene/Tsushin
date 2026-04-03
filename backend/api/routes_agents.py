@@ -137,6 +137,10 @@ class AgentResponse(BaseModel):
     memory_decay_archive_threshold: Optional[float] = None
     memory_decay_mmr_lambda: Optional[float] = None
 
+    # v0.6.1: Vector Store Configuration
+    vector_store_instance_id: Optional[int] = None
+    vector_store_mode: Optional[str] = None  # override | complement | shadow
+
     is_active: bool
     is_default: bool
     skills_count: Optional[int] = 0  # Number of enabled skills
@@ -182,6 +186,10 @@ class AgentCreate(BaseModel):
     memory_decay_archive_threshold: Optional[float] = Field(0.05, ge=0.0, le=1.0, description="Auto-archive below this threshold")
     memory_decay_mmr_lambda: Optional[float] = Field(0.5, ge=0.0, le=1.0, description="MMR diversity weight (0=diverse, 1=relevant)")
 
+    # v0.6.1: Vector Store Configuration
+    vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
+    vector_store_mode: Optional[str] = Field("override", description="Vector store mode: override, complement, shadow")
+
     # Phase 10: Channel Configuration
     enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
@@ -219,6 +227,10 @@ class AgentUpdate(BaseModel):
     memory_decay_lambda: Optional[float] = Field(None, ge=0.001, le=1.0, description="Decay rate")
     memory_decay_archive_threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Auto-archive threshold")
     memory_decay_mmr_lambda: Optional[float] = Field(None, ge=0.0, le=1.0, description="MMR diversity weight")
+
+    # v0.6.1: Vector Store Configuration
+    vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
+    vector_store_mode: Optional[str] = Field(None, description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
     enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack")
@@ -779,6 +791,7 @@ def update_agent(
         "context_message_count", "context_char_limit", "enabled_channels",
         "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id", "discord_integration_id",
         "memory_decay_enabled", "memory_decay_lambda", "memory_decay_archive_threshold", "memory_decay_mmr_lambda",
+        "vector_store_instance_id", "vector_store_mode",
         "is_active", "is_default",
     }
     update_data = agent.model_dump(exclude_unset=True)

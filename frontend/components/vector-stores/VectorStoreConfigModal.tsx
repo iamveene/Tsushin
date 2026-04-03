@@ -1,0 +1,264 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import Modal from '@/components/ui/Modal'
+import MongoAtlasConfigForm from './MongoAtlasConfigForm'
+import PineconeConfigForm from './PineconeConfigForm'
+import QdrantConfigForm from './QdrantConfigForm'
+import { api, VectorStoreInstance, VectorStoreInstanceCreate } from '@/lib/client'
+
+const VENDORS = [
+  { value: 'mongodb', label: 'MongoDB Atlas' },
+  { value: 'pinecone', label: 'Pinecone' },
+  { value: 'qdrant', label: 'Qdrant' },
+]
+
+interface VectorStoreConfigModalProps {
+  isOpen: boolean
+  onClose: () => void
+  onSave: () => void
+  instance?: VectorStoreInstance | null
+}
+
+export default function VectorStoreConfigModal({
+  isOpen,
+  onClose,
+  onSave,
+  instance,
+}: VectorStoreConfigModalProps) {
+  const isEditing = !!instance
+
+  const [vendor, setVendor] = useState('mongodb')
+  const [instanceName, setInstanceName] = useState('')
+  const [description, setDescription] = useState('')
+  const [connectionConfig, setConnectionConfig] = useState<Record<string, any>>({})
+  const [isDefault, setIsDefault] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [testing, setTesting] = useState(false)
+
+  // Reset form when modal opens/closes or instance changes
+  useEffect(() => {
+    if (isOpen) {
+      if (instance) {
+        setVendor(instance.vendor)
+        setInstanceName(instance.instance_name)
+        setDescription(instance.description || '')
+        // Reconstruct connection config from extra_config + base_url
+        const config: Record<string, any> = { ...(instance.extra_config || {}) }
+        if (instance.base_url) {
+          if (instance.vendor === 'mongodb') config.cluster_uri = instance.base_url
+          else if (instance.vendor === 'qdrant') config.base_url = instance.base_url
+        }
+        setConnectionConfig(config)
+        setIsDefault(instance.is_default)
+      } else {
+        setVendor('mongodb')
+        setInstanceName('')
+        setDescription('')
+        setConnectionConfig({})
+        setIsDefault(false)
+      }
+      setError(null)
+      setTestResult(null)
+    }
+  }, [isOpen, instance])
+
+  const handleSave = async () => {
+    if (!instanceName.trim()) {
+      setError('Instance name is required')
+      return
+    }
+
+    setSaving(true)
+    setError(null)
+
+    try {
+      // Build the API payload from connection config
+      const { api_key, cluster_uri, base_url: configBaseUrl, ...extraConfig } = connectionConfig
+
+      let baseUrl: string | undefined
+      const credentials: Record<string, any> = {}
+
+      if (vendor === 'mongodb') {
+        baseUrl = cluster_uri || undefined
+        if (cluster_uri) credentials.connection_string = cluster_uri
+        if (api_key) credentials.api_key = api_key
+      } else if (vendor === 'pinecone') {
+        if (api_key) credentials.api_key = api_key
+      } else if (vendor === 'qdrant') {
+        baseUrl = configBaseUrl || undefined
+        if (api_key) credentials.api_key = api_key
+      }
+
+      if (isEditing && instance) {
+        await api.updateVectorStoreInstance(instance.id, {
+          instance_name: instanceName,
+          description: description || undefined,
+          base_url: baseUrl,
+          credentials: Object.keys(credentials).length > 0 ? credentials : undefined,
+          extra_config: extraConfig,
+          is_default: isDefault,
+        })
+      } else {
+        await api.createVectorStoreInstance({
+          vendor,
+          instance_name: instanceName,
+          description: description || undefined,
+          base_url: baseUrl,
+          credentials: Object.keys(credentials).length > 0 ? credentials : undefined,
+          extra_config: extraConfig,
+          is_default: isDefault,
+        })
+      }
+
+      onSave()
+      onClose()
+    } catch (err: any) {
+      setError(err.message || 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleTest = async () => {
+    if (!isEditing || !instance) return
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const result = await api.testVectorStoreConnection(instance.id)
+      setTestResult(result)
+    } catch (err: any) {
+      setTestResult({ success: false, message: err.message || 'Test failed' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const footer = (
+    <div className="flex items-center justify-between w-full">
+      <div className="flex items-center gap-2">
+        {isEditing && (
+          <button
+            onClick={handleTest}
+            disabled={testing}
+            className="px-3 py-1.5 text-sm rounded-lg border border-emerald-400/30 text-emerald-400 hover:bg-emerald-400/10 disabled:opacity-50 transition-colors"
+          >
+            {testing ? 'Testing...' : 'Test Connection'}
+          </button>
+        )}
+        {testResult && (
+          <span className={`text-xs ${testResult.success ? 'text-emerald-400' : 'text-red-400'}`}>
+            {testResult.success ? 'Connected' : 'Failed'}: {testResult.message}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onClose}
+          className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="px-4 py-2 text-sm bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg disabled:opacity-50 transition-colors"
+        >
+          {saving ? 'Saving...' : isEditing ? 'Update' : 'Create'}
+        </button>
+      </div>
+    </div>
+  )
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={isEditing ? 'Edit Vector Store' : 'Add Vector Store'}
+      footer={footer}
+      size="lg"
+    >
+      <div className="space-y-5">
+        {error && (
+          <div className="px-3 py-2 bg-red-400/10 border border-red-400/20 rounded-lg text-red-400 text-sm">
+            {error}
+          </div>
+        )}
+
+        {/* Provider */}
+        <div>
+          <label className="block text-sm text-gray-300 mb-1">Provider</label>
+          <select
+            value={vendor}
+            onChange={(e) => {
+              setVendor(e.target.value)
+              setConnectionConfig({})
+            }}
+            disabled={isEditing}
+            className="w-full px-3 py-2 border border-white/10 rounded-lg text-white bg-[#0a0a0f] text-sm disabled:opacity-50"
+          >
+            {VENDORS.map((v) => (
+              <option key={v.value} value={v.value}>
+                {v.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Instance Name */}
+        <div>
+          <label className="block text-sm text-gray-300 mb-1">Instance Name <span className="text-red-400">*</span></label>
+          <input
+            type="text"
+            value={instanceName}
+            onChange={(e) => setInstanceName(e.target.value)}
+            placeholder={`My ${VENDORS.find(v => v.value === vendor)?.label || ''} Store`}
+            className="w-full px-3 py-2 border border-white/10 rounded-lg text-white bg-[#0a0a0f] placeholder:text-gray-600 text-sm"
+          />
+        </div>
+
+        {/* Description */}
+        <div>
+          <label className="block text-sm text-gray-300 mb-1">Description</label>
+          <input
+            type="text"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Optional description"
+            className="w-full px-3 py-2 border border-white/10 rounded-lg text-white bg-[#0a0a0f] placeholder:text-gray-600 text-sm"
+          />
+        </div>
+
+        {/* Provider-specific form */}
+        <div className="pt-2 border-t border-white/5">
+          <h3 className="text-sm font-medium text-gray-300 mb-3">Connection Settings</h3>
+          {vendor === 'mongodb' && (
+            <MongoAtlasConfigForm config={connectionConfig} onChange={setConnectionConfig} isEditing={isEditing} />
+          )}
+          {vendor === 'pinecone' && (
+            <PineconeConfigForm config={connectionConfig} onChange={setConnectionConfig} isEditing={isEditing} />
+          )}
+          {vendor === 'qdrant' && (
+            <QdrantConfigForm config={connectionConfig} onChange={setConnectionConfig} isEditing={isEditing} />
+          )}
+        </div>
+
+        {/* Default toggle */}
+        <div className="flex items-center gap-2 pt-2 border-t border-white/5">
+          <input
+            type="checkbox"
+            id="vs-default"
+            checked={isDefault}
+            onChange={(e) => setIsDefault(e.target.checked)}
+            className="rounded border-white/20 bg-[#0a0a0f]"
+          />
+          <label htmlFor="vs-default" className="text-sm text-gray-300">
+            Set as default vector store
+          </label>
+        </div>
+      </div>
+    </Modal>
+  )
+}

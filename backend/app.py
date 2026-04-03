@@ -143,6 +143,8 @@ from api.routes_audit import router as audit_router
 from api.routes_syslog import router as syslog_config_router
 # Phase 21: Provider Instance Management
 from api.routes_provider_instances import router as provider_instances_router, set_engine as set_provider_instances_engine
+# v0.6.1: Vector Store Instance Management
+from api.routes_vector_stores import router as vector_stores_router, set_engine as set_vector_stores_engine
 # Phase 22: Custom Skills Foundation
 from api.routes_custom_skills import router as custom_skills_router, set_engine as set_custom_skills_engine
 # Phase 22.4: MCP Server Integration
@@ -213,6 +215,8 @@ async def lifespan(app: FastAPI):
 
     # Phase 21: Provider Instance Management
     set_provider_instances_engine(engine)
+    # v0.6.1: Vector Store Instance Management
+    set_vector_stores_engine(engine)
 
     # Phase 22: Custom Skills Foundation
     set_custom_skills_engine(engine)
@@ -1264,6 +1268,7 @@ app.include_router(sentinel_router, prefix="/api")  # Phase 20: Sentinel Securit
 app.include_router(sentinel_exceptions_router, prefix="/api")  # Phase 20 Enhancement: Sentinel Exceptions
 app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel Security Profiles
 app.include_router(provider_instances_router, prefix="/api", tags=["Provider Instances"])  # Phase 21: Provider Instance Management
+app.include_router(vector_stores_router, prefix="/api", tags=["Vector Stores"])  # v0.6.1: Vector Store Instance Management
 app.include_router(custom_skills_router, prefix="/api", tags=["Custom Skills"])  # Phase 22: Custom Skills Foundation
 app.include_router(mcp_servers_router, prefix="/api", tags=["MCP Servers"])  # Phase 22.4: MCP Server Integration
 app.include_router(services_router)  # Hub Local Services (Kokoro TTS container management)

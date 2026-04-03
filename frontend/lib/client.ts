@@ -2370,6 +2370,37 @@ export interface ProviderInstanceCreate {
   is_default?: boolean
 }
 
+// ==================== Vector Store Instances (v0.6.1) ====================
+
+export interface VectorStoreInstance {
+  id: number
+  tenant_id: string
+  vendor: string  // mongodb | pinecone | qdrant
+  instance_name: string
+  description?: string | null
+  base_url?: string | null
+  credentials_configured: boolean
+  credentials_preview: string
+  extra_config: Record<string, any>
+  health_status: string  // unknown | healthy | degraded | unavailable
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  is_default: boolean
+  is_active: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface VectorStoreInstanceCreate {
+  vendor: string
+  instance_name: string
+  description?: string
+  base_url?: string
+  credentials?: Record<string, any>
+  extra_config?: Record<string, any>
+  is_default?: boolean
+}
+
 // ==================== Custom Skills (Phase 22/23) ====================
 
 export interface CustomSkill {
@@ -6445,6 +6476,56 @@ export const api = {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to ensure Ollama instance')
+    return res.json()
+  },
+
+  // ==================== Vector Store Instances (v0.6.1) ====================
+
+  async getVectorStoreInstances(vendor?: string): Promise<VectorStoreInstance[]> {
+    const params = vendor ? `?vendor=${vendor}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch vector store instances')
+    return res.json()
+  },
+
+  async createVectorStoreInstance(data: VectorStoreInstanceCreate): Promise<VectorStoreInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create vector store instance')
+    return res.json()
+  },
+
+  async updateVectorStoreInstance(id: number, data: Partial<VectorStoreInstanceCreate>): Promise<VectorStoreInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update vector store instance')
+    return res.json()
+  },
+
+  async deleteVectorStoreInstance(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete vector store instance')
+  },
+
+  async testVectorStoreConnection(id: number): Promise<{ success: boolean; message: string; latency_ms?: number; vector_count?: number }> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/test`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test vector store connection')
+    return res.json()
+  },
+
+  async getVectorStoreStats(id: number): Promise<Record<string, any>> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/stats`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch vector store stats')
     return res.json()
   },
 

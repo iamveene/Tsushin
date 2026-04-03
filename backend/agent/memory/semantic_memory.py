@@ -42,7 +42,8 @@ class SemanticMemoryService:
         self,
         persist_directory: str,
         max_ring_buffer_size: int = 10,
-        enable_semantic: bool = True
+        enable_semantic: bool = True,
+        vector_store_override=None,
     ):
         """
         Initialize semantic memory service.
@@ -51,6 +52,9 @@ class SemanticMemoryService:
             persist_directory: Directory for ChromaDB persistence
             max_ring_buffer_size: Max messages in ring buffer per sender
             enable_semantic: Whether to enable semantic search
+            vector_store_override: Optional ProviderBridgeStore to use instead of ChromaDB default.
+                                  When provided, replaces the VectorStoreManager-managed store.
+                                  v0.6.1: Enables external vector store backends.
         """
         self.logger = logging.getLogger(__name__)
         self.enable_semantic = enable_semantic
@@ -61,11 +65,16 @@ class SemanticMemoryService:
 
         # Initialize semantic search components (if enabled)
         if self.enable_semantic:
-            # Use VectorStore manager to prevent ChromaDB singleton conflicts
-            self.vector_store = get_vector_store(persist_directory, embedding_model="all-MiniLM-L6-v2")
-            # Get embedding service from the vector store
-            self.embedding_service = self.vector_store.embedding_service
-            self.logger.info("Semantic search enabled (using VectorStore manager)")
+            if vector_store_override is not None:
+                # v0.6.1: Use external vector store provider via bridge
+                self.vector_store = vector_store_override
+                self.embedding_service = vector_store_override.embedding_service
+                self.logger.info("Semantic search enabled (using external vector store provider)")
+            else:
+                # Default: Use VectorStore manager (ChromaDB)
+                self.vector_store = get_vector_store(persist_directory, embedding_model="all-MiniLM-L6-v2")
+                self.embedding_service = self.vector_store.embedding_service
+                self.logger.info("Semantic search enabled (using VectorStore manager)")
         else:
             self.embedding_service = None
             self.vector_store = None

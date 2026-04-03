@@ -359,6 +359,10 @@ class Agent(Base):
     discord_integration_id = Column(Integer, nullable=True)  # v0.6.0 Item 34: FK to DiscordIntegration
     provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
 
+    # v0.6.1: Vector Store Configuration
+    vector_store_instance_id = Column(Integer, ForeignKey("vector_store_instance.id", ondelete="SET NULL"), nullable=True)
+    vector_store_mode = Column(String(20), default="override")  # "override" | "complement" | "shadow"
+
     # Avatar
     avatar = Column(String(50), nullable=True, default=None)  # Avatar slug (e.g., "samurai", "robot", "ninja")
 
@@ -3426,6 +3430,54 @@ class AgentCommunicationMessage(Base):
 
     __table_args__ = (
         Index("ix_agent_comm_msg_session", "session_id", "created_at"),
+    )
+
+
+# ============================================================================
+# v0.6.1: Vector Store Instance (External Vector Database Connections)
+# ============================================================================
+
+class VectorStoreInstance(Base):
+    """
+    v0.6.1 Item 1: Pluggable vector store backend configuration.
+
+    Each tenant can configure external vector databases (MongoDB Atlas, Pinecone, Qdrant)
+    alongside the built-in ChromaDB default. Agents reference a specific instance via
+    vector_store_instance_id FK (NULL = ChromaDB default).
+
+    Vendors: chromadb, mongodb, pinecone, qdrant
+    """
+    __tablename__ = "vector_store_instance"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+
+    # Provider identity
+    vendor = Column(String(20), nullable=False)  # chromadb|mongodb|pinecone|qdrant
+    instance_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Connection
+    base_url = Column(String(500), nullable=True)  # Required for mongodb/qdrant, unused for pinecone
+    credentials_encrypted = Column(Text, nullable=True)  # Fernet-encrypted JSON blob
+    extra_config = Column(JSON, default=dict)  # Vendor-specific: index_name, collection_name, namespace, embedding_dims
+
+    # Health monitoring
+    health_status = Column(String(20), default="unknown")  # unknown|healthy|degraded|unavailable
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+
+    # Flags
+    is_default = Column(Boolean, default=False)  # Single default per tenant
+    is_active = Column(Boolean, default=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "instance_name", name="uq_vector_store_instance_tenant_name"),
+        Index("idx_vsi_tenant_vendor", "tenant_id", "vendor"),
     )
 
 

@@ -37,7 +37,8 @@ class AgentMemorySystem:
         db_session: Session,
         config: Dict,
         persist_directory: str,
-        token_tracker=None
+        token_tracker=None,
+        vector_store_provider=None,
     ):
         """
         Initialize agent memory system.
@@ -47,6 +48,9 @@ class AgentMemorySystem:
             db_session: Database session for persistence
             config: Configuration dictionary
             persist_directory: Directory for vector store persistence
+            token_tracker: Optional token usage tracker
+            vector_store_provider: Optional ProviderBridgeStore for external vector store (v0.6.1).
+                                  When None, uses ChromaDB default via VectorStoreManager.
         """
         self.logger = logging.getLogger(__name__)
         self.agent_id = agent_id
@@ -57,7 +61,8 @@ class AgentMemorySystem:
         self.semantic_memory = SemanticMemoryService(
             persist_directory=persist_directory,
             max_ring_buffer_size=config.get("memory_size", 10),
-            enable_semantic=config.get("enable_semantic_search", False)
+            enable_semantic=config.get("enable_semantic_search", False),
+            vector_store_override=vector_store_provider,
         )
 
         # Layer 3: Semantic Knowledge Base (facts about users)
