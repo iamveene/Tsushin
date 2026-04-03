@@ -54,6 +54,7 @@ class PlaygroundChatResponse(BaseModel):
     action: Optional[str] = None  # For command actions (e.g., project_entered, project_exited)
     data: Optional[Dict[str, Any]] = None  # For command data (e.g., project info)
     image_url: Optional[str] = None  # Phase 6: Generated image URL
+    image_urls: Optional[List[str]] = None  # Multiple generated image URLs
 
 
 class PlaygroundMessage(BaseModel):
@@ -68,6 +69,7 @@ class PlaygroundMessage(BaseModel):
     original_content: Optional[str] = None
     kb_used: Optional[List[KBUsageItem]] = None  # KB usage tracking
     image_url: Optional[str] = None  # Phase 6: Generated image URL
+    image_urls: Optional[List[str]] = None  # Multiple generated image URLs
 
 
 class PlaygroundHistoryResponse(BaseModel):
