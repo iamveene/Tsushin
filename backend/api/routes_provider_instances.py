@@ -460,7 +460,14 @@ async def test_provider_connection_raw(
             max_tokens=20,
         )
 
-        # Override base_url and API key if provided
+        # Override API key if provided
+        if api_key:
+            if hasattr(client, 'client') and client.client and hasattr(client.client, 'api_key'):
+                client.client.api_key = api_key
+            if vendor == "ollama" and api_key:
+                client.ollama_api_key = api_key
+
+        # Override base_url if provided
         if data.base_url:
             if hasattr(client, 'client') and client.client:
                 client.client.base_url = data.base_url
@@ -479,8 +486,17 @@ async def test_provider_connection_raw(
             success = True
 
     except Exception as e:
-        error_message = str(e)
-        logger.error(f"Raw test connection failed for vendor {vendor}: {e}")
+        logger.exception(f"Raw test connection failed for vendor {vendor}")
+        # Sanitize error message — only show provider-level info, not internals
+        err_str = str(e)
+        if "api_key" in err_str.lower() or "unauthorized" in err_str.lower() or "401" in err_str:
+            error_message = "Authentication failed — check your API key"
+        elif "timeout" in err_str.lower() or "connect" in err_str.lower():
+            error_message = "Connection timed out — check the base URL"
+        elif "not found" in err_str.lower() or "404" in err_str:
+            error_message = f"Model '{test_model}' not found on this provider"
+        else:
+            error_message = "Connection test failed — check provider and credentials"
 
     latency_ms = int((time.time() - start_time) * 1000)
 
@@ -493,7 +509,7 @@ async def test_provider_connection_raw(
     else:
         return TestConnectionResponse(
             success=False,
-            message=f"Connection failed: {error_message}",
+            message=error_message or "Connection test failed",
             latency_ms=latency_ms,
         )
 
