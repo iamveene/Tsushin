@@ -782,7 +782,7 @@ async def test_custom_skill(
         execution.error = str(e)[:4000]
         execution.execution_time_ms = elapsed_ms
         db.commit()
-        raise HTTPException(status_code=500, detail=f"Skill execution failed: {e}")
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.get("/custom-skills/{skill_id}/executions", response_model=List[CustomSkillExecutionResponse])

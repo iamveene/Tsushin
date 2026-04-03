@@ -281,7 +281,7 @@ def list_events(
 
     except Exception as e:
         logger.error(f"Error listing events: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 @router.post("/", response_model=EventResponseSchema, dependencies=[Depends(require_permission("scheduler.create"))])
@@ -338,7 +338,7 @@ def get_event(
         raise
     except Exception as e:
         logger.error(f"Error getting event: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 @router.put("/{event_id}", response_model=EventResponseSchema, dependencies=[Depends(require_permission("scheduler.edit"))])
@@ -409,7 +409,7 @@ def cancel_event(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error cancelling event: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 @router.post("/cleanup", dependencies=[Depends(require_permission("scheduler.cancel"))])
@@ -438,7 +438,7 @@ def cleanup_events(
 
     except Exception as e:
         logger.error(f"Error during cleanup: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 # ============================================================================
@@ -566,7 +566,7 @@ def get_conversation_logs(
         raise
     except Exception as e:
         logger.error(f"Error getting conversation logs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 @router.post("/conversation/{event_id}/guidance", dependencies=[Depends(require_permission("scheduler.edit"))])
@@ -635,7 +635,7 @@ def cancel_conversation(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error cancelling conversation: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 # ============================================================================
@@ -695,4 +695,4 @@ def get_stats(
 
     except Exception as e:
         logger.error(f"Error getting stats: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")

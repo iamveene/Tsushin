@@ -200,7 +200,7 @@ async def get_agent_skill_integrations(
         raise
     except Exception as e:
         logger.error(f"Error getting skill integrations for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.get("/agents/{agent_id}/skill-integrations/{skill_type}")
@@ -270,7 +270,7 @@ async def get_skill_integration(
 
     except Exception as e:
         logger.error(f"Error getting skill integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.put("/agents/{agent_id}/skill-integrations/{skill_type}")
@@ -398,7 +398,7 @@ async def update_skill_integration(
         raise
     except Exception as e:
         logger.error(f"Error updating skill integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.delete("/agents/{agent_id}/skill-integrations/{skill_type}")
@@ -447,7 +447,7 @@ async def delete_skill_integration(
         raise
     except Exception as e:
         logger.error(f"Error deleting skill integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.get("/skill-providers/{skill_type}")
@@ -658,4 +658,4 @@ async def get_available_providers(
         raise
     except Exception as e:
         logger.error(f"Error getting available providers: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")

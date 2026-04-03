@@ -261,7 +261,7 @@ async def asana_oauth_authorize(
         )
     except Exception as e:
         logger.error(f"OAuth authorize failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/asana/oauth/callback", response_model=OAuthCallbackResponse)
@@ -300,7 +300,7 @@ async def asana_oauth_callback(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"OAuth callback error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/asana/oauth/disconnect/{integration_id}")
@@ -339,7 +339,7 @@ async def asana_oauth_disconnect(
         raise
     except Exception as e:
         logger.error(f"Disconnect failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ============================================================================
@@ -485,7 +485,7 @@ async def asana_health_check(
         raise
     except Exception as e:
         logger.error(f"Health check failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if service:
             await service.close()
@@ -530,7 +530,7 @@ async def asana_list_tools(
         raise
     except Exception as e:
         logger.error(f"List tools failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if service:
             await service.close()
@@ -572,7 +572,7 @@ async def asana_execute_tool(
         raise
     except Exception as e:
         logger.error(f"Tool execution failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if service:
             await service.close()

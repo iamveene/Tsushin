@@ -316,7 +316,7 @@ async def gmail_oauth_disconnect(
 
     except Exception as e:
         logger.error(f"Error disconnecting Gmail integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/gmail/{integration_id}")
@@ -445,7 +445,7 @@ async def calendar_oauth_disconnect(
 
     except Exception as e:
         logger.error(f"Error disconnecting Calendar integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/calendar/{integration_id}")

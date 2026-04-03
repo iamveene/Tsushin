@@ -278,7 +278,7 @@ async def upload_knowledge(
         raise
     except Exception as e:
         logger.error(f"Error uploading knowledge: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/agents/{agent_id}/knowledge-base", response_model=List[KnowledgeResponse])

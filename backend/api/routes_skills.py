@@ -110,7 +110,7 @@ async def get_available_skills():
         }
     except Exception as e:
         logger.error(f"Error listing available skills: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.get("/agents/{agent_id}/skills")
@@ -157,7 +157,7 @@ async def get_agent_skills(
         raise
     except Exception as e:
         logger.error(f"Error getting skills for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.get("/agents/{agent_id}/skills/{skill_type}")
@@ -209,7 +209,7 @@ async def get_skill_config(
         raise
     except Exception as e:
         logger.error(f"Error getting skill config: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.put("/agents/{agent_id}/skills/{skill_type}")
@@ -300,7 +300,7 @@ async def update_skill(
         raise
     except Exception as e:
         logger.error(f"Error updating skill: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.delete("/agents/{agent_id}/skills/{skill_type}")
@@ -352,7 +352,7 @@ async def disable_skill(
         raise
     except Exception as e:
         logger.error(f"Error disabling skill: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.post("/agents/{agent_id}/skills/{skill_type}/test")
@@ -446,4 +446,4 @@ async def test_skill(
         raise
     except Exception as e:
         logger.error(f"Error testing skill: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")

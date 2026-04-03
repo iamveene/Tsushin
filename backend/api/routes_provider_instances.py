@@ -273,7 +273,7 @@ def ensure_ollama_instance(
         return _to_response(instance, db)
     except Exception as e:
         logger.error(f"Failed to ensure Ollama instance for tenant {ctx.tenant_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/provider-instances/{instance_id}", response_model=ProviderInstanceResponse)

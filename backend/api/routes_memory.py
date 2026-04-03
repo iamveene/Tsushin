@@ -132,7 +132,7 @@ async def get_memory_stats(
         return result
     except Exception as e:
         logger.error(f"Error getting memory stats for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Memory operation failed")
 
 
 @router.get("/agents/{agent_id}/memory/conversations")
@@ -162,7 +162,7 @@ async def list_conversations(
         return [conv.to_dict() for conv in conversations]
     except Exception as e:
         logger.error(f"Error listing conversations for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Memory operation failed")
 
 
 @router.get("/agents/{agent_id}/memory/conversation/{sender_key}")
@@ -192,7 +192,7 @@ async def get_conversation(
         return details.to_dict()
     except Exception as e:
         logger.error(f"Error getting conversation {sender_key} for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Memory operation failed")
 
 
 @router.delete("/agents/{agent_id}/memory/conversation/{sender_key}")
@@ -229,7 +229,7 @@ async def delete_conversation(
 
     except Exception as e:
         logger.error(f"Error deleting conversation {sender_key} for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Memory operation failed")
 
 
 @router.post("/agents/{agent_id}/memory/clean")
@@ -264,7 +264,7 @@ async def clean_old_messages(
         return report.to_dict()
     except Exception as e:
         logger.error(f"Error cleaning old messages for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Memory operation failed")
 
 
 @router.delete("/agents/{agent_id}/memory/reset")
@@ -314,7 +314,7 @@ async def reset_agent_memory(
         raise
     except Exception as e:
         logger.error(f"Error resetting memory for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Memory operation failed")
 
 
 class ArchiveDecayedRequest(BaseModel):
@@ -370,4 +370,4 @@ async def archive_decayed_facts(
 
     except Exception as e:
         logger.error(f"Error archiving decayed facts for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Memory operation failed")
