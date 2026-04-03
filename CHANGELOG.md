@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Pre-Release Security Audit (2026-04-03)
+
+- **Error detail leaking**: Sanitized 40 `HTTPException(500, detail=str(e))` calls across 10 API route files (`routes_scheduler`, `routes_skills`, `routes_memory`, `routes_custom_skills`, `routes_hub`, `routes_skill_integrations`, `routes_google`, `routes_telegram_instances`, `routes_provider_instances`, `routes_knowledge_base`). All now return generic context-appropriate messages instead of raw Python exception strings. Added missing `logger.error()` calls for 3 Telegram instance routes.
+- **Dev/debug scripts in git**: Removed 13 internal development scripts from git tracking (`check_*.py`, `debug_*.py`, `fix_shell_wait.py`, `e2e_test_results.txt`). Added gitignore patterns to prevent re-tracking.
+- **Inconsistent tenant isolation**: Standardized `list_runs` endpoint in `routes_flows.py` to use `filter_by_tenant()` instead of manual `tenant_id` check, matching all other flow endpoints.
+
 #### Installer Refactor & Security Hardening (2026-04-03)
 
 - **(BUG-269) XSS token theft via localStorage**: SEC-005 Phase 3 — removed all `localStorage` JWT token storage from the frontend. Auth now relies entirely on the httpOnly `tsushin_session` cookie. Backend WebSocket handlers (playground + watcher) updated to authenticate from cookie without requiring first-message token. Setup wizard and SSO exchange endpoints now set the httpOnly cookie. All auth fetch calls include `credentials: 'include'`.
