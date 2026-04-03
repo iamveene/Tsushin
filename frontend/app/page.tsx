@@ -18,6 +18,7 @@ import ConversationsTab from '@/components/watcher/ConversationsTab'
 import FlowsTab from '@/components/watcher/FlowsTab'
 import BillingTab from '@/components/watcher/BillingTab'
 import SecurityTab from '@/components/watcher/SecurityTab'
+import ChannelHealthTab from '@/components/watcher/ChannelHealthTab'
 
 // Inline SVG icon to match codebase patterns
 const LockClosedIcon = ({ className }: { className?: string }) => (
@@ -26,7 +27,7 @@ const LockClosedIcon = ({ className }: { className?: string }) => (
   </svg>
 )
 
-type WatcherTab = 'dashboard' | 'graph' | 'conversations' | 'flows' | 'security' | 'billing'
+type WatcherTab = 'dashboard' | 'graph' | 'conversations' | 'flows' | 'security' | 'channel-health' | 'billing'
 
 export default function WatcherPage() {
   const [activeTab, setActiveTab] = useState<WatcherTab>('dashboard')
@@ -41,6 +42,7 @@ export default function WatcherPage() {
     { id: 'conversations' as WatcherTab, label: 'Conversations', description: 'Message & Agent Monitoring' },
     { id: 'flows' as WatcherTab, label: 'Flows', description: 'Flow Execution Monitoring' },
     { id: 'security' as WatcherTab, label: 'Security', description: 'Sentinel Security Events' },
+    { id: 'channel-health' as WatcherTab, label: 'Channel Health', description: 'Instance & Circuit Breaker Status' },
     { id: 'billing' as WatcherTab, label: 'Billing', description: 'AI Cost & Consumption' },
   ]
 
@@ -110,6 +112,7 @@ export default function WatcherPage() {
         {activeTab === 'conversations' && <ConversationsTab />}
         {activeTab === 'flows' && <FlowsTab />}
         {activeTab === 'security' && <SecurityTab />}
+        {activeTab === 'channel-health' && <ChannelHealthTab />}
         {activeTab === 'billing' && <BillingTab />}
       </div>
     </div>

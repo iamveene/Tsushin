@@ -923,6 +923,10 @@ export interface BuilderDataResponse {
     memory_isolation_mode: string
     enable_semantic_search: boolean
     avatar: string | null
+    memory_decay_enabled: boolean
+    memory_decay_lambda: number
+    memory_decay_archive_threshold: number
+    memory_decay_mmr_lambda: number
   }
   skills: SkillExpandInfo[]
   knowledge: AgentKnowledge[]
@@ -944,6 +948,10 @@ export interface BuilderSaveRequest {
     memory_isolation_mode?: string
     enable_semantic_search?: boolean
     avatar?: string | null
+    memory_decay_enabled?: boolean
+    memory_decay_lambda?: number
+    memory_decay_archive_threshold?: number
+    memory_decay_mmr_lambda?: number
   }
   skills?: Array<{
     skill_type: string
@@ -1680,6 +1688,7 @@ export interface PlaygroundChatResponse {
   new_thread_title?: string
   kb_used?: KBUsageItem[]  // KB usage tracking
   image_url?: string  // Phase 6: Generated image URL
+  image_urls?: string[]  // Phase 6: All generated image URLs
 }
 
 export interface PlaygroundMessage {
@@ -1698,6 +1707,7 @@ export interface PlaygroundMessage {
   bookmarked_at?: string  // Phase 14.2: Bookmark timestamp
   kb_used?: KBUsageItem[]  // KB usage tracking
   image_url?: string  // Phase 6: Generated image URL
+  image_urls?: string[]  // Phase 6: All generated image URLs
 }
 
 // Phase 14.0: Audio capabilities response
@@ -6380,6 +6390,16 @@ export const api = {
     return res.json()
   },
 
+  async testProviderConnectionRaw(data: { vendor: string, base_url?: string, api_key?: string }): Promise<{ success: boolean; message: string; latency_ms?: number }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test provider connection')
+    return res.json()
+  },
+
   async discoverProviderModels(id: number): Promise<string[]> {
     const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/discover-models`, {
       method: 'POST',
@@ -6685,6 +6705,67 @@ export const api = {
     }
   },
 
+  // ============================================================================
+  // Channel Health Monitor
+  // ============================================================================
+
+  async getChannelHealth(): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health/`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch channel health')
+    return res.json()
+  },
+
+  async getChannelHealthSummary(): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health/summary`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch channel health summary')
+    return res.json()
+  },
+
+  async getChannelHealthInstance(channelType: string, instanceId: string): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health/${channelType}/${instanceId}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch instance health')
+    return res.json()
+  },
+
+  async getChannelHealthHistory(channelType: string, instanceId: string, limit = 50, offset = 0): Promise<any> {
+    const params = new URLSearchParams({ limit: limit.toString(), offset: offset.toString() })
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health/${channelType}/${instanceId}/history?${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch instance history')
+    return res.json()
+  },
+
+  async probeChannelHealth(channelType: string, instanceId: string): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health/${channelType}/${instanceId}/probe`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to probe channel health')
+    return res.json()
+  },
+
+  async resetCircuitBreaker(channelType: string, instanceId: string): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health/${channelType}/${instanceId}/reset`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to reset circuit breaker')
+    return res.json()
+  },
+
+  async getAlertConfig(): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health/alerts/config`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch alert config')
+    return res.json()
+  },
+
+  async updateAlertConfig(data: any): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health/alerts/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update alert config')
+    return res.json()
+  },
+
   async setupWizard(data: {
     tenant_name: string
     admin_email: string
@@ -6711,6 +6792,23 @@ export const api = {
       const err = await res.json().catch(() => ({ detail: 'Setup failed' }))
       throw new Error(err.detail || 'Setup failed')
     }
+    return res.json()
+  },
+
+  // Item 37: Temporal Memory Decay
+  async getAgentMemoryStats(agentId: number): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/memory/stats`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch memory stats')
+    return res.json()
+  },
+
+  async archiveDecayedFacts(agentId: number, dryRun: boolean): Promise<any> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/memory/archive-decayed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: dryRun }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to archive decayed facts')
     return res.json()
   },
 }
