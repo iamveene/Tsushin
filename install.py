@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """
 Tsushin Platform Installer
-Phase 2: Installation Script
 
 Interactive installer for Tsushin multi-agent platform.
 Configures environment, deploys Docker containers, and sets up initial tenant/agents.
-
-Usage:
-    python3 install.py              # Interactive mode
-    python3 install.py --defaults   # Fully unattended with random secrets
 
 Requirements:
     - Python 3.8+
@@ -16,6 +11,7 @@ Requirements:
     - Internet connection
 """
 
+import argparse
 import os
 import sys
 import re
@@ -28,6 +24,78 @@ import getpass
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
+
+
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        prog="install.py",
+        description="Tsushin Platform Installer — deploy and configure the Tsushin multi-agent AI platform.",
+        epilog="""
+examples:
+  python3 install.py                              Interactive mode (recommended for first install)
+  python3 install.py --defaults                   Fully unattended with random secrets + self-signed HTTPS
+  python3 install.py --defaults --http            Unattended with HTTP only (no SSL)
+  python3 install.py --defaults --domain app.io   Unattended with Let's Encrypt SSL for a domain
+
+modes:
+  interactive (default)   Prompts for AI provider keys, network config, SSL, and admin credentials.
+                          Requires a TTY (terminal). If stdin is not a terminal, the installer
+                          looks for a pre-existing .env file and skips prompts.
+
+  --defaults              Fully unattended. Auto-generates .env with random secrets, detects the
+                          machine's IP for remote access, enables self-signed HTTPS, creates a
+                          tenant + admin with random credentials (printed once at the end).
+                          No AI provider keys are configured — add them via Hub after install.
+
+after install:
+  If --defaults is used, log in with the printed credentials.
+  If interactive mode skipped tenant creation, open https://<host>/setup in your browser
+  to create your organization and admin account via the setup wizard UI.
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--defaults",
+        action="store_true",
+        help="Fully unattended install with auto-generated secrets and self-signed HTTPS",
+    )
+    parser.add_argument(
+        "--http",
+        action="store_true",
+        help="Disable SSL (HTTP only). Only valid with --defaults. Insecure — use for isolated dev/test only",
+    )
+    parser.add_argument(
+        "--domain",
+        type=str,
+        metavar="DOMAIN",
+        help="Domain name for Let's Encrypt SSL (e.g., app.example.com). Only valid with --defaults",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8081,
+        metavar="PORT",
+        help="Backend API port (default: 8081)",
+    )
+    parser.add_argument(
+        "--frontend-port",
+        type=int,
+        default=3030,
+        metavar="PORT",
+        help="Frontend port (default: 3030)",
+    )
+
+    args = parser.parse_args()
+
+    # Validation
+    if args.http and args.domain:
+        parser.error("--http and --domain are mutually exclusive")
+    if (args.http or args.domain) and not args.defaults:
+        parser.error("--http and --domain require --defaults mode")
+
+    return args
 
 from platform_utils import (
     is_windows, is_linux, is_macos, is_root,
@@ -115,13 +183,14 @@ def safe_getpass(prompt: str, default: str = "") -> str:
 
 
 class TsushinInstaller:
-    def __init__(self):
+    def __init__(self, args=None):
         self.root_dir = Path(__file__).parent
         self.env_file = self.root_dir / ".env"
         self.backend_data_dir = self.root_dir / "backend" / "data"
         self.database_path = self.backend_data_dir / "agent.db"
         self.config = {}
         self.interactive = is_interactive()
+        self.args = args or argparse.Namespace(defaults=False, http=False, domain=None, port=8081, frontend_port=3030)
 
     def _load_config_from_env(self):
         """Load configuration values from an existing .env file for non-interactive mode."""
@@ -1358,9 +1427,19 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
         enable_ansi_colors()
 
         # --defaults mode: fully unattended install with auto-generated secrets
-        if '--defaults' in sys.argv:
+        if self.args.defaults:
             print_info("Defaults mode: generating .env with random secrets and sensible defaults.")
             self._populate_defaults()
+            # Apply CLI overrides
+            if self.args.port != 8081:
+                self.config['TSN_APP_PORT'] = str(self.args.port)
+            if self.args.frontend_port != 3030:
+                self.config['FRONTEND_PORT'] = str(self.args.frontend_port)
+            if self.args.http:
+                self.config['SSL_MODE'] = 'disabled'
+            elif self.args.domain:
+                self.config['SSL_MODE'] = 'letsencrypt'
+                self.config['SSL_DOMAIN'] = self.args.domain
             self.check_prerequisites()
             self.prepare_data_directories()
             self.generate_caddyfile()
@@ -1504,7 +1583,8 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
 
 if __name__ == "__main__":
     try:
-        installer = TsushinInstaller()
+        args = parse_args()
+        installer = TsushinInstaller(args=args)
         installer.run()
     except KeyboardInterrupt:
         print(f"\n\n{Colors.YELLOW}Installation cancelled by user{Colors.ENDC}")
