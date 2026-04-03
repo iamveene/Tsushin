@@ -114,6 +114,7 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
     setError(null)
     setFreshnessDistribution(null)
     setDecayEnabled(false)
+    setArchivePreview(null)
 
     if (agentId && senderKey) {
       loadMemory()
@@ -185,11 +186,7 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
         setArchiving(false)
       }
     } else {
-      // Confirm: actually archive
-      if (!confirm(`Archive ${archivePreview.count} decayed fact(s)? This cannot be undone.`)) {
-        setArchivePreview(null)
-        return
-      }
+      // Execute archive (user already confirmed via preview panel buttons)
       setArchiving(true)
       try {
         await api.archiveDecayedFacts(agentId, false)
