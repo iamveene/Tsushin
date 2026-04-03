@@ -89,6 +89,12 @@ class TestConnectionResponse(BaseModel):
     latency_ms: Optional[int] = None
 
 
+class TestConnectionRawRequest(BaseModel):
+    vendor: str
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+
+
 class UrlValidationRequest(BaseModel):
     url: str
     vendor: Optional[str] = None
@@ -384,6 +390,112 @@ def delete_provider_instance(
     db.commit()
     logger.info(f"Soft-deleted provider instance {instance_id} for tenant {instance.tenant_id}")
     return {"message": f"Provider instance '{instance.instance_name}' deleted successfully"}
+
+
+@router.post("/provider-instances/test-connection", response_model=TestConnectionResponse)
+async def test_provider_connection_raw(
+    data: TestConnectionRawRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Test connectivity to a provider using raw credentials (no saved instance required).
+    Useful for testing connection during instance creation before saving.
+    """
+    vendor = data.vendor.lower()
+    if vendor not in VALID_VENDORS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid vendor. Must be one of: {', '.join(sorted(VALID_VENDORS))}"
+        )
+
+    api_key = data.api_key
+    if not api_key:
+        # Fall back to tenant-level API key for this vendor
+        from services.api_key_service import get_api_key
+        api_key = get_api_key(vendor, db, tenant_id=ctx.tenant_id)
+
+    if not api_key and vendor not in ("ollama",):
+        return TestConnectionResponse(
+            success=False,
+            message="No API key provided and no tenant-level key configured for this vendor",
+        )
+
+    # Validate base_url against SSRF if provided
+    if data.base_url:
+        from utils.ssrf_validator import validate_url, SSRFValidationError
+        try:
+            allow_private = vendor in ("ollama", "custom")
+            validate_url(data.base_url, allow_private=allow_private)
+        except SSRFValidationError as e:
+            return TestConnectionResponse(
+                success=False,
+                message=f"Invalid base URL: {e}",
+            )
+
+    # Determine a test model
+    from api.routes_integrations import PROVIDER_TEST_MODELS
+    test_model = PROVIDER_TEST_MODELS.get(vendor)
+    if not test_model and vendor == "ollama":
+        test_model = "llama3.2"
+    if not test_model and vendor == "custom":
+        test_model = "default"
+
+    start_time = time.time()
+    error_message = None
+    success = False
+
+    try:
+        from agent.ai_client import AIClient
+        from analytics.token_tracker import TokenTracker
+        tracker = TokenTracker(db, ctx.tenant_id)
+
+        client = AIClient(
+            provider=vendor if vendor != "custom" else "openai",
+            model_name=test_model,
+            db=db,
+            token_tracker=tracker,
+            tenant_id=ctx.tenant_id,
+            max_tokens=20,
+        )
+
+        # Override base_url and API key if provided
+        if data.base_url:
+            if hasattr(client, 'client') and client.client:
+                client.client.base_url = data.base_url
+            if vendor == "ollama":
+                client.ollama_base_url = data.base_url
+
+        result = await client.generate(
+            system_prompt="You are a test assistant. Respond with exactly: OK",
+            user_message="Test connection. Reply with OK.",
+            operation_type="connection_test",
+        )
+
+        if result.get("error"):
+            error_message = str(result["error"])
+        else:
+            success = True
+
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"Raw test connection failed for vendor {vendor}: {e}")
+
+    latency_ms = int((time.time() - start_time) * 1000)
+
+    if success:
+        return TestConnectionResponse(
+            success=True,
+            message=f"Connected to {vendor}/{test_model}",
+            latency_ms=latency_ms,
+        )
+    else:
+        return TestConnectionResponse(
+            success=False,
+            message=f"Connection failed: {error_message}",
+            latency_ms=latency_ms,
+        )
 
 
 @router.post("/provider-instances/{instance_id}/test-connection", response_model=TestConnectionResponse)

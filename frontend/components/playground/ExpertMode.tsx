@@ -239,6 +239,7 @@ export default function ExpertMode({
   const [threadContextMenu, setThreadContextMenu] = useState<{ threadId: number; x: number; y: number } | null>(null)
   const [renamingThreadId, setRenamingThreadId] = useState<number | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Accordion state for left panel sections
@@ -250,6 +251,16 @@ export default function ExpertMode({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // Lightbox: close on Escape key
+  useEffect(() => {
+    if (!lightboxImage) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxImage(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [lightboxImage])
 
   // BUG-012 Fix: Fetch agent-specific tools instead of global tools
   useEffect(() => {
@@ -780,14 +791,26 @@ export default function ExpertMode({
                                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                               </div>
                             )}
-                            {msg.image_url && (
+                            {msg.image_urls && msg.image_urls.length > 0 ? (
+                              <div className={`mt-3 gap-2 ${msg.image_urls.length === 1 ? 'flex' : 'grid grid-cols-2'}`}>
+                                {msg.image_urls.map((url, imgIdx) => (
+                                  <img
+                                    key={imgIdx}
+                                    src={url}
+                                    alt={`Generated image ${imgIdx + 1}`}
+                                    className="rounded-lg max-w-full max-h-[400px] object-contain cursor-pointer border border-[var(--pg-border)] hover:opacity-90 transition-opacity"
+                                    onClick={() => setLightboxImage(url)}
+                                  />
+                                ))}
+                              </div>
+                            ) : msg.image_url ? (
                               <img
                                 src={msg.image_url}
                                 alt="Generated image"
-                                className="mt-3 rounded-lg max-w-full max-h-[400px] object-contain cursor-pointer border border-[var(--pg-border)]"
-                                onClick={(e) => window.open((e.target as HTMLImageElement).src, '_blank')}
+                                className="mt-3 rounded-lg max-w-full max-h-[400px] object-contain cursor-pointer border border-[var(--pg-border)] hover:opacity-90 transition-opacity"
+                                onClick={() => setLightboxImage(msg.image_url!)}
                               />
-                            )}
+                            ) : null}
                             {msg.audio_url && (
                               <audio
                                 controls
@@ -1348,6 +1371,29 @@ export default function ExpertMode({
             </div>
           </div>
         </>
+      )}
+      {/* Lightbox overlay for full-screen image viewing */}
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm cursor-pointer"
+          onClick={() => setLightboxImage(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors z-10"
+            onClick={(e) => { e.stopPropagation(); setLightboxImage(null) }}
+            aria-label="Close lightbox"
+          >
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+          <img
+            src={lightboxImage}
+            alt="Full size image"
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
       )}
     </div>
   )

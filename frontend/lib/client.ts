@@ -1023,6 +1023,8 @@ export interface MemoryStats {
   total_messages: number
   total_embeddings: number
   storage_size_mb: number
+  decay_config?: { enabled: boolean; decay_lambda: number; archive_threshold: number; mmr_lambda: number }
+  freshness_distribution?: { fresh: number; fading: number; stale: number; archived: number }
 }
 
 export interface ConversationSummary {

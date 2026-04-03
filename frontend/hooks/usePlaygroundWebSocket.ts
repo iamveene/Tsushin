@@ -96,6 +96,7 @@ export function usePlaygroundWebSocket(
         timestamp: message.timestamp || new Date().toISOString(),
         message_id: message.message_id || `msg_${Date.now()}`,
         image_url: message.image_url || undefined,  // Phase 6: Image generation
+        image_urls: message.image_urls || undefined,  // Phase 6: All generated images
         metadata: {
           tokenCount: message.token_usage?.total,
           duration,

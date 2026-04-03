@@ -158,11 +158,19 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
   }
 
   const handleTestConnection = async () => {
-    if (!instance) return
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await api.testProviderConnection(instance.id)
+      let result: { success: boolean; message: string; latency_ms?: number }
+      if (isEditing && instance) {
+        result = await api.testProviderConnection(instance.id)
+      } else {
+        result = await api.testProviderConnectionRaw({
+          vendor,
+          base_url: baseUrl || undefined,
+          api_key: apiKey || undefined,
+        })
+      }
       setTestResult(result)
     } catch (err: any) {
       setTestResult({ success: false, message: err.message || 'Test failed' })
@@ -214,16 +222,14 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
   const footer = (
     <div className="flex items-center justify-between">
       <div className="flex items-center gap-3">
-        {isEditing && instance && (
-          <button
-            onClick={handleTestConnection}
-            disabled={testing}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-tsushin-accent/30 text-tsushin-accent bg-tsushin-accent/5 hover:bg-tsushin-accent/10 transition-colors disabled:opacity-50"
-          >
-            <LightningIcon size={14} />
-            {testing ? 'Testing...' : 'Test Connection'}
-          </button>
-        )}
+        <button
+          onClick={handleTestConnection}
+          disabled={testing || (!apiKey && vendor !== 'ollama' && !isEditing)}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-tsushin-accent/30 text-tsushin-accent bg-tsushin-accent/5 hover:bg-tsushin-accent/10 transition-colors disabled:opacity-50"
+        >
+          <LightningIcon size={14} />
+          {testing ? 'Testing...' : 'Test Connection'}
+        </button>
         {testResult && (
           <span className={`text-xs flex items-center gap-1.5 ${testResult.success ? 'text-tsushin-success' : 'text-tsushin-vermilion'}`}>
             {testResult.success ? <CheckCircleIcon size={14} /> : <AlertTriangleIcon size={14} />}

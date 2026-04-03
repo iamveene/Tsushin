@@ -1099,11 +1099,12 @@ export default function PlaygroundPage() {
           if (activeThreadId) {
             const threadData = await api.getThread(activeThreadId)
             const threadMessages = threadData.messages || []
-            // Phase 6: Inject image_url into the last assistant message if present
-            if (response.image_url && threadMessages.length > 0) {
+            // Phase 6: Inject image_url/image_urls into the last assistant message if present
+            if ((response.image_url || response.image_urls) && threadMessages.length > 0) {
               const lastMsg = threadMessages[threadMessages.length - 1]
               if (lastMsg.role === 'assistant') {
                 lastMsg.image_url = response.image_url
+                lastMsg.image_urls = response.image_urls
               }
             }
             setMessages(threadMessages)
@@ -1125,6 +1126,7 @@ export default function PlaygroundPage() {
               timestamp: response.timestamp,
               message_id: agentMsgId,
               image_url: response.image_url || undefined,  // Phase 6: Image generation
+              image_urls: response.image_urls || undefined,  // Phase 6: All generated images
             }
             setMessages((prev) => [...prev, agentMsg])
           }

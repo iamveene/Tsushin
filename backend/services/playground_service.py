@@ -467,13 +467,16 @@ class PlaygroundService:
 
                     # Phase 6: Cache generated images and include URL in response
                     image_url = None
+                    image_urls = []
                     if skill_result.media_paths:
+                        import os
                         for media_path in skill_result.media_paths:
-                            import os
                             if os.path.exists(media_path):
-                                image_url = self._cache_image(media_path)
-                                self.logger.info(f"Cached skill image: {media_path} -> {image_url}")
-                                break  # Use first image
+                                cached_url = self._cache_image(media_path)
+                                self.logger.info(f"Cached skill image: {media_path} -> {cached_url}")
+                                image_urls.append(cached_url)
+                                if image_url is None:
+                                    image_url = cached_url
 
                     # Return skill result directly
                     return {
@@ -484,6 +487,7 @@ class PlaygroundService:
                         "execution_time": None,
                         "timestamp": datetime.utcnow().isoformat() + "Z",
                         "image_url": image_url,
+                        "image_urls": image_urls if image_urls else None,
                     }
 
             except Exception as e:
@@ -722,14 +726,17 @@ class PlaygroundService:
 
             # Phase 6: Cache generated images from tool execution
             image_url = None
+            image_urls = []
             media_paths = result.get("media_paths")
             if media_paths:
                 import os
                 for media_path in media_paths:
                     if os.path.exists(media_path):
-                        image_url = self._cache_image(media_path)
-                        self.logger.info(f"Cached tool image: {media_path} -> {image_url}")
-                        break  # Use first image
+                        cached_url = self._cache_image(media_path)
+                        self.logger.info(f"Cached tool image: {media_path} -> {cached_url}")
+                        image_urls.append(cached_url)
+                        if image_url is None:
+                            image_url = cached_url
 
             return {
                 "status": "success",
@@ -741,6 +748,7 @@ class PlaygroundService:
                 "kb_used": result.get("kb_used", []),  # KB usage tracking
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "image_url": image_url,
+                "image_urls": image_urls if image_urls else None,
             }
 
         except Exception as e:
@@ -1087,13 +1095,16 @@ class PlaygroundService:
 
                     # Phase 6: Cache generated images from skill in streaming path
                     image_url = None
+                    image_urls = []
                     if skill_result.media_paths:
                         import os
                         for media_path in skill_result.media_paths:
                             if os.path.exists(media_path):
-                                image_url = self._cache_image(media_path)
-                                self.logger.info(f"[STREAMING] Cached skill image: {media_path} -> {image_url}")
-                                break
+                                cached_url = self._cache_image(media_path)
+                                self.logger.info(f"[STREAMING] Cached skill image: {media_path} -> {cached_url}")
+                                image_urls.append(cached_url)
+                                if image_url is None:
+                                    image_url = cached_url
 
                     # Return done
                     yield {
@@ -1102,6 +1113,7 @@ class PlaygroundService:
                         "thread_id": thread_id,
                         "timestamp": datetime.utcnow().isoformat() + "Z",
                         "image_url": image_url,
+                        "image_urls": image_urls if image_urls else None,
                     }
                     return  # Skill handled it, don't process with AI
 
@@ -1153,6 +1165,7 @@ class PlaygroundService:
                 "kb_used": response.get("kb_used", []),
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "image_url": response.get("image_url"),  # Phase 6: Image generation
+                "image_urls": response.get("image_urls"),  # Phase 6: All generated images
             }
 
         except Exception as e:
