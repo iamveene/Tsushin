@@ -34,24 +34,25 @@ def parse_args():
         epilog="""
 examples:
   python3 install.py                              Interactive mode (recommended for first install)
-  python3 install.py --defaults                   Fully unattended with random secrets + self-signed HTTPS
+  python3 install.py --defaults                   Fully unattended with self-signed HTTPS
   python3 install.py --defaults --http            Unattended with HTTP only (no SSL)
   python3 install.py --defaults --domain app.io   Unattended with Let's Encrypt SSL for a domain
+  python3 install.py --port 9090                  Custom backend port (works in both modes)
 
 modes:
-  interactive (default)   Prompts for AI provider keys, network config, SSL, and admin credentials.
+  interactive (default)   Prompts for network config (ports, access type) and SSL mode.
                           Requires a TTY (terminal). If stdin is not a terminal, the installer
                           looks for a pre-existing .env file and skips prompts.
 
   --defaults              Fully unattended. Auto-generates .env with random secrets, detects the
-                          machine's IP for remote access, enables self-signed HTTPS, creates a
-                          tenant + admin with random credentials (printed once at the end).
-                          No AI provider keys are configured — add them via Hub after install.
+                          machine's IP for remote access, and enables self-signed HTTPS.
+
+  Both modes set up infrastructure only — no user accounts or API keys are created.
+  SSL is handled by Caddy (auto Let's Encrypt or self-signed, no certbot needed).
 
 after install:
-  If --defaults is used, log in with the printed credentials.
-  If interactive mode skipped tenant creation, open https://<host>/setup in your browser
-  to create your organization and admin account via the setup wizard UI.
+  Open the URL shown at the end of install. The /setup wizard will guide you through
+  creating your admin account, organization, and configuring AI provider API keys.
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -344,110 +345,31 @@ class TsushinInstaller:
 
     def prompt_for_configuration(self, mode: str):
         """
-        Interactive prompts for configuration
+        Interactive prompts for infrastructure configuration only.
+        User/org creation is handled by the /setup UI wizard after install.
 
         Args:
             mode: 'fresh', 'update', or 'destructive'
         """
         print_header("Configuration Setup")
 
-        # AI Provider Configuration
-        print(f"{Colors.BOLD}AI Provider Configuration{Colors.ENDC}")
-        print("At least one AI provider API key is required.\n")
-
-        # Gemini API Key
-        gemini_key = self.prompt_with_validation(
-            "Enter Google Gemini API Key (recommended): ",
-            validator=lambda x: len(x) >= 20 if x else True,
-            error_msg="API key must be at least 20 characters",
-            optional=True,
-            mask=True
-        )
-        self.config['GEMINI_API_KEY'] = gemini_key or ""
-
-        # OpenAI API Key
-        openai_key = self.prompt_with_validation(
-            "Enter OpenAI API Key (optional, for audio agents): ",
-            validator=lambda x: len(x) >= 20 if x else True,
-            error_msg="API key must be at least 20 characters",
-            optional=True,
-            mask=True
-        )
-        self.config['OPENAI_API_KEY'] = openai_key or ""
-
-        # Anthropic API Key
-        anthropic_key = self.prompt_with_validation(
-            "Enter Anthropic API Key (optional): ",
-            validator=lambda x: len(x) >= 20 if x else True,
-            error_msg="API key must be at least 20 characters",
-            optional=True,
-            mask=True
-        )
-        self.config['ANTHROPIC_API_KEY'] = anthropic_key or ""
-
-        # Validate at least one API key provided
-        if not (gemini_key or openai_key or anthropic_key):
-            print_error("At least one AI provider API key is required!")
-            sys.exit(1)
-
-        print()
-
-        # Additional AI Providers (optional)
-        print(f"{Colors.BOLD}Additional AI Providers (optional){Colors.ENDC}")
-        print_info("These can also be configured later via Settings > Integrations.\n")
-
-        groq_key = self.prompt_with_validation(
-            "Enter Groq API Key (optional, ultra-fast inference): ",
-            validator=lambda x: len(x) >= 20 if x else True,
-            error_msg="API key must be at least 20 characters",
-            optional=True,
-            mask=True
-        )
-        self.config['GROQ_API_KEY'] = groq_key or ""
-
-        grok_key = self.prompt_with_validation(
-            "Enter Grok/xAI API Key (optional): ",
-            validator=lambda x: len(x) >= 20 if x else True,
-            error_msg="API key must be at least 20 characters",
-            optional=True,
-            mask=True
-        )
-        self.config['GROK_API_KEY'] = grok_key or ""
-
-        deepseek_key = self.prompt_with_validation(
-            "Enter DeepSeek API Key (optional, reasoning models): ",
-            validator=lambda x: len(x) >= 20 if x else True,
-            error_msg="API key must be at least 20 characters",
-            optional=True,
-            mask=True
-        )
-        self.config['DEEPSEEK_API_KEY'] = deepseek_key or ""
-
-        elevenlabs_key = self.prompt_with_validation(
-            "Enter ElevenLabs API Key (optional, voice synthesis): ",
-            validator=lambda x: len(x) >= 20 if x else True,
-            error_msg="API key must be at least 20 characters",
-            optional=True,
-            mask=True
-        )
-        self.config['ELEVENLABS_API_KEY'] = elevenlabs_key or ""
-
-        print()
-
         # Network Configuration
         print(f"{Colors.BOLD}Network Configuration{Colors.ENDC}\n")
 
+        default_port = str(self.args.port)
+        default_frontend_port = str(self.args.frontend_port)
+
         backend_port = self.prompt_with_validation(
-            "Enter Backend Port [8081]: ",
-            default="8081",
+            f"Enter Backend Port [{default_port}]: ",
+            default=default_port,
             validator=lambda x: 1024 <= int(x) <= 65535,
             error_msg="Port must be between 1024 and 65535"
         )
         self.config['TSN_APP_PORT'] = backend_port
 
         frontend_port = self.prompt_with_validation(
-            "Enter Frontend Port [3030]: ",
-            default="3030",
+            f"Enter Frontend Port [{default_frontend_port}]: ",
+            default=default_frontend_port,
             validator=lambda x: 1024 <= int(x) <= 65535 and int(x) != int(backend_port),
             error_msg="Port must be between 1024 and 65535 and different from backend port"
         )
@@ -477,12 +399,19 @@ class TsushinInstaller:
         else:
             public_host = "localhost"
 
+        self.config['ACCESS_TYPE'] = access_type
+        self.config['PUBLIC_HOST'] = public_host
+
         print()
 
         # SSL/HTTPS Configuration
         self.prompt_ssl_configuration(access_type, public_host, backend_port)
 
         # Set final URLs based on SSL mode
+        self._resolve_urls(access_type, public_host, backend_port)
+
+    def _resolve_urls(self, access_type: str, public_host: str, backend_port: str):
+        """Resolve NEXT_PUBLIC_API_URL and frontend_url based on SSL mode and access type."""
         ssl_mode = self.config.get('SSL_MODE', 'disabled')
         if ssl_mode != 'disabled':
             domain = self.config['SSL_DOMAIN']
@@ -494,107 +423,7 @@ class TsushinInstaller:
             else:
                 self.config['NEXT_PUBLIC_API_URL'] = f"http://localhost:{backend_port}"
             print_info(f"Frontend will connect to backend at: {self.config['NEXT_PUBLIC_API_URL']}")
-
         print()
-
-        # Only ask for tenant/admin info in fresh or destructive mode
-        if mode in ["fresh", "destructive"]:
-            # Tenant Setup
-            print(f"{Colors.BOLD}Organization Setup{Colors.ENDC}\n")
-
-            tenant_name = self.prompt_with_validation(
-                "Enter initial Tenant name [DevTenant]: ",
-                default="DevTenant",
-                validator=lambda x: len(x) >= 2,
-                error_msg="Tenant name must be at least 2 characters"
-            )
-            self.config['TENANT_NAME'] = tenant_name
-
-            # Email validation with TLD check
-            def validate_email(email: str) -> bool:
-                # Basic format check
-                if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
-                    return False
-                # Check for reserved/special-use TLDs that fail email validation
-                reserved_tlds = ['.test', '.example', '.invalid', '.localhost']
-                domain = email.split('@')[1] if '@' in email else ''
-                for tld in reserved_tlds:
-                    if domain.endswith(tld):
-                        print_warning(f"Email domain '{domain}' uses reserved TLD '{tld}' which may fail validation")
-                        print_info("Recommended: Use .com, .local, .dev, or your actual domain")
-                        return False
-                return True
-
-            # Global Admin Credentials
-            print(f"\n{Colors.BOLD}Global Administrator Setup{Colors.ENDC}")
-            print("This user will have platform-wide administrative access.\n")
-
-            global_admin_email = self.prompt_with_validation(
-                "Global admin email: ",
-                validator=validate_email,
-                error_msg="Invalid email format or reserved TLD"
-            )
-            self.config['GLOBAL_ADMIN_EMAIL'] = global_admin_email
-
-            global_admin_full_name = self.prompt_with_validation(
-                "Global admin full name: ",
-                validator=lambda x: len(x) >= 2,
-                error_msg="Name must be at least 2 characters"
-            )
-            self.config['GLOBAL_ADMIN_FULL_NAME'] = global_admin_full_name
-
-            # Password with confirmation
-            while True:
-                global_admin_password = safe_getpass(f"{Colors.BOLD}Global admin password (min 8 chars):{Colors.ENDC} ")
-                if len(global_admin_password) < 8:
-                    print_error("Password must be at least 8 characters")
-                    continue
-                password_confirm = safe_getpass(f"{Colors.BOLD}Confirm password:{Colors.ENDC} ")
-                if global_admin_password != password_confirm:
-                    print_error("Passwords do not match")
-                    continue
-                break
-
-            self.config['GLOBAL_ADMIN_PASSWORD'] = global_admin_password
-
-            # Tenant Admin Credentials
-            print(f"\n{Colors.BOLD}Tenant Administrator Setup{Colors.ENDC}")
-            print(f"This user will manage the '{tenant_name}' organization.\n")
-
-            while True:
-                admin_email = self.prompt_with_validation(
-                    "Tenant admin email: ",
-                    validator=validate_email,
-                    error_msg="Invalid email format or reserved TLD"
-                )
-                # Validate different from global admin
-                if admin_email == self.config['GLOBAL_ADMIN_EMAIL']:
-                    print_error("Tenant admin must use a different email from global admin")
-                    continue
-                break
-
-            self.config['ADMIN_EMAIL'] = admin_email
-
-            admin_full_name = self.prompt_with_validation(
-                "Tenant admin full name: ",
-                validator=lambda x: len(x) >= 2,
-                error_msg="Name must be at least 2 characters"
-            )
-            self.config['ADMIN_FULL_NAME'] = admin_full_name
-
-            # Password with confirmation
-            while True:
-                admin_password = safe_getpass(f"{Colors.BOLD}Tenant admin password (min 8 chars):{Colors.ENDC} ")
-                if len(admin_password) < 8:
-                    print_error("Password must be at least 8 characters")
-                    continue
-                password_confirm = safe_getpass(f"{Colors.BOLD}Confirm password:{Colors.ENDC} ")
-                if admin_password != password_confirm:
-                    print_error("Passwords do not match")
-                    continue
-                break
-
-            self.config['ADMIN_PASSWORD'] = admin_password
 
     def prompt_with_validation(self, prompt: str, default: str = "", validator=None, error_msg: str = "", optional: bool = False, mask: bool = False) -> str:
         """
@@ -950,23 +779,19 @@ class TsushinInstaller:
 
         # Determine URLs based on SSL mode
         ssl_mode = self.config.get('SSL_MODE', 'disabled')
+        access_type = self.config.get('ACCESS_TYPE', 'localhost')
+        public_host = self.config.get('PUBLIC_HOST', 'localhost')
+
         if ssl_mode != 'disabled':
             ssl_domain = self.config.get('SSL_DOMAIN', 'localhost')
             backend_url = f"https://{ssl_domain}"
             frontend_url = f"https://{ssl_domain}"
+        elif access_type == 'remote':
+            backend_url = f"http://{public_host}:{self.config['TSN_APP_PORT']}"
+            frontend_url = f"http://{public_host}:{self.config['FRONTEND_PORT']}"
         else:
             backend_url = f"http://localhost:{self.config['TSN_APP_PORT']}"
-            # For remote HTTP installs, use the public host for frontend URL
-            # so CORS and cookie domains work correctly from remote browsers.
-            public_api_url = self.config.get('NEXT_PUBLIC_API_URL', '')
-            if public_api_url and 'localhost' not in public_api_url and '127.0.0.1' not in public_api_url:
-                # Extract host from NEXT_PUBLIC_API_URL (e.g., http://10.211.55.5:8081 → 10.211.55.5)
-                import re
-                host_match = re.search(r'https?://([^:/]+)', public_api_url)
-                public_host = host_match.group(1) if host_match else 'localhost'
-                frontend_url = f"http://{public_host}:{self.config['FRONTEND_PORT']}"
-            else:
-                frontend_url = f"http://localhost:{self.config['FRONTEND_PORT']}"
+            frontend_url = f"http://localhost:{self.config['FRONTEND_PORT']}"
 
         env_content = f"""# Tsushin Configuration
 # Generated by installer on {datetime.now().isoformat()}
@@ -1012,7 +837,7 @@ HTTP_PORT=80
 HTTPS_PORT=443
 
 # Frontend Build Args
-NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
+NEXT_PUBLIC_API_URL={backend_url}
 """
 
         # Write .env file
@@ -1120,6 +945,11 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
         """Build additional Docker images required for integrations"""
         print_header("Building Integration Images")
 
+        # docker-compose v1 + BuildKit compatibility (same as run_docker_compose)
+        build_env = os.environ.copy()
+        if self.docker_compose_cmd[0] == "docker-compose":
+            build_env["DOCKER_BUILDKIT"] = "0"
+
         images_to_build = [
             {
                 "name": "WhatsApp MCP",
@@ -1154,6 +984,7 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
 
                 process = subprocess.Popen(
                     cmd,
+                    env=build_env,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -1352,28 +1183,14 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
             print(f"  Backend:   {Colors.CYAN}{backend_url}{Colors.ENDC}")
             print()
 
-        if self.config.get('ADMIN_EMAIL'):
-            print(f"{Colors.BOLD}Administrator Accounts:{Colors.ENDC}")
-            print(f"\n  {Colors.YELLOW}Global Administrator:{Colors.ENDC}")
-            print(f"    Email:     {Colors.CYAN}{self.config['GLOBAL_ADMIN_EMAIL']}{Colors.ENDC}")
-            print(f"    Access:    Platform-wide management")
-            print(f"\n  {Colors.YELLOW}Tenant Administrator:{Colors.ENDC}")
-            print(f"    Email:     {Colors.CYAN}{self.config['ADMIN_EMAIL']}{Colors.ENDC}")
-            print(f"    Access:    {self.config['TENANT_NAME']} organization")
-            print()
-
         access_url = f"https://{self.config['SSL_DOMAIN']}" if ssl_mode != 'disabled' else frontend_url
         setup_wizard_url = f"{access_url}/setup"
 
         print(f"{Colors.BOLD}Next Steps:{Colors.ENDC}")
         print(f"  1. Open {Colors.CYAN}{access_url}{Colors.ENDC} in your browser")
-        if self.config.get('ADMIN_EMAIL'):
-            print(f"  2. Log in with your admin credentials")
-        else:
-            print(f"  2. Run the setup wizard to create your first admin account:")
-            print(f"     {Colors.CYAN}{setup_wizard_url}{Colors.ENDC}")
-        print(f"  3. Follow the onboarding wizard to configure Google OAuth (optional)")
-        print(f"  4. Start creating agents and testing in the playground!")
+        print(f"  2. Complete the setup wizard to create your admin account and configure AI providers:")
+        print(f"     {Colors.CYAN}{setup_wizard_url}{Colors.ENDC}")
+        print(f"  3. Start creating agents and testing in the playground!")
         print()
 
         print(f"{Colors.BOLD}Useful Commands:{Colors.ENDC}")
@@ -1395,27 +1212,18 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
             return "localhost"
 
     def _populate_defaults(self):
-        """Populate self.config with random secrets and sensible defaults for unattended install."""
-        self.config['TSN_APP_PORT'] = '8081'
-        self.config['FRONTEND_PORT'] = '3030'
+        """Populate self.config with sensible defaults for unattended install.
+        Only infrastructure config — no user/org/API key creation.
+        User creation is handled by the /setup UI wizard after install."""
+        self.config['TSN_APP_PORT'] = str(self.args.port)
+        self.config['FRONTEND_PORT'] = str(self.args.frontend_port)
         self.config['SSL_MODE'] = 'selfsigned'
         # Use machine's IP so HTTPS works from the network, not just localhost
         host = self._get_primary_ip()
         self.config['SSL_DOMAIN'] = host
         self.config['SSL_EMAIL'] = ''
-        self.config['NEXT_PUBLIC_API_URL'] = f'https://{host}'
-
-        # Default tenant and admin credentials
-        self.config['TENANT_NAME'] = 'DefaultTenant'
-        self.config['ADMIN_EMAIL'] = 'admin@tsushin.dev'
-        self.config['ADMIN_PASSWORD'] = secrets.token_urlsafe(12)
-        self.config['ADMIN_FULL_NAME'] = 'Tenant Admin'
-        self.config['GLOBAL_ADMIN_EMAIL'] = 'globaladmin@tsushin.dev'
-        self.config['GLOBAL_ADMIN_PASSWORD'] = secrets.token_urlsafe(12)
-        self.config['GLOBAL_ADMIN_FULL_NAME'] = 'Global Admin'
-        self.config['GEMINI_API_KEY'] = ''
-        self.config['OPENAI_API_KEY'] = ''
-        self.config['ANTHROPIC_API_KEY'] = ''
+        self.config['ACCESS_TYPE'] = 'remote' if host != 'localhost' else 'localhost'
+        self.config['PUBLIC_HOST'] = host
 
     def run(self):
         """Main installation flow"""
@@ -1426,20 +1234,19 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
         # Enable ANSI color codes on Windows 10+
         enable_ansi_colors()
 
-        # --defaults mode: fully unattended install with auto-generated secrets
+        # --defaults mode: fully unattended infrastructure install
         if self.args.defaults:
-            print_info("Defaults mode: generating .env with random secrets and sensible defaults.")
+            print_info("Defaults mode: generating .env with sensible defaults.")
             self._populate_defaults()
             # Apply CLI overrides
-            if self.args.port != 8081:
-                self.config['TSN_APP_PORT'] = str(self.args.port)
-            if self.args.frontend_port != 3030:
-                self.config['FRONTEND_PORT'] = str(self.args.frontend_port)
             if self.args.http:
                 self.config['SSL_MODE'] = 'disabled'
             elif self.args.domain:
                 self.config['SSL_MODE'] = 'letsencrypt'
                 self.config['SSL_DOMAIN'] = self.args.domain
+            # Resolve URLs after SSL mode is finalized
+            host = self.config['PUBLIC_HOST']
+            self._resolve_urls(self.config['ACCESS_TYPE'], host, self.config['TSN_APP_PORT'])
             self.check_prerequisites()
             self.prepare_data_directories()
             self.generate_caddyfile()
@@ -1448,16 +1255,6 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
             self.run_docker_compose()
             self.build_additional_images()
             self.health_check()
-            if not self.setup_initial_tenant():
-                print_warning("Auto-bootstrap failed. Visit /setup to create your admin account.")
-            else:
-                print()
-                print_success(f"Tenant admin:    {self.config['ADMIN_EMAIL']}")
-                print_success(f"Tenant password: {self.config['ADMIN_PASSWORD']}")
-                print_success(f"Global admin:    {self.config['GLOBAL_ADMIN_EMAIL']}")
-                print_success(f"Global password: {self.config['GLOBAL_ADMIN_PASSWORD']}")
-                print()
-                print_warning("SAVE THESE CREDENTIALS — they will not be shown again.")
             self.display_success_message()
             return
 
@@ -1570,14 +1367,7 @@ NEXT_PUBLIC_API_URL={self.config.get('NEXT_PUBLIC_API_URL', backend_url)}
         # Step 10: Health checks
         self.health_check()
 
-        # Step 11: Setup tenant (only if fresh or destructive)
-        if mode in ["fresh", "destructive"]:
-            if not self.setup_initial_tenant():
-                print_error("Installation completed but tenant setup failed")
-                print_info("You can manually create a tenant by signing up at the frontend")
-                print()
-
-        # Step 12: Display success message
+        # Step 11: Display success message (user creates org/admin via /setup UI)
         self.display_success_message()
 
 
