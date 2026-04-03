@@ -605,15 +605,17 @@ async def save_builder_data(
             if data.agent.memory_decay_lambda is not None:
                 if data.agent.memory_decay_lambda < 0.001 or data.agent.memory_decay_lambda > 1.0:
                     raise HTTPException(status_code=400, detail="memory_decay_lambda must be between 0.001 and 1.0")
-                agent.memory_decay_lambda = data.agent.memory_decay_lambda
+                agent.memory_decay_lambda = round(data.agent.memory_decay_lambda, 4)
             if data.agent.memory_decay_archive_threshold is not None:
-                if data.agent.memory_decay_archive_threshold < 0 or data.agent.memory_decay_archive_threshold > 1.0:
+                val = round(data.agent.memory_decay_archive_threshold, 4)
+                if val < 0 or val > 1.0:
                     raise HTTPException(status_code=400, detail="memory_decay_archive_threshold must be between 0 and 1.0")
-                agent.memory_decay_archive_threshold = data.agent.memory_decay_archive_threshold
+                agent.memory_decay_archive_threshold = val
             if data.agent.memory_decay_mmr_lambda is not None:
-                if data.agent.memory_decay_mmr_lambda < 0 or data.agent.memory_decay_mmr_lambda > 1.0:
+                val = round(data.agent.memory_decay_mmr_lambda, 4)
+                if val < 0 or val > 1.0:
                     raise HTTPException(status_code=400, detail="memory_decay_mmr_lambda must be between 0 and 1.0")
-                agent.memory_decay_mmr_lambda = data.agent.memory_decay_mmr_lambda
+                agent.memory_decay_mmr_lambda = val
             if data.agent.avatar is not None:
                 agent.avatar = data.agent.avatar if data.agent.avatar != "" else None
             agent.updated_at = datetime.utcnow()

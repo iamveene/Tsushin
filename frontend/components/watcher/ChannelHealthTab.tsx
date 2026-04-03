@@ -157,6 +157,7 @@ export default function ChannelHealthTab() {
   const [error, setError] = useState<string | null>(null)
   const [probingInstance, setProbingInstance] = useState<string | null>(null)
   const [resettingInstance, setResettingInstance] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [alertsExpanded, setAlertsExpanded] = useState(false)
   const [alertSaving, setAlertSaving] = useState(false)
   const [alertDraft, setAlertDraft] = useState<AlertConfig | null>(null)
@@ -209,27 +210,27 @@ export default function ChannelHealthTab() {
       return
     }
     setExpandedInstance(key)
-    if (!eventHistory[key]) {
-      try {
-        const data = await api.getChannelHealthHistory(inst.channel_type, String(inst.instance_id), 20, 0)
-        setEventHistory(prev => ({ ...prev, [key]: data.events || [] }))
-      } catch (err) {
-        console.error('Failed to load event history:', err)
-        setEventHistory(prev => ({ ...prev, [key]: [] }))
-      }
+    try {
+      const data = await api.getChannelHealthHistory(inst.channel_type, String(inst.instance_id), 20, 0)
+      setEventHistory(prev => ({ ...prev, [key]: data.events || [] }))
+    } catch (err) {
+      console.error('Failed to load event history:', err)
+      setEventHistory(prev => ({ ...prev, [key]: [] }))
     }
-  }, [expandedInstance, eventHistory])
+  }, [expandedInstance])
 
   // ---- Probe ----
 
   const handleProbe = useCallback(async (inst: ChannelInstance) => {
     const key = instanceKey(inst)
     setProbingInstance(key)
+    setActionError(null)
     try {
       await api.probeChannelHealth(inst.channel_type, String(inst.instance_id))
       await loadData()
     } catch (err: any) {
       console.error('Probe failed:', err)
+      setActionError(`Probe failed for ${inst.instance_name || inst.instance_id}: ${err.message || 'Unknown error'}`)
     } finally {
       setProbingInstance(null)
     }
@@ -240,11 +241,13 @@ export default function ChannelHealthTab() {
   const handleReset = useCallback(async (inst: ChannelInstance) => {
     const key = instanceKey(inst)
     setResettingInstance(key)
+    setActionError(null)
     try {
       await api.resetCircuitBreaker(inst.channel_type, String(inst.instance_id))
       await loadData()
     } catch (err: any) {
       console.error('Reset failed:', err)
+      setActionError(`Reset failed for ${inst.instance_name || inst.instance_id}: ${err.message || 'Unknown error'}`)
     } finally {
       setResettingInstance(null)
     }
@@ -309,6 +312,12 @@ export default function ChannelHealthTab() {
 
   return (
     <div className="space-y-8 animate-fade-in">
+      {actionError && (
+        <div className="bg-red-900/20 border border-red-800 rounded-lg p-3 flex items-center justify-between">
+          <p className="text-sm text-red-200">{actionError}</p>
+          <button onClick={() => setActionError(null)} className="text-red-400 hover:text-red-300 text-xs ml-4">Dismiss</button>
+        </div>
+      )}
 
       {/* ================================================================ */}
       {/* Summary Bar */}
@@ -460,7 +469,7 @@ export default function ChannelHealthTab() {
                       <RefreshIcon size={12} className={isProbing ? 'animate-spin' : ''} />
                       {isProbing ? 'Probing...' : 'Probe'}
                     </button>
-                    {cbState === 'open' && (
+                    {(cbState === 'open' || cbState === 'half_open') && (
                       <button
                         onClick={() => handleReset(inst)}
                         disabled={isResetting}
@@ -533,8 +542,9 @@ export default function ChannelHealthTab() {
       <div className="glass-card rounded-xl overflow-hidden">
         <button
           onClick={() => {
-            setAlertsExpanded(!alertsExpanded)
-            if (!alertsExpanded && !alertDraft) {
+            const willExpand = !alertsExpanded
+            setAlertsExpanded(willExpand)
+            if (willExpand) {
               setAlertDraft({ ...alertConfig })
             }
           }}
@@ -565,7 +575,7 @@ export default function ChannelHealthTab() {
             <div className="flex items-center gap-3">
               <label className="text-sm text-tsushin-slate">Alerts Enabled</label>
               <button
-                onClick={() => setAlertDraft(prev => prev ? { ...prev, enabled: !prev.enabled } : null)}
+                onClick={() => setAlertDraft(prev => ({ ...(prev ?? alertConfig), enabled: !(prev ?? alertConfig).enabled }))}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                   currentAlertDraft.enabled ? 'bg-emerald-500' : 'bg-gray-600'
                 }`}
@@ -582,7 +592,7 @@ export default function ChannelHealthTab() {
               <input
                 type="url"
                 value={currentAlertDraft.webhook_url || ''}
-                onChange={(e) => setAlertDraft(prev => prev ? { ...prev, webhook_url: e.target.value || null } : null)}
+                onChange={(e) => setAlertDraft(prev => ({ ...(prev ?? alertConfig), webhook_url: e.target.value || null }))}
                 placeholder="https://hooks.slack.com/services/..."
                 className="w-full px-3 py-2 border border-gray-700 rounded-lg text-sm text-white bg-gray-800 placeholder-gray-500 focus:ring-2 focus:ring-tsushin-indigo focus:border-transparent"
               />
@@ -596,7 +606,7 @@ export default function ChannelHealthTab() {
                 value={(currentAlertDraft.email_recipients || []).join(', ')}
                 onChange={(e) => {
                   const emails = e.target.value.split(',').map(s => s.trim()).filter(Boolean)
-                  setAlertDraft(prev => prev ? { ...prev, email_recipients: emails.length > 0 ? emails : null } : null)
+                  setAlertDraft(prev => ({ ...(prev ?? alertConfig), email_recipients: emails.length > 0 ? emails : null }))
                 }}
                 placeholder="admin@example.com, ops@example.com"
                 className="w-full px-3 py-2 border border-gray-700 rounded-lg text-sm text-white bg-gray-800 placeholder-gray-500 focus:ring-2 focus:ring-tsushin-indigo focus:border-transparent"
@@ -611,7 +621,7 @@ export default function ChannelHealthTab() {
                 min={60}
                 max={3600}
                 value={currentAlertDraft.cooldown_seconds}
-                onChange={(e) => setAlertDraft(prev => prev ? { ...prev, cooldown_seconds: parseInt(e.target.value) || 300 } : null)}
+                onChange={(e) => { const val = parseInt(e.target.value, 10); setAlertDraft(prev => ({ ...(prev ?? alertConfig), cooldown_seconds: Number.isNaN(val) ? 300 : val })) }}
                 className="w-32 px-3 py-2 border border-gray-700 rounded-lg text-sm text-white bg-gray-800 focus:ring-2 focus:ring-tsushin-indigo focus:border-transparent"
               />
               <p className="text-xs text-tsushin-muted mt-1">Minimum time between repeated alerts for the same instance.</p>
