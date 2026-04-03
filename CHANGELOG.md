@@ -5,6 +5,39 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-04-03
+
+### Added
+
+#### Temporal Memory Decay Frontend (Item 37)
+
+- **Agent Studio decay configuration**: New "Temporal Decay" section in Agent Builder Memory Config with enable toggle, decay rate slider (0.001-1.0), archive threshold slider (0-1.0), and MMR diversity slider (0-1.0). Decay fields persisted via builder save endpoint with float validation and rounding.
+- **Memory Inspector freshness badges**: Per-fact colored dots (green=fresh, yellow=fading, orange=stale, gray=archived) with decay factor percentage. Freshness distribution summary bar when decay is enabled.
+- **Archive decayed facts**: Dry-run preview with fact count, then confirm to archive. Clears on agent/thread switch to prevent wrong-context operations.
+
+#### Channel Health Tab in Watcher (Item 38)
+
+- **New Watcher tab**: "Channel Health" tab with summary bar (total, healthy, unhealthy, open circuits), instance cards grid with circuit breaker state visualization, and per-instance Probe/Reset actions.
+- **Event history**: Expandable per-instance event timeline showing circuit breaker state transitions with timestamps and reasons.
+- **Alert configuration**: Collapsible panel with webhook URL, email recipients, cooldown settings, and enable/disable toggle.
+- **8 API client methods**: Full frontend integration with all channel health backend endpoints.
+
+#### Test Connection on Provider Instance Create (Item 27b)
+
+- **New backend endpoint**: `POST /api/provider-instances/test-connection` accepts raw credentials (vendor, base_url, api_key) without requiring a saved instance. SSRF validation on base_url, falls back to tenant-level API key.
+- **Create mode button**: Test Connection button now visible during instance creation (previously edit-only). Disabled when no API key entered (except Ollama).
+
+#### Inline Screenshots in Playground (Item 35)
+
+- **Multi-image support**: Backend now returns all `media_paths` images (previously only first). New `image_urls` array in response alongside backward-compatible `image_url`.
+- **Image grid + lightbox**: Multiple images render in a 2-column grid. Click any image to open full-screen lightbox overlay with close on backdrop click or Escape key.
+
+### Changed
+
+- **Docker env passthrough**: Added `GROQ_API_KEY`, `GROK_API_KEY`, `ELEVENLABS_API_KEY` to docker-compose.yml backend environment.
+
+---
+
 ## [0.6.0] - 2026-04-01
 
 ### Fixed
