@@ -6710,7 +6710,7 @@ export const api = {
   // ============================================================================
 
   async getChannelHealth(): Promise<any> {
-    const res = await authenticatedFetch(`${API_URL}/api/channel-health/`)
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch channel health')
     return res.json()
   },
@@ -6795,13 +6795,7 @@ export const api = {
     return res.json()
   },
 
-  // Item 37: Temporal Memory Decay
-  async getAgentMemoryStats(agentId: number): Promise<any> {
-    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/memory/stats`)
-    if (!res.ok) await handleApiError(res, 'Failed to fetch memory stats')
-    return res.json()
-  },
-
+  // Item 37: Temporal Memory Decay - Archive decayed facts
   async archiveDecayedFacts(agentId: number, dryRun: boolean): Promise<any> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/memory/archive-decayed`, {
       method: 'POST',

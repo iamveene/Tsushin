@@ -226,6 +226,10 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
         telegramIntegrationId: agent.telegram_integration_id || null, memorySize: agent.memory_size || 10,
         memoryIsolationMode: agent.memory_isolation_mode || 'isolated', enableSemanticSearch: agent.enable_semantic_search || false,
         avatar: agent.avatar || null,
+        memoryDecayEnabled: agent.memory_decay_enabled || false,
+        memoryDecayLambda: agent.memory_decay_lambda ?? 0.01,
+        memoryDecayArchiveThreshold: agent.memory_decay_archive_threshold ?? 0.05,
+        memoryDecayMmrLambda: agent.memory_decay_mmr_lambda ?? 0.5,
       },
       attachedPersonaId: validPersonaId,
       attachedChannels: agent.enabled_channels || [],
@@ -244,6 +248,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       skills: newState.attachedSkills.map(s => ({ t: s.skillType, c: s.config })).sort((a, b) => a.t.localeCompare(b.t)),
       tools: [...newState.attachedTools].sort(), sentinelProfileId: newState.attachedSentinelProfileId,
       memory: { size: newState.agent?.memorySize, mode: newState.agent?.memoryIsolationMode, semantic: newState.agent?.enableSemanticSearch },
+      decay: { enabled: newState.agent?.memoryDecayEnabled, lambda: newState.agent?.memoryDecayLambda, threshold: newState.agent?.memoryDecayArchiveThreshold, mmr: newState.agent?.memoryDecayMmrLambda },
       toolOverrides: {},
       avatar: newState.agent?.avatar || null,
     })
@@ -370,7 +375,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       if (profile) directNodes.push({ id: `sentinel-${profile.id}`, type: 'builder-sentinel', position: { x: 0, y: 0 }, data: { type: 'builder-sentinel', profileId: profile.id, name: profile.name, mode: profile.detection_mode, isSystem: profile.is_system, onDetach: () => detachProfile('security', profile.id) } as BuilderSentinelData })
     }
     if (state.agent) {
-      directNodes.push({ id: 'memory-config', type: 'builder-memory', position: { x: 0, y: 0 }, data: { type: 'builder-memory', isolationMode: state.agent.memoryIsolationMode, memorySize: state.agent.memorySize, enableSemanticSearch: state.agent.enableSemanticSearch } as BuilderMemoryData })
+      directNodes.push({ id: 'memory-config', type: 'builder-memory', position: { x: 0, y: 0 }, data: { type: 'builder-memory', isolationMode: state.agent.memoryIsolationMode, memorySize: state.agent.memorySize, enableSemanticSearch: state.agent.enableSemanticSearch, memoryDecayEnabled: state.agent.memoryDecayEnabled, memoryDecayLambda: state.agent.memoryDecayLambda, memoryDecayArchiveThreshold: state.agent.memoryDecayArchiveThreshold, memoryDecayMmrLambda: state.agent.memoryDecayMmrLambda } as BuilderMemoryData })
     }
 
     // Build grouped categories input
@@ -479,6 +484,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
       skills: state.attachedSkills.map(s => ({ t: s.skillType, c: s.config })).sort((a, b) => a.t.localeCompare(b.t)),
       tools: [...state.attachedTools].sort(), sentinelProfileId: state.attachedSentinelProfileId,
       memory: { size: state.agent?.memorySize, mode: state.agent?.memoryIsolationMode, semantic: state.agent?.enableSemanticSearch },
+      decay: { enabled: state.agent?.memoryDecayEnabled, lambda: state.agent?.memoryDecayLambda, threshold: state.agent?.memoryDecayArchiveThreshold, mmr: state.agent?.memoryDecayMmrLambda },
       toolOverrides: state.toolEnabledOverrides,
       avatar: state.agent?.avatar || null,
     }) !== savedSnapshot.current
@@ -495,6 +501,10 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
             memorySize: config.memorySize !== undefined ? (config.memorySize as number) : prev.agent.memorySize,
             memoryIsolationMode: config.memoryIsolationMode !== undefined ? (config.memoryIsolationMode as string) : prev.agent.memoryIsolationMode,
             enableSemanticSearch: config.enableSemanticSearch !== undefined ? (config.enableSemanticSearch as boolean) : prev.agent.enableSemanticSearch,
+            memoryDecayEnabled: config.memoryDecayEnabled !== undefined ? (config.memoryDecayEnabled as boolean) : prev.agent.memoryDecayEnabled,
+            memoryDecayLambda: config.memoryDecayLambda !== undefined ? (config.memoryDecayLambda as number) : prev.agent.memoryDecayLambda,
+            memoryDecayArchiveThreshold: config.memoryDecayArchiveThreshold !== undefined ? (config.memoryDecayArchiveThreshold as number) : prev.agent.memoryDecayArchiveThreshold,
+            memoryDecayMmrLambda: config.memoryDecayMmrLambda !== undefined ? (config.memoryDecayMmrLambda as number) : prev.agent.memoryDecayMmrLambda,
           }
           next.isDirty = true
           break
@@ -533,6 +543,10 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
         memory_isolation_mode: state.agent.memoryIsolationMode,
         enable_semantic_search: state.agent.enableSemanticSearch,
         avatar: state.agent.avatar,
+        memory_decay_enabled: state.agent.memoryDecayEnabled,
+        memory_decay_lambda: state.agent.memoryDecayLambda,
+        memory_decay_archive_threshold: state.agent.memoryDecayArchiveThreshold,
+        memory_decay_mmr_lambda: state.agent.memoryDecayMmrLambda,
       }
 
       // Skills: send full desired state
@@ -583,6 +597,7 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
         skills: state.attachedSkills.map(s => ({ t: s.skillType, c: s.config })).sort((a, b) => a.t.localeCompare(b.t)),
         tools: [...state.attachedTools].sort(), sentinelProfileId: state.attachedSentinelProfileId,
         memory: { size: state.agent.memorySize, mode: state.agent.memoryIsolationMode, semantic: state.agent.enableSemanticSearch },
+        decay: { enabled: state.agent.memoryDecayEnabled, lambda: state.agent.memoryDecayLambda, threshold: state.agent.memoryDecayArchiveThreshold, mmr: state.agent.memoryDecayMmrLambda },
         toolOverrides: {},
         avatar: state.agent?.avatar || null,
       })

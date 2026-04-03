@@ -86,6 +86,10 @@ class BuilderAgentDetail(BaseModel):
     memory_isolation_mode: str
     enable_semantic_search: bool
     avatar: Optional[str] = None
+    memory_decay_enabled: bool = False
+    memory_decay_lambda: float = 0.01
+    memory_decay_archive_threshold: float = 0.05
+    memory_decay_mmr_lambda: float = 0.5
 
 
 class BuilderSkillInfo(BaseModel):
@@ -209,6 +213,10 @@ class AgentSaveData(BaseModel):
     memory_isolation_mode: Optional[str] = None
     enable_semantic_search: Optional[bool] = None
     avatar: Optional[str] = None
+    memory_decay_enabled: Optional[bool] = None
+    memory_decay_lambda: Optional[float] = None
+    memory_decay_archive_threshold: Optional[float] = None
+    memory_decay_mmr_lambda: Optional[float] = None
 
 
 class BuilderSaveRequest(BaseModel):
@@ -380,6 +388,10 @@ async def get_builder_data(
         memory_isolation_mode=agent.memory_isolation_mode or "isolated",
         enable_semantic_search=agent.enable_semantic_search if agent.enable_semantic_search is not None else True,
         avatar=agent.avatar,
+        memory_decay_enabled=bool(agent.memory_decay_enabled) if agent.memory_decay_enabled is not None else False,
+        memory_decay_lambda=agent.memory_decay_lambda if agent.memory_decay_lambda is not None else 0.01,
+        memory_decay_archive_threshold=agent.memory_decay_archive_threshold if agent.memory_decay_archive_threshold is not None else 0.05,
+        memory_decay_mmr_lambda=agent.memory_decay_mmr_lambda if agent.memory_decay_mmr_lambda is not None else 0.5,
     )
 
     # 2. Skills (all, not just enabled — builder needs full state for diff)
@@ -588,6 +600,20 @@ async def save_builder_data(
                 agent.memory_isolation_mode = data.agent.memory_isolation_mode
             if data.agent.enable_semantic_search is not None:
                 agent.enable_semantic_search = data.agent.enable_semantic_search
+            if data.agent.memory_decay_enabled is not None:
+                agent.memory_decay_enabled = data.agent.memory_decay_enabled
+            if data.agent.memory_decay_lambda is not None:
+                if data.agent.memory_decay_lambda < 0.001 or data.agent.memory_decay_lambda > 1.0:
+                    raise HTTPException(status_code=400, detail="memory_decay_lambda must be between 0.001 and 1.0")
+                agent.memory_decay_lambda = data.agent.memory_decay_lambda
+            if data.agent.memory_decay_archive_threshold is not None:
+                if data.agent.memory_decay_archive_threshold < 0 or data.agent.memory_decay_archive_threshold > 1.0:
+                    raise HTTPException(status_code=400, detail="memory_decay_archive_threshold must be between 0 and 1.0")
+                agent.memory_decay_archive_threshold = data.agent.memory_decay_archive_threshold
+            if data.agent.memory_decay_mmr_lambda is not None:
+                if data.agent.memory_decay_mmr_lambda < 0 or data.agent.memory_decay_mmr_lambda > 1.0:
+                    raise HTTPException(status_code=400, detail="memory_decay_mmr_lambda must be between 0 and 1.0")
+                agent.memory_decay_mmr_lambda = data.agent.memory_decay_mmr_lambda
             if data.agent.avatar is not None:
                 agent.avatar = data.agent.avatar if data.agent.avatar != "" else None
             agent.updated_at = datetime.utcnow()

@@ -178,6 +178,10 @@ export interface BuilderMemoryData {
   isolationMode: string
   memorySize: number
   enableSemanticSearch: boolean
+  memoryDecayEnabled?: boolean
+  memoryDecayLambda?: number
+  memoryDecayArchiveThreshold?: number
+  memoryDecayMmrLambda?: number
 }
 
 export interface BuilderGroupData {
@@ -255,6 +259,10 @@ export interface AgentBuilderState {
     memoryIsolationMode: string
     enableSemanticSearch: boolean
     avatar: string | null
+    memoryDecayEnabled: boolean
+    memoryDecayLambda: number
+    memoryDecayArchiveThreshold: number
+    memoryDecayMmrLambda: number
   } | null
   attachedPersonaId: number | null
   attachedChannels: string[]

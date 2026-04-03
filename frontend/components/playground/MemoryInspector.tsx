@@ -3,6 +3,7 @@
 /**
  * Phase 17: Memory Inspector Component
  * Phase 18: Add CRUD operations for facts
+ * Item 37: Temporal decay freshness badges + archive decayed
  *
  * View and inspect agent memory layers in cockpit mode.
  * Features:
@@ -10,6 +11,8 @@
  * - Semantic memory search
  * - Learned facts display with edit/delete/create
  * - Memory stats
+ * - Freshness badges (fresh/fading/stale/archived) with decay factor
+ * - Archive decayed facts button
  */
 
 import React, { useState, useEffect } from 'react'
@@ -21,7 +24,7 @@ import {
   DocumentIcon
 } from '@/components/ui/icons'
 import { formatDateTime } from '@/lib/dateUtils'
-import { authenticatedFetch } from '@/lib/client'
+import { authenticatedFetch, api } from '@/lib/client'
 
 interface MemoryMessage {
   role: string
@@ -39,6 +42,10 @@ interface Fact {
   project_id?: number
   confidence?: number
   source?: string
+  freshness?: 'fresh' | 'fading' | 'stale' | 'archived'
+  decay_factor?: number
+  last_accessed_at?: string
+  effective_confidence?: number
 }
 
 interface MemoryData {
@@ -54,9 +61,23 @@ interface MemoryData {
   }
 }
 
+interface FreshnessDistribution {
+  fresh: number
+  fading: number
+  stale: number
+  archived: number
+}
+
 interface MemoryInspectorProps {
   agentId: number | null
   senderKey?: string
+}
+
+const FRESHNESS_COLORS: Record<string, { dot: string; text: string; bg: string }> = {
+  fresh: { dot: 'bg-emerald-500', text: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+  fading: { dot: 'bg-amber-500', text: 'text-amber-400', bg: 'bg-amber-500/10' },
+  stale: { dot: 'bg-orange-500', text: 'text-orange-400', bg: 'bg-orange-500/10' },
+  archived: { dot: 'bg-gray-500', text: 'text-gray-400', bg: 'bg-gray-500/10' },
 }
 
 export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorProps) {
@@ -65,6 +86,14 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
   const [error, setError] = useState<string | null>(null)
   const [activeLayer, setActiveLayer] = useState<'working' | 'semantic' | 'facts'>('working')
   const [searchQuery, setSearchQuery] = useState('')
+
+  // Freshness distribution from memory stats
+  const [freshnessDistribution, setFreshnessDistribution] = useState<FreshnessDistribution | null>(null)
+  const [decayEnabled, setDecayEnabled] = useState(false)
+
+  // Archive state
+  const [archiving, setArchiving] = useState(false)
+  const [archivePreview, setArchivePreview] = useState<{ count: number; facts: any[] } | null>(null)
 
   // Editing state
   const [editingFactId, setEditingFactId] = useState<number | null>(null)
@@ -83,9 +112,12 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
     // This prevents showing stale data from a different thread during transitions
     setMemoryData(null)
     setError(null)
+    setFreshnessDistribution(null)
+    setDecayEnabled(false)
 
     if (agentId && senderKey) {
       loadMemory()
+      loadMemoryStats()
     }
   }, [agentId, senderKey])
 
@@ -115,6 +147,60 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
       setError(err.message || 'Failed to load memory')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadMemoryStats = async () => {
+    if (!agentId) return
+    try {
+      const stats = await api.getAgentMemoryStats(agentId)
+      if (stats.decay_config) {
+        setDecayEnabled(stats.decay_config.enabled)
+      }
+      if (stats.freshness_distribution) {
+        setFreshnessDistribution(stats.freshness_distribution)
+      }
+    } catch {
+      // Stats are supplementary, don't block on failure
+    }
+  }
+
+  const handleArchiveDecayed = async () => {
+    if (!agentId) return
+
+    if (!archivePreview) {
+      // First click: dry run
+      setArchiving(true)
+      try {
+        const result = await api.archiveDecayedFacts(agentId, true)
+        if (result.archived_count === 0) {
+          alert('No decayed facts to archive.')
+          setArchiving(false)
+          return
+        }
+        setArchivePreview({ count: result.archived_count, facts: result.archived_facts || [] })
+      } catch (err: any) {
+        alert(`Failed to preview archive: ${err.message}`)
+      } finally {
+        setArchiving(false)
+      }
+    } else {
+      // Confirm: actually archive
+      if (!confirm(`Archive ${archivePreview.count} decayed fact(s)? This cannot be undone.`)) {
+        setArchivePreview(null)
+        return
+      }
+      setArchiving(true)
+      try {
+        await api.archiveDecayedFacts(agentId, false)
+        setArchivePreview(null)
+        await loadMemory()
+        await loadMemoryStats()
+      } catch (err: any) {
+        alert(`Failed to archive: ${err.message}`)
+      } finally {
+        setArchiving(false)
+      }
     }
   }
 
@@ -299,6 +385,9 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
       : true
   ) || []
 
+  // Check if any fact has freshness data
+  const hasFreshnessData = filteredFacts.some(f => f.freshness)
+
   return (
     <div className="h-full flex flex-col bg-tsushin-deep">
       {/* Header with Stats */}
@@ -481,6 +570,63 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
             {/* Facts Layer */}
             {activeLayer === 'facts' && (
               <div className="space-y-2">
+                {/* Freshness Distribution Summary */}
+                {decayEnabled && freshnessDistribution && (
+                  <div className="flex items-center gap-3 p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.06] text-xs mb-3">
+                    <span className="text-white/40 mr-1">Freshness:</span>
+                    {(['fresh', 'fading', 'stale', 'archived'] as const).map(label => {
+                      const count = freshnessDistribution[label]
+                      const colors = FRESHNESS_COLORS[label]
+                      return (
+                        <div key={label} className="flex items-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full ${colors.dot}`} />
+                          <span className={colors.text}>{count}</span>
+                          <span className="text-white/30">{label}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Archive Decayed Button */}
+                {decayEnabled && (
+                  <div className="mb-2">
+                    {archivePreview ? (
+                      <div className="p-2.5 rounded-lg bg-orange-500/10 border border-orange-500/30 text-xs">
+                        <p className="text-orange-400 mb-2">
+                          {archivePreview.count} fact(s) will be permanently archived.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={handleArchiveDecayed}
+                            disabled={archiving}
+                            className="flex-1 px-3 py-1.5 bg-orange-500/20 text-orange-400 rounded hover:bg-orange-500/30 transition-colors text-xs font-medium disabled:opacity-50"
+                          >
+                            {archiving ? 'Archiving...' : 'Confirm Archive'}
+                          </button>
+                          <button
+                            onClick={() => setArchivePreview(null)}
+                            className="flex-1 px-3 py-1.5 bg-white/[0.04] text-white/60 rounded hover:bg-white/[0.08] transition-colors text-xs"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={handleArchiveDecayed}
+                        disabled={archiving}
+                        className="w-full p-2 rounded-lg border border-dashed border-orange-500/30 text-orange-400/70 hover:text-orange-400 hover:border-orange-500/50 transition-colors text-xs flex items-center justify-center gap-2 disabled:opacity-50"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                        </svg>
+                        {archiving ? 'Checking...' : 'Archive Decayed Facts'}
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {/* Create Fact Button */}
                 {!isCreating && (
                   <button
@@ -548,6 +694,8 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
                 ) : (
                   filteredFacts.map((fact) => {
                     const isEditing = editingFactId === fact.id
+                    const freshness = fact.freshness
+                    const freshnessColors = freshness ? FRESHNESS_COLORS[freshness] : null
 
                     return (
                       <div
@@ -600,7 +748,17 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
                           // View Mode
                           <>
                             <div className="flex items-center justify-between mb-1.5">
-                              <span className="text-amber-400/60 text-[10px] uppercase tracking-wider">{fact.topic}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-amber-400/60 text-[10px] uppercase tracking-wider">{fact.topic}</span>
+                                {freshnessColors && (
+                                  <div className="flex items-center gap-1">
+                                    <span className={`w-1.5 h-1.5 rounded-full ${freshnessColors.dot}`} />
+                                    <span className={`text-[10px] ${freshnessColors.text}`}>
+                                      {fact.decay_factor !== undefined ? `${Math.round(fact.decay_factor * 100)}%` : freshness}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
                               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button
                                   onClick={() => handleStartEdit(fact)}
