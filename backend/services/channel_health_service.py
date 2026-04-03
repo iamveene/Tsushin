@@ -53,6 +53,14 @@ class ChannelHealthService:
 
     CHECK_INTERVAL_SECONDS = settings.CHANNEL_HEALTH_CHECK_INTERVAL
 
+    # Module-level singleton for access from non-request contexts (e.g., AgentRouter)
+    _instance: Optional['ChannelHealthService'] = None
+
+    @classmethod
+    def get_instance(cls) -> Optional['ChannelHealthService']:
+        """Return the singleton instance, or None if not yet initialized."""
+        return cls._instance
+
     def __init__(
         self,
         get_db_session: Callable[[], Session],
@@ -81,6 +89,9 @@ class ChannelHealthService:
             failure_threshold=settings.CHANNEL_CB_FAILURE_THRESHOLD,
             recovery_timeout_seconds=settings.CHANNEL_CB_RECOVERY_TIMEOUT,
         )
+
+        # Register singleton so AgentRouter can access without app.state
+        ChannelHealthService._instance = self
 
     async def start(self):
         """Start the health monitoring background task."""

@@ -39,6 +39,9 @@ from services.group_sender_resolver import GroupSenderResolver
 # Phase 8: Watcher activity events
 from services.watcher_activity_service import emit_agent_processing_async
 
+# Item 38: Circuit breaker queuing — defer messages when a channel is OPEN
+from services.circuit_breaker import CircuitBreakerState
+
 # Shared utilities
 from agent.utils import summarize_tool_result
 from agent.memory.tool_output_buffer import get_tool_output_buffer
@@ -1136,6 +1139,65 @@ class AgentRouter:
                 return
         except Exception:
             pass  # If check fails, continue normal processing
+
+        # Item 38: Circuit breaker queuing — if the channel's CB is OPEN, enqueue
+        # the message instead of processing it immediately.  When the circuit
+        # recovers the queue worker will pick up the deferred messages.
+        if os.getenv("TSN_CB_QUEUE_ENABLED", "true").lower() == "true":
+            try:
+                from services.channel_health_service import ChannelHealthService
+                chs = ChannelHealthService.get_instance()
+                if chs is not None:
+                    cb_channel = message.get("channel", "whatsapp")
+                    # Determine instance_id from the router's own context
+                    cb_instance_id = None
+                    if cb_channel == "whatsapp" and self.mcp_instance_id:
+                        cb_instance_id = self.mcp_instance_id
+                    elif cb_channel == "telegram" and self.telegram_instance_id:
+                        cb_instance_id = self.telegram_instance_id
+
+                    if cb_instance_id is not None and chs.is_circuit_open(cb_channel, cb_instance_id):
+                        self.logger.warning(
+                            f"[CB_QUEUE] Circuit breaker OPEN for {cb_channel}/{cb_instance_id} "
+                            f"— queuing message from {sender_key} instead of processing"
+                        )
+                        try:
+                            from services.message_queue_service import MessageQueueService
+                            # Resolve tenant_id and agent_id for the queue entry
+                            _tenant_id = message.get("tenant_id", "default")
+                            if _tenant_id == "default":
+                                if cb_channel == "whatsapp" and self.mcp_instance_id:
+                                    from models import WhatsAppMCPInstance
+                                    _inst = self.db.query(WhatsAppMCPInstance).get(self.mcp_instance_id)
+                                    if _inst:
+                                        _tenant_id = _inst.tenant_id
+                                elif cb_channel == "telegram" and self.telegram_instance_id:
+                                    from models import TelegramBotInstance
+                                    _inst = self.db.query(TelegramBotInstance).get(self.telegram_instance_id)
+                                    if _inst:
+                                        _tenant_id = _inst.tenant_id
+
+                            _agent_id = message.get("agent_id") or 0
+                            mqs = MessageQueueService(self.db)
+                            mqs.enqueue(
+                                channel=cb_channel,
+                                tenant_id=_tenant_id,
+                                agent_id=int(_agent_id),
+                                sender_key=sender_key,
+                                payload={
+                                    "message": message,
+                                    "trigger_type": trigger_type,
+                                    "queued_reason": "circuit_breaker_open",
+                                },
+                                priority=0,
+                            )
+                            return  # Do not process — message is safely queued
+                        except Exception as eq:
+                            self.logger.error(f"[CB_QUEUE] Failed to enqueue message: {eq}", exc_info=True)
+                            # Fall through to normal processing rather than losing the message
+            except Exception as ecb:
+                self.logger.debug(f"[CB_QUEUE] CB check skipped: {ecb}")
+                # Non-fatal — proceed with normal processing
 
         # SAFETY CHECK 1: Age check
         # Warn if message is older than 1 hour (3600 seconds)
