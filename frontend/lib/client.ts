@@ -6712,7 +6712,7 @@ export const api = {
   // ============================================================================
 
   async getChannelHealth(): Promise<any> {
-    const res = await authenticatedFetch(`${API_URL}/api/channel-health`)
+    const res = await authenticatedFetch(`${API_URL}/api/channel-health/`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch channel health')
     return res.json()
   },
