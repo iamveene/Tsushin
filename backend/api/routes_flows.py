@@ -701,8 +701,7 @@ def list_runs(
         query = db.query(FlowRun)
 
         # Tenant isolation
-        if tenant_context.tenant_id:
-            query = query.filter(FlowRun.tenant_id == tenant_context.tenant_id)
+        query = tenant_context.filter_by_tenant(query, FlowRun.tenant_id)
 
         if flow_id is not None:
             query = query.filter(FlowRun.flow_definition_id == flow_id)

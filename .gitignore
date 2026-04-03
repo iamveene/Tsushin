@@ -236,6 +236,12 @@ backend/fix_agent_phone.py
 backend/tests/
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py
+ops/check_openrouter_agent.py
+backend/check_*.py
+backend/debug_*.py
+backend/fix_shell_wait.py
+backend/e2e_test_results.txt
+backend/scripts/check_*.py
 backend/test-api.html
 
 # Root-level screenshots & dev artifacts
