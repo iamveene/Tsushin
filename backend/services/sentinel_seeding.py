@@ -76,6 +76,7 @@ def seed_sentinel_config(db: Session) -> Optional["SentinelConfig"]:
             detect_shell_malicious_intent=True,
             detect_memory_poisoning=True,
             detect_browser_ssrf=True,
+            detect_vector_store_poisoning=True,
 
             # Moderate aggressiveness (1) - balanced false positive/detection rate
             # 0=Off, 1=Moderate, 2=Aggressive, 3=Extra Aggressive
@@ -198,6 +199,9 @@ def migrate_sentinel_config_columns(db: Session) -> bool:
         # Browser SSRF detection
         ("detect_browser_ssrf", "BOOLEAN DEFAULT 1 NOT NULL"),
         ("browser_ssrf_prompt", "TEXT"),
+        # Vector store poisoning detection
+        ("detect_vector_store_poisoning", "BOOLEAN DEFAULT 1 NOT NULL"),
+        ("vector_store_poisoning_prompt", "TEXT"),
     ]
 
     success = True
@@ -702,6 +706,10 @@ def _build_detection_overrides(config) -> str:
         "memory_poisoning": {
             "enabled_col": "detect_memory_poisoning",
             "prompt_col": "memory_poisoning_prompt",
+        },
+        "vector_store_poisoning": {
+            "enabled_col": "detect_vector_store_poisoning",
+            "prompt_col": "vector_store_poisoning_prompt",
         },
     }
 
