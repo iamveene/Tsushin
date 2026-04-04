@@ -88,6 +88,7 @@ class Config(Base):
     api_key_encryption_key = Column(String(500), nullable=True)  # LLM API key encryption (Fernet key)
     slack_encryption_key = Column(String(500), nullable=True)  # Slack token encryption (Fernet key) — v0.6.0 Item 33
     discord_encryption_key = Column(String(500), nullable=True)  # Discord token encryption (Fernet key) — v0.6.0 Item 34
+    webhook_encryption_key = Column(String(500), nullable=True)  # Webhook HMAC secret encryption (Fernet key) — v0.6.0
 
     # System-Level AI Configuration (Phase 17: Tenant-Configurable System AI)
     # These settings control which AI provider/model is used for system operations
@@ -359,11 +360,12 @@ class Agent(Base):
 
     # Phase 10: Channel Configuration
     # Determines which channels this agent can interact through
-    enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack, discord
+    enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack, discord, webhook
     whatsapp_integration_id = Column(Integer, ForeignKey("whatsapp_mcp_instance.id", ondelete="SET NULL"), nullable=True)  # Specific MCP instance
     telegram_integration_id = Column(Integer, nullable=True)  # Future: FK to TelegramBotInstance
     slack_integration_id = Column(Integer, nullable=True)  # v0.6.0 Item 33: FK to SlackIntegration
     discord_integration_id = Column(Integer, nullable=True)  # v0.6.0 Item 34: FK to DiscordIntegration
+    webhook_integration_id = Column(Integer, ForeignKey("webhook_integration.id", ondelete="SET NULL"), nullable=True)  # v0.6.0: FK to WebhookIntegration
     provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
 
     # v0.6.0: Vector Store Configuration
@@ -2906,6 +2908,72 @@ class DiscordIntegration(Base):
     __table_args__ = (
         Index("idx_discord_integration_tenant", "tenant_id"),
         Index("idx_discord_integration_status", "status"),
+    )
+
+
+# ============================================================================
+# v0.6.0: Webhook-as-a-Channel Integration
+# ============================================================================
+
+class WebhookIntegration(Base):
+    """
+    v0.6.0: Webhook Channel Integration
+
+    Bidirectional HTTP webhook channel. External systems POST HMAC-signed
+    events to /api/webhooks/{id}/inbound; responses are optionally POSTed
+    back to customer-provided callback URL (also HMAC-signed).
+
+    Inbound auth: HMAC-SHA256 signature mandatory (X-Tsushin-Signature header)
+    + timestamp replay protection (X-Tsushin-Timestamp, ±5 min window).
+    Optional per-webhook IP allowlist + rate limit as defense-in-depth.
+
+    No container is spawned — webhooks are stateless HTTP in/out. Handlers
+    are FastAPI routes + shared QueueWorker (matches Telegram/Slack pattern).
+    """
+    __tablename__ = "webhook_integration"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+
+    # Inbound identity (HMAC key, encrypted with Fernet)
+    api_secret_encrypted = Column(Text, nullable=False)
+    api_secret_preview = Column(String(16), nullable=False)  # first 8 chars + "…" for UI
+
+    # Outbound callback (optional bidirectional mode)
+    callback_url = Column(String(500), nullable=True)
+    callback_enabled = Column(Boolean, default=False)
+
+    # Optional inbound defense layers
+    ip_allowlist_json = Column(Text, nullable=True)  # JSON list of CIDRs
+    rate_limit_rpm = Column(Integer, default=30)
+    max_payload_bytes = Column(Integer, default=1048576)  # 1 MB
+
+    # Status
+    is_active = Column(Boolean, default=True)
+    status = Column(String(20), default="active")  # active/paused/error
+    health_status = Column(String(20), default="unknown")  # unknown/healthy/unhealthy
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+
+    # v0.6.0 Item 38: Circuit Breaker State (for outbound callback failures)
+    circuit_breaker_state = Column(String(20), default="closed")  # closed/open/half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+
+    # Retry config
+    max_retry_attempts = Column(Integer, default=3)
+    retry_timeout_seconds = Column(Integer, default=300)
+
+    # Audit
+    created_by = Column(Integer, ForeignKey('user.id'), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_webhook_integration_tenant", "tenant_id"),
+        Index("idx_webhook_integration_status", "status"),
     )
 
 
