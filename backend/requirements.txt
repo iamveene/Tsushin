@@ -70,6 +70,11 @@ discord.py>=2.4.0
 # Observability
 prometheus_client>=0.20.0  # Prometheus metrics exposition
 
+# v0.6.1: External Vector Store Providers
+qdrant-client>=1.8.0
+pinecone-client>=3.0.0
+pymongo[srv]>=4.6.0
+
 # Testing
 pytest>=7.4.4
 pytest-asyncio>=0.23.3

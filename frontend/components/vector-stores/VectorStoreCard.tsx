@@ -14,11 +14,11 @@ const VENDOR_BADGES: Record<string, string> = {
   qdrant: 'Qdrant',
 }
 
-const STATUS_STYLES: Record<string, { dot: string; label: string }> = {
-  healthy: { dot: 'bg-emerald-400 animate-pulse', label: 'Connected' },
-  unknown: { dot: 'bg-gray-400', label: 'Not tested' },
-  unavailable: { dot: 'bg-red-400', label: 'Error' },
-  degraded: { dot: 'bg-yellow-400 animate-pulse', label: 'Degraded' },
+const STATUS_STYLES: Record<string, { dot: string; dotColor: string; label: string }> = {
+  healthy: { dot: 'bg-emerald-400 animate-pulse', dotColor: 'bg-emerald-400', label: 'Connected' },
+  unknown: { dot: 'bg-gray-400', dotColor: 'bg-gray-400', label: 'Not tested' },
+  unavailable: { dot: 'bg-red-400', dotColor: 'bg-red-400', label: 'Error' },
+  degraded: { dot: 'bg-yellow-400 animate-pulse', dotColor: 'bg-yellow-400', label: 'Degraded' },
 }
 
 interface VectorStoreCardProps {
@@ -83,7 +83,7 @@ export default function VectorStoreCard({
           </div>
         )}
         <div className="text-xs text-gray-500 flex items-center gap-1">
-          <div className={`w-1.5 h-1.5 rounded-full ${status.dot.split(' ')[0]}`} />
+          <div className={`w-1.5 h-1.5 rounded-full ${status.dotColor}`} />
           {status.label}
           {instance.health_status_reason && instance.health_status === 'unavailable' && (
             <span className="text-red-400/70 ml-1 truncate" title={instance.health_status_reason}>

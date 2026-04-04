@@ -35,8 +35,21 @@ export default function VectorStoreConfigModal({
   const [isDefault, setIsDefault] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency_ms?: number; vector_count?: number } | null>(null)
   const [testing, setTesting] = useState(false)
+  // Track whether user explicitly changed credentials (prevents silent wipe on edit)
+  const [credentialsTouched, setCredentialsTouched] = useState(false)
+
+  // Wrap connectionConfig onChange to detect credential field changes
+  const handleConfigChange = (config: Record<string, any>) => {
+    const credFields = ['api_key', 'cluster_uri']
+    const oldCreds = credFields.map(f => connectionConfig[f] || '')
+    const newCreds = credFields.map(f => config[f] || '')
+    if (oldCreds.some((v, i) => v !== newCreds[i])) {
+      setCredentialsTouched(true)
+    }
+    setConnectionConfig(config)
+  }
 
   // Reset form when modal opens/closes or instance changes
   useEffect(() => {
@@ -45,20 +58,23 @@ export default function VectorStoreConfigModal({
         setVendor(instance.vendor)
         setInstanceName(instance.instance_name)
         setDescription(instance.description || '')
-        // Reconstruct connection config from extra_config + base_url
         const config: Record<string, any> = { ...(instance.extra_config || {}) }
-        if (instance.base_url) {
-          if (instance.vendor === 'mongodb') config.cluster_uri = instance.base_url
-          else if (instance.vendor === 'qdrant') config.base_url = instance.base_url
+        // For qdrant, restore base_url into config for the form
+        if (instance.base_url && instance.vendor === 'qdrant') {
+          config.base_url = instance.base_url
         }
+        // MongoDB: base_url may contain masked URI — don't populate cluster_uri from it in edit mode
+        // The user must re-enter the URI if they want to change it
         setConnectionConfig(config)
         setIsDefault(instance.is_default)
+        setCredentialsTouched(false)
       } else {
         setVendor('mongodb')
         setInstanceName('')
         setDescription('')
         setConnectionConfig({})
         setIsDefault(false)
+        setCredentialsTouched(false)
       }
       setError(null)
       setTestResult(null)
@@ -75,14 +91,15 @@ export default function VectorStoreConfigModal({
     setError(null)
 
     try {
-      // Build the API payload from connection config
+      // Separate credential fields from extra_config
       const { api_key, cluster_uri, base_url: configBaseUrl, ...extraConfig } = connectionConfig
 
       let baseUrl: string | undefined
       const credentials: Record<string, any> = {}
 
       if (vendor === 'mongodb') {
-        baseUrl = cluster_uri || undefined
+        // Never store raw MongoDB URI in base_url (may contain embedded credentials)
+        // Route it exclusively through encrypted credentials
         if (cluster_uri) credentials.connection_string = cluster_uri
         if (api_key) credentials.api_key = api_key
       } else if (vendor === 'pinecone') {
@@ -92,12 +109,16 @@ export default function VectorStoreConfigModal({
         if (api_key) credentials.api_key = api_key
       }
 
+      // Only include credentials in payload if user explicitly changed them (prevents silent wipe on edit)
+      const hasNewCredentials = Object.keys(credentials).length > 0
+      const shouldSendCredentials = isEditing ? (credentialsTouched && hasNewCredentials) : hasNewCredentials
+
       if (isEditing && instance) {
         await api.updateVectorStoreInstance(instance.id, {
           instance_name: instanceName,
           description: description || undefined,
           base_url: baseUrl,
-          credentials: Object.keys(credentials).length > 0 ? credentials : undefined,
+          credentials: shouldSendCredentials ? credentials : undefined,
           extra_config: extraConfig,
           is_default: isDefault,
         })
@@ -107,7 +128,7 @@ export default function VectorStoreConfigModal({
           instance_name: instanceName,
           description: description || undefined,
           base_url: baseUrl,
-          credentials: Object.keys(credentials).length > 0 ? credentials : undefined,
+          credentials: hasNewCredentials ? credentials : undefined,
           extra_config: extraConfig,
           is_default: isDefault,
         })
@@ -151,6 +172,12 @@ export default function VectorStoreConfigModal({
         {testResult && (
           <span className={`text-xs ${testResult.success ? 'text-emerald-400' : 'text-red-400'}`}>
             {testResult.success ? 'Connected' : 'Failed'}: {testResult.message}
+            {testResult.latency_ms !== undefined && testResult.success && (
+              <span className="text-gray-400 ml-1">({testResult.latency_ms}ms)</span>
+            )}
+            {testResult.vector_count !== undefined && testResult.vector_count !== null && testResult.success && (
+              <span className="text-gray-400 ml-1">- {testResult.vector_count} vectors</span>
+            )}
           </span>
         )}
       </div>
@@ -235,13 +262,13 @@ export default function VectorStoreConfigModal({
         <div className="pt-2 border-t border-white/5">
           <h3 className="text-sm font-medium text-gray-300 mb-3">Connection Settings</h3>
           {vendor === 'mongodb' && (
-            <MongoAtlasConfigForm config={connectionConfig} onChange={setConnectionConfig} isEditing={isEditing} />
+            <MongoAtlasConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
           )}
           {vendor === 'pinecone' && (
-            <PineconeConfigForm config={connectionConfig} onChange={setConnectionConfig} isEditing={isEditing} />
+            <PineconeConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
           )}
           {vendor === 'qdrant' && (
-            <QdrantConfigForm config={connectionConfig} onChange={setConnectionConfig} isEditing={isEditing} />
+            <QdrantConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
           )}
         </div>
 
