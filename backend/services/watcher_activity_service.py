@@ -400,6 +400,7 @@ def emit_agent_communication_async(
 ):
     """Fire-and-forget wrapper for A2A communication events."""
     service = WatcherActivityService.get_instance()
+    service = WatcherActivityService.get_instance()
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(service.emit_agent_communication(
