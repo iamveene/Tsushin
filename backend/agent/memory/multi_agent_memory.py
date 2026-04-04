@@ -157,12 +157,16 @@ class MultiAgentMemoryManager:
             instance_id = agent.vector_store_instance_id
             if not instance_id:
                 try:
-                    from models import Config as ConfigModel
-                    config = self.db.query(ConfigModel).filter(ConfigModel.id == 1).first()
-                    if config:
-                        instance_id = getattr(config, 'default_vector_store_instance_id', None)
+                    from models import VectorStoreInstance as VSI
+                    default_vs = self.db.query(VSI).filter(
+                        VSI.tenant_id == agent.tenant_id,
+                        VSI.is_default == True,
+                        VSI.is_active == True,
+                    ).first()
+                    if default_vs:
+                        instance_id = default_vs.id
                 except Exception:
-                    pass  # Config column may not exist yet
+                    pass
 
             if not instance_id:
                 return None  # ChromaDB default
