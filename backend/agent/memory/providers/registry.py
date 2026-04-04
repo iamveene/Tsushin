@@ -149,6 +149,7 @@ class VectorStoreRegistry:
                 collection_name=extra_config.get("collection_name", "vectors"),
                 index_name=extra_config.get("index_name", "vector_index"),
                 embedding_dims=extra_config.get("embedding_dims", 384),
+                use_native_search=extra_config.get("use_native_search", True),
             )
 
         elif vendor == "pinecone":

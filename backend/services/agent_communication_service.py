@@ -699,13 +699,60 @@ class AgentCommunicationService:
         source_contact = self.db.query(Contact).filter(Contact.id == source_agent.contact_id).first()
         source_name = source_contact.friendly_name if source_contact else f"Agent {source_agent.id}"
 
+        # Enrich with memory context from target agent's vector store
+        # A2A searches across ALL the agent's memories (no sender filter)
+        sender_key = f"agent:{source_agent.id}"
+        memory_context = ""
+        if target_agent.enable_semantic_search:
+            try:
+                from agent.memory.providers.registry import VectorStoreRegistry
+                from agent.memory.embedding_service import EmbeddingService
+
+                # Get embedding for the query
+                embedder = EmbeddingService()
+                query_embedding = embedder.embed_text(message)
+
+                if target_agent.vector_store_instance_id:
+                    # Use external vector store provider
+                    registry = VectorStoreRegistry()
+                    provider = registry.get_provider(
+                        target_agent.vector_store_instance_id,
+                        self.db,
+                        tenant_id=self.tenant_id,
+                    )
+                    # Search without sender_key filter to find ALL memories
+                    results = await provider.search_similar(
+                        query_embedding=query_embedding,
+                        limit=5,
+                        sender_key=None,  # No sender filter for A2A
+                    )
+                    if results:
+                        memory_parts = [f"- {r.text}" for r in results if r.text]
+                        if memory_parts:
+                            memory_context = "Relevant memories:\n" + "\n".join(memory_parts)
+                            logger.info(f"A2A memory enrichment: found {len(memory_parts)} results for agent {target_agent.id}")
+                else:
+                    # ChromaDB default - use vector store manager
+                    persist_dir = target_agent.chroma_db_path or f"./data/chroma_db/agent_{target_agent.id}"
+                    from agent.memory.vector_store import VectorStore
+                    vs = VectorStore(persist_dir)
+                    results = vs.search_similar(query_embedding, limit=5)
+                    if results:
+                        memory_parts = [f"- {r['text']}" for r in results if r.get('text')]
+                        if memory_parts:
+                            memory_context = "Relevant memories:\n" + "\n".join(memory_parts)
+            except Exception as e:
+                logger.warning(f"A2A memory enrichment failed for agent {target_agent.id}: {e}", exc_info=True)
+
         # Build the prompt with context
         prompt_parts = [
             f"[INTER-AGENT REQUEST from '{source_name}' (depth {depth})]",
-            f"Respond concisely and factually.",
+            f"Respond concisely and factually. Use your memory context to answer if available.",
         ]
+        if memory_context:
+            prompt_parts.append(f"\n--- Your Memory Context ---\n{memory_context}\n---")
         if context:
-            prompt_parts.append(f"Context: {context}")
+            prompt_parts.append(f"Additional Context: {context}")
         prompt_parts.append(f"Question: {message}")
         full_prompt = "\n".join(prompt_parts)
 
@@ -715,9 +762,9 @@ class AgentCommunicationService:
             agent_id=target_agent.id,
             token_tracker=self.token_tracker,
             tenant_id=self.tenant_id,
+            disable_skills=True,  # Prevent recursive tool use during A2A
         )
 
-        sender_key = f"agent:{source_agent.id}"
         result = await agent_service.process_message(
             sender_key=sender_key,
             message_text=full_prompt,

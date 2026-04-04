@@ -93,6 +93,28 @@ export default function MongoAtlasConfigForm({ config, onChange, isEditing }: Mo
           </button>
         </div>
       </div>
+
+      <div className="flex items-center gap-3 p-3 rounded-lg border border-white/5 bg-white/[0.02]">
+        <button
+          type="button"
+          onClick={() => update('use_native_search', config.use_native_search === false ? true : false)}
+          className={`relative w-10 h-5 rounded-full transition-colors ${
+            config.use_native_search === false ? 'bg-amber-500/80' : 'bg-white/10'
+          }`}
+        >
+          <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+            config.use_native_search === false ? 'translate-x-5' : ''
+          }`} />
+        </button>
+        <div>
+          <span className="text-sm text-gray-300">Local Mode</span>
+          <p className="text-xs text-gray-500">
+            {config.use_native_search === false
+              ? 'Using local cosine similarity (self-hosted MongoDB, no Atlas required)'
+              : 'Using Atlas Vector Search ($vectorSearch aggregation)'}
+          </p>
+        </div>
+      </div>
     </div>
   )
 }

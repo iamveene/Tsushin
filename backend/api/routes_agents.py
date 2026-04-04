@@ -624,6 +624,10 @@ def get_agent(
         "memory_decay_archive_threshold": getattr(agent, 'memory_decay_archive_threshold', None),
         "memory_decay_mmr_lambda": getattr(agent, 'memory_decay_mmr_lambda', None),
 
+        # v0.6.1: Vector Store Configuration
+        "vector_store_instance_id": agent.vector_store_instance_id,
+        "vector_store_mode": agent.vector_store_mode,
+
         "is_active": agent.is_active,
         "is_default": agent.is_default,
         "skills_count": skills_count,

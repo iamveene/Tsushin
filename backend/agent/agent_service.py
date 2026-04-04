@@ -32,7 +32,8 @@ class AgentService:
         persona_id: Optional[int] = None,
         on_tool_complete_callback=None,
         project_id: Optional[int] = None,
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        disable_skills: bool = False,
     ):
         """
         Initialize Agent Service.
@@ -62,6 +63,7 @@ class AgentService:
         self.on_tool_complete_callback = on_tool_complete_callback
         self.project_id = project_id  # Phase 16: Project context
         self.user_id = user_id  # Phase 16: User context for combined KB
+        self.disable_skills = disable_skills  # A2A: prevent recursive tool use
         self.logger = logging.getLogger(__name__)
 
         # Phase 5.0: Initialize knowledge service if agent_id and db provided
@@ -85,8 +87,9 @@ class AgentService:
         # Phase 9.3: Added persona_id for persona-based tool discovery
         # Skills-as-Tools Phase 6: Renamed from CustomToolWrapper to SandboxedToolWrapper
         # Gate on sandboxed_tools skill being enabled for this agent
+        # A2A: Skip all tool initialization when disable_skills=True
         self.sandboxed_tools = None
-        if db and agent_id:
+        if db and agent_id and not disable_skills:
             from models import AgentSkill
             sandboxed_tools_skill = db.query(AgentSkill).filter(
                 AgentSkill.agent_id == agent_id,
@@ -662,10 +665,11 @@ You can add a brief message AFTER the tool call block if needed.
                 ollama_tools = self.sandboxed_tools.get_ollama_tools()
 
         # Phase 18.3.8: Add skill-based tools (like shell) if in agentic mode
+        # A2A: Skip skill tools when disable_skills=True to prevent recursive tool use
         skill_manager = get_skill_manager()
         skill_tools = []
         shell_os_context = ""
-        if self.db and self.agent_id:
+        if self.db and self.agent_id and not self.disable_skills:
             try:
                 skill_tools, shell_os_context = await skill_manager.get_skill_tool_definitions(self.db, self.agent_id)
                 if skill_tools:

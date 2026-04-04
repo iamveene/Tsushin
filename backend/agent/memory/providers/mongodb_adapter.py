@@ -1,8 +1,9 @@
 """
-v0.6.1: MongoDB Atlas Vector Search adapter.
+v0.6.1: MongoDB Vector Search adapter.
 
-Uses pymongo with MongoDB Atlas $vectorSearch aggregation pipeline.
-Requires MongoDB 7.0+ with Atlas Vector Search index configured.
+Supports two modes:
+- Atlas mode (default): Uses $vectorSearch aggregation pipeline (requires Atlas).
+- Local mode: Computes cosine similarity in Python for self-hosted MongoDB.
 
 Namespace convention: collection = tsushin_{tenant_id}_{agent_id}
 """
@@ -12,6 +13,8 @@ import time
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 
+import numpy as np
+
 from .base import VectorStoreProvider, VectorRecord, ProviderHealthResult, ProviderConnectionError
 
 logger = logging.getLogger(__name__)
@@ -19,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 class MongoDBVectorAdapter(VectorStoreProvider):
     """
-    MongoDB Atlas Vector Search adapter.
+    MongoDB Vector Search adapter.
 
     Stores documents as:
     {
@@ -32,7 +35,8 @@ class MongoDBVectorAdapter(VectorStoreProvider):
         created_at: datetime
     }
 
-    Requires an Atlas Vector Search index on the 'embedding' field.
+    When use_native_search=True (default), requires Atlas Vector Search index.
+    When use_native_search=False, computes cosine similarity locally (for self-hosted MongoDB).
     """
 
     def __init__(
@@ -43,6 +47,7 @@ class MongoDBVectorAdapter(VectorStoreProvider):
         index_name: str = "vector_index",
         embedding_dims: int = 384,
         timeout_ms: int = 5000,
+        use_native_search: bool = True,
     ):
         try:
             from pymongo import MongoClient
@@ -53,6 +58,7 @@ class MongoDBVectorAdapter(VectorStoreProvider):
 
         self._index_name = index_name
         self._embedding_dims = embedding_dims
+        self._use_native_search = use_native_search
 
         try:
             self._client = MongoClient(
@@ -118,6 +124,9 @@ class MongoDBVectorAdapter(VectorStoreProvider):
         limit: int = 5,
         sender_key: Optional[str] = None,
     ) -> List[VectorRecord]:
+        if not self._use_native_search:
+            return self._local_cosine_search(query_embedding, limit, sender_key)
+
         pipeline = self._build_search_pipeline(query_embedding, limit, sender_key)
 
         try:
@@ -142,6 +151,9 @@ class MongoDBVectorAdapter(VectorStoreProvider):
         limit: int = 5,
         sender_key: Optional[str] = None,
     ) -> Tuple[List[VectorRecord], List[List[float]]]:
+        if not self._use_native_search:
+            return self._local_cosine_search_with_embeddings(query_embedding, limit, sender_key)
+
         pipeline = self._build_search_pipeline(query_embedding, limit, sender_key)
 
         try:
@@ -200,10 +212,11 @@ class MongoDBVectorAdapter(VectorStoreProvider):
             self._client.admin.command("ping")
             count = self._collection.count_documents({})
             latency = int((time.time() - start) * 1000)
+            mode = "Atlas" if self._use_native_search else "Local"
             return ProviderHealthResult(
                 healthy=True,
                 latency_ms=latency,
-                message="MongoDB Atlas connected",
+                message=f"MongoDB ({mode}) connected",
                 vector_count=count,
             )
         except Exception as e:
@@ -255,3 +268,99 @@ class MongoDBVectorAdapter(VectorStoreProvider):
             },
         ]
         return pipeline
+
+    def _local_cosine_search(
+        self, query_embedding: List[float], limit: int, sender_key: Optional[str]
+    ) -> List[VectorRecord]:
+        """Compute cosine similarity in Python for self-hosted MongoDB (no Atlas)."""
+        query_filter: Dict = {}
+        if sender_key:
+            query_filter["sender_key"] = sender_key
+
+        try:
+            docs = list(self._collection.find(query_filter, {"_id": 1, "text": 1, "sender_key": 1, "embedding": 1, "metadata": 1}))
+        except Exception as e:
+            raise ProviderConnectionError(f"MongoDB local search failed: {e}")
+
+        if not docs:
+            return []
+
+        q = np.array(query_embedding, dtype=np.float32)
+        q_norm = np.linalg.norm(q)
+        if q_norm < 1e-10:
+            return []
+
+        scored = []
+        for doc in docs:
+            emb = doc.get("embedding")
+            if not emb or len(emb) != len(query_embedding):
+                continue
+            e = np.array(emb, dtype=np.float32)
+            e_norm = np.linalg.norm(e)
+            if e_norm < 1e-10:
+                continue
+            cos_sim = float(np.dot(q, e) / (q_norm * e_norm))
+            scored.append((doc, cos_sim))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        return [
+            VectorRecord(
+                message_id=str(doc["_id"]),
+                text=doc.get("text", ""),
+                distance=1.0 - sim,
+                sender_key=doc.get("sender_key"),
+                metadata=doc.get("metadata", {}),
+            )
+            for doc, sim in scored[:limit]
+        ]
+
+    def _local_cosine_search_with_embeddings(
+        self, query_embedding: List[float], limit: int, sender_key: Optional[str]
+    ) -> Tuple[List[VectorRecord], List[List[float]]]:
+        """Local cosine search returning embeddings too."""
+        query_filter: Dict = {}
+        if sender_key:
+            query_filter["sender_key"] = sender_key
+
+        try:
+            docs = list(self._collection.find(query_filter))
+        except Exception as e:
+            raise ProviderConnectionError(f"MongoDB local search failed: {e}")
+
+        if not docs:
+            return [], []
+
+        q = np.array(query_embedding, dtype=np.float32)
+        q_norm = np.linalg.norm(q)
+        if q_norm < 1e-10:
+            return [], []
+
+        scored = []
+        for doc in docs:
+            emb = doc.get("embedding")
+            if not emb or len(emb) != len(query_embedding):
+                continue
+            e = np.array(emb, dtype=np.float32)
+            e_norm = np.linalg.norm(e)
+            if e_norm < 1e-10:
+                continue
+            cos_sim = float(np.dot(q, e) / (q_norm * e_norm))
+            scored.append((doc, cos_sim))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top = scored[:limit]
+
+        records = [
+            VectorRecord(
+                message_id=str(doc["_id"]),
+                text=doc.get("text", ""),
+                distance=1.0 - sim,
+                sender_key=doc.get("sender_key"),
+                metadata=doc.get("metadata", {}),
+            )
+            for doc, sim in top
+        ]
+        embeddings = [doc.get("embedding", []) for doc, _ in top]
+
+        return records, embeddings
