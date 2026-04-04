@@ -191,7 +191,14 @@ class MultiAgentMemoryManager:
                 return None
 
             embedding_service = get_shared_embedding_service()
-            return ProviderBridgeStore(resolved, embedding_service)
+            # v0.6.1 Item 4: Pass security context for post-retrieval MemGuard checks
+            security_context = {
+                "db": self.db,
+                "tenant_id": agent.tenant_id,
+                "agent_id": agent_id,
+                "instance_id": instance_id,
+            }
+            return ProviderBridgeStore(resolved, embedding_service, security_context=security_context)
 
         except Exception as e:
             self.logger.error(

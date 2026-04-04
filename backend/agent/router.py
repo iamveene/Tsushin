@@ -3164,6 +3164,8 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 # Instantiate skill (with parameters if needed)
                 if skill_type == "knowledge_sharing":
                     skill_instance = skill_class(self.db, agent_id)
+                elif skill_type == "okg_term_memory":
+                    skill_instance = skill_class(db=self.db, agent_id=agent_id)
                 else:
                     skill_instance = skill_class()
 
