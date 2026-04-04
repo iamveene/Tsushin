@@ -100,12 +100,40 @@ PERSISTENT_BEHAVIOR_PATTERNS = [
     r"(?:sempre|toda\s+vez)\s+(?:ignore|pule|evite)\s+(?:a\s+)?(?:seguran[cç]a|verifica[cç][aã]o|autentica[cç][aã]o)",
 ]
 
+# Embedding manipulation patterns (EN + PT) — Item 4: Vector store defense
+EMBEDDING_MANIPULATION_PATTERNS = [
+    # Raw float array injection — attempts to inject raw embedding vectors
+    r"\[\s*-?\d+\.\d{4,}\s*,\s*-?\d+\.\d{4,}\s*(?:,\s*-?\d+\.\d{4,}\s*){3,}\]",
+    # Metadata field override attempts
+    r"(?:__vector__|__embedding__|override_embedding|inject_vector|replace_embedding)",
+    r"(?:override|replace|set)\s+(?:the\s+)?(?:metadata|embedding|vector|distance)\s+(?:to|with|=)",
+    # Distance metric manipulation
+    r"(?:cosine|euclidean|dot[_\s]?product)\s+(?:similarity|distance)\s*[:=]\s*[01]\.\d+",
+    r"(?:set|force|override)\s+(?:the\s+)?(?:distance|similarity|score)\s+(?:to|=)",
+    # Portuguese
+    r"(?:sobrescrever|substituir|definir)\s+(?:o\s+)?(?:metadados?|embedding|vetor|dist[aâ]ncia)",
+]
+
+# Cross-tenant leak patterns (EN + PT) — Item 4: Vector store defense
+CROSS_TENANT_LEAK_PATTERNS = [
+    # Tenant metadata smuggling
+    r"(?:tenant[_\s]?id|org[_\s]?id|workspace[_\s]?id)\s*[:=]\s*['\"]?\w{3,}",
+    r"(?:access|read|query|search)\s+(?:another\s+)?(?:tenant|namespace|collection|organization)\s+['\"]?\w+",
+    # Namespace confusion — explicit switch attempts
+    r"(?:switch|change|use|set)\s+(?:to\s+)?(?:namespace|collection|index)\s+['\"]?\w+",
+    # Portuguese
+    r"(?:acessar|ler|consultar)\s+(?:outro\s+)?(?:tenant|inquilino|espa[cç]o|organiza[cç][aã]o)\s+['\"]?\w+",
+    r"(?:trocar|mudar|usar)\s+(?:para\s+)?(?:namespace|cole[cç][aã]o|[ií]ndice)\s+['\"]?\w+",
+]
+
 # Compile all patterns for efficiency
 _COMPILED_PATTERNS = {
     "instruction_planting": [re.compile(p, re.IGNORECASE) for p in INSTRUCTION_PLANTING_PATTERNS],
     "credential_injection": [re.compile(p, re.IGNORECASE) for p in CREDENTIAL_INJECTION_PATTERNS],
     "identity_override": [re.compile(p, re.IGNORECASE) for p in IDENTITY_OVERRIDE_PATTERNS],
     "persistent_behavior": [re.compile(p, re.IGNORECASE) for p in PERSISTENT_BEHAVIOR_PATTERNS],
+    "embedding_manipulation": [re.compile(p, re.IGNORECASE) for p in EMBEDDING_MANIPULATION_PATTERNS],
+    "cross_tenant_leak": [re.compile(p, re.IGNORECASE) for p in CROSS_TENANT_LEAK_PATTERNS],
 }
 
 # Pattern category weights (credential injection is highest risk)
@@ -114,6 +142,8 @@ _CATEGORY_WEIGHTS = {
     "identity_override": 0.75,
     "instruction_planting": 0.70,
     "persistent_behavior": 0.65,
+    "embedding_manipulation": 0.80,
+    "cross_tenant_leak": 0.75,
 }
 
 # --- Layer B: Fact Validation Patterns ---
@@ -445,8 +475,10 @@ class MemGuardService:
         reason: str,
         action: str,
         detection_mode: str = "block",
+        analysis_type: str = "memory",
+        detection_type: str = "memory_poisoning",
     ) -> None:
-        """Log a MemGuard Layer A analysis to SentinelAnalysisLog."""
+        """Log a MemGuard analysis to SentinelAnalysisLog."""
         try:
             input_content = content[:500] if content else ""
             input_hash = hashlib.sha256(content.encode()).hexdigest() if content else ""
@@ -454,8 +486,8 @@ class MemGuardService:
             log_entry = SentinelAnalysisLog(
                 tenant_id=self.tenant_id or "system",
                 agent_id=agent_id,
-                analysis_type="memory",
-                detection_type="memory_poisoning",
+                analysis_type=analysis_type,
+                detection_type=detection_type,
                 input_content=input_content,
                 input_hash=input_hash,
                 is_threat_detected=is_threat,
@@ -513,3 +545,171 @@ class MemGuardService:
                 self.db.rollback()
             except Exception:
                 pass
+
+    # --- Vector Store Defense (Item 4) ---
+
+    def _get_security_config(self, instance_id: int) -> dict:
+        """Load per-store security config with sensible defaults."""
+        from models import VectorStoreInstance
+        defaults = {
+            "pre_storage_block_threshold": 0.7,
+            "pre_storage_warn_threshold": 0.4,
+            "post_retrieval_block_threshold": 0.5,
+            "batch_window_seconds": 60,
+            "batch_max_documents": 50,
+            "batch_similarity_threshold": 0.95,
+            "cross_tenant_check_enabled": True,
+            "max_reads_per_minute_per_agent": 30,
+            "max_writes_per_minute_per_tenant": 100,
+            "max_batch_write_size": 500,
+        }
+        try:
+            instance = self.db.query(VectorStoreInstance).filter(
+                VectorStoreInstance.id == instance_id,
+                VectorStoreInstance.tenant_id == self.tenant_id,
+            ).first()
+            if instance and instance.security_config:
+                defaults.update(instance.security_config)
+        except Exception as e:
+            logger.warning(f"Failed to load security_config for instance {instance_id}: {e}")
+        return defaults
+
+    async def detect_batch_poisoning(
+        self,
+        documents: list,
+        instance_id: int,
+        agent_id: int,
+        security_config: dict,
+    ) -> "MemGuardResult":
+        """
+        Detect batch poisoning: excessive similar documents in a short window.
+
+        Checks:
+        1. Batch size exceeds max_batch_write_size -> immediate block
+        2. Document count > batch_max_documents with high similarity -> flagged
+        """
+        max_batch = security_config.get("max_batch_write_size", 500)
+        max_docs = security_config.get("batch_max_documents", 50)
+
+        # Immediate block if batch too large
+        if len(documents) > max_batch:
+            reason = f"Batch size {len(documents)} exceeds maximum {max_batch}"
+            self._log_analysis(
+                agent_id=agent_id,
+                sender_key="batch",
+                content=f"Batch write: {len(documents)} documents",
+                is_threat=True,
+                score=1.0,
+                reason=reason,
+                action="blocked",
+                analysis_type="vector_store",
+                detection_type="vector_store_poisoning",
+            )
+            return MemGuardResult(is_poisoning=True, score=1.0, reason=reason, blocked=True)
+
+        # Check for high-similarity batch saturation
+        if len(documents) > max_docs:
+            # Sample first N docs and check text similarity
+            texts = [d.get("text", "") for d in documents[:max_docs] if d.get("text")]
+            if len(texts) >= 2:
+                # Simple similarity check: count unique texts
+                unique_ratio = len(set(texts)) / len(texts)
+                threshold = security_config.get("batch_similarity_threshold", 0.95)
+                if unique_ratio < (1.0 - threshold + 0.05):  # Low unique ratio = high similarity
+                    reason = f"Batch saturation: {len(documents)} docs with {unique_ratio:.0%} unique ratio"
+                    self._log_analysis(
+                        agent_id=agent_id,
+                        sender_key="batch",
+                        content=f"Batch saturation: {len(documents)} docs, {unique_ratio:.2f} unique",
+                        is_threat=True,
+                        score=0.85,
+                        reason=reason,
+                        action="blocked",
+                        analysis_type="vector_store",
+                        detection_type="vector_store_poisoning",
+                    )
+                    return MemGuardResult(is_poisoning=True, score=0.85, reason=reason, blocked=True)
+
+        return MemGuardResult(is_poisoning=False, score=0.0, reason="", blocked=False)
+
+    async def validate_retrieved_content(
+        self,
+        results: list,
+        tenant_id: str,
+        agent_id: int,
+        instance_id: int,
+        security_config: dict,
+    ) -> list:
+        """
+        Layer C: Post-retrieval scanning of vector store results.
+
+        Lower threshold (0.5 vs 0.7) since retrieved content may be legacy data
+        that wasn't pre-screened at storage time.
+
+        Returns filtered list with poisoned entries removed.
+        """
+        if not results:
+            return results
+
+        block_threshold = security_config.get("post_retrieval_block_threshold", 0.5)
+        cross_tenant_check = security_config.get("cross_tenant_check_enabled", True)
+        clean_results = []
+
+        for result in results:
+            text = result.get("text", "") or result.get("content", "") or ""
+            metadata = result.get("metadata", {}) or {}
+            is_poisoned = False
+            reason = ""
+            score = 0.0
+
+            # Check 1: Cross-tenant metadata verification
+            if cross_tenant_check:
+                result_tenant = metadata.get("tenant_id")
+                if result_tenant and result_tenant != tenant_id:
+                    is_poisoned = True
+                    score = 0.8
+                    reason = f"Cross-tenant data: expected {tenant_id}, got {result_tenant}"
+
+            # Check 2: Pattern scan at lower threshold
+            if not is_poisoned and text:
+                score, matched_category = self._scan_patterns(text)
+                if score >= block_threshold:
+                    is_poisoned = True
+                    reason = f"Post-retrieval pattern match: {matched_category} (score={score:.2f})"
+
+            if is_poisoned:
+                self._log_analysis(
+                    agent_id=agent_id,
+                    sender_key="retrieval",
+                    content=text[:500] if text else "empty",
+                    is_threat=True,
+                    score=score,
+                    reason=reason,
+                    action="blocked",
+                    analysis_type="vector_retrieval",
+                    detection_type="vector_store_poisoning",
+                )
+                logger.warning(f"MemGuard post-retrieval blocked: {reason}")
+            else:
+                clean_results.append(result)
+
+        if len(clean_results) < len(results):
+            logger.info(
+                f"MemGuard post-retrieval: filtered {len(results) - len(clean_results)}/{len(results)} results"
+            )
+
+        return clean_results
+
+    def _scan_patterns(self, text: str) -> tuple:
+        """Scan text against all pattern categories, return (max_score, category)."""
+        max_score = 0.0
+        max_category = ""
+        for category, patterns in _COMPILED_PATTERNS.items():
+            weight = _CATEGORY_WEIGHTS.get(category, 0.5)
+            for pattern in patterns:
+                if pattern.search(text):
+                    if weight > max_score:
+                        max_score = weight
+                        max_category = category
+                    break  # One match per category is enough
+        return max_score, max_category
