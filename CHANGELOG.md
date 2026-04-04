@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Vector Store Auto-Provisioning
+- **One-click container deployment**: Auto-provision Docker containers for Qdrant and MongoDB directly from the Hub UI. Toggle "Auto-Provision" during creation to have Tsushin spawn, configure, and health-check a container automatically.
+- **Container lifecycle management**: Start, stop, restart auto-provisioned containers from the Vector Store card. Container status (running/stopped/error) displayed with real-time indicators.
+- **Port allocation**: Dedicated port range 6300-6399 for vector store containers (separate from MCP 8080-8180).
+- **Named volumes**: Data persists across container restarts via Docker named volumes (`tsushin-vs-{vendor}-{tenant}-{id}`).
+- **Resource limits**: Configurable memory limits (512MB/1GB/2GB/4GB) per container.
+
+#### Default Vector Store Settings Page
+- **Global tenant default**: New Settings > Vector Stores page with dropdown selector to choose the tenant-wide default vector store. Replaces the confusing per-instance `is_default` toggle.
+- **Three-tier resolution**: Agent override > Tenant default (Settings) > ChromaDB (built-in). Agents without an explicit vector store assignment now use the tenant default.
+- **Settings API**: `GET/PUT /api/settings/vector-stores/default` for managing the default selection.
+
 #### MongoDB Local Mode for Vector Stores
 - **Local cosine similarity fallback**: MongoDB adapter now supports self-hosted MongoDB 7.0+ without Atlas Vector Search. Toggle "Local Mode" in the UI to use Python-side cosine similarity instead of Atlas `$vectorSearch` aggregation.
 - **Registry integration**: `use_native_search` config option passed from `extra_config` through the provider registry.
