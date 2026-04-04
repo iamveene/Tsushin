@@ -7,8 +7,8 @@ SSRF validation, health checking.
 """
 
 from datetime import datetime
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional, List, Dict, Any, Literal
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import logging
@@ -184,6 +184,7 @@ async def create_vector_store_instance(
 
         # Auto-provision Docker container if requested
         if data.auto_provision and data.vendor in ("qdrant", "mongodb"):
+            import asyncio
             from services.vector_store_container_manager import VectorStoreContainerManager
             if data.mem_limit:
                 instance.mem_limit = data.mem_limit
@@ -191,7 +192,7 @@ async def create_vector_store_instance(
                 instance.cpu_quota = data.cpu_quota
             db.commit()
             mgr = VectorStoreContainerManager()
-            mgr.provision(instance, db)
+            await asyncio.get_event_loop().run_in_executor(None, mgr.provision, instance, db)
 
         return _to_response(instance, db)
     except ValueError as e:
@@ -298,12 +299,10 @@ async def get_vector_store_stats(
 @router.post("/vector-stores/{instance_id}/container/{action}", tags=["Vector Stores"])
 async def vector_store_container_action(
     instance_id: int,
-    action: str,
+    action: Literal["start", "stop", "restart"],
     ctx: TenantContext = Depends(require_permission("org.settings.write")),
     db: Session = Depends(get_db),
 ):
-    if action not in ("start", "stop", "restart"):
-        raise HTTPException(status_code=400, detail="Invalid action. Use: start, stop, restart")
 
     from services.vector_store_container_manager import VectorStoreContainerManager
     mgr = VectorStoreContainerManager()
@@ -338,7 +337,7 @@ async def vector_store_container_status(
 @router.get("/vector-stores/{instance_id}/container/logs", tags=["Vector Stores"])
 async def vector_store_container_logs(
     instance_id: int,
-    tail: int = 100,
+    tail: int = Query(default=100, ge=1, le=2000),
     ctx: TenantContext = Depends(require_permission("org.settings.read")),
     db: Session = Depends(get_db),
 ):
@@ -358,20 +357,16 @@ async def get_default_vector_store(
     ctx: TenantContext = Depends(require_permission("org.settings.read")),
     db: Session = Depends(get_db),
 ):
-    from models import Config as ConfigModel
-    config = db.query(ConfigModel).filter(ConfigModel.id == 1).first()
-    instance_id = getattr(config, 'default_vector_store_instance_id', None) if config else None
-
-    instance_data = None
-    if instance_id:
-        from services.vector_store_instance_service import VectorStoreInstanceService
-        instance = VectorStoreInstanceService.get_instance(instance_id, ctx.tenant_id, db)
-        if instance:
-            instance_data = _to_response(instance, db)
+    # Tenant-scoped: query VectorStoreInstance.is_default (not global Config)
+    default_instance = db.query(VectorStoreInstance).filter(
+        VectorStoreInstance.tenant_id == ctx.tenant_id,
+        VectorStoreInstance.is_default == True,
+        VectorStoreInstance.is_active == True,
+    ).first()
 
     return {
-        "default_vector_store_instance_id": instance_id,
-        "instance": instance_data,
+        "default_vector_store_instance_id": default_instance.id if default_instance else None,
+        "instance": _to_response(default_instance, db) if default_instance else None,
     }
 
 
@@ -381,8 +376,6 @@ async def set_default_vector_store(
     ctx: TenantContext = Depends(require_permission("org.settings.write")),
     db: Session = Depends(get_db),
 ):
-    from models import Config as ConfigModel
-
     # Validate instance exists and belongs to tenant
     if data.default_vector_store_instance_id is not None:
         from services.vector_store_instance_service import VectorStoreInstanceService
@@ -392,19 +385,15 @@ async def set_default_vector_store(
         if not instance:
             raise HTTPException(status_code=404, detail="Vector store instance not found")
 
-    config = db.query(ConfigModel).filter(ConfigModel.id == 1).first()
-    if not config:
-        raise HTTPException(status_code=500, detail="Config not found")
-
-    config.default_vector_store_instance_id = data.default_vector_store_instance_id
-
-    # Sync is_default flags for backward compatibility
+    # Clear all is_default flags for this tenant, then set the new one
     db.query(VectorStoreInstance).filter(
         VectorStoreInstance.tenant_id == ctx.tenant_id,
     ).update({"is_default": False})
+
     if data.default_vector_store_instance_id:
         db.query(VectorStoreInstance).filter(
             VectorStoreInstance.id == data.default_vector_store_instance_id,
+            VectorStoreInstance.tenant_id == ctx.tenant_id,
         ).update({"is_default": True})
 
     db.commit()

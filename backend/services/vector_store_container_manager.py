@@ -6,7 +6,9 @@ Follows the same patterns as MCPContainerManager and ToolboxContainerService.
 """
 
 import logging
+import re
 import time
+import threading
 from datetime import datetime
 from typing import Optional, Set, Dict, Any
 
@@ -39,6 +41,9 @@ PORT_RANGE_END = 6399
 CONTAINER_PREFIX = "tsushin-vs-"
 HEALTH_CHECK_TIMEOUT = 90
 HEALTH_CHECK_INTERVAL = 5
+
+
+_provision_lock = threading.Lock()
 
 
 class VectorStoreContainerManager:
@@ -84,13 +89,15 @@ class VectorStoreContainerManager:
 
         config = VENDOR_CONFIGS[vendor]
         tenant_id = instance.tenant_id
+        safe_tenant = re.sub(r'[^a-zA-Z0-9_.-]', '-', tenant_id)
 
-        # Allocate port
-        port = self._allocate_port(db)
+        # Lock to prevent port allocation race condition
+        with _provision_lock:
+            port = self._allocate_port(db)
 
-        # Generate names
-        container_name = f"{CONTAINER_PREFIX}{vendor}-{tenant_id}_{int(time.time())}"
-        volume_name = f"tsushin-vs-{vendor}-{tenant_id}-{instance.id}"
+            # Generate names
+            container_name = f"{CONTAINER_PREFIX}{vendor}-{safe_tenant}_{int(time.time())}"
+            volume_name = f"tsushin-vs-{vendor}-{safe_tenant}-{instance.id}"
 
         # Resolve network
         network_name = resolve_tsushin_network_name(self.runtime.raw_client)
@@ -155,6 +162,9 @@ class VectorStoreContainerManager:
 
         except Exception as e:
             instance.container_status = "error"
+            instance.container_name = None
+            instance.container_id = None
+            instance.container_port = None
             instance.health_status = "unavailable"
             instance.health_status_reason = str(e)[:500]
             db.commit()
