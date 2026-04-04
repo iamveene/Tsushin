@@ -52,6 +52,9 @@ class VectorStoreInstanceCreate(BaseModel):
     credentials: Optional[Dict[str, Any]] = None
     extra_config: Optional[Dict[str, Any]] = None
     is_default: bool = False
+    auto_provision: bool = False
+    mem_limit: Optional[str] = None  # e.g. "1g", "2g"
+    cpu_quota: Optional[int] = None  # microseconds, 100000 = 1 CPU
 
 
 class VectorStoreInstanceUpdate(BaseModel):
@@ -79,8 +82,16 @@ class VectorStoreInstanceResponse(BaseModel):
     last_health_check: Optional[str] = None
     is_default: bool
     is_active: bool
+    is_auto_provisioned: bool = False
+    container_status: Optional[str] = None
+    container_name: Optional[str] = None
+    container_port: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class DefaultVectorStoreUpdate(BaseModel):
+    default_vector_store_instance_id: Optional[int] = None
 
 
 class TestConnectionResponse(BaseModel):
@@ -109,6 +120,10 @@ def _to_response(instance: VectorStoreInstance, db: Session) -> dict:
         "last_health_check": instance.last_health_check.isoformat() if instance.last_health_check else None,
         "is_default": instance.is_default,
         "is_active": instance.is_active,
+        "is_auto_provisioned": getattr(instance, 'is_auto_provisioned', False),
+        "container_status": getattr(instance, 'container_status', None),
+        "container_name": getattr(instance, 'container_name', None),
+        "container_port": getattr(instance, 'container_port', None),
         "created_at": instance.created_at.isoformat() if instance.created_at else None,
         "updated_at": instance.updated_at.isoformat() if instance.updated_at else None,
     }
@@ -166,6 +181,18 @@ async def create_vector_store_instance(
             extra_config=data.extra_config,
             is_default=data.is_default,
         )
+
+        # Auto-provision Docker container if requested
+        if data.auto_provision and data.vendor in ("qdrant", "mongodb"):
+            from services.vector_store_container_manager import VectorStoreContainerManager
+            if data.mem_limit:
+                instance.mem_limit = data.mem_limit
+            if data.cpu_quota:
+                instance.cpu_quota = data.cpu_quota
+            db.commit()
+            mgr = VectorStoreContainerManager()
+            mgr.provision(instance, db)
+
         return _to_response(instance, db)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -173,7 +200,7 @@ async def create_vector_store_instance(
         logger.error(f"Failed to create vector store instance: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create vector store instance",
+            detail=f"Failed to create vector store instance: {str(e)}",
         )
 
 
@@ -220,10 +247,22 @@ async def update_vector_store_instance(
 @router.delete("/vector-stores/{instance_id}", tags=["Vector Stores"])
 async def delete_vector_store_instance(
     instance_id: int,
+    remove_volume: bool = False,
     ctx: TenantContext = Depends(require_permission("org.settings.write")),
     db: Session = Depends(get_db),
 ):
     from services.vector_store_instance_service import VectorStoreInstanceService
+
+    # Deprovision container if auto-provisioned
+    instance = VectorStoreInstanceService.get_instance(instance_id, ctx.tenant_id, db)
+    if instance and getattr(instance, 'is_auto_provisioned', False):
+        try:
+            from services.vector_store_container_manager import VectorStoreContainerManager
+            mgr = VectorStoreContainerManager()
+            mgr.deprovision(instance_id, ctx.tenant_id, db, remove_volume=remove_volume)
+        except Exception as e:
+            logger.warning(f"Container deprovision failed: {e}")
+
     success = VectorStoreInstanceService.delete_instance(instance_id, ctx.tenant_id, db)
     if not success:
         raise HTTPException(status_code=404, detail="Vector store instance not found")
@@ -252,3 +291,121 @@ async def get_vector_store_stats(
     from services.vector_store_instance_service import VectorStoreInstanceService
     stats = await VectorStoreInstanceService.get_stats(instance_id, ctx.tenant_id, db)
     return stats
+
+
+# ==================== Container Lifecycle ====================
+
+@router.post("/vector-stores/{instance_id}/container/{action}", tags=["Vector Stores"])
+async def vector_store_container_action(
+    instance_id: int,
+    action: str,
+    ctx: TenantContext = Depends(require_permission("org.settings.write")),
+    db: Session = Depends(get_db),
+):
+    if action not in ("start", "stop", "restart"):
+        raise HTTPException(status_code=400, detail="Invalid action. Use: start, stop, restart")
+
+    from services.vector_store_container_manager import VectorStoreContainerManager
+    mgr = VectorStoreContainerManager()
+    try:
+        if action == "start":
+            status_val = mgr.start_container(instance_id, ctx.tenant_id, db)
+        elif action == "stop":
+            status_val = mgr.stop_container(instance_id, ctx.tenant_id, db)
+        else:
+            status_val = mgr.restart_container(instance_id, ctx.tenant_id, db)
+        return {"status": status_val}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Container action failed: {e}")
+
+
+@router.get("/vector-stores/{instance_id}/container/status", tags=["Vector Stores"])
+async def vector_store_container_status(
+    instance_id: int,
+    ctx: TenantContext = Depends(require_permission("org.settings.read")),
+    db: Session = Depends(get_db),
+):
+    from services.vector_store_container_manager import VectorStoreContainerManager
+    mgr = VectorStoreContainerManager()
+    try:
+        return mgr.get_status(instance_id, ctx.tenant_id, db)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/vector-stores/{instance_id}/container/logs", tags=["Vector Stores"])
+async def vector_store_container_logs(
+    instance_id: int,
+    tail: int = 100,
+    ctx: TenantContext = Depends(require_permission("org.settings.read")),
+    db: Session = Depends(get_db),
+):
+    from services.vector_store_container_manager import VectorStoreContainerManager
+    mgr = VectorStoreContainerManager()
+    try:
+        logs = mgr.get_logs(instance_id, ctx.tenant_id, db, tail=tail)
+        return {"logs": logs}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ==================== Default Vector Store Settings ====================
+
+@router.get("/settings/vector-stores/default", tags=["Vector Stores"])
+async def get_default_vector_store(
+    ctx: TenantContext = Depends(require_permission("org.settings.read")),
+    db: Session = Depends(get_db),
+):
+    from models import Config as ConfigModel
+    config = db.query(ConfigModel).filter(ConfigModel.id == 1).first()
+    instance_id = getattr(config, 'default_vector_store_instance_id', None) if config else None
+
+    instance_data = None
+    if instance_id:
+        from services.vector_store_instance_service import VectorStoreInstanceService
+        instance = VectorStoreInstanceService.get_instance(instance_id, ctx.tenant_id, db)
+        if instance:
+            instance_data = _to_response(instance, db)
+
+    return {
+        "default_vector_store_instance_id": instance_id,
+        "instance": instance_data,
+    }
+
+
+@router.put("/settings/vector-stores/default", tags=["Vector Stores"])
+async def set_default_vector_store(
+    data: DefaultVectorStoreUpdate,
+    ctx: TenantContext = Depends(require_permission("org.settings.write")),
+    db: Session = Depends(get_db),
+):
+    from models import Config as ConfigModel
+
+    # Validate instance exists and belongs to tenant
+    if data.default_vector_store_instance_id is not None:
+        from services.vector_store_instance_service import VectorStoreInstanceService
+        instance = VectorStoreInstanceService.get_instance(
+            data.default_vector_store_instance_id, ctx.tenant_id, db
+        )
+        if not instance:
+            raise HTTPException(status_code=404, detail="Vector store instance not found")
+
+    config = db.query(ConfigModel).filter(ConfigModel.id == 1).first()
+    if not config:
+        raise HTTPException(status_code=500, detail="Config not found")
+
+    config.default_vector_store_instance_id = data.default_vector_store_instance_id
+
+    # Sync is_default flags for backward compatibility
+    db.query(VectorStoreInstance).filter(
+        VectorStoreInstance.tenant_id == ctx.tenant_id,
+    ).update({"is_default": False})
+    if data.default_vector_store_instance_id:
+        db.query(VectorStoreInstance).filter(
+            VectorStoreInstance.id == data.default_vector_store_instance_id,
+        ).update({"is_default": True})
+
+    db.commit()
+    return {"default_vector_store_instance_id": data.default_vector_store_instance_id}

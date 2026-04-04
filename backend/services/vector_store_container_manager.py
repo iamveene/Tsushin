@@ -1,0 +1,292 @@
+"""
+v0.6.0: Vector Store Container Manager — auto-provisioning of Qdrant/MongoDB containers.
+
+Manages Docker container lifecycle for auto-provisioned vector store instances.
+Follows the same patterns as MCPContainerManager and ToolboxContainerService.
+"""
+
+import logging
+import time
+from datetime import datetime
+from typing import Optional, Set, Dict, Any
+
+import requests
+from sqlalchemy.orm import Session
+
+from services.container_runtime import get_container_runtime, ContainerRuntime, ContainerNotFoundError, ContainerRuntimeError
+from services.docker_network_utils import resolve_tsushin_network_name
+
+logger = logging.getLogger(__name__)
+
+
+VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "qdrant": {
+        "image": "qdrant/qdrant:v1.13.2",
+        "internal_port": 6333,
+        "volume_bind": "/qdrant/storage",
+        "default_mem_limit": "1g",
+    },
+    "mongodb": {
+        "image": "mongo:7.0",
+        "internal_port": 27017,
+        "volume_bind": "/data/db",
+        "default_mem_limit": "1g",
+    },
+}
+
+PORT_RANGE_START = 6300
+PORT_RANGE_END = 6399
+CONTAINER_PREFIX = "tsushin-vs-"
+HEALTH_CHECK_TIMEOUT = 90
+HEALTH_CHECK_INTERVAL = 5
+
+
+class VectorStoreContainerManager:
+    """Manages auto-provisioned Docker containers for vector store instances."""
+
+    def __init__(self):
+        self.runtime: ContainerRuntime = get_container_runtime()
+
+    # --- Port allocation ---
+
+    def _get_used_ports(self, db: Session) -> Set[int]:
+        from models import VectorStoreInstance
+        rows = db.query(VectorStoreInstance.container_port).filter(
+            VectorStoreInstance.container_port.isnot(None),
+            VectorStoreInstance.is_active == True,
+        ).all()
+        return {r[0] for r in rows}
+
+    def _allocate_port(self, db: Session) -> int:
+        import socket
+        used = self._get_used_ports(db)
+        for port in range(PORT_RANGE_START, PORT_RANGE_END):
+            if port in used:
+                continue
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+        raise RuntimeError(f"No available ports in range {PORT_RANGE_START}-{PORT_RANGE_END}")
+
+    # --- Container lifecycle ---
+
+    def provision(self, instance, db: Session) -> None:
+        """
+        Create and start a Docker container for the given VectorStoreInstance.
+        Updates the instance in-place with container metadata.
+        """
+        vendor = instance.vendor
+        if vendor not in VENDOR_CONFIGS:
+            raise ValueError(f"Auto-provisioning not supported for vendor: {vendor}")
+
+        config = VENDOR_CONFIGS[vendor]
+        tenant_id = instance.tenant_id
+
+        # Allocate port
+        port = self._allocate_port(db)
+
+        # Generate names
+        container_name = f"{CONTAINER_PREFIX}{vendor}-{tenant_id}_{int(time.time())}"
+        volume_name = f"tsushin-vs-{vendor}-{tenant_id}-{instance.id}"
+
+        # Resolve network
+        network_name = resolve_tsushin_network_name(self.runtime.raw_client)
+
+        mem_limit = instance.mem_limit or config["default_mem_limit"]
+        cpu_quota = instance.cpu_quota or 100000  # 1 CPU default
+
+        logger.info(f"Provisioning {vendor} container: {container_name} on port {port}")
+
+        instance.container_status = "creating"
+        instance.container_name = container_name
+        instance.container_port = port
+        instance.container_image = config["image"]
+        instance.volume_name = volume_name
+        instance.is_auto_provisioned = True
+        db.commit()
+
+        try:
+            container = self.runtime.create_container(
+                image=config["image"],
+                name=container_name,
+                volumes={volume_name: {"bind": config["volume_bind"], "mode": "rw"}},
+                ports={f'{config["internal_port"]}/tcp': ("127.0.0.1", port)},
+                network=network_name,
+                restart_policy={"Name": "unless-stopped"},
+                mem_limit=mem_limit,
+                cpu_quota=cpu_quota,
+                labels={
+                    "tsushin.service": "vector-store",
+                    "tsushin.vendor": vendor,
+                    "tsushin.tenant": tenant_id,
+                    "tsushin.instance_id": str(instance.id),
+                },
+                detach=True,
+            )
+
+            instance.container_id = container.id if hasattr(container, 'id') else str(container)
+
+            # Build base_url using container DNS name
+            if vendor == "qdrant":
+                instance.base_url = f"http://{container_name}:{config['internal_port']}"
+            elif vendor == "mongodb":
+                instance.base_url = f"mongodb://{container_name}:{config['internal_port']}"
+                # Set local mode for MongoDB (no Atlas Vector Search)
+                extra = instance.extra_config or {}
+                extra["use_native_search"] = False
+                if not extra.get("database_name"):
+                    extra["database_name"] = "tsushin"
+                if not extra.get("collection_name"):
+                    extra["collection_name"] = "vectors"
+                instance.extra_config = extra
+
+            # Wait for health
+            healthy = self._wait_for_health(instance)
+            instance.container_status = "running" if healthy else "error"
+            instance.health_status = "healthy" if healthy else "unavailable"
+            instance.health_status_reason = "Auto-provisioned and healthy" if healthy else "Container started but health check failed"
+            instance.last_health_check = datetime.utcnow()
+
+            db.commit()
+            logger.info(f"Provisioned {vendor} container: {container_name} (healthy={healthy})")
+
+        except Exception as e:
+            instance.container_status = "error"
+            instance.health_status = "unavailable"
+            instance.health_status_reason = str(e)[:500]
+            db.commit()
+            logger.error(f"Failed to provision {vendor} container: {e}", exc_info=True)
+            raise
+
+    def start_container(self, instance_id: int, tenant_id: str, db: Session) -> str:
+        instance = self._get_instance(instance_id, tenant_id, db)
+        if not instance.container_name:
+            raise ValueError("No container associated with this instance")
+        self.runtime.start_container(instance.container_name)
+        instance.container_status = "running"
+        db.commit()
+        return "running"
+
+    def stop_container(self, instance_id: int, tenant_id: str, db: Session) -> str:
+        instance = self._get_instance(instance_id, tenant_id, db)
+        if not instance.container_name:
+            raise ValueError("No container associated with this instance")
+        self.runtime.stop_container(instance.container_name)
+        instance.container_status = "stopped"
+        db.commit()
+        return "stopped"
+
+    def restart_container(self, instance_id: int, tenant_id: str, db: Session) -> str:
+        instance = self._get_instance(instance_id, tenant_id, db)
+        if not instance.container_name:
+            raise ValueError("No container associated with this instance")
+        self.runtime.restart_container(instance.container_name)
+        instance.container_status = "running"
+        db.commit()
+        return "running"
+
+    def deprovision(self, instance_id: int, tenant_id: str, db: Session, remove_volume: bool = False) -> None:
+        instance = self._get_instance(instance_id, tenant_id, db)
+
+        if instance.container_name:
+            try:
+                self.runtime.stop_container(instance.container_name, timeout=10)
+            except (ContainerNotFoundError, ContainerRuntimeError):
+                pass
+            try:
+                self.runtime.remove_container(instance.container_name, force=True)
+            except (ContainerNotFoundError, ContainerRuntimeError):
+                pass
+            logger.info(f"Removed container: {instance.container_name}")
+
+        if remove_volume and instance.volume_name:
+            try:
+                self.runtime.remove_volume(instance.volume_name, force=True)
+                logger.info(f"Removed volume: {instance.volume_name}")
+            except Exception as e:
+                logger.warning(f"Failed to remove volume {instance.volume_name}: {e}")
+
+        instance.container_status = "none"
+        instance.container_name = None
+        instance.container_id = None
+        instance.container_port = None
+        db.commit()
+
+    def get_status(self, instance_id: int, tenant_id: str, db: Session) -> Dict[str, Any]:
+        instance = self._get_instance(instance_id, tenant_id, db)
+        if not instance.container_name:
+            return {"status": "none", "container_name": None}
+        try:
+            status = self.runtime.get_container_status(instance.container_name)
+            if status != instance.container_status:
+                instance.container_status = status
+                db.commit()
+            return {
+                "status": status,
+                "container_name": instance.container_name,
+                "container_port": instance.container_port,
+                "image": instance.container_image,
+                "volume": instance.volume_name,
+            }
+        except ContainerNotFoundError:
+            instance.container_status = "not_found"
+            db.commit()
+            return {"status": "not_found", "container_name": instance.container_name}
+
+    def get_logs(self, instance_id: int, tenant_id: str, db: Session, tail: int = 100) -> str:
+        instance = self._get_instance(instance_id, tenant_id, db)
+        if not instance.container_name:
+            return ""
+        return self.runtime.get_container_logs(instance.container_name, tail=tail)
+
+    # --- Health checking ---
+
+    def _wait_for_health(self, instance) -> bool:
+        vendor = instance.vendor
+        start = time.time()
+        while time.time() - start < HEALTH_CHECK_TIMEOUT:
+            if self._check_health(instance):
+                return True
+            time.sleep(HEALTH_CHECK_INTERVAL)
+        return False
+
+    def _check_health(self, instance) -> bool:
+        try:
+            if instance.vendor == "qdrant":
+                # Use container DNS name on tsushin-network (backend runs in Docker too)
+                config = VENDOR_CONFIGS["qdrant"]
+                resp = requests.get(
+                    f"http://{instance.container_name}:{config['internal_port']}/healthz",
+                    timeout=5,
+                )
+                return resp.status_code == 200
+            elif instance.vendor == "mongodb":
+                result = self.runtime.exec_run(
+                    instance.container_name,
+                    ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"],
+                )
+                output = result.output if hasattr(result, 'output') else str(result)
+                if isinstance(output, bytes):
+                    output = output.decode("utf-8", errors="replace")
+                return "1" in output
+        except Exception:
+            return False
+        return False
+
+    # --- Helpers ---
+
+    def _get_instance(self, instance_id: int, tenant_id: str, db: Session):
+        from models import VectorStoreInstance
+        instance = db.query(VectorStoreInstance).filter(
+            VectorStoreInstance.id == instance_id,
+            VectorStoreInstance.tenant_id == tenant_id,
+            VectorStoreInstance.is_active == True,
+        ).first()
+        if not instance:
+            raise ValueError(f"Vector store instance {instance_id} not found")
+        if not instance.is_auto_provisioned:
+            raise ValueError(f"Instance {instance_id} is not auto-provisioned")
+        return instance

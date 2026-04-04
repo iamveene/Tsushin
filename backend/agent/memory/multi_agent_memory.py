@@ -150,7 +150,21 @@ class MultiAgentMemoryManager:
         try:
             from models import Agent
             agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
-            if not agent or not agent.vector_store_instance_id:
+            if not agent:
+                return None
+
+            # Three-tier resolution: Agent override → Tenant default → ChromaDB
+            instance_id = agent.vector_store_instance_id
+            if not instance_id:
+                try:
+                    from models import Config as ConfigModel
+                    config = self.db.query(ConfigModel).filter(ConfigModel.id == 1).first()
+                    if config:
+                        instance_id = getattr(config, 'default_vector_store_instance_id', None)
+                except Exception:
+                    pass  # Config column may not exist yet
+
+            if not instance_id:
                 return None  # ChromaDB default
 
             from agent.memory.providers.registry import VectorStoreRegistry
@@ -164,7 +178,7 @@ class MultiAgentMemoryManager:
                 agent_id=agent_id,
                 db=self.db,
                 persist_directory=persist_dir,
-                vector_store_instance_id=agent.vector_store_instance_id,
+                vector_store_instance_id=instance_id,
                 vector_store_mode=agent.vector_store_mode or "override",
                 tenant_id=agent.tenant_id,
             )

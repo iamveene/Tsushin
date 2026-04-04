@@ -368,6 +368,16 @@ class ContainerRuntime(ABC):
         """
         ...
 
+    @abstractmethod
+    def remove_volume(self, volume_name: str, force: bool = False) -> None:
+        """Remove a named Docker volume."""
+        ...
+
+    @abstractmethod
+    def get_container_logs(self, name_or_id: str, tail: int = 100) -> str:
+        """Get container logs."""
+        ...
+
 
 class ContainerNotFoundError(Exception):
     """Raised when a container is not found by the runtime."""
@@ -722,6 +732,36 @@ class DockerRuntime(ContainerRuntime):
         except Exception as e:
             logger.error(f"DockerRuntime: Failed to get container IP: {e}")
             return ""
+
+    def remove_volume(self, volume_name: str, force: bool = False) -> None:
+        import docker as docker_lib
+        try:
+            vol = self._client.volumes.get(volume_name)
+            vol.remove(force=force)
+            logger.info(f"DockerRuntime: Removed volume {volume_name}")
+        except docker_lib.errors.NotFound:
+            logger.warning(f"DockerRuntime: Volume {volume_name} not found")
+        except docker_lib.errors.APIError:
+            # Proxy may block volume API — try direct socket
+            try:
+                direct = docker_lib.DockerClient(base_url='unix:///var/run/docker.sock')
+                vol = direct.volumes.get(volume_name)
+                vol.remove(force=force)
+                direct.close()
+                logger.info(f"DockerRuntime: Removed volume {volume_name} via direct socket")
+            except Exception as e2:
+                raise ContainerRuntimeError(f"Failed to remove volume {volume_name}: {e2}")
+
+    def get_container_logs(self, name_or_id: str, tail: int = 100) -> str:
+        import docker as docker_lib
+        try:
+            container = self._client.containers.get(name_or_id)
+            logs = container.logs(tail=tail, timestamps=False)
+            return logs.decode("utf-8", errors="replace") if isinstance(logs, bytes) else str(logs)
+        except docker_lib.errors.NotFound:
+            raise ContainerNotFoundError(f"Container {name_or_id} not found")
+        except Exception as e:
+            raise ContainerRuntimeError(f"Failed to get logs: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1642,6 +1682,17 @@ class K8sRuntime(ContainerRuntime):
             return pod.status.pod_ip if pod.status and pod.status.pod_ip else ""
         except (ContainerNotFoundError, ContainerRuntimeError):
             return ""
+
+    def remove_volume(self, volume_name: str, force: bool = False) -> None:
+        logger.warning("K8sRuntime: remove_volume not implemented for Kubernetes")
+
+    def get_container_logs(self, name_or_id: str, tail: int = 100) -> str:
+        pod = self._find_pod(name_or_id)
+        if not pod:
+            raise ContainerNotFoundError(f"Pod {name_or_id} not found")
+        return self._core_v1.read_namespaced_pod_log(
+            name=pod.metadata.name, namespace=self._namespace, tail_lines=tail
+        )
 
     # ------------------------------------------------------------------
     # Private exec helper

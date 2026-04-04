@@ -96,6 +96,13 @@ class Config(Base):
     system_ai_provider = Column(String(20), default="gemini")  # gemini, anthropic, openai, openrouter
     system_ai_model = Column(String(100), default="gemini-2.5-flash")  # Default: fast/cheap model for system ops
 
+    # v0.6.0: Default Vector Store (tenant-wide)
+    default_vector_store_instance_id = Column(
+        Integer,
+        ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -3468,8 +3475,19 @@ class VectorStoreInstance(Base):
     last_health_check = Column(DateTime, nullable=True)
 
     # Flags
-    is_default = Column(Boolean, default=False)  # Single default per tenant
+    is_default = Column(Boolean, default=False)  # Legacy — use Config.default_vector_store_instance_id
     is_active = Column(Boolean, default=True)
+
+    # Auto-provisioning (Docker-managed containers)
+    is_auto_provisioned = Column(Boolean, default=False)
+    container_name = Column(String(200), nullable=True)
+    container_id = Column(String(80), nullable=True)
+    container_port = Column(Integer, nullable=True)
+    container_status = Column(String(20), default="none")  # none|creating|running|stopped|error
+    container_image = Column(String(200), nullable=True)
+    volume_name = Column(String(150), nullable=True)
+    mem_limit = Column(String(20), nullable=True)
+    cpu_quota = Column(Integer, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
