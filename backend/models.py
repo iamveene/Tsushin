@@ -2168,6 +2168,7 @@ class SentinelConfig(Base):
     detect_shell_malicious_intent = Column(Boolean, default=True, nullable=False)
     detect_memory_poisoning = Column(Boolean, default=True, nullable=False)
     detect_browser_ssrf = Column(Boolean, default=True, nullable=False)
+    detect_vector_store_poisoning = Column(Boolean, default=True, nullable=False)
 
     # Aggressiveness: 0=Off, 1=Moderate, 2=Aggressive, 3=Extra Aggressive
     aggressiveness_level = Column(Integer, default=1, nullable=False)
@@ -2185,6 +2186,7 @@ class SentinelConfig(Base):
     shell_intent_prompt = Column(Text, nullable=True)
     memory_poisoning_prompt = Column(Text, nullable=True)
     browser_ssrf_prompt = Column(Text, nullable=True)
+    vector_store_poisoning_prompt = Column(Text, nullable=True)
 
     # Performance settings
     cache_ttl_seconds = Column(Integer, default=300, nullable=False)  # 5-minute cache
@@ -2250,6 +2252,10 @@ class SentinelAgentConfig(Base):
     enable_tool_analysis = Column(Boolean, nullable=True)
     enable_shell_analysis = Column(Boolean, nullable=True)
     aggressiveness_level = Column(Integer, nullable=True)
+
+    # Vector store access controls (Item 5)
+    vector_store_access_enabled = Column(Boolean, nullable=True)  # NULL = inherit
+    vector_store_allowed_configs = Column(JSON, nullable=True)  # List of allowed VectorStoreInstance IDs
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -3489,6 +3495,9 @@ class VectorStoreInstance(Base):
     mem_limit = Column(String(20), nullable=True)
     cpu_quota = Column(Integer, nullable=True)
 
+    # Security config (Item 4: MemGuard + rate limiting per-store)
+    security_config = Column(JSON, default=dict)  # thresholds, rate limits, batch limits
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -3496,6 +3505,39 @@ class VectorStoreInstance(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "instance_name", name="uq_vector_store_instance_tenant_name"),
         Index("idx_vsi_tenant_vendor", "tenant_id", "vendor"),
+    )
+
+
+class OKGMemoryAuditLog(Base):
+    """
+    v0.6.1 Item 3: Audit trail for OKG Term Memory operations.
+
+    Tracks all store, recall, forget, and auto-capture operations
+    for compliance, debugging, and MemGuard visibility.
+    """
+    __tablename__ = "okg_memory_audit_log"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    agent_id = Column(Integer, nullable=False)
+    user_id = Column(String(200), nullable=False)
+    action = Column(String(20), nullable=False)  # store|recall|forget|auto_capture
+    doc_id = Column(String(32), nullable=True, index=True)  # sha256[:32] dedup hash
+    memory_type = Column(String(20), nullable=True)  # fact|episodic|semantic|procedural|belief
+    subject_entity = Column(String(200), nullable=True)
+    relation = Column(String(100), nullable=True)
+    confidence = Column(Float, nullable=True)
+    memguard_blocked = Column(Boolean, default=False, nullable=False)
+    memguard_reason = Column(String(500), nullable=True)
+    source = Column(String(20), nullable=True)  # tool_call|auto_capture|import
+    result_count = Column(Integer, nullable=True)  # For recall operations
+    latency_ms = Column(Integer, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_okg_audit_tenant_agent", "tenant_id", "agent_id"),
+        Index("idx_okg_audit_created", "created_at"),
     )
 
 

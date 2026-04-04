@@ -192,7 +192,8 @@ class AgentMemorySystem:
             'working_memory': [],       # Recent messages
             'episodic_memories': [],    # Relevant past conversations
             'semantic_facts': {},       # Known user information
-            'shared_knowledge': []      # Cross-agent knowledge
+            'shared_knowledge': [],     # Cross-agent knowledge
+            'okg_memories': None,       # v0.6.1 Layer 5: OKG long-term memory XML
         }
 
         # Determine active decay config
@@ -223,6 +224,14 @@ class AgentMemorySystem:
                 decay_config=active_decay
             )
             context['shared_knowledge'] = shared_knowledge
+
+        # Layer 5: OKG long-term memory auto-recall (v0.6.1 Item 3)
+        try:
+            okg_context = await self._get_okg_context(user_id, current_message)
+            if okg_context:
+                context['okg_memories'] = okg_context
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"OKG auto-recall skipped: {e}")
 
         return context
 
@@ -508,7 +517,86 @@ class AgentMemorySystem:
                 shared_by = item.get('shared_by_agent', 'unknown')
                 lines.append(f"  [{topic.upper()} - Agent {shared_by}] {content}")
 
+        # v0.6.1 Layer 5: OKG Long-Term Memory (XML block)
+        okg_block = context.get('okg_memories')
+        if okg_block:
+            lines.append("\n" + okg_block)
+
         return "\n".join(lines) if lines else "[No previous context]"
+
+    async def _get_okg_context(self, user_id: str, current_message: str) -> Optional[str]:
+        """
+        v0.6.1 Layer 5: Auto-recall OKG memories for context injection.
+
+        Only runs if okg_term_memory skill is enabled for this agent.
+        Returns XML block or None.
+        """
+        try:
+            from models import AgentSkill
+            skill = self.db.query(AgentSkill).filter(
+                AgentSkill.agent_id == self.agent_id,
+                AgentSkill.skill_type == "okg_term_memory",
+                AgentSkill.is_enabled == True,
+            ).first()
+
+            if not skill:
+                return None
+
+            skill_config = skill.config or {}
+            if not skill_config.get("auto_recall_enabled", True):
+                return None
+
+            from agent.memory.okg import OKGMemoryService, OKGContextInjector
+
+            # Get tenant_id from agent
+            from models import Agent as AgentModel
+            agent = self.db.query(AgentModel).filter(AgentModel.id == self.agent_id).first()
+            if not agent:
+                return None
+
+            # Resolve vector store provider
+            provider = None
+            try:
+                from agent.memory.providers.registry import VectorStoreRegistry
+                from agent.memory.providers.resolver import VectorStoreResolver
+                from agent.memory.providers.bridge import ProviderBridgeStore
+                from agent.memory.embedding_service import get_shared_embedding_service
+
+                instance_id = agent.vector_store_instance_id
+                if instance_id:
+                    registry = VectorStoreRegistry()
+                    resolver = VectorStoreResolver(registry)
+                    resolved = resolver.resolve(
+                        agent_id=self.agent_id,
+                        db=self.db,
+                        persist_directory=self.config.get("chroma_db_path", "./data/chroma"),
+                        vector_store_instance_id=instance_id,
+                        vector_store_mode=agent.vector_store_mode or "override",
+                        tenant_id=agent.tenant_id,
+                    )
+                    if resolved:
+                        embedding_service = get_shared_embedding_service()
+                        provider = ProviderBridgeStore(resolved, embedding_service)
+            except Exception:
+                pass
+
+            okg_service = OKGMemoryService(
+                agent_id=self.agent_id,
+                db_session=self.db,
+                tenant_id=agent.tenant_id,
+                vector_store_provider=provider,
+            )
+            injector = OKGContextInjector(okg_service)
+
+            return await injector.get_context_block(
+                user_id=user_id,
+                current_message=current_message,
+                limit=skill_config.get("auto_recall_limit", 5),
+                min_confidence=skill_config.get("auto_recall_min_confidence", 0.3),
+            )
+        except Exception as e:
+            self.logger.debug(f"OKG context injection skipped: {e}")
+            return None
 
     def _persist_memory_to_db(self, user_id: str) -> None:
         """

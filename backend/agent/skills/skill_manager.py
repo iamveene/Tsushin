@@ -121,7 +121,11 @@ class SkillManager:
             from agent.skills.sandboxed_tools_skill import SandboxedToolsSkill
             self.register_skill(SandboxedToolsSkill)
 
-            logger.info("Built-in skills registered: flight_search, web_search, web_scraping, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image, sandboxed_tools")
+            # v0.6.1 Item 3: OKG Term Memory — structured long-term memory
+            from agent.skills.okg_term_memory_skill import OKGTermMemorySkill
+            self.register_skill(OKGTermMemorySkill)
+
+            logger.info("Built-in skills registered: flight_search, web_search, web_scraping, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image, sandboxed_tools, okg_term_memory")
         except Exception as e:
             logger.error(f"Error registering built-in skills: {e}", exc_info=True)
 
@@ -397,16 +401,37 @@ class SkillManager:
                 if not skill_instance.is_tool_enabled(config):
                     continue
 
-                # Get tool definition in provider-specific format
-                if provider == "anthropic":
-                    tool_def = skill_class.to_anthropic_tool()
+                # v0.6.1: Multi-tool skills (e.g., OKG with 3 tools)
+                if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
+                    all_defs = skill_class.get_all_mcp_tool_definitions()
+                    for mcp_def in all_defs:
+                        if provider == "anthropic":
+                            tool_def = {
+                                "name": mcp_def["name"],
+                                "description": mcp_def["description"],
+                                "input_schema": mcp_def["inputSchema"]
+                            }
+                        else:
+                            tool_def = {
+                                "type": "function",
+                                "function": {
+                                    "name": mcp_def["name"],
+                                    "description": mcp_def["description"],
+                                    "parameters": mcp_def["inputSchema"]
+                                }
+                            }
+                        tools.append(tool_def)
+                    logger.debug(f"Added {len(all_defs)} tools from multi-tool skill '{skill_type}'")
                 else:
-                    # OpenAI format works for: openai, openrouter, groq, ollama, gemini
-                    tool_def = skill_class.to_openai_tool()
+                    # Single-tool skill (standard path)
+                    if provider == "anthropic":
+                        tool_def = skill_class.to_anthropic_tool()
+                    else:
+                        tool_def = skill_class.to_openai_tool()
 
-                if tool_def:
-                    tools.append(tool_def)
-                    logger.debug(f"Added tool from skill '{skill_type}' for provider '{provider}'")
+                    if tool_def:
+                        tools.append(tool_def)
+                        logger.debug(f"Added tool from skill '{skill_type}' for provider '{provider}'")
 
             if tools:
                 logger.info(f"Collected {len(tools)} skill tools for agent {agent_id} (provider: {provider})")
@@ -459,9 +484,14 @@ class SkillManager:
                 if not skill_instance.is_tool_enabled(config):
                     continue
 
-                mcp_def = skill_class.get_mcp_tool_definition()
-                if mcp_def:
-                    tools.append(mcp_def)
+                # v0.6.1: Multi-tool skills
+                if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
+                    for mcp_def in skill_class.get_all_mcp_tool_definitions():
+                        tools.append(mcp_def)
+                else:
+                    mcp_def = skill_class.get_mcp_tool_definition()
+                    if mcp_def:
+                        tools.append(mcp_def)
 
             return tools
 
@@ -546,7 +576,15 @@ class SkillManager:
                         config['comm_parent_session_id'] = message.metadata['comm_parent_session_id']
 
             # Validate arguments against input schema
-            mcp_def = skill_class.get_mcp_tool_definition()
+            # v0.6.1: Multi-tool skills — find the right schema by tool_name
+            mcp_def = None
+            if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
+                for d in skill_class.get_all_mcp_tool_definitions():
+                    if d.get("name") == tool_name:
+                        mcp_def = d
+                        break
+            if not mcp_def:
+                mcp_def = skill_class.get_mcp_tool_definition()
             if mcp_def and mcp_def.get("inputSchema"):
                 validation_error = self._validate_arguments(arguments, mcp_def["inputSchema"])
                 if validation_error:
@@ -557,6 +595,9 @@ class SkillManager:
             skill_instance._config = config
             skill_instance.set_db_session(db)
             skill_instance._agent_id = agent_id
+            # v0.6.1: For multi-tool skills, tell the instance which tool was invoked
+            if hasattr(skill_instance, '_current_tool_name'):
+                skill_instance._current_tool_name = tool_name
             # Phase 0.6.0: Propagate token tracker for cost monitoring
             if hasattr(skill_instance, 'set_token_tracker') and self.token_tracker:
                 skill_instance.set_token_tracker(self.token_tracker)
@@ -608,6 +649,9 @@ class SkillManager:
         """
         Map tool name to skill class using MCP definition.
 
+        Supports multi-tool skills (e.g., OKG with okg_store/okg_recall/okg_forget)
+        via get_all_mcp_tool_definitions().
+
         Args:
             tool_name: Name from LLM tool call
 
@@ -615,7 +659,13 @@ class SkillManager:
             Skill class or None if not found
         """
         for skill_class in self.registry.values():
-            # Check MCP definition first
+            # Check multi-tool definitions first (v0.6.1: OKG Term Memory)
+            if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
+                all_defs = skill_class.get_all_mcp_tool_definitions()
+                if any(d.get("name") == tool_name for d in all_defs):
+                    return skill_class
+
+            # Check single MCP definition
             mcp_def = skill_class.get_mcp_tool_definition()
             if mcp_def and mcp_def.get("name") == tool_name:
                 return skill_class
@@ -725,6 +775,8 @@ class SkillManager:
             return skill_class(db=db, token_tracker=self.token_tracker)
         elif skill_type == "image":
             return skill_class(token_tracker=self.token_tracker)
+        elif skill_type == "okg_term_memory":
+            return skill_class(db=db, agent_id=agent_id)
         else:
             return skill_class()
 

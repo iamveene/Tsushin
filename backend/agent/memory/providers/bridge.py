@@ -27,11 +27,23 @@ class ProviderBridgeStore:
     """
     Bridge between text-based SemanticMemoryService API and
     embedding-based VectorStoreProvider API.
+
+    v0.6.1 Item 4: Optional security context for MemGuard integration.
+    When security_context is provided, add_message runs pre-storage scan
+    and search_similar runs post-retrieval validation.
     """
 
-    def __init__(self, provider: VectorStoreProvider, embedding_service):
+    def __init__(
+        self,
+        provider: VectorStoreProvider,
+        embedding_service,
+        security_context: Optional[Dict] = None,
+    ):
         self._provider = provider
         self._embedding_service = embedding_service
+        # v0.6.1: Optional security context for MemGuard hooks
+        # Keys: db, tenant_id, agent_id, instance_id
+        self._security = security_context
 
     @property
     def embedding_service(self):
@@ -72,7 +84,30 @@ class ProviderBridgeStore:
         """Convert text to embedding, search, return List[Dict] format."""
         embedding = await self._embedding_service.embed_text_async(query_text)
         records = await self._provider.search_similar(embedding, limit, sender_key)
-        return self._records_to_dicts(records)
+        results = self._records_to_dicts(records)
+
+        # v0.6.1 Item 4: Post-retrieval MemGuard validation
+        if self._security and results:
+            try:
+                from services.memguard_service import MemGuardService
+                db = self._security.get("db")
+                tenant_id = self._security.get("tenant_id", "")
+                if db and tenant_id:
+                    memguard = MemGuardService(db, tenant_id)
+                    security_config = memguard._get_security_config(
+                        self._security.get("instance_id", 0)
+                    )
+                    results = await memguard.validate_retrieved_content(
+                        results=results,
+                        tenant_id=tenant_id,
+                        agent_id=self._security.get("agent_id", 0),
+                        instance_id=self._security.get("instance_id", 0),
+                        security_config=security_config,
+                    )
+            except Exception as e:
+                logger.debug(f"Post-retrieval MemGuard check skipped: {e}")
+
+        return results
 
     async def search_similar_with_embeddings(
         self,
