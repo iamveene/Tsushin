@@ -145,13 +145,14 @@ class QdrantVectorAdapter(VectorStoreProvider):
         query_filter = self._build_filter(sender_key)
 
         try:
-            results = self._client.search(
+            response = self._client.query_points(
                 collection_name=self._collection_name,
-                query_vector=query_embedding,
+                query=query_embedding,
                 limit=limit,
                 query_filter=query_filter,
                 with_payload=True,
             )
+            results = response.points
         except Exception as e:
             raise ProviderConnectionError(f"Qdrant search failed: {e}")
 
@@ -179,14 +180,15 @@ class QdrantVectorAdapter(VectorStoreProvider):
         query_filter = self._build_filter(sender_key)
 
         try:
-            results = self._client.search(
+            response = self._client.query_points(
                 collection_name=self._collection_name,
-                query_vector=query_embedding,
+                query=query_embedding,
                 limit=limit,
                 query_filter=query_filter,
                 with_payload=True,
                 with_vectors=True,
             )
+            results = response.points
         except Exception as e:
             raise ProviderConnectionError(f"Qdrant search_with_embeddings failed: {e}")
 
