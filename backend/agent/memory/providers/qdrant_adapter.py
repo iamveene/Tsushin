@@ -224,17 +224,19 @@ class QdrantVectorAdapter(VectorStoreProvider):
             raise ProviderConnectionError(f"Qdrant delete failed: {e}")
 
     async def delete_by_sender(self, sender_key: str) -> None:
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
 
         try:
             self._client.delete(
                 collection_name=self._collection_name,
-                points_selector=Filter(
-                    must=[
-                        FieldCondition(
-                            key="sender_key", match=MatchValue(value=sender_key)
-                        )
-                    ]
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="sender_key", match=MatchValue(value=sender_key)
+                            )
+                        ]
+                    )
                 ),
             )
         except Exception as e:
@@ -319,8 +321,8 @@ class QdrantVectorAdapter(VectorStoreProvider):
         )
 
     @staticmethod
-    def _hash_id(message_id: str) -> int:
-        """Convert string ID to integer (Qdrant uses integer point IDs by default)."""
-        import hashlib
+    def _hash_id(message_id: str) -> str:
+        """Convert string message_id to a deterministic UUID string for Qdrant point ID."""
+        import uuid
 
-        return int(hashlib.sha256(message_id.encode()).hexdigest()[:16], 16)
+        return str(uuid.uuid5(uuid.NAMESPACE_OID, message_id))

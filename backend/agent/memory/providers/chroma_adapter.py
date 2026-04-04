@@ -133,14 +133,23 @@ class ChromaDBAdapter(VectorStoreProvider):
         self._store.collection.delete(where={"sender_key": sender_key})
 
     async def clear_all(self) -> None:
-        client = self._store.collection._client if hasattr(self._store.collection, '_client') else self._store.client
+        collection_name = self._store.collection.name
+        # Access the underlying ChromaDB client
+        if hasattr(self._store, 'client'):
+            client = self._store.client
+        elif hasattr(self._store, 'collection') and hasattr(self._store.collection, '_client'):
+            client = self._store.collection._client
+        else:
+            # Fallback: delegate to the wrapped store
+            self._store.clear_all()
+            return
         try:
-            client.delete_collection(name="whatsapp_messages")
+            client.delete_collection(name=collection_name)
         except Exception:
             pass
         self._store.collection = client.get_or_create_collection(
-            name="whatsapp_messages",
-            metadata={"description": "WhatsApp message embeddings"},
+            name=collection_name,
+            metadata={"description": "Message embeddings"},
         )
 
     async def update_access_time(self, message_ids: List[str]) -> None:

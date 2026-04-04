@@ -88,56 +88,41 @@ class ProviderBridgeStore:
         formatted = self._records_to_dicts(records)
         return formatted, query_embedding, result_embeddings
 
-    def delete_message(self, message_id: str) -> None:
-        """Sync wrapper for delete_message."""
-        import asyncio
-
+    async def delete_message(self, message_id: str) -> None:
+        """Async delete — callers must await."""
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._provider.delete_message(message_id))
-        except RuntimeError:
-            asyncio.run(self._provider.delete_message(message_id))
+            await self._provider.delete_message(message_id)
+        except Exception as e:
+            logger.warning(f"Bridge delete_message failed: {e}")
 
-    def delete_by_sender(self, sender_key: str) -> None:
-        """Sync wrapper for delete_by_sender."""
-        import asyncio
-
+    async def delete_by_sender(self, sender_key: str) -> None:
+        """Async delete_by_sender — callers must await."""
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._provider.delete_by_sender(sender_key))
-        except RuntimeError:
-            asyncio.run(self._provider.delete_by_sender(sender_key))
+            await self._provider.delete_by_sender(sender_key)
+        except Exception as e:
+            logger.warning(f"Bridge delete_by_sender failed: {e}")
 
-    def clear_all(self) -> None:
-        """Sync wrapper for clear_all."""
-        import asyncio
-
+    async def clear_all(self) -> None:
+        """Async clear_all — callers must await."""
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._provider.clear_all())
-        except RuntimeError:
-            asyncio.run(self._provider.clear_all())
+            await self._provider.clear_all()
+        except Exception as e:
+            logger.warning(f"Bridge clear_all failed: {e}")
 
-    def update_access_time(self, message_ids: List[str]) -> None:
-        """Sync wrapper for update_access_time."""
-        import asyncio
-
+    async def update_access_time(self, message_ids: List[str]) -> None:
+        """Async update_access_time — callers must await."""
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._provider.update_access_time(message_ids))
-        except RuntimeError:
-            asyncio.run(self._provider.update_access_time(message_ids))
+            await self._provider.update_access_time(message_ids)
+        except Exception as e:
+            logger.warning(f"Bridge update_access_time failed: {e}")
 
     def get_stats(self) -> Dict:
-        """Sync wrapper for get_stats."""
-        import asyncio
-
-        try:
-            loop = asyncio.get_running_loop()
-            # Can't await in sync context, return basic info
-            return {"provider": "external_bridge", "persist_directory": self.persist_directory}
-        except RuntimeError:
-            return asyncio.run(self._provider.get_stats())
+        """Return basic stats synchronously. Full async stats via health_check."""
+        return {
+            "provider": "external_bridge",
+            "persist_directory": self.persist_directory,
+            "collection_name": "external",
+        }
 
     @staticmethod
     def _records_to_dicts(records) -> List[Dict]:
