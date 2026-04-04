@@ -3,15 +3,17 @@
 import { VectorStoreInstance } from '@/lib/client'
 
 const VENDOR_LABELS: Record<string, string> = {
-  mongodb: 'MongoDB Atlas',
+  mongodb: 'MongoDB',
   pinecone: 'Pinecone',
   qdrant: 'Qdrant',
 }
 
-const VENDOR_BADGES: Record<string, string> = {
-  mongodb: 'Atlas',
-  pinecone: 'Pinecone',
-  qdrant: 'Qdrant',
+function getVendorBadge(instance: VectorStoreInstance): string {
+  if (instance.vendor === 'mongodb') {
+    return instance.extra_config?.use_native_search === false ? 'MongoDB' : 'Atlas'
+  }
+  const badges: Record<string, string> = { pinecone: 'Pinecone', qdrant: 'Qdrant' }
+  return badges[instance.vendor] || instance.vendor
 }
 
 const STATUS_STYLES: Record<string, { dot: string; dotColor: string; label: string }> = {
@@ -38,7 +40,7 @@ export default function VectorStoreCard({
 }: VectorStoreCardProps) {
   const status = STATUS_STYLES[instance.health_status] || STATUS_STYLES.unknown
   const vendorLabel = VENDOR_LABELS[instance.vendor] || instance.vendor
-  const badge = VENDOR_BADGES[instance.vendor] || instance.vendor
+  const badge = getVendorBadge(instance)
 
   return (
     <div className="bg-[#12121a] border border-white/5 rounded-xl p-4 hover:border-white/15 transition-colors">
