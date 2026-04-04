@@ -7,13 +7,13 @@
  * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI, ElevenLabs
  * - Communication: WhatsApp, Telegram, Discord, Slack, Email (coming soon)
  * - Productivity: Asana, Google Calendar, Notion (coming soon)
- * - Developer Tools: Shell, GitHub (coming soon)
+ * - Developer Tools: Shell, Sandboxed Tools, GitHub (coming soon)
  * - Tool APIs: Brave Search, Amadeus
- * - Sandboxed Tools: Per-tenant toolbox containers
  */
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, Config, ProviderInstance, VectorStoreInstance } from '@/lib/client'
@@ -66,7 +66,7 @@ import {
 } from '@/components/ui/icons'
 import ToggleSwitch from '@/components/ui/ToggleSwitch'
 
-type TabType = 'ai-providers' | 'communication' | 'productivity' | 'developer' | 'tool-apis' | 'sandboxed-tools' | 'mcp-servers' | 'vector-stores'
+type TabType = 'ai-providers' | 'communication' | 'productivity' | 'developer' | 'tool-apis' | 'mcp-servers' | 'vector-stores'
 
 // SVG Icons for Hub Tabs
 const BotIcon = () => (
@@ -243,7 +243,22 @@ const NOTIFICATION_SERVICES: { value: string; label: string; Icon: React.FC<Icon
 export default function HubPage() {
   const toast = useToast()
   const { isGlobalAdmin, hasPermission } = useAuth()
-  const [activeTab, setActiveTab] = useState<TabType>('ai-providers')
+  const searchParams = useSearchParams()
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    if (typeof window === 'undefined') return 'ai-providers'
+    const validTabs: TabType[] = ['ai-providers', 'communication', 'productivity', 'developer', 'tool-apis', 'mcp-servers', 'vector-stores']
+    const requested = new URLSearchParams(window.location.search).get('tab') as TabType | null
+    return requested && validTabs.includes(requested) ? requested : 'ai-providers'
+  })
+
+  // Sync activeTab with ?tab= query param when it changes (e.g., via soft nav back from sub-pages)
+  useEffect(() => {
+    const validTabs: TabType[] = ['ai-providers', 'communication', 'productivity', 'developer', 'tool-apis', 'mcp-servers', 'vector-stores']
+    const requested = searchParams?.get('tab') as TabType | null
+    if (requested && validTabs.includes(requested)) {
+      setActiveTab(requested)
+    }
+  }, [searchParams])
 
   // API Keys state
   const [apiKeys, setApiKeys] = useState<APIKey[]>([])
@@ -1848,7 +1863,6 @@ export default function HubPage() {
     { key: 'productivity', label: 'Productivity', Icon: ClipboardIcon, color: 'text-tsushin-warning', iconBg: 'bg-tsushin-warning/10' },
     { key: 'developer', label: 'Developer Tools', Icon: TerminalIcon, color: 'text-purple-400', iconBg: 'bg-purple-400/10' },
     { key: 'tool-apis', label: 'Tool APIs', Icon: WrenchIcon, color: 'text-tsushin-success', iconBg: 'bg-tsushin-success/10' },
-    { key: 'sandboxed-tools', label: 'Sandboxed Tools', Icon: BoxIcon, color: 'text-pink-400', iconBg: 'bg-pink-400/10' },
     { key: 'mcp-servers', label: 'MCP Servers', Icon: ServerIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'vector-stores', label: 'Vector Stores', Icon: VectorStoreIcon, color: 'text-emerald-400', iconBg: 'bg-emerald-400/10' },
   ]
@@ -3181,13 +3195,13 @@ export default function HubPage() {
               <div className="space-y-6 animate-fade-in">
                 <div>
                   <h2 className="text-lg font-display font-semibold text-white">Developer Tools</h2>
-                  <p className="text-sm text-tsushin-slate">Connect development and DevOps platforms</p>
+                  <p className="text-sm text-tsushin-slate">Shell execution, sandboxed tools, and DevOps integrations</p>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {/* Shell Command Center - Featured Card */}
+                  {/* Shell Command Center - Featured Card (full-width hero) */}
                   <div
-                    className="card p-5 hover-glow group border-teal-700/30 col-span-full lg:col-span-2 cursor-pointer"
+                    className="card p-5 hover-glow group border-teal-700/30 col-span-full cursor-pointer"
                     onClick={() => window.location.href = '/hub/shell'}
                   >
                     <div className="flex items-center justify-between mb-4">
@@ -3233,6 +3247,90 @@ export default function HubPage() {
                     </button>
                   </div>
 
+                  {/* Toolbox Container - Sandboxed Tools */}
+                  <div
+                    className="card p-5 hover-glow group border-purple-700/30 col-span-full lg:col-span-2 cursor-pointer"
+                    onClick={() => window.location.href = '/hub/sandboxed-tools'}
+                  >
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-purple-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                          <BoxIconSvg size={24} className="text-purple-400" />
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-white text-lg">Sandboxed Tools</h3>
+                          <p className="text-sm text-tsushin-slate">Per-tenant isolated execution environment</p>
+                        </div>
+                      </div>
+                      {getToolboxBadge()}
+                    </div>
+                    <div className="text-sm text-tsushin-slate mb-4">
+                      <p className="mb-2">Create command-based tools that run in a secure, isolated container with pre-installed security scanners and utilities.</p>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3">
+                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
+                          <span className="text-xs text-tsushin-accent">nmap</span>
+                          <p className="text-xs text-gray-500">Network scanner</p>
+                        </div>
+                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
+                          <span className="text-xs text-tsushin-accent">nuclei</span>
+                          <p className="text-xs text-gray-500">Vuln scanner</p>
+                        </div>
+                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
+                          <span className="text-xs text-tsushin-accent">katana</span>
+                          <p className="text-xs text-gray-500">Web crawler</p>
+                        </div>
+                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
+                          <span className="text-xs text-tsushin-accent">httpx</span>
+                          <p className="text-xs text-gray-500">HTTP toolkit</p>
+                        </div>
+                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
+                          <span className="text-xs text-tsushin-accent">subfinder</span>
+                          <p className="text-xs text-gray-500">Subdomain finder</p>
+                        </div>
+                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
+                          <span className="text-xs text-tsushin-accent">Python 3.11</span>
+                          <p className="text-xs text-gray-500">Scripting</p>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); window.location.href = '/hub/sandboxed-tools' }}
+                      className="w-full btn-primary py-2.5 text-sm font-medium"
+                    >
+                      Open Toolbox Manager →
+                    </button>
+                  </div>
+
+                  {/* Sandboxed Tools Quick Actions */}
+                  <div className="card p-5 hover-glow group">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-10 h-10 rounded-xl bg-teal-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <LightningIcon size={20} className="text-teal-400" />
+                      </div>
+                      <h3 className="font-semibold text-white">Quick Actions</h3>
+                    </div>
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => window.location.href = '/hub/sandboxed-tools?action=create'}
+                        className="w-full btn-ghost py-2 text-sm text-left flex items-center gap-2"
+                      >
+                        <PlusIconSvg size={16} /> Create New Tool
+                      </button>
+                      <button
+                        onClick={() => window.location.href = '/hub/sandboxed-tools?tab=packages'}
+                        className="w-full btn-ghost py-2 text-sm text-left flex items-center gap-2"
+                      >
+                        <PackageIcon size={16} /> Install Package
+                      </button>
+                      <button
+                        onClick={() => window.location.href = '/hub/sandboxed-tools?tab=executions'}
+                        className="w-full btn-ghost py-2 text-sm text-left flex items-center gap-2"
+                      >
+                        <ClipboardIconSvg size={16} /> View Executions
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Coming Soon Developer Tools */}
                   {DEVELOPER_TOOLS.filter(tool => tool.status === 'coming_soon').map(tool => {
                     const ToolIcon = tool.Icon
@@ -3264,8 +3362,9 @@ export default function HubPage() {
                     <LightbulbIcon size={16} className="text-blue-300" /> Developer Integrations
                   </h3>
                   <p className="text-xs text-tsushin-slate">
-                    The Shell Command Center is now available for remote command execution with security approval workflows.
-                    GitHub integration is coming soon, enabling agents to create issues, summarize PRs, and respond to repository events.
+                    The Shell Command Center enables remote command execution with security approval workflows. Sandboxed Tools provide
+                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts. GitHub integration
+                    is coming soon, enabling agents to create issues, summarize PRs, and respond to repository events.
                   </p>
                 </div>
               </div>
@@ -3293,119 +3392,6 @@ export default function HubPage() {
                   <p className="text-xs text-tsushin-slate">
                     These tools are automatically available to agents when the corresponding API keys are configured.
                     Tools include: Web Search (Brave/Google), Flight Search (Amadeus/Google), and Web Scraping.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* ==================== CUSTOM TOOLS TAB ==================== */}
-            {activeTab === 'sandboxed-tools' && (
-              <div className="space-y-6 animate-fade-in">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <h2 className="text-lg font-display font-semibold text-white">Sandboxed Tools</h2>
-                    <p className="text-sm text-tsushin-slate">Manage and create command-based tools for agents</p>
-                  </div>
-                  <button
-                    onClick={() => window.location.href = '/hub/sandboxed-tools'}
-                    className="btn-primary"
-                  >
-                    Manage Tools →
-                  </button>
-                </div>
-
-                {/* Toolbox Status Card */}
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  <div className="card p-5 hover-glow group col-span-full lg:col-span-2">
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-xl bg-purple-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
-                          <BoxIconSvg size={24} className="text-purple-400" />
-                        </div>
-                        <div>
-                          <h3 className="font-semibold text-white text-lg">Toolbox Container</h3>
-                          <p className="text-sm text-tsushin-slate">Per-tenant isolated execution environment</p>
-                        </div>
-                      </div>
-                      {getToolboxBadge()}
-                    </div>
-                    <div className="text-sm text-tsushin-slate mb-4">
-                      <p className="mb-2">The toolbox container provides a secure, isolated environment for running sandboxed tools with pre-installed security scanners and utilities.</p>
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3">
-                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
-                          <span className="text-xs text-tsushin-accent">nmap</span>
-                          <p className="text-xs text-gray-500">Network scanner</p>
-                        </div>
-                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
-                          <span className="text-xs text-tsushin-accent">nuclei</span>
-                          <p className="text-xs text-gray-500">Vuln scanner</p>
-                        </div>
-                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
-                          <span className="text-xs text-tsushin-accent">katana</span>
-                          <p className="text-xs text-gray-500">Web crawler</p>
-                        </div>
-                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
-                          <span className="text-xs text-tsushin-accent">httpx</span>
-                          <p className="text-xs text-gray-500">HTTP toolkit</p>
-                        </div>
-                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
-                          <span className="text-xs text-tsushin-accent">subfinder</span>
-                          <p className="text-xs text-gray-500">Subdomain finder</p>
-                        </div>
-                        <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
-                          <span className="text-xs text-tsushin-accent">Python 3.11</span>
-                          <p className="text-xs text-gray-500">Scripting</p>
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => window.location.href = '/hub/sandboxed-tools'}
-                      className="w-full btn-secondary py-2 text-sm"
-                    >
-                      Open Toolbox Manager
-                    </button>
-                  </div>
-
-                  {/* Quick Stats Card */}
-                  <div className="card p-5 hover-glow group">
-                    <div className="flex items-center gap-3 mb-4">
-                      <div className="w-10 h-10 rounded-xl bg-teal-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <LightningIcon size={20} className="text-teal-400" />
-                      </div>
-                      <h3 className="font-semibold text-white">Quick Actions</h3>
-                    </div>
-                    <div className="space-y-2">
-                      <button
-                        onClick={() => window.location.href = '/hub/sandboxed-tools?action=create'}
-                        className="w-full btn-ghost py-2 text-sm text-left flex items-center gap-2"
-                      >
-                        <PlusIconSvg size={16} /> Create New Tool
-                      </button>
-                      <button
-                        onClick={() => window.location.href = '/hub/sandboxed-tools?tab=packages'}
-                        className="w-full btn-ghost py-2 text-sm text-left flex items-center gap-2"
-                      >
-                        <PackageIcon size={16} /> Install Package
-                      </button>
-                      <button
-                        onClick={() => window.location.href = '/hub/sandboxed-tools?tab=executions'}
-                        className="w-full btn-ghost py-2 text-sm text-left flex items-center gap-2"
-                      >
-                        <ClipboardIconSvg size={16} /> View Executions
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Info Box */}
-                <div className="bg-purple-500/5 border border-purple-500/20 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-purple-300 mb-2 flex items-center gap-2">
-                    <LightbulbIcon size={16} className="text-purple-300" /> Sandboxed Tools Feature
-                  </h3>
-                  <p className="text-xs text-tsushin-slate">
-                    Sandboxed Tools allow you to create command-based tools that agents can execute in a secure container environment.
-                    Tools can run network scans, vulnerability assessments, web crawling, and custom scripts.
-                    Each tenant gets an isolated container with the ability to install additional packages.
                   </p>
                 </div>
               </div>

@@ -566,9 +566,9 @@ export default function ShellDashboardPage() {
         <div className="flex justify-between items-center mb-8">
           <div>
             <div className="flex items-center gap-4 mb-2">
-              <a href="/hub" className="text-gray-400 hover:text-white transition-colors flex items-center gap-2">
+              <a href="/hub?tab=developer" className="text-gray-400 hover:text-white transition-colors flex items-center gap-2">
                 <span>←</span>
-                <span className="text-sm">Back to Hub</span>
+                <span className="text-sm">Back to Developer Tools</span>
               </a>
             </div>
             <h1 className="text-3xl font-bold text-white mb-2 flex items-center gap-3">
