@@ -2387,6 +2387,10 @@ export interface VectorStoreInstance {
   last_health_check?: string | null
   is_default: boolean
   is_active: boolean
+  is_auto_provisioned: boolean
+  container_status?: string | null  // none | creating | running | stopped | error
+  container_name?: string | null
+  container_port?: number | null
   created_at?: string | null
   updated_at?: string | null
 }
@@ -2399,6 +2403,9 @@ export interface VectorStoreInstanceCreate {
   credentials?: Record<string, any>
   extra_config?: Record<string, any>
   is_default?: boolean
+  auto_provision?: boolean
+  mem_limit?: string
+  cpu_quota?: number
 }
 
 // ==================== Custom Skills (Phase 22/23) ====================
@@ -6527,6 +6534,43 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/stats`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch vector store stats')
     return res.json()
+  },
+
+  async vectorStoreContainerAction(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/container/${action}`, { method: 'POST' })
+    if (!res.ok) await handleApiError(res, `Failed to ${action} container`)
+    return res.json()
+  },
+
+  async getVectorStoreContainerStatus(id: number): Promise<Record<string, any>> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/container/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to get container status')
+    return res.json()
+  },
+
+  async getVectorStoreContainerLogs(id: number, tail: number = 100): Promise<{ logs: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/container/logs?tail=${tail}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get container logs')
+    return res.json()
+  },
+
+  async deleteVectorStoreInstance(id: number, removeVolume: boolean = false): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}?remove_volume=${removeVolume}`, { method: 'DELETE' })
+    if (!res.ok) await handleApiError(res, 'Failed to delete vector store')
+  },
+
+  async getDefaultVectorStore(): Promise<{ default_vector_store_instance_id: number | null; instance: VectorStoreInstance | null }> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/vector-stores/default`)
+    if (!res.ok) await handleApiError(res, 'Failed to get default vector store')
+    return res.json()
+  },
+
+  async updateDefaultVectorStore(instanceId: number | null): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/vector-stores/default`, {
+      method: 'PUT',
+      body: JSON.stringify({ default_vector_store_instance_id: instanceId }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update default vector store')
   },
 
   // ==================== Custom Skills (Phase 22/23) ====================

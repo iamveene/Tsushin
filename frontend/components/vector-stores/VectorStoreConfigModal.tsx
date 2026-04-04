@@ -33,6 +33,8 @@ export default function VectorStoreConfigModal({
   const [description, setDescription] = useState('')
   const [connectionConfig, setConnectionConfig] = useState<Record<string, any>>({})
   const [isDefault, setIsDefault] = useState(false)
+  const [autoProvision, setAutoProvision] = useState(false)
+  const [memLimit, setMemLimit] = useState('1g')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency_ms?: number; vector_count?: number } | null>(null)
@@ -74,6 +76,8 @@ export default function VectorStoreConfigModal({
         setDescription('')
         setConnectionConfig({})
         setIsDefault(false)
+        setAutoProvision(false)
+        setMemLimit('1g')
         setCredentialsTouched(false)
       }
       setError(null)
@@ -127,10 +131,12 @@ export default function VectorStoreConfigModal({
           vendor,
           instance_name: instanceName,
           description: description || undefined,
-          base_url: baseUrl,
-          credentials: hasNewCredentials ? credentials : undefined,
+          base_url: autoProvision ? undefined : baseUrl,
+          credentials: autoProvision ? undefined : (hasNewCredentials ? credentials : undefined),
           extra_config: extraConfig,
           is_default: isDefault,
+          auto_provision: autoProvision,
+          mem_limit: autoProvision ? memLimit : undefined,
         })
       }
 
@@ -258,32 +264,67 @@ export default function VectorStoreConfigModal({
           />
         </div>
 
-        {/* Provider-specific form */}
-        <div className="pt-2 border-t border-white/5">
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Connection Settings</h3>
-          {vendor === 'mongodb' && (
-            <MongoAtlasConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
-          )}
-          {vendor === 'pinecone' && (
-            <PineconeConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
-          )}
-          {vendor === 'qdrant' && (
-            <QdrantConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
-          )}
-        </div>
+        {/* Auto-Provision Toggle (Qdrant/MongoDB only, create mode) */}
+        {!isEditing && (vendor === 'qdrant' || vendor === 'mongodb') && (
+          <div className="flex items-center gap-3 p-3 rounded-lg border border-white/5 bg-white/[0.02]">
+            <button
+              type="button"
+              onClick={() => setAutoProvision(!autoProvision)}
+              className={`relative w-10 h-5 rounded-full transition-colors ${
+                autoProvision ? 'bg-teal-500/80' : 'bg-white/10'
+              }`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                autoProvision ? 'translate-x-5' : ''
+              }`} />
+            </button>
+            <div>
+              <span className="text-sm text-gray-300">Auto-Provision Container</span>
+              <p className="text-xs text-gray-500">
+                {autoProvision
+                  ? `Tsushin will create and manage a local ${vendor === 'qdrant' ? 'Qdrant' : 'MongoDB'} Docker container for you`
+                  : 'Connect to an existing external instance'}
+              </p>
+            </div>
+          </div>
+        )}
 
-        {/* Default toggle */}
-        <div className="flex items-center gap-2 pt-2 border-t border-white/5">
-          <input
-            type="checkbox"
-            id="vs-default"
-            checked={isDefault}
-            onChange={(e) => setIsDefault(e.target.checked)}
-            className="rounded border-white/20 bg-[#0a0a0f]"
-          />
-          <label htmlFor="vs-default" className="text-sm text-gray-300">
-            Set as default vector store
-          </label>
+        {/* Resource Limits (auto-provision only) */}
+        {autoProvision && !isEditing && (
+          <div className="p-3 rounded-lg border border-white/5 bg-white/[0.02]">
+            <label className="block text-sm text-gray-300 mb-2">Memory Limit</label>
+            <select
+              value={memLimit}
+              onChange={(e) => setMemLimit(e.target.value)}
+              className="w-full px-3 py-2 border border-white/10 rounded-lg text-white bg-[#0a0a0f] text-sm"
+            >
+              <option value="512m">512 MB</option>
+              <option value="1g">1 GB (default)</option>
+              <option value="2g">2 GB</option>
+              <option value="4g">4 GB</option>
+            </select>
+          </div>
+        )}
+
+        {/* Provider-specific form (hidden when auto-provision) */}
+        {!autoProvision && (
+          <div className="pt-2 border-t border-white/5">
+            <h3 className="text-sm font-medium text-gray-300 mb-3">Connection Settings</h3>
+            {vendor === 'mongodb' && (
+              <MongoAtlasConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
+            )}
+            {vendor === 'pinecone' && (
+              <PineconeConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
+            )}
+            {vendor === 'qdrant' && (
+              <QdrantConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
+            )}
+          </div>
+        )}
+
+        {/* Info note about default setting */}
+        <div className="text-xs text-gray-500 pt-2 border-t border-white/5">
+          Default vector store is configured in Settings &gt; Vector Stores.
         </div>
       </div>
     </Modal>

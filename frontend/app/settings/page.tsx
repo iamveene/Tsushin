@@ -150,6 +150,13 @@ export default function SettingsHubPage() {
       permission: 'org.settings.write',
     },
     {
+      title: 'Vector Stores',
+      description: 'Configure default vector store for agent memory',
+      icon: icons.ai,
+      href: '/settings/vector-stores',
+      permission: 'org.settings.read',
+    },
+    {
       title: 'Prompts & Patterns',
       description: 'Manage system prompts, tone presets, and command patterns',
       icon: icons.ai,
