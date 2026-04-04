@@ -97,7 +97,7 @@ export default function MongoAtlasConfigForm({ config, onChange, isEditing }: Mo
       <div className="flex items-center gap-3 p-3 rounded-lg border border-white/5 bg-white/[0.02]">
         <button
           type="button"
-          onClick={() => update('use_native_search', config.use_native_search === false ? true : false)}
+          onClick={() => update('use_native_search', config.use_native_search === false)}
           className={`relative w-10 h-5 rounded-full transition-colors ${
             config.use_native_search === false ? 'bg-amber-500/80' : 'bg-white/10'
           }`}

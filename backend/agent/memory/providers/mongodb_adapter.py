@@ -13,8 +13,6 @@ import time
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 
-import numpy as np
-
 from .base import VectorStoreProvider, VectorRecord, ProviderHealthResult, ProviderConnectionError
 
 logger = logging.getLogger(__name__)
@@ -125,7 +123,8 @@ class MongoDBVectorAdapter(VectorStoreProvider):
         sender_key: Optional[str] = None,
     ) -> List[VectorRecord]:
         if not self._use_native_search:
-            return self._local_cosine_search(query_embedding, limit, sender_key)
+            import asyncio
+            return await asyncio.to_thread(self._local_cosine_search, query_embedding, limit, sender_key)
 
         pipeline = self._build_search_pipeline(query_embedding, limit, sender_key)
 
@@ -152,7 +151,8 @@ class MongoDBVectorAdapter(VectorStoreProvider):
         sender_key: Optional[str] = None,
     ) -> Tuple[List[VectorRecord], List[List[float]]]:
         if not self._use_native_search:
-            return self._local_cosine_search_with_embeddings(query_embedding, limit, sender_key)
+            import asyncio
+            return await asyncio.to_thread(self._local_cosine_search_with_embeddings, query_embedding, limit, sender_key)
 
         pipeline = self._build_search_pipeline(query_embedding, limit, sender_key)
 
@@ -273,6 +273,8 @@ class MongoDBVectorAdapter(VectorStoreProvider):
         self, query_embedding: List[float], limit: int, sender_key: Optional[str]
     ) -> List[VectorRecord]:
         """Compute cosine similarity in Python for self-hosted MongoDB (no Atlas)."""
+        import numpy as np
+
         query_filter: Dict = {}
         if sender_key:
             query_filter["sender_key"] = sender_key
@@ -319,12 +321,14 @@ class MongoDBVectorAdapter(VectorStoreProvider):
         self, query_embedding: List[float], limit: int, sender_key: Optional[str]
     ) -> Tuple[List[VectorRecord], List[List[float]]]:
         """Local cosine search returning embeddings too."""
+        import numpy as np
+
         query_filter: Dict = {}
         if sender_key:
             query_filter["sender_key"] = sender_key
 
         try:
-            docs = list(self._collection.find(query_filter))
+            docs = list(self._collection.find(query_filter, {"_id": 1, "text": 1, "sender_key": 1, "embedding": 1, "metadata": 1}))
         except Exception as e:
             raise ProviderConnectionError(f"MongoDB local search failed: {e}")
 
