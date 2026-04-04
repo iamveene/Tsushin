@@ -54,7 +54,7 @@ class SemanticMemoryService:
             enable_semantic: Whether to enable semantic search
             vector_store_override: Optional ProviderBridgeStore to use instead of ChromaDB default.
                                   When provided, replaces the VectorStoreManager-managed store.
-                                  v0.6.1: Enables external vector store backends.
+                                  v0.6.0: Enables external vector store backends.
         """
         self.logger = logging.getLogger(__name__)
         self.enable_semantic = enable_semantic
@@ -66,7 +66,7 @@ class SemanticMemoryService:
         # Initialize semantic search components (if enabled)
         if self.enable_semantic:
             if vector_store_override is not None:
-                # v0.6.1: Use external vector store provider via bridge
+                # v0.6.0: Use external vector store provider via bridge
                 self.vector_store = vector_store_override
                 self.embedding_service = vector_store_override.embedding_service
                 self.logger.info("Semantic search enabled (using external vector store provider)")

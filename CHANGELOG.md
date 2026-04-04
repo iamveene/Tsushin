@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-#### OKG Term Memory Skill (v0.6.1 Item 3)
+#### OKG Term Memory Skill (v0.6.0)
 - **Ontological Knowledge Graph skill**: New `okg_term_memory` skill providing structured long-term memory with typed metadata (subject/relation/type/confidence). First multi-tool skill in Tsushin.
 - **Three LLM-callable tools**: `okg_store` (store memory with ontological metadata), `okg_recall` (search by query + metadata filters with temporal decay), `okg_forget` (delete by doc_id).
 - **Auto-capture hook**: Post-response FactExtractor integration auto-stores durable facts from conversations with `source=auto_capture`.
@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SkillManager multi-tool support**: `get_all_mcp_tool_definitions()`, `_current_tool_name` dispatch, multi-tool schema validation. All existing single-tool skills unaffected.
 - **OKGMemoryAuditLog table**: Full audit trail of store/recall/forget/auto_capture operations with MemGuard block tracking.
 
-#### MemGuard Vector Store Defense (v0.6.1 Item 4)
+#### MemGuard Vector Store Defense (v0.6.0)
 - **New pattern categories**: `embedding_manipulation` (weight 0.80) detects raw float arrays, metadata overrides, distance manipulation. `cross_tenant_leak` (weight 0.75) detects tenant metadata smuggling and namespace confusion.
 - **Batch poisoning detection**: `detect_batch_poisoning()` with configurable thresholds (max 50 docs / 60s window / 0.95 similarity). Immediate block for batches exceeding max_batch_write_size.
 - **Post-retrieval scanning (Layer C)**: `validate_retrieved_content()` scans retrieved vector store results at lower threshold (0.5 vs 0.7) and verifies tenant_id metadata isolation.
@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Rate limiter**: `VectorStoreRateLimiter` singleton with sliding-window enforcement for reads (per agent) and writes (per tenant).
 - **Bridge security hooks**: `ProviderBridgeStore` accepts optional `security_context` for automatic post-retrieval MemGuard validation.
 
-#### Sentinel Vector Store Detection (v0.6.1 Item 5)
+#### Sentinel Vector Store Detection (v0.6.0)
 - **New detection type**: `vector_store_poisoning` in DETECTION_REGISTRY with `applies_to: ["vector_store"]`, severity "high", default enabled.
 - **LLM prompts**: 3 aggressiveness levels for vector store content analysis (instruction-bearing docs, embedding manipulation, batch saturation, cross-tenant leakage).
 - **Unified classification update**: `vector_store_poisoning` added to all 3 UNIFIED_CLASSIFICATION_PROMPT levels with proper priority ordering.

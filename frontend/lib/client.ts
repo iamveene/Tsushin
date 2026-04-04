@@ -2372,7 +2372,7 @@ export interface ProviderInstanceCreate {
   is_default?: boolean
 }
 
-// ==================== Vector Store Instances (v0.6.1) ====================
+// ==================== Vector Store Instances (v0.6.0) ====================
 
 export interface VectorStoreInstance {
   id: number
@@ -6490,7 +6490,7 @@ export const api = {
     return res.json()
   },
 
-  // ==================== Vector Store Instances (v0.6.1) ====================
+  // ==================== Vector Store Instances (v0.6.0) ====================
 
   async getVectorStoreInstances(vendor?: string): Promise<VectorStoreInstance[]> {
     const params = vendor ? `?vendor=${vendor}` : ''

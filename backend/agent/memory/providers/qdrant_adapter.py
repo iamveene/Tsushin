@@ -1,5 +1,5 @@
 """
-v0.6.1: Qdrant vector store adapter.
+v0.6.0: Qdrant vector store adapter.
 
 Uses qdrant-client for self-hosted or Qdrant Cloud vector search.
 Supports both cosine and dot product distance metrics.

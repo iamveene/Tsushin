@@ -122,7 +122,7 @@ class MultiAgentMemoryManager:
             else:
                 config_to_use = agent_config
 
-            # v0.6.1: Resolve external vector store provider if configured
+            # v0.6.0: Resolve external vector store provider if configured
             vector_store_provider = self._resolve_vector_store(agent_id, persist_dir)
 
             memory = AgentMemorySystem(
@@ -142,7 +142,7 @@ class MultiAgentMemoryManager:
 
     def _resolve_vector_store(self, agent_id: int, persist_dir: str):
         """
-        v0.6.1: Resolve agent's vector store configuration to a ProviderBridgeStore.
+        v0.6.0: Resolve agent's vector store configuration to a ProviderBridgeStore.
 
         Returns None when agent uses ChromaDB default (vector_store_instance_id IS NULL).
         Fails open to None (ChromaDB) on any error.
@@ -191,7 +191,7 @@ class MultiAgentMemoryManager:
                 return None
 
             embedding_service = get_shared_embedding_service()
-            # v0.6.1 Item 4: Pass security context for post-retrieval MemGuard checks
+            # v0.6.0 Item 4: Pass security context for post-retrieval MemGuard checks
             security_context = {
                 "db": self.db,
                 "tenant_id": agent.tenant_id,

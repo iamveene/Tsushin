@@ -1,5 +1,5 @@
 """
-v0.6.1 Item 1: Add Vector Store Instance table and Agent FK.
+v0.6.0 Item 1: Add Vector Store Instance table and Agent FK.
 
 Creates:
 - vector_store_instance: External vector database connection configs

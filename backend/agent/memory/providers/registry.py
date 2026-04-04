@@ -1,5 +1,5 @@
 """
-v0.6.1: Vector Store Registry — singleton cache of provider instances.
+v0.6.0: Vector Store Registry — singleton cache of provider instances.
 
 Manages lifecycle of vector store adapters, keyed by instance_id.
 Includes circuit breaker per instance for fail-open fallback to ChromaDB.

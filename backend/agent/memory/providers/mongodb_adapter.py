@@ -1,5 +1,5 @@
 """
-v0.6.1: MongoDB Vector Search adapter.
+v0.6.0: MongoDB Vector Search adapter.
 
 Supports two modes:
 - Atlas mode (default): Uses $vectorSearch aggregation pipeline (requires Atlas).

@@ -1,5 +1,5 @@
 """
-v0.6.1 Item 3: OKG Memory Service — Core operations for the Ontological
+v0.6.0 Item 3: OKG Memory Service — Core operations for the Ontological
 Knowledge Graph long-term memory system.
 
 Supports store, recall, forget, and merge operations with:

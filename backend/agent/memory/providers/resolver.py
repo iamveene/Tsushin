@@ -1,5 +1,5 @@
 """
-v0.6.1: Vector Store Resolver — resolves agent config into provider(s) with mode logic.
+v0.6.0: Vector Store Resolver — resolves agent config into provider(s) with mode logic.
 
 The resolver is the single entry point for AgentMemorySystem. It returns a
 ResolvedVectorStore that implements mode logic (override/complement/shadow)
@@ -318,7 +318,7 @@ class VectorStoreResolver:
             logger.warning(f"Invalid vector_store_mode '{vector_store_mode}' for agent {agent_id}, using 'override'")
             vector_store_mode = "override"
 
-        # v0.6.1 Item 5: Enforce per-agent vector store access control
+        # v0.6.0 Item 5: Enforce per-agent vector store access control
         try:
             from models import SentinelAgentConfig
             agent_sentinel = db.query(SentinelAgentConfig).filter(

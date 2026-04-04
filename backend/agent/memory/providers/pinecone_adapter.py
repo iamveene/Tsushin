@@ -1,5 +1,5 @@
 """
-v0.6.1: Pinecone vector store adapter.
+v0.6.0: Pinecone vector store adapter.
 
 Uses the Pinecone SDK for serverless vector search.
 Distance convention: Pinecone returns similarity (0-1), we convert to distance = 1 - score.

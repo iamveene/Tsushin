@@ -323,7 +323,7 @@ export default function HubPage() {
   const [mcpServerActionLoading, setMcpServerActionLoading] = useState<number | null>(null)
   const [allowedBinaries, setAllowedBinaries] = useState<string[]>(['uvx', 'npx', 'node'])
 
-  // v0.6.1: Vector Store Instances
+  // v0.6.0: Vector Store Instances
   const [vectorStoreInstances, setVectorStoreInstances] = useState<VectorStoreInstance[]>([])
   const [vectorStoresLoading, setVectorStoresLoading] = useState(false)
   const [showVectorStoreModal, setShowVectorStoreModal] = useState(false)
@@ -391,7 +391,7 @@ export default function HubPage() {
         loadMcpServers()  // Phase 26
       }
       if (activeTab === 'vector-stores') {
-        loadVectorStoreInstances()  // v0.6.1
+        loadVectorStoreInstances()  // v0.6.0
       }
     }, 10000)
     return () => clearInterval(interval)
@@ -539,7 +539,7 @@ export default function HubPage() {
         loadSystemConfig(),
         fetchProviderInstances(),  // Phase 21: Provider Instances
         loadMcpServers(),  // Phase 26: MCP Servers
-        loadVectorStoreInstances(),  // v0.6.1: Vector Store Instances
+        loadVectorStoreInstances(),  // v0.6.0: Vector Store Instances
       ])
     } finally {
       setLoading(false)
@@ -3562,7 +3562,7 @@ export default function HubPage() {
               </div>
             )}
 
-            {/* v0.6.1: Vector Stores Tab */}
+            {/* v0.6.0: Vector Stores Tab */}
             {activeTab === 'vector-stores' && (
               <div className="space-y-6 animate-fade-in">
                 {/* Header */}
@@ -4243,7 +4243,7 @@ export default function HubPage() {
         saving={saving}
       />
 
-      {/* v0.6.1: Vector Store Config Modal */}
+      {/* v0.6.0: Vector Store Config Modal */}
       <VectorStoreConfigModal
         isOpen={showVectorStoreModal}
         onClose={() => { setShowVectorStoreModal(false); setEditingVectorStore(null) }}

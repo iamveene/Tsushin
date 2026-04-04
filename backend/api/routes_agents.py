@@ -137,7 +137,7 @@ class AgentResponse(BaseModel):
     memory_decay_archive_threshold: Optional[float] = None
     memory_decay_mmr_lambda: Optional[float] = None
 
-    # v0.6.1: Vector Store Configuration
+    # v0.6.0: Vector Store Configuration
     vector_store_instance_id: Optional[int] = None
     vector_store_mode: Optional[str] = None  # override | complement | shadow
 
@@ -186,7 +186,7 @@ class AgentCreate(BaseModel):
     memory_decay_archive_threshold: Optional[float] = Field(0.05, ge=0.0, le=1.0, description="Auto-archive below this threshold")
     memory_decay_mmr_lambda: Optional[float] = Field(0.5, ge=0.0, le=1.0, description="MMR diversity weight (0=diverse, 1=relevant)")
 
-    # v0.6.1: Vector Store Configuration
+    # v0.6.0: Vector Store Configuration
     vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field("override", description="Vector store mode: override, complement, shadow")
 
@@ -228,7 +228,7 @@ class AgentUpdate(BaseModel):
     memory_decay_archive_threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Auto-archive threshold")
     memory_decay_mmr_lambda: Optional[float] = Field(None, ge=0.0, le=1.0, description="MMR diversity weight")
 
-    # v0.6.1: Vector Store Configuration
+    # v0.6.0: Vector Store Configuration
     vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field(None, description="Vector store mode: override, complement, shadow")
 
@@ -624,7 +624,7 @@ def get_agent(
         "memory_decay_archive_threshold": getattr(agent, 'memory_decay_archive_threshold', None),
         "memory_decay_mmr_lambda": getattr(agent, 'memory_decay_mmr_lambda', None),
 
-        # v0.6.1: Vector Store Configuration
+        # v0.6.0: Vector Store Configuration
         "vector_store_instance_id": getattr(agent, 'vector_store_instance_id', None),
         "vector_store_mode": getattr(agent, 'vector_store_mode', None),
 

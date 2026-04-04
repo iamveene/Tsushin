@@ -1,5 +1,5 @@
 """
-v0.6.1 Items 3+4+5: OKG Memory audit log, Sentinel vector_store_poisoning
+v0.6.0 Items 3+4+5: OKG Memory audit log, Sentinel vector_store_poisoning
 detection columns, and VectorStoreInstance security_config.
 
 Revision ID: 0022
