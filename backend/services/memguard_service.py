@@ -568,8 +568,15 @@ class MemGuardService:
                 VectorStoreInstance.id == instance_id,
                 VectorStoreInstance.tenant_id == self.tenant_id,
             ).first()
-            if instance and instance.security_config:
-                defaults.update(instance.security_config)
+            if instance:
+                # Check top-level security_config column first
+                if instance.security_config:
+                    defaults.update(instance.security_config)
+                # Fallback: frontend stores in extra_config.security_config
+                elif instance.extra_config and isinstance(instance.extra_config, dict):
+                    extra_sec = instance.extra_config.get("security_config")
+                    if extra_sec and isinstance(extra_sec, dict):
+                        defaults.update(extra_sec)
         except Exception as e:
             logger.warning(f"Failed to load security_config for instance {instance_id}: {e}")
         return defaults
