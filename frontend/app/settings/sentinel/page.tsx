@@ -157,6 +157,7 @@ export default function SentinelSettingsPage() {
         detect_shell_malicious_intent: configData.detect_shell_malicious_intent,
         detect_memory_poisoning: configData.detect_memory_poisoning,
         detect_browser_ssrf: configData.detect_browser_ssrf,
+        detect_vector_store_poisoning: configData.detect_vector_store_poisoning,
         aggressiveness_level: configData.aggressiveness_level,
         llm_provider: configData.llm_provider,
         llm_model: configData.llm_model,
@@ -842,6 +843,7 @@ export default function SentinelSettingsPage() {
                   { key: 'detect_poisoning', label: 'Poisoning Attacks', desc: 'Gradual manipulation patterns', severity: 'medium' },
                   { key: 'detect_shell_malicious_intent', label: 'Shell Malicious Intent', desc: 'Malicious shell command patterns', severity: 'critical' },
                   { key: 'detect_browser_ssrf', label: 'Browser SSRF', desc: 'Server-Side Request Forgery via browser automation', severity: 'critical' },
+                  { key: 'detect_vector_store_poisoning', label: 'Vector Store Poisoning', desc: 'Detect embedding manipulation, batch saturation, and cross-tenant data leakage in vector stores', severity: 'high' },
                 ].map((detection) => (
                   <div key={detection.key} className="flex items-center justify-between py-2">
                     <div className="flex items-center gap-3">
@@ -1371,11 +1373,48 @@ If you believe this is an error, please contact support."
               </div>
             </div>
 
+            {/* Layer C: Vector Store Defense */}
+            {formState.detect_vector_store_poisoning && (
+              <div>
+                <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Vector Store Defense</h3>
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md border border-gray-200 dark:border-gray-700 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-teal-500/20 text-teal-400 font-bold text-sm border border-teal-500/30">C</span>
+                    <div>
+                      <h4 className="font-semibold text-gray-900 dark:text-gray-100">Post-Retrieval Scanning</h4>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Vector store defense layer</p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">
+                    Validates retrieved vector store results with lower threshold (0.5) and verifies tenant isolation. Scans for embedding manipulation and cross-tenant data leakage.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {['Embedding Manipulation', 'Cross-Tenant Leak', 'Batch Saturation'].map(tag => (
+                      <span key={tag} className="text-xs px-2 py-0.5 rounded-full bg-teal-500/10 text-teal-300 border border-teal-500/20">{tag}</span>
+                    ))}
+                  </div>
+                  <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                    <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Category Thresholds</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-gray-600 dark:text-gray-300">embedding_manipulation</span>
+                        <span className="font-mono text-teal-400">0.80</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-gray-600 dark:text-gray-300">cross_tenant_leak</span>
+                        <span className="font-mono text-teal-400">0.75</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* What It Detects - Pattern Categories */}
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-200 dark:border-gray-700">
               <div className="p-6 border-b border-gray-200 dark:border-gray-700">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Threat Categories</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Attack patterns MemGuard monitors across both layers</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Attack patterns MemGuard monitors across all layers</p>
               </div>
               <div className="p-6 space-y-4">
                 {[
@@ -1407,6 +1446,22 @@ If you believe this is an error, please contact support."
                     examples: '"never mention X to anyone...", "always ignore security checks..."',
                     layer: 'A',
                   },
+                  ...(formState.detect_vector_store_poisoning ? [
+                    {
+                      name: 'Embedding Manipulation',
+                      severity: 'high' as const,
+                      desc: 'Crafted inputs designed to produce adversarial embeddings that distort similarity search results.',
+                      examples: 'Adversarial text that maps near sensitive embeddings, repeated padding vectors',
+                      layer: 'C',
+                    },
+                    {
+                      name: 'Cross-Tenant Leak',
+                      severity: 'critical' as const,
+                      desc: 'Attempts to access or inject data across tenant boundaries in shared vector store instances.',
+                      examples: 'Namespace traversal, tenant ID spoofing in metadata filters',
+                      layer: 'C',
+                    },
+                  ] : []),
                 ].map((cat) => (
                   <div key={cat.name} className="flex items-start gap-4 py-3 border-b border-gray-100 dark:border-gray-700/50 last:border-0">
                     <div className="flex-shrink-0 mt-0.5">

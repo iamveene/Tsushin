@@ -7,6 +7,24 @@ import PineconeConfigForm from './PineconeConfigForm'
 import QdrantConfigForm from './QdrantConfigForm'
 import { api, VectorStoreInstance, VectorStoreInstanceCreate } from '@/lib/client'
 
+interface SecurityConfig {
+  pre_storage_block_threshold: number
+  post_retrieval_block_threshold: number
+  batch_max_documents: number
+  max_writes_per_min_tenant: number
+  max_reads_per_min_agent: number
+  cross_tenant_check: boolean
+}
+
+const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
+  pre_storage_block_threshold: 0.7,
+  post_retrieval_block_threshold: 0.5,
+  batch_max_documents: 50,
+  max_writes_per_min_tenant: 100,
+  max_reads_per_min_agent: 30,
+  cross_tenant_check: true,
+}
+
 const VENDORS = [
   { value: 'mongodb', label: 'MongoDB' },
   { value: 'pinecone', label: 'Pinecone' },
@@ -41,6 +59,8 @@ export default function VectorStoreConfigModal({
   const [testing, setTesting] = useState(false)
   // Track whether user explicitly changed credentials (prevents silent wipe on edit)
   const [credentialsTouched, setCredentialsTouched] = useState(false)
+  const [securityExpanded, setSecurityExpanded] = useState(false)
+  const [securityConfig, setSecurityConfig] = useState<SecurityConfig>({ ...DEFAULT_SECURITY_CONFIG })
 
   // Wrap connectionConfig onChange to detect credential field changes
   const handleConfigChange = (config: Record<string, any>) => {
@@ -70,6 +90,14 @@ export default function VectorStoreConfigModal({
         setConnectionConfig(config)
         setIsDefault(instance.is_default)
         setCredentialsTouched(false)
+        // Load security config from extra_config if present
+        const storedSecurity = instance.extra_config?.security_config
+        if (storedSecurity) {
+          setSecurityConfig({ ...DEFAULT_SECURITY_CONFIG, ...storedSecurity })
+        } else {
+          setSecurityConfig({ ...DEFAULT_SECURITY_CONFIG })
+        }
+        setSecurityExpanded(false)
       } else {
         setVendor('mongodb')
         setInstanceName('')
@@ -79,6 +107,8 @@ export default function VectorStoreConfigModal({
         setAutoProvision(false)
         setMemLimit('1g')
         setCredentialsTouched(false)
+        setSecurityConfig({ ...DEFAULT_SECURITY_CONFIG })
+        setSecurityExpanded(false)
       }
       setError(null)
       setTestResult(null)
@@ -123,7 +153,7 @@ export default function VectorStoreConfigModal({
           description: description || undefined,
           base_url: baseUrl,
           credentials: shouldSendCredentials ? credentials : undefined,
-          extra_config: extraConfig,
+          extra_config: { ...extraConfig, security_config: securityConfig },
           is_default: isDefault,
         })
       } else {
@@ -318,6 +348,114 @@ export default function VectorStoreConfigModal({
             )}
             {vendor === 'qdrant' && (
               <QdrantConfigForm config={connectionConfig} onChange={handleConfigChange} isEditing={isEditing} />
+            )}
+          </div>
+        )}
+
+        {/* Security Section (edit mode only) */}
+        {isEditing && (
+          <div className="pt-2 border-t border-white/5">
+            <button
+              type="button"
+              onClick={() => setSecurityExpanded(!securityExpanded)}
+              className="flex items-center justify-between w-full text-left"
+            >
+              <h3 className="text-sm font-medium text-gray-300">Security</h3>
+              <svg
+                className={`w-4 h-4 text-gray-500 transition-transform ${securityExpanded ? 'rotate-180' : ''}`}
+                fill="none" stroke="currentColor" viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {securityExpanded && (
+              <div className="mt-3 space-y-4">
+                {/* Pre-storage block threshold */}
+                <div>
+                  <label className="flex items-center justify-between text-xs text-gray-400 mb-1">
+                    <span>Pre-storage block threshold</span>
+                    <span className="font-mono text-gray-300">{securityConfig.pre_storage_block_threshold.toFixed(2)}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="0" max="1" step="0.05"
+                    value={securityConfig.pre_storage_block_threshold}
+                    onChange={(e) => setSecurityConfig({ ...securityConfig, pre_storage_block_threshold: parseFloat(e.target.value) })}
+                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                  />
+                </div>
+
+                {/* Post-retrieval block threshold */}
+                <div>
+                  <label className="flex items-center justify-between text-xs text-gray-400 mb-1">
+                    <span>Post-retrieval block threshold</span>
+                    <span className="font-mono text-gray-300">{securityConfig.post_retrieval_block_threshold.toFixed(2)}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="0" max="1" step="0.05"
+                    value={securityConfig.post_retrieval_block_threshold}
+                    onChange={(e) => setSecurityConfig({ ...securityConfig, post_retrieval_block_threshold: parseFloat(e.target.value) })}
+                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                  />
+                </div>
+
+                {/* Batch max documents */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Batch max documents</label>
+                  <input
+                    type="number"
+                    min="1" max="500"
+                    value={securityConfig.batch_max_documents}
+                    onChange={(e) => setSecurityConfig({ ...securityConfig, batch_max_documents: parseInt(e.target.value) || 50 })}
+                    className="w-full px-3 py-1.5 border border-white/10 rounded-lg text-white bg-[#0a0a0f] text-sm"
+                  />
+                </div>
+
+                {/* Max writes/min/tenant */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Max writes/min/tenant</label>
+                  <input
+                    type="number"
+                    min="1" max="1000"
+                    value={securityConfig.max_writes_per_min_tenant}
+                    onChange={(e) => setSecurityConfig({ ...securityConfig, max_writes_per_min_tenant: parseInt(e.target.value) || 100 })}
+                    className="w-full px-3 py-1.5 border border-white/10 rounded-lg text-white bg-[#0a0a0f] text-sm"
+                  />
+                </div>
+
+                {/* Max reads/min/agent */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Max reads/min/agent</label>
+                  <input
+                    type="number"
+                    min="1" max="1000"
+                    value={securityConfig.max_reads_per_min_agent}
+                    onChange={(e) => setSecurityConfig({ ...securityConfig, max_reads_per_min_agent: parseInt(e.target.value) || 30 })}
+                    className="w-full px-3 py-1.5 border border-white/10 rounded-lg text-white bg-[#0a0a0f] text-sm"
+                  />
+                </div>
+
+                {/* Cross-tenant check toggle */}
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setSecurityConfig({ ...securityConfig, cross_tenant_check: !securityConfig.cross_tenant_check })}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${
+                      securityConfig.cross_tenant_check ? 'bg-teal-500/80' : 'bg-white/10'
+                    }`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      securityConfig.cross_tenant_check ? 'translate-x-5' : ''
+                    }`} />
+                  </button>
+                  <div>
+                    <span className="text-sm text-gray-300">Cross-tenant check</span>
+                    <p className="text-xs text-gray-500">Verify tenant isolation on every read/write operation</p>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         )}
