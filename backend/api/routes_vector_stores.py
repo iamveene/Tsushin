@@ -51,6 +51,7 @@ class VectorStoreInstanceCreate(BaseModel):
     base_url: Optional[str] = None
     credentials: Optional[Dict[str, Any]] = None
     extra_config: Optional[Dict[str, Any]] = None
+    security_config: Optional[Dict[str, Any]] = None
     is_default: bool = False
     auto_provision: bool = False
     mem_limit: Optional[str] = None  # e.g. "1g", "2g"
@@ -63,6 +64,7 @@ class VectorStoreInstanceUpdate(BaseModel):
     base_url: Optional[str] = None
     credentials: Optional[Dict[str, Any]] = None
     extra_config: Optional[Dict[str, Any]] = None
+    security_config: Optional[Dict[str, Any]] = None
     is_default: Optional[bool] = None
     is_active: Optional[bool] = None
 
@@ -77,6 +79,7 @@ class VectorStoreInstanceResponse(BaseModel):
     credentials_configured: bool
     credentials_preview: str
     extra_config: Dict[str, Any]
+    security_config: Dict[str, Any]
     health_status: str
     health_status_reason: Optional[str] = None
     last_health_check: Optional[str] = None
@@ -115,6 +118,7 @@ def _to_response(instance: VectorStoreInstance, db: Session) -> dict:
         "credentials_configured": bool(instance.credentials_encrypted),
         "credentials_preview": VectorStoreInstanceService.mask_credentials(instance, db),
         "extra_config": instance.extra_config or {},
+        "security_config": (getattr(instance, "security_config", None) or {}),
         "health_status": instance.health_status or "unknown",
         "health_status_reason": instance.health_status_reason,
         "last_health_check": instance.last_health_check.isoformat() if instance.last_health_check else None,
@@ -179,6 +183,7 @@ async def create_vector_store_instance(
             base_url=data.base_url,
             credentials=data.credentials,
             extra_config=data.extra_config,
+            security_config=data.security_config,
             is_default=data.is_default,
         )
 

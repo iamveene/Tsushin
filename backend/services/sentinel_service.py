@@ -856,6 +856,62 @@ class SentinelService:
 
         return result
 
+    async def analyze_vector_store_content(
+        self,
+        content: str,
+        agent_id: Optional[int] = None,
+        instance_id: Optional[int] = None,
+        sender_key: str = "",
+    ) -> SentinelAnalysisResult:
+        """
+        Analyze content destined for (or retrieved from) a vector store.
+
+        Uses the vector_store_poisoning detection type via LLM analysis.
+        Logs with analysis_type='vector_store', detection_type='vector_store_poisoning'.
+
+        Args:
+            content: The content text to analyze (document/chunk being ingested or retrieved)
+            agent_id: Agent ID for agent-specific config resolution
+            instance_id: Optional vector store instance ID (for logging context)
+            sender_key: User identifier for logging
+
+        Returns:
+            SentinelAnalysisResult with threat detection results
+        """
+        start_time = time.time()
+
+        # Get effective configuration
+        config = self.get_effective_config(agent_id=agent_id)
+
+        # Check if Sentinel is enabled
+        if not config.is_enabled:
+            return self._create_allowed_result("vector_store", "sentinel_disabled", start_time)
+
+        if config.aggressiveness_level <= 0:
+            return self._create_allowed_result("vector_store", "aggressiveness_off", start_time)
+
+        if not config.is_detection_enabled("vector_store_poisoning"):
+            return self._create_allowed_result("vector_store", "vector_store_poisoning_disabled", start_time)
+
+        # Truncate content for analysis
+        truncated_content = content[:config.max_input_chars]
+        input_hash = self._hash_input(truncated_content)
+
+        # Analyze for vector store poisoning
+        result = await self._analyze_single(
+            input_content=truncated_content,
+            input_hash=input_hash,
+            analysis_type="vector_store",
+            detection_type="vector_store_poisoning",
+            config=config,
+            sender_key=sender_key,
+            message_id=None,
+            agent_id=agent_id,
+            start_time=start_time,
+        )
+
+        return result
+
     # =========================================================================
     # Internal Methods
     # =========================================================================

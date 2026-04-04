@@ -736,6 +736,9 @@ async def get_sentinel_prompts(
                 "poisoning": config.poisoning_prompt,
                 "shell_malicious": config.shell_intent_prompt,
                 "memory_poisoning": getattr(config, 'memory_poisoning_prompt', None),
+                "browser_ssrf": getattr(config, 'browser_ssrf_prompt', None),
+                "agent_escalation": getattr(config, 'agent_escalation_prompt', None),
+                "vector_store_poisoning": getattr(config, 'vector_store_poisoning_prompt', None),
             }
             custom_prompt = prompt_map.get(detection_type)
 
@@ -808,11 +811,12 @@ async def update_sentinel_prompt(
         "shell_malicious": "shell_intent_prompt",
         "memory_poisoning": "memory_poisoning_prompt",
         "browser_ssrf": "browser_ssrf_prompt",
+        "agent_escalation": "agent_escalation_prompt",
         "vector_store_poisoning": "vector_store_poisoning_prompt",
     }
 
     field_name = prompt_field_map.get(detection_type)
-    if field_name:
+    if field_name and hasattr(config, field_name):
         setattr(config, field_name, update.prompt)  # None = reset to default
 
     config.updated_by = current_user.id

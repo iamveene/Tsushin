@@ -228,6 +228,69 @@ class OKGTermMemorySkill(BaseSkill):
         """Memory operations are never exempt from Sentinel detection."""
         return []
 
+    @classmethod
+    def get_config_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "auto_capture_enabled": {
+                    "type": "boolean",
+                    "title": "Auto-Capture Facts",
+                    "description": "Automatically extract and store durable facts from conversations",
+                    "default": False,  # Opt-in for data minimization
+                },
+                "auto_recall_enabled": {
+                    "type": "boolean",
+                    "title": "Auto-Recall Memories",
+                    "description": "Automatically inject relevant memories as context on every message",
+                    "default": True,
+                },
+                "auto_recall_limit": {
+                    "type": "integer",
+                    "title": "Auto-Recall Limit",
+                    "description": "Max memories to inject per message",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 20,
+                },
+                "auto_recall_min_confidence": {
+                    "type": "number",
+                    "title": "Auto-Recall Min Confidence",
+                    "description": "Minimum confidence to include in auto-recall",
+                    "default": 0.3,
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
+                "capture_min_confidence": {
+                    "type": "number",
+                    "title": "Capture Min Confidence",
+                    "description": "Minimum fact confidence for auto-capture",
+                    "default": 0.75,
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
+                "default_merge_mode": {
+                    "type": "string",
+                    "title": "Default Merge Mode",
+                    "description": "How to handle duplicate memories",
+                    "enum": ["replace", "prepend", "merge"],
+                    "default": "merge",
+                },
+            },
+            "required": [],
+        }
+
+    @classmethod
+    def get_default_config(cls) -> Dict[str, Any]:
+        return {
+            "auto_capture_enabled": False,  # Opt-in
+            "auto_recall_enabled": True,
+            "auto_recall_limit": 5,
+            "auto_recall_min_confidence": 0.3,
+            "capture_min_confidence": 0.75,
+            "default_merge_mode": "merge",
+        }
+
     def is_tool_enabled(self, config: Dict[str, Any]) -> bool:
         return True
 
@@ -346,7 +409,7 @@ class OKGTermMemorySkill(BaseSkill):
         Uses existing FactExtractor infrastructure to identify facts,
         then stores each as an OKG memory with source="auto_capture".
         """
-        if not config.get("auto_capture_enabled", True):
+        if not config.get("auto_capture_enabled", False):
             return {"captured": 0}
 
         try:
@@ -356,11 +419,34 @@ class OKGTermMemorySkill(BaseSkill):
 
             # Use FactExtractor to find durable facts
             from agent.memory.fact_extractor import FactExtractor
-            extractor = FactExtractor(ai_client=ai_client)
 
+            # Get provider + model_name from agent config
+            provider_name = None
+            model_name = None
+            try:
+                from models import Agent as AgentModel
+                agent = self._db.query(AgentModel).filter(AgentModel.id == self._agent_id).first() if self._db else None
+                if agent:
+                    provider_name = agent.model_provider
+                    model_name = agent.model_name
+            except Exception as e:
+                logger.warning(f"OKG auto-capture: failed to load agent model config: {e}")
+
+            extractor = FactExtractor(
+                ai_client=ai_client,
+                provider=provider_name,
+                model_name=model_name,
+                db=self._db,
+            )
+
+            conversation = [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": agent_response},
+            ]
             facts = await extractor.extract_facts(
-                user_message=user_message,
-                agent_response=agent_response,
+                conversation=conversation,
+                user_id=context.get("sender_key", ""),
+                agent_id=self._agent_id,
             )
 
             if not facts:
@@ -397,8 +483,15 @@ class OKGTermMemorySkill(BaseSkill):
 
     def _get_service(self, config: dict):
         """Lazy-init OKG service with current config."""
+        current_tenant_id = config.get("tenant_id")
+
+        # v0.6.1 fix (Task 19): Validate cached service matches current request context
         if self._okg_service:
-            return self._okg_service
+            if (self._okg_service.tenant_id == current_tenant_id and
+                self._okg_service.agent_id == self._agent_id):
+                return self._okg_service
+            # Tenant/agent mismatch — invalidate cache
+            self._okg_service = None
 
         if not self._db or not self._agent_id:
             logger.warning("OKG skill: no db or agent_id available")
@@ -407,7 +500,7 @@ class OKGTermMemorySkill(BaseSkill):
         try:
             from models import Agent as AgentModel
             agent = self._db.query(AgentModel).filter(AgentModel.id == self._agent_id).first()
-            tenant_id = config.get("tenant_id") or (agent.tenant_id if agent else "")
+            tenant_id = current_tenant_id or (agent.tenant_id if agent else "")
 
             # Resolve vector store provider
             provider = None
@@ -431,7 +524,17 @@ class OKGTermMemorySkill(BaseSkill):
                     )
                     if resolved:
                         embedding_service = get_shared_embedding_service()
-                        provider = ProviderBridgeStore(resolved, embedding_service)
+                        security_context = {
+                            "db": self._db,
+                            "tenant_id": tenant_id,
+                            "agent_id": self._agent_id,
+                            "instance_id": instance_id,
+                        }
+                        provider = ProviderBridgeStore(
+                            resolved,
+                            embedding_service,
+                            security_context=security_context,
+                        )
             except Exception as e:
                 logger.warning(f"OKG: failed to resolve vector store (using None): {e}")
 
