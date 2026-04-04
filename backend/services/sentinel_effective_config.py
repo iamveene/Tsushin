@@ -132,6 +132,10 @@ class SentinelEffectiveConfig:
                 "enabled": getattr(config, "detect_browser_ssrf", True),
                 "custom_prompt": getattr(config, "browser_ssrf_prompt", None),
             },
+            "vector_store_poisoning": {
+                "enabled": getattr(config, "detect_vector_store_poisoning", True),
+                "custom_prompt": getattr(config, "vector_store_poisoning_prompt", None),
+            },
         }
 
         return cls(
