@@ -135,7 +135,7 @@ async def create_vector_store_instance(
 ):
     from services.vector_store_instance_service import VectorStoreInstanceService
 
-    # Check duplicate name
+    # Check duplicate name (active instances)
     existing = db.query(VectorStoreInstance).filter(
         VectorStoreInstance.tenant_id == ctx.tenant_id,
         VectorStoreInstance.instance_name == data.instance_name,
@@ -146,6 +146,13 @@ async def create_vector_store_instance(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Vector store instance '{data.instance_name}' already exists",
         )
+
+    # Hard-delete any soft-deleted instance with the same name (UniqueConstraint)
+    db.query(VectorStoreInstance).filter(
+        VectorStoreInstance.tenant_id == ctx.tenant_id,
+        VectorStoreInstance.instance_name == data.instance_name,
+        VectorStoreInstance.is_active == False,
+    ).delete()
 
     try:
         instance = VectorStoreInstanceService.create_instance(
