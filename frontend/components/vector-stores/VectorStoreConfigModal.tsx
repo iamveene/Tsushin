@@ -8,7 +8,7 @@ import QdrantConfigForm from './QdrantConfigForm'
 import { api, VectorStoreInstance, VectorStoreInstanceCreate } from '@/lib/client'
 
 const VENDORS = [
-  { value: 'mongodb', label: 'MongoDB Atlas' },
+  { value: 'mongodb', label: 'MongoDB' },
   { value: 'pinecone', label: 'Pinecone' },
   { value: 'qdrant', label: 'Qdrant' },
 ]
