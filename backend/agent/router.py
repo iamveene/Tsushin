@@ -79,7 +79,7 @@ def _determine_agent_run_status(result: Dict) -> str:
 
 
 class AgentRouter:
-    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None):
+    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None, webhook_instance_id: int = None):
         self.db = db_session
         self.config = config
         self.contact_mappings = config.get("contact_mappings", {})
@@ -89,6 +89,8 @@ class AgentRouter:
         self.mcp_instance_id = mcp_instance_id
         # Phase 10.1.1: Track which Telegram instance this router serves
         self.telegram_instance_id = telegram_instance_id
+        # v0.6.0: Track which Webhook instance this router serves
+        self.webhook_instance_id = webhook_instance_id
 
         # Phase 6.11.3: Initialize CachedContactService for faster lookups
         self.contact_service = CachedContactService(db_session)
@@ -146,6 +148,7 @@ class AgentRouter:
         from channels.whatsapp.adapter import WhatsAppChannelAdapter
         from channels.telegram.adapter import TelegramChannelAdapter
         from channels.playground.adapter import PlaygroundChannelAdapter
+        from channels.webhook.adapter import WebhookChannelAdapter
 
         self.channel_registry = ChannelRegistry()
 
@@ -158,6 +161,11 @@ class AgentRouter:
             self.channel_registry.register(
                 "telegram",
                 TelegramChannelAdapter(self.telegram_sender, self.logger)
+            )
+        if webhook_instance_id:
+            self.channel_registry.register(
+                "webhook",
+                WebhookChannelAdapter(db_session, webhook_instance_id, self.logger)
             )
         self.channel_registry.register(
             "playground",
@@ -597,7 +605,7 @@ class AgentRouter:
         # Phase 10: Helper to check if agent is valid for this MCP instance
         def is_agent_valid_for_channel(agent: Agent) -> bool:
             """Check if agent has current channel enabled and is assigned to the right integration"""
-            if not self.mcp_instance_id and not self.telegram_instance_id:
+            if not self.mcp_instance_id and not self.telegram_instance_id and not self.webhook_instance_id:
                 return True  # No filtering if no instance set (backward compat)
 
             # Parse enabled channels
@@ -623,6 +631,16 @@ class AgentRouter:
 
                 if agent.telegram_integration_id and agent.telegram_integration_id != self.telegram_instance_id:
                     self.logger.debug(f"Agent {agent.id} assigned to different Telegram instance ({agent.telegram_integration_id}), skipping")
+                    return False
+
+            # v0.6.0: Webhook channel check
+            if self.webhook_instance_id:
+                if "webhook" not in enabled_channels:
+                    self.logger.debug(f"Agent {agent.id} has Webhook disabled, skipping")
+                    return False
+
+                if agent.webhook_integration_id and agent.webhook_integration_id != self.webhook_instance_id:
+                    self.logger.debug(f"Agent {agent.id} assigned to different Webhook instance ({agent.webhook_integration_id}), skipping")
                     return False
 
             return True

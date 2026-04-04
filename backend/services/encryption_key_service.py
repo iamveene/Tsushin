@@ -188,6 +188,8 @@ def _save_encryption_key_to_db(key_type: str, key: str, db: Session) -> bool:
             config.slack_encryption_key = wrapped
         elif key_type == 'discord':
             config.discord_encryption_key = wrapped
+        elif key_type == 'webhook':
+            config.webhook_encryption_key = wrapped
         else:
             logger.warning(f"Unknown key type: {key_type}")
             return False
@@ -234,6 +236,7 @@ def get_encryption_key(key_type: str, db: Session, auto_generate: bool = True) -
         'api_key': 'API_KEY_ENCRYPTION_KEY',
         'slack': 'SLACK_ENCRYPTION_KEY',
         'discord': 'DISCORD_ENCRYPTION_KEY',
+        'webhook': 'WEBHOOK_ENCRYPTION_KEY',
     }
 
     # Step 1: Check database (Config table)
@@ -257,6 +260,8 @@ def get_encryption_key(key_type: str, db: Session, auto_generate: bool = True) -
                 stored_key = config.slack_encryption_key
             elif key_type == 'discord':
                 stored_key = config.discord_encryption_key
+            elif key_type == 'webhook':
+                stored_key = config.webhook_encryption_key
 
             if stored_key:
                 # Unwrap the stored key (SEC-006 envelope decryption)
@@ -427,3 +432,20 @@ def get_discord_encryption_key(db: Session) -> Optional[str]:
         Discord encryption key (never None in normal operation)
     """
     return get_encryption_key('discord', db, auto_generate=True)
+
+
+def get_webhook_encryption_key(db: Session) -> Optional[str]:
+    """
+    Get Webhook encryption key (for webhook HMAC secrets).
+
+    v0.6.0: Dedicated encryption key for WebhookIntegration.api_secret_encrypted.
+
+    Automatically generates a new key if none exists (SaaS-ready).
+
+    Args:
+        db: Database session
+
+    Returns:
+        Webhook encryption key (never None in normal operation)
+    """
+    return get_encryption_key('webhook', db, auto_generate=True)
