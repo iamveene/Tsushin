@@ -318,6 +318,34 @@ class VectorStoreResolver:
             logger.warning(f"Invalid vector_store_mode '{vector_store_mode}' for agent {agent_id}, using 'override'")
             vector_store_mode = "override"
 
+        # v0.6.1 Item 5: Enforce per-agent vector store access control
+        try:
+            from models import SentinelAgentConfig
+            agent_sentinel = db.query(SentinelAgentConfig).filter(
+                SentinelAgentConfig.agent_id == agent_id
+            ).first()
+
+            if agent_sentinel:
+                # Check if vector store access is explicitly disabled for this agent
+                if agent_sentinel.vector_store_access_enabled is False:
+                    logger.warning(
+                        f"Agent {agent_id} has vector_store_access_enabled=False, "
+                        f"denying access to instance {vector_store_instance_id}"
+                    )
+                    return None  # Falls back to ChromaDB
+
+                # Check allowlist if configured
+                allowed = agent_sentinel.vector_store_allowed_configs
+                if allowed is not None and len(allowed) > 0:
+                    if vector_store_instance_id not in allowed:
+                        logger.warning(
+                            f"Agent {agent_id} attempted to access instance "
+                            f"{vector_store_instance_id} but it's not in allowed_configs={allowed}"
+                        )
+                        return None  # Falls back to ChromaDB
+        except Exception as e:
+            logger.debug(f"Access control check failed (fail-open): {e}")
+
         try:
             primary = self.registry.get_provider(vector_store_instance_id, db, tenant_id=tenant_id)
             chromadb_fallback = self.registry.get_chromadb_fallback(persist_directory)

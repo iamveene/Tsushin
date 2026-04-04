@@ -76,6 +76,7 @@ class VectorStoreInstanceService:
         base_url: str = None,
         credentials: Dict = None,
         extra_config: Dict = None,
+        security_config: Dict = None,
         is_default: bool = False,
     ) -> VectorStoreInstance:
         if vendor not in SUPPORTED_VENDORS:
@@ -117,6 +118,7 @@ class VectorStoreInstanceService:
             base_url=base_url,
             credentials_encrypted=credentials_encrypted,
             extra_config=extra_config or {},
+            security_config=security_config or {},
             is_default=is_default,
         )
         db.add(instance)

@@ -2384,6 +2384,7 @@ export interface VectorStoreInstance {
   credentials_configured: boolean
   credentials_preview: string
   extra_config: Record<string, any>
+  security_config?: Record<string, any>
   health_status: string  // unknown | healthy | degraded | unavailable
   health_status_reason?: string | null
   last_health_check?: string | null
@@ -2404,6 +2405,7 @@ export interface VectorStoreInstanceCreate {
   base_url?: string
   credentials?: Record<string, any>
   extra_config?: Record<string, any>
+  security_config?: Record<string, any>
   is_default?: boolean
   auto_provision?: boolean
   mem_limit?: string

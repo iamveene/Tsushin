@@ -576,7 +576,17 @@ class AgentMemorySystem:
                     )
                     if resolved:
                         embedding_service = get_shared_embedding_service()
-                        provider = ProviderBridgeStore(resolved, embedding_service)
+                        security_context = {
+                            "db": self.db,
+                            "tenant_id": agent.tenant_id,
+                            "agent_id": self.agent_id,
+                            "instance_id": instance_id,
+                        }
+                        provider = ProviderBridgeStore(
+                            resolved,
+                            embedding_service,
+                            security_context=security_context,
+                        )
             except Exception:
                 pass
 

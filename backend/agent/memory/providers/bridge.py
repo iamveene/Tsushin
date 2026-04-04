@@ -28,9 +28,13 @@ class ProviderBridgeStore:
     Bridge between text-based SemanticMemoryService API and
     embedding-based VectorStoreProvider API.
 
-    v0.6.1 Item 4: Optional security context for MemGuard integration.
-    When security_context is provided, add_message runs pre-storage scan
-    and search_similar runs post-retrieval validation.
+    v0.6.1 Item 4: Optional security context for MemGuard + rate limiting.
+    When security_context is provided:
+      - add_message runs write rate limit check + pre-storage MemGuard scan (Layer A)
+      - search_similar runs read rate limit check + post-retrieval validation (Layer C)
+      - add_batch runs batch size check + batch poisoning detection (Layer B)
+    Security hooks fail-open on unexpected errors but propagate explicit RuntimeError
+    blocks (rate limit exceeded, content blocked by MemGuard).
     """
 
     def __init__(
@@ -71,9 +75,123 @@ class ProviderBridgeStore:
         text: str,
         metadata: Optional[Dict] = None,
     ) -> None:
-        """Convert text to embedding, then delegate to provider."""
+        """Convert text to embedding, then delegate to provider.
+
+        When security_context is set, runs:
+        1. Rate limit check (write)
+        2. Pre-storage MemGuard scan (Layer A)
+        3. Delegates to provider
+        """
+        # v0.6.1 Item 4: Security hooks (when security_context is provided)
+        if self._security:
+            try:
+                from services.vector_store_rate_limiter import VectorStoreRateLimiter
+                from services.memguard_service import MemGuardService
+
+                db = self._security.get("db")
+                tenant_id = self._security.get("tenant_id", "")
+                agent_id = self._security.get("agent_id", 0)
+                instance_id = self._security.get("instance_id", 0)
+
+                if db and tenant_id and instance_id:
+                    memguard = MemGuardService(db, tenant_id)
+                    security_config = memguard._get_security_config(instance_id)
+
+                    # Rate limit check
+                    limiter = VectorStoreRateLimiter()
+                    if not limiter.check_write(
+                        instance_id, tenant_id,
+                        max_per_minute=security_config.get("max_writes_per_minute_per_tenant", 100)
+                    ):
+                        logger.warning(f"Vector store write rate limit exceeded for tenant {tenant_id}")
+                        raise RuntimeError("Vector store write rate limit exceeded")
+
+                    # Pre-storage MemGuard Layer A scan
+                    try:
+                        from services.sentinel_service import SentinelService
+                        sentinel = SentinelService(db, tenant_id=tenant_id)
+                        effective_config = sentinel.get_effective_config(agent_id=agent_id)
+                        mg_result = await memguard.analyze_for_memory_poisoning(
+                            content=text,
+                            agent_id=agent_id,
+                            sender_key=sender_key,
+                            config=effective_config,
+                        )
+                        if mg_result.blocked:
+                            logger.warning(
+                                f"Bridge pre-storage MemGuard blocked: {mg_result.reason}"
+                            )
+                            raise RuntimeError(
+                                f"Content blocked by MemGuard pre-storage scan: {mg_result.reason}"
+                            )
+                    except RuntimeError:
+                        raise  # Re-raise MemGuard blocks
+                    except Exception as e:
+                        logger.debug(f"Pre-storage MemGuard check skipped (fail-open): {e}")
+            except RuntimeError:
+                raise  # Propagate blocks and rate limits
+            except Exception as e:
+                logger.debug(f"Pre-storage security hooks skipped: {e}")
+
         embedding = await self._embedding_service.embed_text_async(text)
         await self._provider.add_message(message_id, sender_key, text, embedding, metadata)
+
+    async def add_batch(self, records: List[Dict]) -> None:
+        """Add multiple records with batch size + poisoning checks.
+
+        Args:
+            records: List of dicts with keys: message_id, sender_key, text, metadata
+        """
+        if not records:
+            return
+
+        # v0.6.1 Item 4: Batch security checks
+        if self._security:
+            try:
+                from services.vector_store_rate_limiter import VectorStoreRateLimiter
+                from services.memguard_service import MemGuardService
+
+                db = self._security.get("db")
+                tenant_id = self._security.get("tenant_id", "")
+                agent_id = self._security.get("agent_id", 0)
+                instance_id = self._security.get("instance_id", 0)
+
+                if db and tenant_id and instance_id:
+                    memguard = MemGuardService(db, tenant_id)
+                    security_config = memguard._get_security_config(instance_id)
+
+                    # Batch size check
+                    limiter = VectorStoreRateLimiter()
+                    if not limiter.check_batch_size(
+                        len(records),
+                        max_batch=security_config.get("max_batch_write_size", 500)
+                    ):
+                        raise RuntimeError(
+                            f"Batch size {len(records)} exceeds max_batch_write_size"
+                        )
+
+                    # Batch poisoning detection
+                    mg_result = await memguard.detect_batch_poisoning(
+                        documents=records,
+                        instance_id=instance_id,
+                        agent_id=agent_id,
+                        security_config=security_config,
+                    )
+                    if mg_result.blocked:
+                        raise RuntimeError(f"Batch blocked by MemGuard: {mg_result.reason}")
+            except RuntimeError:
+                raise
+            except Exception as e:
+                logger.debug(f"Batch security checks skipped: {e}")
+
+        # Delegate to individual add_message calls
+        for record in records:
+            await self.add_message(
+                message_id=record.get("message_id", ""),
+                sender_key=record.get("sender_key", ""),
+                text=record.get("text", ""),
+                metadata=record.get("metadata"),
+            )
 
     async def search_similar(
         self,
@@ -82,6 +200,31 @@ class ProviderBridgeStore:
         sender_key: Optional[str] = None,
     ) -> List[Dict]:
         """Convert text to embedding, search, return List[Dict] format."""
+        # v0.6.1 Item 4: Rate limit check (read)
+        if self._security:
+            try:
+                from services.vector_store_rate_limiter import VectorStoreRateLimiter
+                from services.memguard_service import MemGuardService
+
+                db = self._security.get("db")
+                tenant_id = self._security.get("tenant_id", "")
+                agent_id = self._security.get("agent_id", 0)
+                instance_id = self._security.get("instance_id", 0)
+
+                if db and tenant_id and instance_id:
+                    memguard = MemGuardService(db, tenant_id)
+                    security_config = memguard._get_security_config(instance_id)
+
+                    limiter = VectorStoreRateLimiter()
+                    if not limiter.check_read(
+                        instance_id, agent_id,
+                        max_per_minute=security_config.get("max_reads_per_minute_per_agent", 30)
+                    ):
+                        logger.warning(f"Vector store read rate limit exceeded for agent {agent_id}")
+                        return []  # Graceful degradation
+            except Exception as e:
+                logger.debug(f"Read rate limit check skipped: {e}")
+
         embedding = await self._embedding_service.embed_text_async(query_text)
         records = await self._provider.search_similar(embedding, limit, sender_key)
         results = self._records_to_dicts(records)

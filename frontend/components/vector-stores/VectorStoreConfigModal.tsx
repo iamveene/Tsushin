@@ -90,8 +90,8 @@ export default function VectorStoreConfigModal({
         setConnectionConfig(config)
         setIsDefault(instance.is_default)
         setCredentialsTouched(false)
-        // Load security config from extra_config if present
-        const storedSecurity = instance.extra_config?.security_config
+        // Load security config from top-level column, fall back to extra_config for backward compat
+        const storedSecurity = instance.security_config || instance.extra_config?.security_config
         if (storedSecurity) {
           setSecurityConfig({ ...DEFAULT_SECURITY_CONFIG, ...storedSecurity })
         } else {
@@ -153,7 +153,8 @@ export default function VectorStoreConfigModal({
           description: description || undefined,
           base_url: baseUrl,
           credentials: shouldSendCredentials ? credentials : undefined,
-          extra_config: { ...extraConfig, security_config: securityConfig },
+          extra_config: extraConfig,
+          security_config: securityConfig,
           is_default: isDefault,
         })
       } else {

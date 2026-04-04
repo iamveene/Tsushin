@@ -48,6 +48,7 @@ class OKGMemoryMetadata:
     tags: List[str] = field(default_factory=list)
     doc_id: str = ""
     user_id: str = ""
+    agent_id: int = 0
     created_at: str = ""
     updated_at: str = ""
 
@@ -61,6 +62,7 @@ class OKGMemoryMetadata:
             "tags": ",".join(self.tags) if self.tags else "",
             "doc_id": self.doc_id,
             "user_id": self.user_id,
+            "agent_id": str(self.agent_id),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "is_okg": "true",  # Marker to distinguish OKG records
@@ -72,8 +74,15 @@ class OKGMemoryService:
     Core OKG memory operations: store, recall, forget.
 
     Uses the same VectorStoreProvider infrastructure from Item 1.
-    Operates in a separate namespace (okg_{tenant}_{agent}) to avoid
-    collision with episodic memory.
+
+    OKG memories are stored in the SAME vector store instance as episodic memory,
+    differentiated by metadata filters:
+    - is_okg="true" marker
+    - agent_id="{self.agent_id}" for cross-agent isolation
+    - user_id="{sender}" for per-user scoping
+
+    This co-tenant storage design avoids the need for separate collections/namespaces
+    while maintaining isolation through metadata-based filtering.
     """
 
     def __init__(
@@ -156,6 +165,7 @@ class OKGMemoryService:
             tags=tags,
             doc_id=doc_id,
             user_id=user_id,
+            agent_id=self.agent_id,
             created_at=now,
             updated_at=now,
         )
@@ -217,6 +227,13 @@ class OKGMemoryService:
         Search OKG memories by semantic similarity + metadata filters.
 
         Flow: embed query → provider search → post-filter → temporal decay → format
+
+        Note on user_id scoping:
+        If user_id is None/empty, no per-user filter is applied and results span
+        all users *within this agent's namespace*. Cross-agent isolation is still
+        enforced by the agent_id metadata post-filter below, so unscoped recall
+        is safe for LLM tool-call use cases. Auto-recall code paths SHOULD pass
+        user_id to further narrow to a single sender.
         """
         start_ms = int(time.time() * 1000)
 
@@ -247,6 +264,10 @@ class OKGMemoryService:
 
             # Skip non-OKG records
             if meta.get("is_okg") != "true":
+                continue
+
+            # Cross-agent isolation: skip records from other agents
+            if str(meta.get("agent_id", "")) != str(self.agent_id):
                 continue
 
             # Filter by memory_type
@@ -305,17 +326,39 @@ class OKGMemoryService:
         return results
 
     async def forget(self, doc_id: str, user_id: str = "") -> Dict[str, Any]:
-        """Delete a memory by doc_id."""
+        """Delete a memory by doc_id (with ownership check)."""
         start_ms = int(time.time() * 1000)
 
         if not self._provider:
             return {"success": False, "error": "No vector store provider available"}
 
+        # Ownership check: verify this doc_id belongs to (tenant_id, agent_id)
+        # by looking for a prior 'store' audit record we emitted for it.
         try:
-            if hasattr(self._provider, '_provider') and hasattr(self._provider._provider, 'delete_message'):
-                await self._provider._provider.delete_message(doc_id)
-            else:
-                logger.warning(f"OKG forget: provider does not support delete for doc_id={doc_id}")
+            from models import OKGMemoryAuditLog
+            owned = (
+                self.db.query(OKGMemoryAuditLog)
+                .filter(
+                    OKGMemoryAuditLog.doc_id == doc_id,
+                    OKGMemoryAuditLog.agent_id == self.agent_id,
+                    OKGMemoryAuditLog.tenant_id == self.tenant_id,
+                    OKGMemoryAuditLog.action == "store",
+                )
+                .first()
+            )
+            if owned is None:
+                self._audit_log(
+                    action="forget", user_id=user_id, doc_id=doc_id,
+                    error="ownership check failed",
+                    latency_ms=int(time.time() * 1000) - start_ms,
+                )
+                return {"success": False, "error": "Memory not found or access denied"}
+        except Exception as e:
+            logger.warning(f"OKG forget ownership check failed (denying): {e}")
+            return {"success": False, "error": "Memory not found or access denied"}
+
+        try:
+            await self._provider.delete_message(doc_id)
         except Exception as e:
             logger.error(f"OKG forget failed for doc_id={doc_id}: {e}")
             self._audit_log(
@@ -396,31 +439,45 @@ class OKGMemoryService:
         latency_ms: int = 0,
         error: str = "",
     ):
-        """Write audit log entry to okg_memory_audit_log table."""
+        """Write audit log entry to okg_memory_audit_log table.
+
+        Uses a separate short-lived session so that audit failures do not
+        affect the caller's DB session state, and a caller's rollback does
+        not lose the audit record.
+        """
         try:
             from models import OKGMemoryAuditLog
-            log_entry = OKGMemoryAuditLog(
-                tenant_id=self.tenant_id,
-                agent_id=self.agent_id,
-                user_id=user_id,
-                action=action,
-                doc_id=doc_id,
-                memory_type=memory_type or None,
-                subject_entity=subject_entity or None,
-                relation=relation or None,
-                confidence=confidence if confidence > 0 else None,
-                memguard_blocked=memguard_blocked,
-                memguard_reason=memguard_reason or None,
-                source=source or None,
-                result_count=result_count if result_count > 0 else None,
-                latency_ms=latency_ms if latency_ms > 0 else None,
-                error=error or None,
-            )
-            self.db.add(log_entry)
-            self.db.commit()
+            from sqlalchemy.orm import sessionmaker
+            from db import get_global_engine
+
+            engine = get_global_engine()
+            if engine is None:
+                logger.warning("OKG audit log skipped: global engine not initialized")
+                return
+
+            AuditSession = sessionmaker(bind=engine)
+            audit_db = AuditSession()
+            try:
+                log_entry = OKGMemoryAuditLog(
+                    tenant_id=self.tenant_id,
+                    agent_id=self.agent_id,
+                    user_id=user_id,
+                    action=action,
+                    doc_id=doc_id,
+                    memory_type=memory_type or None,
+                    subject_entity=subject_entity or None,
+                    relation=relation or None,
+                    confidence=confidence if confidence > 0 else None,
+                    memguard_blocked=memguard_blocked,
+                    memguard_reason=memguard_reason or None,
+                    source=source or None,
+                    result_count=result_count if result_count > 0 else None,
+                    latency_ms=latency_ms if latency_ms > 0 else None,
+                    error=error or None,
+                )
+                audit_db.add(log_entry)
+                audit_db.commit()
+            finally:
+                audit_db.close()
         except Exception as e:
             logger.warning(f"OKG audit log write failed: {e}")
-            try:
-                self.db.rollback()
-            except Exception:
-                pass
