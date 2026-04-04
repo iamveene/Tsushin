@@ -623,8 +623,8 @@ export default function CustomToolsPage() {
       {/* Header */}
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-6 flex items-center gap-4">
-          <Link href="/hub" className="text-tsushin-slate hover:text-white transition-colors">
-            ← Back to Hub
+          <Link href="/hub?tab=developer" className="text-tsushin-slate hover:text-white transition-colors">
+            ← Back to Developer Tools
           </Link>
         </div>
         <div className="flex justify-between items-start">
