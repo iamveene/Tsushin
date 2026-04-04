@@ -1,5 +1,5 @@
 """
-v0.6.1: Vector Store Instance Management API Routes
+v0.6.0: Vector Store Instance Management API Routes
 
 CRUD endpoints for external vector store connections (MongoDB Atlas, Pinecone, Qdrant).
 Follows routes_provider_instances.py pattern: tenant isolation, Fernet encryption,

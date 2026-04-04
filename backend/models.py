@@ -366,7 +366,7 @@ class Agent(Base):
     discord_integration_id = Column(Integer, nullable=True)  # v0.6.0 Item 34: FK to DiscordIntegration
     provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
 
-    # v0.6.1: Vector Store Configuration
+    # v0.6.0: Vector Store Configuration
     vector_store_instance_id = Column(Integer, ForeignKey("vector_store_instance.id", ondelete="SET NULL"), nullable=True)
     vector_store_mode = Column(String(20), default="override")  # "override" | "complement" | "shadow"
 
@@ -3447,12 +3447,12 @@ class AgentCommunicationMessage(Base):
 
 
 # ============================================================================
-# v0.6.1: Vector Store Instance (External Vector Database Connections)
+# v0.6.0: Vector Store Instance (External Vector Database Connections)
 # ============================================================================
 
 class VectorStoreInstance(Base):
     """
-    v0.6.1 Item 1: Pluggable vector store backend configuration.
+    v0.6.0 Item 1: Pluggable vector store backend configuration.
 
     Each tenant can configure external vector databases (MongoDB Atlas, Pinecone, Qdrant)
     alongside the built-in ChromaDB default. Agents reference a specific instance via
@@ -3510,7 +3510,7 @@ class VectorStoreInstance(Base):
 
 class OKGMemoryAuditLog(Base):
     """
-    v0.6.1 Item 3: Audit trail for OKG Term Memory operations.
+    v0.6.0 Item 3: Audit trail for OKG Term Memory operations.
 
     Tracks all store, recall, forget, and auto-capture operations
     for compliance, debugging, and MemGuard visibility.

@@ -1,5 +1,5 @@
 """
-v0.6.1 Item 3: OKG Context Injector — Layer 5 auto-recall integration.
+v0.6.0 Item 3: OKG Context Injector — Layer 5 auto-recall integration.
 
 Hooks into AgentMemorySystem.get_context() to automatically inject
 relevant OKG memories into the agent's prompt context.

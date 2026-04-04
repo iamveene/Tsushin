@@ -121,7 +121,7 @@ class SkillManager:
             from agent.skills.sandboxed_tools_skill import SandboxedToolsSkill
             self.register_skill(SandboxedToolsSkill)
 
-            # v0.6.1 Item 3: OKG Term Memory — structured long-term memory
+            # v0.6.0 Item 3: OKG Term Memory — structured long-term memory
             from agent.skills.okg_term_memory_skill import OKGTermMemorySkill
             self.register_skill(OKGTermMemorySkill)
 
@@ -401,7 +401,7 @@ class SkillManager:
                 if not skill_instance.is_tool_enabled(config):
                     continue
 
-                # v0.6.1: Multi-tool skills (e.g., OKG with 3 tools)
+                # v0.6.0: Multi-tool skills (e.g., OKG with 3 tools)
                 if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
                     all_defs = skill_class.get_all_mcp_tool_definitions()
                     for mcp_def in all_defs:
@@ -484,7 +484,7 @@ class SkillManager:
                 if not skill_instance.is_tool_enabled(config):
                     continue
 
-                # v0.6.1: Multi-tool skills
+                # v0.6.0: Multi-tool skills
                 if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
                     for mcp_def in skill_class.get_all_mcp_tool_definitions():
                         tools.append(mcp_def)
@@ -576,7 +576,7 @@ class SkillManager:
                         config['comm_parent_session_id'] = message.metadata['comm_parent_session_id']
 
             # Validate arguments against input schema
-            # v0.6.1: Multi-tool skills — find the right schema by tool_name
+            # v0.6.0: Multi-tool skills — find the right schema by tool_name
             mcp_def = None
             if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
                 for d in skill_class.get_all_mcp_tool_definitions():
@@ -595,7 +595,7 @@ class SkillManager:
             skill_instance._config = config
             skill_instance.set_db_session(db)
             skill_instance._agent_id = agent_id
-            # v0.6.1: For multi-tool skills, tell the instance which tool was invoked
+            # v0.6.0: For multi-tool skills, tell the instance which tool was invoked
             if hasattr(skill_instance, '_current_tool_name'):
                 skill_instance._current_tool_name = tool_name
             # Phase 0.6.0: Propagate token tracker for cost monitoring
@@ -659,7 +659,7 @@ class SkillManager:
             Skill class or None if not found
         """
         for skill_class in self.registry.values():
-            # Check multi-tool definitions first (v0.6.1: OKG Term Memory)
+            # Check multi-tool definitions first (v0.6.0: OKG Term Memory)
             if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
                 all_defs = skill_class.get_all_mcp_tool_definitions()
                 if any(d.get("name") == tool_name for d in all_defs):

@@ -1,5 +1,5 @@
 """
-v0.6.1 Item 5: Sliding-window rate limiter for vector store operations.
+v0.6.0 Item 5: Sliding-window rate limiter for vector store operations.
 
 Thread-safe singleton with in-memory counters. Resets on process restart,
 which is acceptable for rate limiting (not a security boundary).

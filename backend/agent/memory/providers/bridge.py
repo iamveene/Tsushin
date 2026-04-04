@@ -1,5 +1,5 @@
 """
-v0.6.1: Provider Bridge Store — impedance adapter between SemanticMemoryService
+v0.6.0: Provider Bridge Store — impedance adapter between SemanticMemoryService
 (text-based API) and VectorStoreProvider (embedding-based API).
 
 SemanticMemoryService expects a store with text-based search_similar(query_text, ...)
@@ -28,7 +28,7 @@ class ProviderBridgeStore:
     Bridge between text-based SemanticMemoryService API and
     embedding-based VectorStoreProvider API.
 
-    v0.6.1 Item 4: Optional security context for MemGuard + rate limiting.
+    v0.6.0 Item 4: Optional security context for MemGuard + rate limiting.
     When security_context is provided:
       - add_message runs write rate limit check + pre-storage MemGuard scan (Layer A)
       - search_similar runs read rate limit check + post-retrieval validation (Layer C)
@@ -45,7 +45,7 @@ class ProviderBridgeStore:
     ):
         self._provider = provider
         self._embedding_service = embedding_service
-        # v0.6.1: Optional security context for MemGuard hooks
+        # v0.6.0: Optional security context for MemGuard hooks
         # Keys: db, tenant_id, agent_id, instance_id
         self._security = security_context
 
@@ -82,7 +82,7 @@ class ProviderBridgeStore:
         2. Pre-storage MemGuard scan (Layer A)
         3. Delegates to provider
         """
-        # v0.6.1 Item 4: Security hooks (when security_context is provided)
+        # v0.6.0 Item 4: Security hooks (when security_context is provided)
         if self._security:
             try:
                 from services.vector_store_rate_limiter import VectorStoreRateLimiter
@@ -145,7 +145,7 @@ class ProviderBridgeStore:
         if not records:
             return
 
-        # v0.6.1 Item 4: Batch security checks
+        # v0.6.0 Item 4: Batch security checks
         if self._security:
             try:
                 from services.vector_store_rate_limiter import VectorStoreRateLimiter
@@ -200,7 +200,7 @@ class ProviderBridgeStore:
         sender_key: Optional[str] = None,
     ) -> List[Dict]:
         """Convert text to embedding, search, return List[Dict] format."""
-        # v0.6.1 Item 4: Rate limit check (read)
+        # v0.6.0 Item 4: Rate limit check (read)
         if self._security:
             try:
                 from services.vector_store_rate_limiter import VectorStoreRateLimiter
@@ -229,7 +229,7 @@ class ProviderBridgeStore:
         records = await self._provider.search_similar(embedding, limit, sender_key)
         results = self._records_to_dicts(records)
 
-        # v0.6.1 Item 4: Post-retrieval MemGuard validation
+        # v0.6.0 Item 4: Post-retrieval MemGuard validation
         if self._security and results:
             try:
                 from services.memguard_service import MemGuardService

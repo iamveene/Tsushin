@@ -1,5 +1,5 @@
 """
-v0.6.1: Vector Store Instance Service
+v0.6.0: Vector Store Instance Service
 
 CRUD operations, credential encryption, SSRF validation, and health checking
 for external vector store connections (MongoDB Atlas, Pinecone, Qdrant).

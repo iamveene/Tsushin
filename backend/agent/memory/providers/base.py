@@ -1,5 +1,5 @@
 """
-v0.6.1: Abstract base class for vector store providers.
+v0.6.0: Abstract base class for vector store providers.
 
 All vector store adapters (ChromaDB, MongoDB, Pinecone, Qdrant) implement
 this interface. Embeddings are pre-computed externally — adapters only

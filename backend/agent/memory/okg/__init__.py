@@ -1,5 +1,5 @@
 """
-v0.6.1 Item 3: Ontological Knowledge Graph (OKG) Term Memory
+v0.6.0 Item 3: Ontological Knowledge Graph (OKG) Term Memory
 
 Provides structured, graph-aware long-term memory with typed metadata
 (subject/relation/type) on top of vector store providers.

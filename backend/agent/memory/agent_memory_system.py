@@ -49,7 +49,7 @@ class AgentMemorySystem:
             config: Configuration dictionary
             persist_directory: Directory for vector store persistence
             token_tracker: Optional token usage tracker
-            vector_store_provider: Optional ProviderBridgeStore for external vector store (v0.6.1).
+            vector_store_provider: Optional ProviderBridgeStore for external vector store (v0.6.0).
                                   When None, uses ChromaDB default via VectorStoreManager.
         """
         self.logger = logging.getLogger(__name__)
@@ -193,7 +193,7 @@ class AgentMemorySystem:
             'episodic_memories': [],    # Relevant past conversations
             'semantic_facts': {},       # Known user information
             'shared_knowledge': [],     # Cross-agent knowledge
-            'okg_memories': None,       # v0.6.1 Layer 5: OKG long-term memory XML
+            'okg_memories': None,       # v0.6.0 Layer 5: OKG long-term memory XML
         }
 
         # Determine active decay config
@@ -225,7 +225,7 @@ class AgentMemorySystem:
             )
             context['shared_knowledge'] = shared_knowledge
 
-        # Layer 5: OKG long-term memory auto-recall (v0.6.1 Item 3)
+        # Layer 5: OKG long-term memory auto-recall (v0.6.0 Item 3)
         try:
             okg_context = await self._get_okg_context(user_id, current_message)
             if okg_context:
@@ -517,7 +517,7 @@ class AgentMemorySystem:
                 shared_by = item.get('shared_by_agent', 'unknown')
                 lines.append(f"  [{topic.upper()} - Agent {shared_by}] {content}")
 
-        # v0.6.1 Layer 5: OKG Long-Term Memory (XML block)
+        # v0.6.0 Layer 5: OKG Long-Term Memory (XML block)
         okg_block = context.get('okg_memories')
         if okg_block:
             lines.append("\n" + okg_block)
@@ -526,7 +526,7 @@ class AgentMemorySystem:
 
     async def _get_okg_context(self, user_id: str, current_message: str) -> Optional[str]:
         """
-        v0.6.1 Layer 5: Auto-recall OKG memories for context injection.
+        v0.6.0 Layer 5: Auto-recall OKG memories for context injection.
 
         Only runs if okg_term_memory skill is enabled for this agent.
         Returns XML block or None.

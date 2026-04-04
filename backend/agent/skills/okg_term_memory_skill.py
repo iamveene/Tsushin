@@ -1,5 +1,5 @@
 """
-v0.6.1 Item 3: OKG Term Memory Skill
+v0.6.0 Item 3: OKG Term Memory Skill
 
 Ontological Knowledge Graph long-term memory with 3 LLM-callable tools:
 - okg_store: Store a memory with typed metadata
@@ -485,7 +485,7 @@ class OKGTermMemorySkill(BaseSkill):
         """Lazy-init OKG service with current config."""
         current_tenant_id = config.get("tenant_id")
 
-        # v0.6.1 fix (Task 19): Validate cached service matches current request context
+        # v0.6.0 fix (Task 19): Validate cached service matches current request context
         if self._okg_service:
             if (self._okg_service.tenant_id == current_tenant_id and
                 self._okg_service.agent_id == self._agent_id):

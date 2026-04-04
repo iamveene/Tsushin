@@ -1,5 +1,5 @@
 """
-v0.6.1: ChromaDB adapter — wraps existing VectorStore as a VectorStoreProvider.
+v0.6.0: ChromaDB adapter — wraps existing VectorStore as a VectorStoreProvider.
 
 This is the default adapter used when an agent has no external vector store configured
 (vector_store_instance_id IS NULL). It delegates to the existing VectorStore/CachedVectorStore
