@@ -48,10 +48,11 @@ class VectorStoreRegistry:
                     cls._instance = inst
         return cls._instance
 
-    def get_provider(self, instance_id: int, db) -> VectorStoreProvider:
+    def get_provider(self, instance_id: int, db, tenant_id: str = None) -> VectorStoreProvider:
         """
         Get or create a provider adapter for the given vector store instance.
         Decrypts credentials on first access and caches the adapter.
+        tenant_id is required for multi-tenancy isolation — prevents cross-tenant access.
         """
         if instance_id in self._providers:
             return self._providers[instance_id]
@@ -62,10 +63,15 @@ class VectorStoreRegistry:
                 return self._providers[instance_id]
 
             from models import VectorStoreInstance
-            instance = db.query(VectorStoreInstance).filter(
+            query = db.query(VectorStoreInstance).filter(
                 VectorStoreInstance.id == instance_id,
                 VectorStoreInstance.is_active == True,
-            ).first()
+            )
+            # Multi-tenancy guard: prevent cross-tenant vector store access
+            if tenant_id:
+                query = query.filter(VectorStoreInstance.tenant_id == tenant_id)
+
+            instance = query.first()
 
             if not instance:
                 raise ProviderConnectionError(
@@ -90,17 +96,20 @@ class VectorStoreRegistry:
             return adapter
 
     def get_circuit_breaker(self, instance_id: int) -> CircuitBreaker:
-        """Get or create a circuit breaker for an instance."""
-        if instance_id not in self._circuit_breakers:
-            self._circuit_breakers[instance_id] = CircuitBreaker(
-                config=CircuitBreakerConfig(
-                    failure_threshold=3,
-                    recovery_timeout_seconds=60,
-                    half_open_max_failures=1,
-                    success_threshold=2,
+        """Get or create a circuit breaker for an instance. Thread-safe."""
+        if instance_id in self._circuit_breakers:
+            return self._circuit_breakers[instance_id]
+        with self._provider_lock:
+            if instance_id not in self._circuit_breakers:
+                self._circuit_breakers[instance_id] = CircuitBreaker(
+                    config=CircuitBreakerConfig(
+                        failure_threshold=3,
+                        recovery_timeout_seconds=60,
+                        half_open_max_failures=1,
+                        success_threshold=2,
+                    )
                 )
-            )
-        return self._circuit_breakers[instance_id]
+            return self._circuit_breakers[instance_id]
 
     def evict(self, instance_id: int) -> None:
         """Remove cached provider (called on instance update/delete)."""

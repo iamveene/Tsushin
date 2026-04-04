@@ -158,10 +158,16 @@ class ResolvedVectorStore(VectorStoreProvider):
             try:
                 ext_records, ext_embs = await self.primary.search_similar_with_embeddings(query_embedding, limit, sender_key)
                 self._record_success()
+                # Build embedding lookup keyed by message_id for correct alignment after merge
+                emb_lookup = {}
+                for rec, emb in zip(ext_records, ext_embs):
+                    emb_lookup[rec.message_id] = emb
+                for rec, emb in zip(chroma_records, chroma_embs):
+                    if rec.message_id not in emb_lookup:
+                        emb_lookup[rec.message_id] = emb
                 merged = self._merge_results(ext_records, chroma_records, limit)
-                # For complement with embeddings, return all embeddings combined
-                all_embs = ext_embs + chroma_embs
-                return merged, all_embs[:limit]
+                aligned_embs = [emb_lookup.get(r.message_id, []) for r in merged]
+                return merged, aligned_embs
             except Exception as e:
                 self._record_failure(e)
                 return chroma_records, chroma_embs
@@ -279,6 +285,8 @@ class VectorStoreResolver:
     def __init__(self, registry: Optional[VectorStoreRegistry] = None):
         self.registry = registry or VectorStoreRegistry()
 
+    VALID_MODES = {"override", "complement", "shadow"}
+
     def resolve(
         self,
         agent_id: int,
@@ -286,6 +294,7 @@ class VectorStoreResolver:
         persist_directory: str,
         vector_store_instance_id: Optional[int] = None,
         vector_store_mode: str = "override",
+        tenant_id: Optional[str] = None,
     ) -> Optional[ResolvedVectorStore]:
         """
         Resolve agent's vector store config into a provider facade.
@@ -296,6 +305,7 @@ class VectorStoreResolver:
             persist_directory: ChromaDB persist path (for fallback)
             vector_store_instance_id: FK to VectorStoreInstance (None = ChromaDB default)
             vector_store_mode: override|complement|shadow
+            tenant_id: Tenant ID for multi-tenancy isolation
 
         Returns:
             ResolvedVectorStore or None (None = use ChromaDB via existing path)
@@ -303,8 +313,13 @@ class VectorStoreResolver:
         if not vector_store_instance_id:
             return None  # ChromaDB default — zero regression
 
+        # Validate mode
+        if vector_store_mode not in self.VALID_MODES:
+            logger.warning(f"Invalid vector_store_mode '{vector_store_mode}' for agent {agent_id}, using 'override'")
+            vector_store_mode = "override"
+
         try:
-            primary = self.registry.get_provider(vector_store_instance_id, db)
+            primary = self.registry.get_provider(vector_store_instance_id, db, tenant_id=tenant_id)
             chromadb_fallback = self.registry.get_chromadb_fallback(persist_directory)
             circuit_breaker = self.registry.get_circuit_breaker(vector_store_instance_id)
 

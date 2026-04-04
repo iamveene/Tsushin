@@ -81,13 +81,19 @@ class VectorStoreInstanceService:
         if vendor not in SUPPORTED_VENDORS:
             raise ValueError(f"Unsupported vendor: {vendor}. Must be one of: {SUPPORTED_VENDORS}")
 
-        # SSRF validate base_url for mongodb/qdrant
-        if base_url and vendor in ("mongodb", "qdrant"):
-            from utils.ssrf_validator import validate_url, SSRFValidationError
-            try:
-                validate_url(base_url, allow_private=True)
-            except SSRFValidationError as e:
-                raise ValueError(f"URL validation failed: {e}")
+        # SSRF validate base_url (skip for mongodb+srv:// which uses a non-HTTP scheme)
+        if base_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(base_url)
+            if parsed.scheme in ("http", "https"):
+                from utils.ssrf_validator import validate_url, SSRFValidationError
+                try:
+                    # Allow private IPs for self-hosted Qdrant
+                    validate_url(base_url, allow_private=(vendor == "qdrant"))
+                except SSRFValidationError as e:
+                    raise ValueError(f"URL validation failed: {e}")
+            elif parsed.scheme not in ("mongodb", "mongodb+srv"):
+                raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
 
         # Encrypt credentials
         credentials_encrypted = None
@@ -128,12 +134,16 @@ class VectorStoreInstanceService:
 
         # SSRF validate new base_url
         if "base_url" in kwargs and kwargs["base_url"]:
-            if instance.vendor in ("mongodb", "qdrant"):
+            from urllib.parse import urlparse
+            parsed = urlparse(kwargs["base_url"])
+            if parsed.scheme in ("http", "https"):
                 from utils.ssrf_validator import validate_url, SSRFValidationError
                 try:
-                    validate_url(kwargs["base_url"], allow_private=True)
+                    validate_url(kwargs["base_url"], allow_private=(instance.vendor == "qdrant"))
                 except SSRFValidationError as e:
                     raise ValueError(f"URL validation failed: {e}")
+            elif parsed.scheme not in ("mongodb", "mongodb+srv"):
+                raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
 
         # Handle credentials update
         if "credentials" in kwargs:
@@ -174,9 +184,10 @@ class VectorStoreInstanceService:
         if not instance:
             return False
 
-        # Clear FK on affected agents
+        # Clear FK on affected agents (tenant-scoped to prevent cross-tenant mutation)
         db.query(Agent).filter(
-            Agent.vector_store_instance_id == instance_id
+            Agent.vector_store_instance_id == instance_id,
+            Agent.tenant_id == tenant_id,
         ).update({"vector_store_instance_id": None})
 
         instance.is_active = False
@@ -229,11 +240,12 @@ class VectorStoreInstanceService:
                 "vector_count": result.vector_count,
             }
         except Exception as e:
+            logger.error(f"Vector store connection test failed for instance {instance_id}: {e}")
             instance.health_status = "unavailable"
-            instance.health_status_reason = str(e)[:500]
+            instance.health_status_reason = str(e)[:500]  # Stored for admin diagnostics
             instance.last_health_check = datetime.utcnow()
             db.commit()
-            return {"success": False, "message": str(e)}
+            return {"success": False, "message": "Connection test failed. Check credentials and endpoint configuration."}
 
     @staticmethod
     async def get_stats(
@@ -248,7 +260,8 @@ class VectorStoreInstanceService:
             provider = VectorStoreRegistry().get_provider(instance_id, db)
             return await provider.get_stats()
         except Exception as e:
-            return {"error": str(e)}
+            logger.error(f"Vector store stats failed for instance {instance_id}: {e}")
+            return {"error": "Failed to retrieve stats"}
 
     @staticmethod
     def mask_credentials(instance: VectorStoreInstance, db: Session) -> str:

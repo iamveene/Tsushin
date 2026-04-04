@@ -7,7 +7,7 @@ Provides CRUD operations for agents and tone presets.
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 import sys
@@ -188,7 +188,7 @@ class AgentCreate(BaseModel):
 
     # v0.6.1: Vector Store Configuration
     vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
-    vector_store_mode: Optional[str] = Field("override", description="Vector store mode: override, complement, shadow")
+    vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field("override", description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
     enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack")
@@ -230,7 +230,7 @@ class AgentUpdate(BaseModel):
 
     # v0.6.1: Vector Store Configuration
     vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
-    vector_store_mode: Optional[str] = Field(None, description="Vector store mode: override, complement, shadow")
+    vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field(None, description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
     enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack")

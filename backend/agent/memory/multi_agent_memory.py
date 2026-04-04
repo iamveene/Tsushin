@@ -166,6 +166,7 @@ class MultiAgentMemoryManager:
                 persist_directory=persist_dir,
                 vector_store_instance_id=agent.vector_store_instance_id,
                 vector_store_mode=agent.vector_store_mode or "override",
+                tenant_id=agent.tenant_id,
             )
 
             if resolved is None:

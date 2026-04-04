@@ -338,7 +338,7 @@ class SemanticMemoryService:
             vector_stats = self.vector_store.get_stats()
             stats.update({
                 'vector_store_messages': vector_stats['total_messages'],
-                'vector_store_collection': vector_stats['collection_name']
+                'vector_store_collection': vector_stats.get('collection_name', 'external')
             })
 
         return stats
