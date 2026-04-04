@@ -3631,6 +3631,15 @@ export default function HubPage() {
                           }
                         }}
                         testLoading={vectorStoreTestLoading === instance.id}
+                        onContainerAction={async (inst, action) => {
+                          try {
+                            await api.vectorStoreContainerAction(inst.id, action)
+                            toast.success(`Container ${action} successful`)
+                            loadVectorStoreInstances()
+                          } catch (err: any) {
+                            toast.error(err.message || `Container ${action} failed`)
+                          }
+                        }}
                       />
                     ))}
                   </div>

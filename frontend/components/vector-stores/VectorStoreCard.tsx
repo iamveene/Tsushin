@@ -23,12 +23,24 @@ const STATUS_STYLES: Record<string, { dot: string; dotColor: string; label: stri
   degraded: { dot: 'bg-yellow-400 animate-pulse', dotColor: 'bg-yellow-400', label: 'Degraded' },
 }
 
+const CONTAINER_STATUS_STYLES: Record<string, { dot: string; label: string }> = {
+  running: { dot: 'bg-emerald-400 animate-pulse', label: 'Running' },
+  stopped: { dot: 'bg-gray-400', label: 'Stopped' },
+  exited: { dot: 'bg-gray-400', label: 'Stopped' },
+  creating: { dot: 'bg-yellow-400 animate-pulse', label: 'Creating' },
+  error: { dot: 'bg-red-400', label: 'Error' },
+  none: { dot: 'bg-gray-600', label: '' },
+  not_found: { dot: 'bg-red-400', label: 'Not Found' },
+}
+
 interface VectorStoreCardProps {
   instance: VectorStoreInstance
   onEdit: (instance: VectorStoreInstance) => void
   onDelete: (instance: VectorStoreInstance) => void
   onTest: (instance: VectorStoreInstance) => void
   testLoading: boolean
+  onContainerAction?: (instance: VectorStoreInstance, action: 'start' | 'stop' | 'restart') => void
+  containerActionLoading?: boolean
 }
 
 export default function VectorStoreCard({
@@ -37,6 +49,8 @@ export default function VectorStoreCard({
   onDelete,
   onTest,
   testLoading,
+  onContainerAction,
+  containerActionLoading,
 }: VectorStoreCardProps) {
   const status = STATUS_STYLES[instance.health_status] || STATUS_STYLES.unknown
   const vendorLabel = VENDOR_LABELS[instance.vendor] || instance.vendor
@@ -57,10 +71,30 @@ export default function VectorStoreCard({
             </span>
           )}
         </div>
-        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-400 flex-shrink-0 ml-2">
-          {badge}
-        </span>
+        <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+          {instance.is_auto_provisioned && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-400/10 text-purple-400">
+              Provisioned
+            </span>
+          )}
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-400">
+            {badge}
+          </span>
+        </div>
       </div>
+
+      {/* Container Status (auto-provisioned only) */}
+      {instance.is_auto_provisioned && instance.container_status && instance.container_status !== 'none' && (
+        <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-white/[0.02] border border-white/5">
+          <div className={`w-1.5 h-1.5 rounded-full ${(CONTAINER_STATUS_STYLES[instance.container_status] || CONTAINER_STATUS_STYLES.none).dot}`} />
+          <span className="text-xs text-gray-400">
+            Container: {(CONTAINER_STATUS_STYLES[instance.container_status] || CONTAINER_STATUS_STYLES.none).label}
+          </span>
+          {instance.container_port && (
+            <span className="text-xs text-gray-500 ml-auto">Port {instance.container_port}</span>
+          )}
+        </div>
+      )}
 
       {/* Info */}
       <div className="space-y-1.5 mb-3">
@@ -96,7 +130,7 @@ export default function VectorStoreCard({
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-2 pt-2 border-t border-white/5">
+      <div className="flex items-center gap-2 pt-2 border-t border-white/5 flex-wrap">
         <button
           onClick={() => onEdit(instance)}
           className="text-xs text-gray-400 hover:text-white transition-colors"
@@ -111,6 +145,39 @@ export default function VectorStoreCard({
         >
           {testLoading ? 'Testing...' : 'Test'}
         </button>
+        {instance.is_auto_provisioned && onContainerAction && (
+          <>
+            <span className="text-gray-600">|</span>
+            {(instance.container_status === 'stopped' || instance.container_status === 'exited') && (
+              <button
+                onClick={() => onContainerAction(instance, 'start')}
+                disabled={containerActionLoading}
+                className="text-xs text-teal-400 hover:text-teal-300 transition-colors disabled:opacity-50"
+              >
+                Start
+              </button>
+            )}
+            {instance.container_status === 'running' && (
+              <>
+                <button
+                  onClick={() => onContainerAction(instance, 'stop')}
+                  disabled={containerActionLoading}
+                  className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors disabled:opacity-50"
+                >
+                  Stop
+                </button>
+                <span className="text-gray-600">|</span>
+                <button
+                  onClick={() => onContainerAction(instance, 'restart')}
+                  disabled={containerActionLoading}
+                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50"
+                >
+                  Restart
+                </button>
+              </>
+            )}
+          </>
+        )}
         <span className="text-gray-600">|</span>
         <button
           onClick={() => onDelete(instance)}
