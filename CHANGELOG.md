@@ -5,6 +5,32 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - develop
+
+### Added
+
+#### MongoDB Local Mode for Vector Stores
+- **Local cosine similarity fallback**: MongoDB adapter now supports self-hosted MongoDB 7.0+ without Atlas Vector Search. Toggle "Local Mode" in the UI to use Python-side cosine similarity instead of Atlas `$vectorSearch` aggregation.
+- **Registry integration**: `use_native_search` config option passed from `extra_config` through the provider registry.
+- **UI toggle**: MongoAtlasConfigForm has a "Local Mode" toggle that sets `use_native_search: false`.
+
+#### A2A Communication Memory Enrichment
+- **Cross-agent memory retrieval**: When Agent A asks Agent B via A2A communication, Agent B's vector store is now searched for relevant memories and injected into the A2A prompt context. This enables agents to recall facts from their external vector stores (Qdrant, MongoDB) during inter-agent conversations.
+- **disable_skills flag**: Target agents in A2A calls no longer have access to skills/tools, preventing recursive tool invocations. Pure LLM-only responses using memory context.
+
+#### Dynamic Vector Store Vendor Labels
+- **MongoDB vs Atlas badges**: Vector Store cards in the Hub UI now show "MongoDB" badge for local mode instances and "Atlas" for native Atlas Vector Search instances.
+- **Vendor dropdown**: Changed from "MongoDB Atlas" to "MongoDB" in the vendor selector.
+
+### Fixed
+- **Agent API response**: `vector_store_instance_id` and `vector_store_mode` fields were missing from the `GET /api/agents/{id}` response.
+- **A2A memory search**: Use `get_shared_embedding_service()` singleton instead of creating a new `EmbeddingService()` per call (prevents model reload).
+- **MongoDB adapter async safety**: Local cosine search methods now run in `asyncio.to_thread()` to prevent blocking the event loop.
+- **MongoDB adapter memory**: Added projection to `_local_cosine_search_with_embeddings` to prevent loading entire documents into memory.
+- **Frontend toggle**: Fixed Local Mode toggle treating `undefined` as local mode on first click.
+
+---
+
 ## [0.6.0] - 2026-04-01
 
 ### Added
