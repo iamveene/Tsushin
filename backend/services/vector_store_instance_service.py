@@ -289,9 +289,11 @@ class VectorStoreInstanceService:
         from services.encryption_key_service import get_api_key_encryption_key
 
         encryption_key = get_api_key_encryption_key(db)
+        if not encryption_key:
+            raise ValueError("Failed to get encryption key for vector store credential encryption")
+        encryptor = TokenEncryption(encryption_key.encode())
         identifier = f"vector_store_{tenant_id}"
-        encryptor = TokenEncryption(encryption_key, identifier)
-        return encryptor.encrypt(json.dumps(credentials))
+        return encryptor.encrypt(json.dumps(credentials), identifier)
 
     @staticmethod
     def _decrypt_credentials(encrypted: str, tenant_id: str, db: Session) -> Dict:
@@ -299,6 +301,8 @@ class VectorStoreInstanceService:
         from services.encryption_key_service import get_api_key_encryption_key
 
         encryption_key = get_api_key_encryption_key(db)
+        if not encryption_key:
+            raise ValueError("Failed to get encryption key for vector store credential decryption")
+        encryptor = TokenEncryption(encryption_key.encode())
         identifier = f"vector_store_{tenant_id}"
-        encryptor = TokenEncryption(encryption_key, identifier)
-        return json.loads(encryptor.decrypt(encrypted))
+        return json.loads(encryptor.decrypt(encrypted, identifier))

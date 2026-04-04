@@ -190,8 +190,8 @@ class VectorStoreRegistry:
 
             encryption_key = get_api_key_encryption_key(db)
             identifier = f"vector_store_{instance.tenant_id}"
-            encryptor = TokenEncryption(encryption_key, identifier)
-            decrypted = encryptor.decrypt(instance.credentials_encrypted)
+            encryptor = TokenEncryption(encryption_key.encode())
+            decrypted = encryptor.decrypt(instance.credentials_encrypted, identifier)
             return json.loads(decrypted)
         except Exception as e:
             logger.error(f"Failed to decrypt credentials for instance {instance.id}: {e}")
