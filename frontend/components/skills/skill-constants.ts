@@ -1,7 +1,7 @@
 import {
   CalendarIcon, MailIcon, SearchIcon, MicrophoneIcon, TerminalIcon,
   WrenchIcon, BotIcon, FileTextIcon, RocketIcon, PlugIcon,
-  GlobeIcon,
+  GlobeIcon, BrainIcon,
   IconProps,
 } from '@/components/ui/icons'
 
@@ -124,6 +124,13 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
     category: 'intelligence',
     configType: 'standard',
     icon: BotIcon,
+  },
+  okg_term_memory: {
+    displayName: 'OKG Term Memory',
+    description: 'Structured long-term memory with ontological metadata (subject/relation/type).',
+    category: 'intelligence',
+    configType: 'standard',
+    icon: BrainIcon,
   },
   flight_search: {
     displayName: 'Flight Search',
