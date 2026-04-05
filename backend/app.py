@@ -1256,6 +1256,13 @@ app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Setti
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
 app.include_router(slack_router, prefix="/api/integrations/slack")  # v0.6.0 Item 33: Slack Integration
 
+# V060-CHN-002: Public inbound webhooks for Slack Events + Discord Interactions
+try:
+    from api.routes_channel_webhooks import router as channel_webhooks_router
+    app.include_router(channel_webhooks_router, prefix="/api")  # POST /api/slack/events + /api/discord/interactions
+except ImportError as _e:
+    logging.warning(f"Channel webhook routes not available: {_e}")
+
 # v0.6.0 Item 38: Channel Health Monitor
 try:
     from api.routes_channel_health import router as channel_health_router
