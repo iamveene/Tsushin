@@ -75,7 +75,7 @@ Tsushin ships as a Docker Compose stack defined in `/Users/vinicios/code/tsushin
 | Service | Image / Build | Port | Purpose | Source |
 |---------|---------------|------|---------|--------|
 | `tsushin-postgres` | `postgres:16-alpine` | 5432 (internal) | Relational database — tenants, users, agents, flows, events, audit logs. | `docker-compose.yml:22-38` |
-| `tsushin-docker-proxy` | `tecnativa/docker-socket-proxy:latest` | 2375 (internal) | Restricts Docker API surface (BUG-135). Backend talks to `tcp://docker-socket-proxy:2375` rather than mounting the raw socket. | `docker-compose.yml:43-75` |
+| `tsushin-docker-proxy` | `tecnativa/docker-socket-proxy:latest` | 2375 (internal) | Restricts the Docker API surface to reduce container-escape risk. Backend talks to `tcp://docker-socket-proxy:2375` rather than mounting the raw socket. | `docker-compose.yml:43-75` |
 | `tsushin-backend` | Built from `./backend/Dockerfile` | `${TSN_APP_PORT:-8081}` | FastAPI app. Agents, flows, memory, skills, channels, API v1, WebSockets. | `docker-compose.yml:80-168` |
 | `tsushin-frontend` | Built from `./frontend/Dockerfile` | `${FRONTEND_PORT:-3030}` | Next.js 14 UI (Watcher, Hub, Studio, Playground, Settings). | `docker-compose.yml:173-195` |
 | `kokoro-tts` (profile `tts`) | `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4` | 8880 | Optional local text-to-speech. | `docker-compose.yml:200-224` |
@@ -1773,7 +1773,7 @@ Every API-v1 response carries standard rate-limit headers (`backend/middleware/r
 
 On **429 Too Many Requests** (`backend/api/v1/schemas.py:174`) the same three headers are set; clients should back off until `X-RateLimit-Reset`.
 
-Per-client `rate_limit_rpm` is stored on the `ApiClient` record (default 60 RPM; the seeded regression client is 120 RPM per CLAUDE.md).
+Per-client `rate_limit_rpm` is stored on the `ApiClient` record (default 60 RPM; seeded regression clients may be provisioned at a higher limit, e.g. 120 RPM).
 
 ### 25.3 `/api/v1/*` endpoint reference
 
@@ -2023,7 +2023,7 @@ The Tester MCP is a containerized Go WhatsApp bridge dedicated to QA. It is conf
 curl -X POST http://localhost:8088/api/send \
   -H "Authorization: Bearer <api_secret>" \
   -H "Content-Type: application/json" \
-  -d '{"recipient": "5527988290533", "message": "<test_command>"}'
+  -d '{"recipient": "<msisdn_without_plus>", "message": "<test_command>"}'
 ```
 
 **Sandboxed tool command format** (supported over this channel — see §26):
