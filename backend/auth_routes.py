@@ -578,6 +578,14 @@ async def setup_wizard(
             # Don't fail the whole setup if tools seeding fails
             logger.warning(f"Setup wizard: Failed to seed sandboxed tools: {e}")
 
+        # BUG-273: Seed shell skill row for every agent in the tenant (disabled by default)
+        try:
+            from services.shell_skill_seeding import seed_shell_skill_for_tenant
+            shell_count = seed_shell_skill_for_tenant(db, tenant.id)
+            logger.info(f"Setup wizard: Seeded shell skill for {shell_count} agents")
+        except Exception as e:
+            logger.warning(f"Setup wizard: Failed to seed shell skill: {e}")
+
         # Get tenant admin permissions for frontend
         tenant_admin_permissions = auth_service.get_user_permissions(tenant_owner.id)
 

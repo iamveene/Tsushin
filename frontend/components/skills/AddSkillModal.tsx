@@ -80,7 +80,9 @@ export default function AddSkillModal({
       }
 
       // Standard skills not already covered
-      if (!SPECIAL_RENDERED_SKILLS.has(skill.skill_type)) {
+      // BUG-273: 'shell' is SPECIAL_RENDERED but we still want it addable from the modal
+      // so users can enable per-agent shell command execution.
+      if (!SPECIAL_RENDERED_SKILLS.has(skill.skill_type) || skill.skill_type === 'shell') {
         addable.push({
           skillType: skill.skill_type,
           displayName: display.displayName,

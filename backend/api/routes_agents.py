@@ -728,6 +728,14 @@ def create_agent(
     db.add(switcher_skill)
     db.commit()
 
+    # BUG-273: Seed shell skill (disabled by default, user opts-in per agent)
+    try:
+        from services.shell_skill_seeding import seed_shell_skill_for_agent
+        seed_shell_skill_for_agent(db, new_agent, is_enabled=False)
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to seed shell skill for agent {new_agent.id}: {e}")
+
     log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.AGENT_CREATE, "agent", str(new_agent.id), {"name": contact.friendly_name}, request)
 
     # Pass all required parameters when calling get_agent internally
