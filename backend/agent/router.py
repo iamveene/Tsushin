@@ -79,7 +79,7 @@ def _determine_agent_run_status(result: Dict) -> str:
 
 
 class AgentRouter:
-    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None, tenant_id: str = None):
+    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None, tenant_id: str = None, slack_integration_id: int = None, discord_integration_id: int = None):
         self.db = db_session
         self.config = config
         self.contact_mappings = config.get("contact_mappings", {})
@@ -170,6 +170,15 @@ class AgentRouter:
             "playground",
             PlaygroundChannelAdapter(self.logger)
         )
+
+        # V060-CHN-001: Register Slack/Discord adapters so outbound routing
+        # can actually deliver to those channels. Previously only whatsapp,
+        # telegram, and playground were registered — any agent flow targeting
+        # slack/discord failed silently. Resolution order: explicit
+        # integration_id → tenant's single active integration.
+        self._register_slack_adapter(db_session, slack_integration_id)
+        self._register_discord_adapter(db_session, discord_integration_id)
+
         self.logger.info(f"ChannelRegistry initialized with channels: {self.channel_registry.list_channels()}")
 
         # Phase 5.0: Initialize SkillManager for audio transcription, TTS, etc.
@@ -1115,6 +1124,113 @@ class AgentRouter:
         except Exception as e:
             self.logger.error(f"Error finding active conversation: {e}", exc_info=True)
             return None
+
+    def _register_slack_adapter(self, db_session, slack_integration_id):
+        """V060-CHN-001: Register a SlackChannelAdapter with the registry.
+
+        Resolution order:
+        1. explicit slack_integration_id argument
+        2. tenant's single active SlackIntegration (if exactly one active)
+        """
+        try:
+            from models import SlackIntegration
+            from channels.slack.adapter import SlackChannelAdapter
+            from hub.security import TokenEncryption
+            from services.encryption_key_service import get_slack_encryption_key
+
+            integration = None
+            if slack_integration_id:
+                integration = db_session.query(SlackIntegration).filter(
+                    SlackIntegration.id == slack_integration_id,
+                    SlackIntegration.is_active == True,
+                ).first()
+            elif self.tenant_id:
+                actives = db_session.query(SlackIntegration).filter(
+                    SlackIntegration.tenant_id == self.tenant_id,
+                    SlackIntegration.is_active == True,
+                ).all()
+                if len(actives) == 1:
+                    integration = actives[0]
+                elif len(actives) > 1:
+                    self.logger.info(
+                        f"[CHN-001] Tenant {self.tenant_id} has {len(actives)} active "
+                        "Slack integrations — skipping auto-registration (pass "
+                        "slack_integration_id explicitly to select one)."
+                    )
+                    return
+
+            if not integration:
+                return
+
+            key = get_slack_encryption_key(db_session)
+            if not key:
+                self.logger.warning("[CHN-001] Slack encryption key not configured — cannot register adapter")
+                return
+            enc = TokenEncryption(key.encode())
+            try:
+                bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+            except Exception as e:
+                self.logger.error(f"[CHN-001] Slack bot_token decrypt failed for integration {integration.id}: {e}")
+                return
+
+            self.channel_registry.register("slack", SlackChannelAdapter(bot_token, self.logger))
+            self.logger.info(
+                f"[CHN-001] Registered Slack adapter (integration_id={integration.id}, workspace={integration.workspace_name})"
+            )
+        except Exception as e:
+            self.logger.warning(f"[CHN-001] Slack adapter registration skipped: {e}")
+
+    def _register_discord_adapter(self, db_session, discord_integration_id):
+        """V060-CHN-001: Register a DiscordChannelAdapter with the registry.
+
+        Resolution order identical to Slack.
+        """
+        try:
+            from models import DiscordIntegration
+            from channels.discord.adapter import DiscordChannelAdapter
+            from hub.security import TokenEncryption
+            from services.encryption_key_service import get_discord_encryption_key
+
+            integration = None
+            if discord_integration_id:
+                integration = db_session.query(DiscordIntegration).filter(
+                    DiscordIntegration.id == discord_integration_id,
+                    DiscordIntegration.is_active == True,
+                ).first()
+            elif self.tenant_id:
+                actives = db_session.query(DiscordIntegration).filter(
+                    DiscordIntegration.tenant_id == self.tenant_id,
+                    DiscordIntegration.is_active == True,
+                ).all()
+                if len(actives) == 1:
+                    integration = actives[0]
+                elif len(actives) > 1:
+                    self.logger.info(
+                        f"[CHN-001] Tenant {self.tenant_id} has {len(actives)} active "
+                        "Discord integrations — skipping auto-registration."
+                    )
+                    return
+
+            if not integration:
+                return
+
+            key = get_discord_encryption_key(db_session)
+            if not key:
+                self.logger.warning("[CHN-001] Discord encryption key not configured — cannot register adapter")
+                return
+            enc = TokenEncryption(key.encode())
+            try:
+                bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+            except Exception as e:
+                self.logger.error(f"[CHN-001] Discord bot_token decrypt failed for integration {integration.id}: {e}")
+                return
+
+            self.channel_registry.register("discord", DiscordChannelAdapter(bot_token, self.logger))
+            self.logger.info(
+                f"[CHN-001] Registered Discord adapter (integration_id={integration.id})"
+            )
+        except Exception as e:
+            self.logger.warning(f"[CHN-001] Discord adapter registration skipped: {e}")
 
     async def route_message(self, message: Dict, trigger_type: str):
         """

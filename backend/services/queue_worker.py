@@ -255,6 +255,12 @@ class QueueWorker:
                         await self._process_telegram_message(db, item)
                     elif channel == "api":
                         result = await self._process_api_message(db, item)
+                    elif channel == "slack":
+                        # V060-CHN-002
+                        await self._process_slack_message(db, item)
+                    elif channel == "discord":
+                        # V060-CHN-002
+                        await self._process_discord_message(db, item)
                     else:
                         raise ValueError(f"Unknown channel: {channel}")
 
@@ -402,6 +408,112 @@ class QueueWorker:
         agent_router = AgentRouter(
             db, config_dict, mcp_reader=None, telegram_instance_id=instance_id,
             tenant_id=item.tenant_id,  # V060-CHN-006
+        )
+        await agent_router.route_message(message, "queue")
+
+    async def _process_slack_message(self, db: Session, item):
+        """V060-CHN-002: Process a queued inbound Slack event through AgentRouter."""
+        from models import Config
+        from agent.router import AgentRouter
+        import json as json_lib
+
+        payload = item.payload or {}
+        event = payload.get("event", {})
+        slack_integration_id = payload.get("slack_integration_id")
+
+        config = db.query(Config).first()
+        if not config:
+            raise Exception("No config found for Slack processing")
+
+        contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
+        config_dict = {
+            "model_provider": config.model_provider,
+            "model_name": config.model_name,
+            "system_prompt": config.system_prompt,
+            "memory_size": config.memory_size,
+            "contact_mappings": contact_mappings,
+            "maintenance_mode": config.maintenance_mode,
+            "maintenance_message": config.maintenance_message,
+            "context_message_count": config.context_message_count,
+            "context_char_limit": config.context_char_limit,
+            "enable_semantic_search": getattr(config, "enable_semantic_search", False),
+            "semantic_search_results": getattr(config, "semantic_search_results", 5),
+            "semantic_similarity_threshold": getattr(config, "semantic_similarity_threshold", 0.3),
+        }
+
+        # Normalize Slack event into router message envelope
+        message = {
+            "channel": "slack",
+            "sender": f"{payload.get('team_id', '')}:{event.get('user', '')}",
+            "sender_name": event.get("user", ""),
+            "body": event.get("text", ""),
+            "to": event.get("channel"),  # Slack channel ID to reply to
+            "thread_ts": event.get("thread_ts") or event.get("ts"),
+            "tenant_id": item.tenant_id,
+            "agent_id": item.agent_id,
+            "slack_integration_id": slack_integration_id,
+        }
+
+        agent_router = AgentRouter(
+            db, config_dict, mcp_reader=None,
+            tenant_id=item.tenant_id,
+            slack_integration_id=slack_integration_id,
+        )
+        await agent_router.route_message(message, "queue")
+
+    async def _process_discord_message(self, db: Session, item):
+        """V060-CHN-002: Process a queued inbound Discord interaction through AgentRouter."""
+        from models import Config
+        from agent.router import AgentRouter
+        import json as json_lib
+
+        payload = item.payload or {}
+        interaction = payload.get("interaction", {})
+        discord_integration_id = payload.get("discord_integration_id")
+
+        config = db.query(Config).first()
+        if not config:
+            raise Exception("No config found for Discord processing")
+
+        contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
+        config_dict = {
+            "model_provider": config.model_provider,
+            "model_name": config.model_name,
+            "system_prompt": config.system_prompt,
+            "memory_size": config.memory_size,
+            "contact_mappings": contact_mappings,
+            "maintenance_mode": config.maintenance_mode,
+            "maintenance_message": config.maintenance_message,
+            "context_message_count": config.context_message_count,
+            "context_char_limit": config.context_char_limit,
+            "enable_semantic_search": getattr(config, "enable_semantic_search", False),
+            "semantic_search_results": getattr(config, "semantic_search_results", 5),
+            "semantic_similarity_threshold": getattr(config, "semantic_similarity_threshold", 0.3),
+        }
+
+        user = (interaction.get("member") or {}).get("user") or interaction.get("user") or {}
+        data = interaction.get("data") or {}
+        # Pull slash-command text or options
+        command_text = data.get("name", "") or ""
+        for opt in data.get("options") or []:
+            if opt.get("type") == 3 and opt.get("value"):  # STRING option
+                command_text += f" {opt.get('value')}"
+
+        message = {
+            "channel": "discord",
+            "sender": f"discord:{user.get('id', '')}",
+            "sender_name": user.get("username", ""),
+            "body": command_text.strip(),
+            "to": interaction.get("channel_id"),
+            "tenant_id": item.tenant_id,
+            "agent_id": item.agent_id,
+            "discord_integration_id": discord_integration_id,
+        }
+
+        agent_router = AgentRouter(
+            db, config_dict, mcp_reader=None,
+            tenant_id=item.tenant_id,
+            discord_integration_id=discord_integration_id,
         )
         await agent_router.route_message(message, "queue")
 
