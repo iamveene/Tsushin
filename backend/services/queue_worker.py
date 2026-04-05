@@ -156,7 +156,7 @@ class QueueWorker:
         remain queued. Returns False on any lookup failure (fail-open so
         legitimate traffic isn't held hostage by a bug in this gate)."""
         try:
-            from models import MessageQueue, WhatsAppMCPInstance, TelegramBotInstance, Agent
+            from models import MessageQueue, Agent
             from services.channel_health_service import ChannelHealthService
 
             chs = ChannelHealthService.get_instance()
@@ -188,18 +188,26 @@ class QueueWorker:
             if channel == "whatsapp":
                 instance_id = payload.get("mcp_instance_id")
                 if not instance_id:
-                    # Fall back to the agent's linked MCP instance
-                    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-                    if agent:
-                        linked = (
-                            db.query(WhatsAppMCPInstance)
-                            .filter(WhatsAppMCPInstance.tenant_id == tenant_id)
-                            .first()
-                        )
-                        if linked:
-                            instance_id = linked.id
+                    # Use the agent's explicit whatsapp_integration_id FK rather
+                    # than a blind .first() lookup — multi-instance tenants would
+                    # otherwise get arbitrary CB decisions.
+                    agent = db.query(Agent).filter(
+                        Agent.id == agent_id,
+                        Agent.tenant_id == tenant_id,
+                    ).first()
+                    if agent and agent.whatsapp_integration_id:
+                        instance_id = agent.whatsapp_integration_id
             elif channel == "telegram":
                 instance_id = payload.get("instance_id") or payload.get("telegram_instance_id")
+                if not instance_id:
+                    # Same fix for telegram: prefer the agent's explicit FK over
+                    # a tenant-wide .first() lookup.
+                    agent = db.query(Agent).filter(
+                        Agent.id == agent_id,
+                        Agent.tenant_id == tenant_id,
+                    ).first()
+                    if agent and getattr(agent, "telegram_integration_id", None):
+                        instance_id = agent.telegram_integration_id
 
             if not instance_id:
                 return False  # Can't identify instance → don't block dispatch

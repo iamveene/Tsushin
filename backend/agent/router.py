@@ -192,7 +192,7 @@ class AgentRouter:
 
         # Phase 6.4 Week 3: Initialize SchedulerService for conversation detection
         # Item 11.4: Pass memory_manager to SchedulerService for semantic memory in conversations
-        self.scheduler_service = SchedulerService(db_session, memory_manager=self.memory_manager, token_tracker=self.token_tracker)
+        self.scheduler_service = SchedulerService(db_session, memory_manager=self.memory_manager, token_tracker=self.token_tracker, tenant_id=self.tenant_id)  # V060-CHN-006 follow-up
         self.logger.info("SchedulerService initialized for conversation routing with memory integration")
 
         # Phase 4.8: Ring buffer memory loading deprecated
