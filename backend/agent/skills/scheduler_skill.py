@@ -318,7 +318,7 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
             db = SessionLocal()
 
             try:
-                scheduler_service = SchedulerService(db, token_tracker=self._token_tracker)
+                scheduler_service = SchedulerService(db, token_tracker=self._token_tracker, tenant_id=config.get('tenant_id'))  # V060-CHN-006 follow-up
 
                 # Create scheduled event in scheduled_events table
                 event = scheduler_service.create_event(

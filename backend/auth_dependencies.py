@@ -152,7 +152,14 @@ def get_current_user_required(
                     detail="Token missing issued-at (iat) claim",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            token_issued = datetime.utcfromtimestamp(token_iat)
+            try:
+                token_issued = datetime.utcfromtimestamp(token_iat)
+            except (TypeError, ValueError, OSError):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token issued-at claim",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
             if token_issued < user.password_changed_at:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,

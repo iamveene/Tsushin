@@ -100,7 +100,7 @@ class FlowsProvider(SchedulerProviderBase):
         """Lazy-load SchedulerService to avoid circular imports."""
         if self._scheduler_service is None:
             from scheduler.scheduler_service import SchedulerService
-            self._scheduler_service = SchedulerService(self.db)
+            self._scheduler_service = SchedulerService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006 follow-up
         return self._scheduler_service
 
     def _scheduled_event_to_scheduler_event(self, event) -> SchedulerEvent:
