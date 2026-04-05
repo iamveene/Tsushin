@@ -261,6 +261,8 @@ class QueueWorker:
                         await self._process_whatsapp_message(db, item)
                     elif channel == "telegram":
                         await self._process_telegram_message(db, item)
+                    elif channel == "webhook":
+                        result = await self._process_webhook_message(db, item)
                     elif channel == "api":
                         result = await self._process_api_message(db, item)
                     elif channel == "slack":
@@ -524,6 +526,90 @@ class QueueWorker:
             discord_integration_id=discord_integration_id,
         )
         await agent_router.route_message(message, "queue")
+
+    async def _process_webhook_message(self, db: Session, item):
+        """
+        v0.6.0: Process an inbound webhook message from the queue.
+
+        Routes the normalized payload through AgentRouter with webhook_instance_id
+        set so the WebhookChannelAdapter is registered. If the webhook integration
+        has callback_enabled=True, the agent's response will be POSTed back to
+        the customer's callback URL.
+
+        The LLM answer is returned for queue-result retrieval via
+        GET /api/v1/queue/{id} (matches API channel poll semantics).
+        """
+        from models import Config, WebhookIntegration
+        from agent.router import AgentRouter
+        from datetime import datetime as _dt
+        import json as json_lib
+
+        payload = item.payload or {}
+        webhook_id = payload.get("webhook_id")
+        message_text = payload.get("message_text") or ""
+        sender_id = payload.get("sender_id") or "webhook"
+        sender_name = payload.get("sender_name") or "Webhook"
+        source_id = payload.get("source_id") or f"whk_{item.id}"
+        raw_event = payload.get("raw_event") or {}
+
+        integration = db.query(WebhookIntegration).get(webhook_id) if webhook_id else None
+        if integration is None:
+            raise Exception(f"Webhook integration {webhook_id} not found")
+        if not integration.is_active or integration.status == "paused":
+            logger.info(f"Webhook {webhook_id} inactive/paused, skipping queue item {item.id}")
+            return {"status": "skipped", "reason": "integration inactive"}
+
+        # Update activity timestamp
+        try:
+            integration.last_activity_at = _dt.utcnow()
+            db.commit()
+        except Exception:
+            db.rollback()
+
+        config = db.query(Config).first()
+        if not config:
+            raise Exception("No config found for webhook processing")
+
+        contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
+        config_dict = {
+            "model_provider": config.model_provider,
+            "model_name": config.model_name,
+            "system_prompt": config.system_prompt,
+            "memory_size": config.memory_size,
+            "contact_mappings": contact_mappings,
+            "maintenance_mode": config.maintenance_mode,
+            "maintenance_message": config.maintenance_message,
+            "context_message_count": config.context_message_count,
+            "context_char_limit": config.context_char_limit,
+            "enable_semantic_search": getattr(config, "enable_semantic_search", False),
+            "semantic_search_results": getattr(config, "semantic_search_results", 5),
+            "semantic_similarity_threshold": getattr(config, "semantic_similarity_threshold", 0.3),
+        }
+
+        # Build normalized message dict (same shape as WhatsApp/Telegram)
+        message = {
+            "channel": "webhook",
+            "body": message_text,
+            "sender": sender_id,
+            "sender_name": sender_name,
+            "is_group": False,
+            "timestamp": payload.get("timestamp") or _dt.utcnow().timestamp(),
+            "source_id": source_id,
+            "raw": raw_event,
+        }
+
+        agent_router = AgentRouter(
+            db, config_dict, mcp_reader=None, webhook_instance_id=webhook_id
+        )
+        await agent_router.route_message(message, "webhook")
+
+        # Return a compact result for queue-poll callers
+        return {
+            "status": "success",
+            "webhook_id": webhook_id,
+            "agent_id": item.agent_id,
+            "source_id": source_id,
+        }
 
     async def _process_api_message(self, db: Session, item):
         """

@@ -12,6 +12,7 @@ const CHANNEL_CONFIG: Record<string, { color: string; bgColor: string; label: st
   discord: { color: 'text-violet-400', bgColor: 'bg-violet-500/20', label: 'Discord', nodeClass: 'builder-node-channel-default' },
   email: { color: 'text-orange-400', bgColor: 'bg-orange-500/20', label: 'Email', nodeClass: 'builder-node-channel-default' },
   sms: { color: 'text-emerald-400', bgColor: 'bg-emerald-500/20', label: 'SMS', nodeClass: 'builder-node-channel-default' },
+  webhook: { color: 'text-cyan-400', bgColor: 'bg-cyan-500/20', label: 'Webhook', nodeClass: 'builder-node-channel-webhook' },
 }
 
 function BuilderChannelNode({ data, selected }: NodeProps) {

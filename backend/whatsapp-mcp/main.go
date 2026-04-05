@@ -1600,7 +1600,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		}
 
 		// Call IsOnWhatsApp to check if numbers are registered
-		results, err := client.IsOnWhatsApp(normalizedNumbers)
+		results, err := client.IsOnWhatsApp(r.Context(), normalizedNumbers)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -1927,7 +1927,7 @@ func startKeepalive(client *whatsmeow.Client, logger waLog.Logger, stopChan <-ch
 		case <-ticker.C:
 			if client.IsConnected() && client.IsLoggedIn() {
 				// Send presence available to keep session alive
-				err := client.SendPresence(types.PresenceAvailable)
+				err := client.SendPresence(context.Background(), types.PresenceAvailable)
 				if err != nil {
 					logger.Warnf("Failed to send keepalive presence: %v", err)
 				} else {
@@ -2315,7 +2315,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 		// If we didn't get a name, try group info
 		if name == "" {
-			groupInfo, err := client.GetGroupInfo(jid)
+			groupInfo, err := client.GetGroupInfo(context.Background(), jid)
 			if err == nil && groupInfo.Name != "" {
 				name = groupInfo.Name
 			} else {

@@ -532,7 +532,7 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
                       {msg.metadata && Object.keys(msg.metadata).length > 0 && (
                         <div className="mt-2 pt-2 border-t border-white/[0.06]">
                           <span className="text-white/40">Metadata: </span>
-                          <span className="text-white/60 font-mono">{JSON.stringify(msg.metadata)}</span>
+                          <span className="text-white/60 font-mono break-all whitespace-pre-wrap">{JSON.stringify(msg.metadata)}</span>
                         </div>
                       )}
                     </div>

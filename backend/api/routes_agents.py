@@ -146,11 +146,12 @@ class AgentResponse(BaseModel):
     skills_count: Optional[int] = 0  # Number of enabled skills
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord"]
+    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord", "webhook"]
     whatsapp_integration_id: Optional[int] = None  # Specific MCP instance
     telegram_integration_id: Optional[int] = None  # Telegram bot instance
     slack_integration_id: Optional[int] = None  # Slack workspace integration
     discord_integration_id: Optional[int] = None  # Discord bot integration
+    webhook_integration_id: Optional[int] = None  # v0.6.0: Webhook integration
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -191,11 +192,12 @@ class AgentCreate(BaseModel):
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field("override", description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack")
+    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
 
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
@@ -233,11 +235,12 @@ class AgentUpdate(BaseModel):
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field(None, description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack")
+    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
 
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
@@ -639,6 +642,7 @@ def get_agent(
         "telegram_integration_id": agent.telegram_integration_id,
         "slack_integration_id": agent.slack_integration_id,
         "discord_integration_id": agent.discord_integration_id,
+        "webhook_integration_id": getattr(agent, "webhook_integration_id", None),
 
         "created_at": agent.created_at,
         "updated_at": agent.updated_at
@@ -688,6 +692,16 @@ def create_agent(
         if not persona:
             raise HTTPException(status_code=404, detail="Persona not found")
 
+    # v0.6.0: Validate webhook integration belongs to caller's tenant
+    if getattr(agent, "webhook_integration_id", None) is not None:
+        from models import WebhookIntegration
+        _webhook = db.query(WebhookIntegration).filter(
+            WebhookIntegration.id == agent.webhook_integration_id,
+            WebhookIntegration.tenant_id == ctx.tenant_id,
+        ).first()
+        if not _webhook:
+            raise HTTPException(status_code=404, detail="Webhook integration not found")
+
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
         db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).update({"is_default": False})
@@ -723,6 +737,14 @@ def create_agent(
     )
     db.add(switcher_skill)
     db.commit()
+
+    # BUG-273: Seed shell skill (disabled by default, user opts-in per agent)
+    try:
+        from services.shell_skill_seeding import seed_shell_skill_for_agent
+        seed_shell_skill_for_agent(db, new_agent, is_enabled=False)
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to seed shell skill for agent {new_agent.id}: {e}")
 
     log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.AGENT_CREATE, "agent", str(new_agent.id), {"name": contact.friendly_name}, request)
 
@@ -782,6 +804,16 @@ def update_agent(
         if not persona:
             raise HTTPException(status_code=404, detail="Persona not found")
 
+    # v0.6.0: Validate webhook integration belongs to caller's tenant
+    if getattr(agent, "webhook_integration_id", None) is not None:
+        from models import WebhookIntegration
+        _webhook = db.query(WebhookIntegration).filter(
+            WebhookIntegration.id == agent.webhook_integration_id,
+            WebhookIntegration.tenant_id == ctx.tenant_id,
+        ).first()
+        if not _webhook:
+            raise HTTPException(status_code=404, detail="Webhook integration not found")
+
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
         db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id, Agent.id != agent_id).update({"is_default": False})
@@ -793,7 +825,7 @@ def update_agent(
         "response_template", "memory_size", "trigger_dm_enabled",
         "trigger_group_filters", "trigger_number_filters",
         "context_message_count", "context_char_limit", "enabled_channels",
-        "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id", "discord_integration_id",
+        "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id", "discord_integration_id", "webhook_integration_id",
         "memory_decay_enabled", "memory_decay_lambda", "memory_decay_archive_threshold", "memory_decay_mmr_lambda",
         "vector_store_instance_id", "vector_store_mode",
         "is_active", "is_default",

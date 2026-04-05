@@ -70,9 +70,47 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
   // Model discovery
   const [discovering, setDiscovering] = useState(false)
 
+  // Curated model suggestions per vendor (populated once on mount)
+  const [predefinedModels, setPredefinedModels] = useState<Record<string, string[]>>({})
+
+  // Live-discovered model list when user has typed an API key pre-save.
+  // Overrides the static predefined list for the current vendor.
+  const [liveModels, setLiveModels] = useState<string[]>([])
+  const liveModelsDebounceRef = useRef<NodeJS.Timeout | null>(null)
+
   // Saving state
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Fetch curated model suggestions once per mount (public endpoint).
+  useEffect(() => {
+    if (Object.keys(predefinedModels).length > 0) return
+    api.getPredefinedModels().then(setPredefinedModels).catch(() => {})
+  }, [predefinedModels])
+
+  // When the user has typed an API key, debounce a live /models fetch
+  // so the datalist reflects what the provider actually exposes right now.
+  // Supported vendors only — others keep the static suggestions.
+  useEffect(() => {
+    if (liveModelsDebounceRef.current) clearTimeout(liveModelsDebounceRef.current)
+    const LIVE_SUPPORTED = new Set(['gemini', 'openai', 'groq', 'grok', 'deepseek', 'openrouter'])
+    if (!apiKey || !LIVE_SUPPORTED.has(vendor)) {
+      setLiveModels([])
+      return
+    }
+    liveModelsDebounceRef.current = setTimeout(async () => {
+      const discovered = await api.discoverModelsRaw(vendor, apiKey, baseUrl || undefined)
+      setLiveModels(discovered)
+    }, 800)
+  }, [apiKey, vendor, baseUrl])
+
+  // Clear live models when vendor changes
+  useEffect(() => { setLiveModels([]) }, [vendor])
+
+  // Resolved suggestion list for the current vendor: live > predefined fallback
+  const suggestionModels = liveModels.length > 0
+    ? liveModels
+    : (predefinedModels[vendor] || [])
 
   // Initialize form when instance changes or modal opens
   useEffect(() => {
@@ -410,9 +448,21 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
                   addModel()
                 }
               }}
-              placeholder="Add model name..."
+              list={`predefined-models-${vendor}`}
+              placeholder={
+                suggestionModels.length > 0
+                  ? (liveModels.length > 0
+                      ? 'Live from provider — pick or type a custom ID...'
+                      : 'Pick a suggestion or type a custom model ID...')
+                  : 'Add model name...'
+              }
               className="flex-1 px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50 text-sm"
             />
+            <datalist id={`predefined-models-${vendor}`}>
+              {suggestionModels.map(m => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
             <button
               onClick={addModel}
               disabled={!modelInput.trim()}

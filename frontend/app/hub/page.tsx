@@ -16,11 +16,12 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, Config, ProviderInstance, VectorStoreInstance } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
 import SlackSetupModal from '@/components/SlackSetupModal'
 import DiscordSetupModal from '@/components/DiscordSetupModal'
+import WebhookSetupModal from '@/components/WebhookSetupModal'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
 import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
@@ -61,6 +62,8 @@ import {
   AlertTriangleIcon,
   SlackIcon,
   DiscordIcon,
+  WebhookIcon,
+  CopyIcon,
   CloudIcon,
   type IconProps
 } from '@/components/ui/icons'
@@ -219,6 +222,7 @@ const COMMUNICATION_CHANNELS: { value: string; label: string; Icon: React.FC<Ico
   { value: 'telegram', label: 'Telegram', Icon: PlaneIcon, description: 'Telegram Bot API', status: 'available' },  // Phase 10.1.1: Now available!
   { value: 'slack', label: 'Slack', Icon: SlackIcon, description: 'Slack workspace integration', status: 'available' },
   { value: 'discord', label: 'Discord', Icon: DiscordIcon, description: 'Discord bot integration', status: 'available' },
+  { value: 'webhook', label: 'Webhook', Icon: WebhookIcon, description: 'HTTP webhook integration (bidirectional)', status: 'available' },
 ]
 
 const PRODUCTIVITY_APPS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
@@ -283,6 +287,11 @@ export default function HubPage() {
   // v0.6.0: Discord Integration
   const [discordIntegrations, setDiscordIntegrations] = useState<DiscordIntegration[]>([])
   const [showDiscordSetupModal, setShowDiscordSetupModal] = useState(false)
+
+  // v0.6.0: Webhook-as-a-Channel
+  const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])
+  const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
+  const [webhookSaving, setWebhookSaving] = useState(false)
   const [discordTestLoading, setDiscordTestLoading] = useState<number | null>(null)
 
   // Vertex AI configuration state
@@ -401,6 +410,7 @@ export default function HubPage() {
         loadTelegramInstances()  // Phase 10.1.1
         loadSlackIntegrations()  // v0.6.0
         loadDiscordIntegrations()  // v0.6.0
+        loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
       }
       if (activeTab === 'mcp-servers') {
         loadMcpServers()  // Phase 26
@@ -549,6 +559,7 @@ export default function HubPage() {
         loadTelegramInstances(),  // Phase 10.1.1
         loadSlackIntegrations(),  // v0.6.0
         loadDiscordIntegrations(),  // v0.6.0
+        loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
         fetchToolboxStatus(),
         loadGoogleCredentials(),
         loadSystemConfig(),
@@ -1571,6 +1582,57 @@ export default function HubPage() {
       setError(err.message || 'Failed to test Discord connection')
     } finally {
       setDiscordTestLoading(null)
+    }
+  }
+
+  // v0.6.0: Webhook-as-a-Channel handlers
+  const loadWebhookIntegrations = useCallback(async () => {
+    try {
+      const data = await api.listWebhookIntegrations()
+      setWebhookIntegrations(data)
+    } catch (err) {
+      console.error('Failed to load webhook integrations:', err)
+    }
+  }, [])
+
+  const handleCreateWebhookIntegration = async (data: WebhookIntegrationCreate) => {
+    setWebhookSaving(true)
+    try {
+      const response = await api.createWebhookIntegration(data)
+      setSuccessMessage('Webhook integration created successfully!')
+      setTimeout(() => setSuccessMessage(null), 3000)
+      loadWebhookIntegrations()
+      return { api_secret: response.api_secret, inbound_url: response.integration.inbound_url }
+    } catch (err: any) {
+      setError(err.message || 'Failed to create webhook integration')
+      return null
+    } finally {
+      setWebhookSaving(false)
+    }
+  }
+
+  const handleDeleteWebhookIntegration = async (id: number) => {
+    if (!confirm('Delete this webhook integration? Any agent bound to it will be unbound.')) return
+    try {
+      await api.deleteWebhookIntegration(id)
+      setSuccessMessage('Webhook integration deleted')
+      setTimeout(() => setSuccessMessage(null), 3000)
+      loadWebhookIntegrations()
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete webhook integration')
+    }
+  }
+
+  const handleRotateWebhookSecret = async (id: number) => {
+    if (!confirm('Rotate the HMAC secret? Your external system will need the new secret before the next request.')) return
+    try {
+      const result = await api.rotateWebhookSecret(id)
+      await navigator.clipboard.writeText(result.api_secret).catch(() => {})
+      setSuccessMessage(`New secret copied to clipboard: ${result.api_secret_preview}`)
+      setTimeout(() => setSuccessMessage(null), 6000)
+      loadWebhookIntegrations()
+    } catch (err: any) {
+      setError(err.message || 'Failed to rotate webhook secret')
     }
   }
 
@@ -2847,6 +2909,107 @@ export default function HubPage() {
                               className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs hover:bg-red-600/30"
                             >
                               Disconnect
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* v0.6.0: Webhook-as-a-Channel Integrations */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-md font-semibold text-white flex items-center gap-2">
+                      <WebhookIcon size={18} className="text-cyan-400" /> Webhook Integrations
+                    </h3>
+                    <button
+                      onClick={() => setShowWebhookSetupModal(true)}
+                      className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
+                    >
+                      + New Webhook
+                    </button>
+                  </div>
+
+                  {webhookIntegrations.length === 0 ? (
+                    <div className="empty-state py-12 border border-dashed border-tsushin-border rounded-xl">
+                      <div className="empty-state-icon">
+                        <WebhookIcon size={36} className="text-cyan-400" />
+                      </div>
+                      <h3 className="text-lg font-semibold text-white mb-2">No Webhook Integrations</h3>
+                      <p className="text-tsushin-slate mb-4">
+                        Connect external HTTP systems (CRMs, Zapier, custom apps) via HMAC-signed webhooks
+                      </p>
+                      <button
+                        onClick={() => setShowWebhookSetupModal(true)}
+                        className="btn-primary"
+                      >
+                        Create Webhook
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      {webhookIntegrations.map(integration => (
+                        <div key={integration.id} className="card p-5 hover-glow">
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 flex items-center justify-center shrink-0">
+                                <WebhookIcon size={20} className="text-cyan-400" />
+                              </div>
+                              <div className="min-w-0">
+                                <h3 className="font-semibold text-white truncate">{integration.integration_name}</h3>
+                                <p className="text-xs text-tsushin-slate font-mono truncate">{integration.api_secret_preview}</p>
+                              </div>
+                            </div>
+                            <span className={`px-2 py-1 text-xs font-medium rounded-full shrink-0 ${
+                              !integration.is_active || integration.status === 'paused'
+                                ? 'bg-gray-500/20 text-gray-400 border border-gray-500/50'
+                                : integration.circuit_breaker_state === 'open'
+                                ? 'bg-red-500/20 text-red-400 border border-red-500/50'
+                                : integration.health_status === 'healthy'
+                                ? 'bg-green-500/20 text-green-400 border border-green-500/50'
+                                : 'bg-gray-500/20 text-gray-400 border border-gray-500/50'
+                            }`}>
+                              {!integration.is_active || integration.status === 'paused'
+                                ? 'Paused'
+                                : integration.circuit_breaker_state === 'open'
+                                ? 'Circuit Open'
+                                : integration.health_status === 'healthy'
+                                ? 'Active'
+                                : 'Unknown'}
+                            </span>
+                          </div>
+
+                          <div className="text-xs text-tsushin-slate mb-3 space-y-1">
+                            <div className="flex items-center gap-1">
+                              <span>Inbound:</span>
+                              <code className="text-cyan-300 text-xs bg-gray-900 px-1 rounded truncate">{integration.inbound_url}</code>
+                              <button
+                                type="button"
+                                onClick={() => navigator.clipboard.writeText(window.location.origin + integration.inbound_url)}
+                                title="Copy URL"
+                                className="text-gray-500 hover:text-cyan-400 ml-auto shrink-0"
+                              >
+                                <CopyIcon size={12} />
+                              </button>
+                            </div>
+                            <p>Callback: <span className="text-white">{integration.callback_enabled ? 'Enabled' : 'Disabled'}</span></p>
+                            <p>Rate limit: <span className="text-white">{integration.rate_limit_rpm} req/min</span></p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => handleRotateWebhookSecret(integration.id)}
+                              className="px-3 py-1.5 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded text-xs hover:bg-cyan-600/30"
+                              title="Rotate HMAC secret"
+                            >
+                              Rotate Secret
+                            </button>
+                            <button
+                              onClick={() => handleDeleteWebhookIntegration(integration.id)}
+                              className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs hover:bg-red-600/30"
+                            >
+                              Delete
                             </button>
                           </div>
                         </div>
@@ -4227,6 +4390,15 @@ export default function HubPage() {
         onClose={() => setShowDiscordSetupModal(false)}
         onSubmit={handleCreateDiscordIntegration}
         saving={saving}
+      />
+
+      {/* v0.6.0: Webhook Setup Modal */}
+      <WebhookSetupModal
+        isOpen={showWebhookSetupModal}
+        onClose={() => setShowWebhookSetupModal(false)}
+        onSubmit={handleCreateWebhookIntegration}
+        saving={webhookSaving}
+        apiBase={typeof window !== 'undefined' ? window.location.origin : ''}
       />
 
       {/* v0.6.0: Vector Store Config Modal */}

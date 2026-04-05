@@ -1012,6 +1012,7 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
           if (id === 'channel-playground') return 'playground'
           if (id.startsWith('channel-whatsapp')) return 'whatsapp'
           if (id.startsWith('channel-telegram')) return 'telegram'
+          if (id.startsWith('channel-webhook')) return 'webhook'  // v0.6.0
           return null
         }
 

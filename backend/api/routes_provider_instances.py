@@ -95,6 +95,12 @@ class TestConnectionRawRequest(BaseModel):
     api_key: Optional[str] = None
 
 
+class DiscoverModelsRawRequest(BaseModel):
+    vendor: str
+    api_key: str
+    base_url: Optional[str] = None
+
+
 class UrlValidationRequest(BaseModel):
     url: str
     vendor: Optional[str] = None
@@ -108,6 +114,53 @@ class UrlValidationResponse(BaseModel):
 # ==================== Helpers ====================
 
 VALID_VENDORS = {"openai", "anthropic", "gemini", "groq", "grok", "deepseek", "openrouter", "ollama", "vertex_ai", "custom"}
+
+# Curated suggestions shown in the UI as model-name autocomplete.
+# Providers with a live /models endpoint (openai/groq/grok/deepseek/openrouter via
+# Auto-detect, gemini via live discovery below) will replace this list after
+# the instance is saved; the suggestions help users pick a sensible default
+# *before* saving. Kept free of `ollama`, `vertex_ai`, `custom` — those are
+# fully user-supplied (ollama via Auto-detect against the local daemon).
+PREDEFINED_MODELS = {
+    "openai": [
+        "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini",
+        "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
+        "o1", "o1-mini", "o3-mini", "o4-mini",
+    ],
+    "anthropic": [
+        "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
+        "claude-sonnet-4-20250514",
+        "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
+        "claude-3-opus-20240229", "claude-3-haiku-20240307",
+    ],
+    "gemini": [
+        # Static fallback only — used when the live /v1beta/models call fails
+        # or no API key is available yet. The modal and setup page call
+        # /provider-instances/discover-models-raw with the user's key to
+        # refresh this list live from Google.
+        # Gemini 3.x (preview):
+        "gemini-3.1-pro-preview", "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+        # Gemini 2.5 (stable):
+        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+        # Gemini 2.0 / 1.5 (legacy):
+        "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
+    ],
+    "groq": [
+        "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768", "gemma2-9b-it",
+    ],
+    "grok": [
+        "grok-3", "grok-3-mini", "grok-2",
+    ],
+    "deepseek": [
+        "deepseek-chat", "deepseek-reasoner",
+    ],
+    "openrouter": [
+        "google/gemini-2.5-flash", "anthropic/claude-sonnet-4",
+        "openai/gpt-4o-mini", "meta-llama/llama-3.1-8b-instruct:free",
+    ],
+}
 
 
 def _encrypt_provider_key(plaintext_key: str, tenant_id: str, instance_id: int, db: Session) -> Optional[str]:
@@ -168,6 +221,106 @@ def _to_response(instance: ProviderInstance, db: Session) -> ProviderInstanceRes
 
 
 # ==================== Endpoints ====================
+
+@router.get("/provider-instances/predefined-models")
+def get_predefined_models():
+    """
+    Return the curated list of well-known model IDs per provider.
+    Public (no auth) — data is static and contains no tenant-specific info.
+    Used by the setup flow and the provider-instance modal to populate
+    model-name autocomplete suggestions.
+    """
+    return {"models": PREDEFINED_MODELS}
+
+
+@router.post("/provider-instances/discover-models-raw")
+async def discover_models_raw(data: DiscoverModelsRawRequest):
+    """
+    Live-discover models from a provider endpoint using a raw API key
+    (no saved instance required). Public endpoint — intended to be called
+    during setup and during pre-save modal configuration, so the model
+    dropdown reflects what the provider actually exposes right now.
+
+    The supplied API key is used only for this single outbound request
+    and is never stored or logged.
+
+    Supports: gemini, openai, groq, grok, deepseek, openrouter (any
+    OpenAI-compatible /models endpoint). Falls back to {"models": []}
+    on failure — callers should keep their static suggestions as a
+    secondary fallback.
+    """
+    vendor = data.vendor.lower()
+    if vendor not in VALID_VENDORS:
+        raise HTTPException(status_code=400, detail="Invalid vendor")
+    if not data.api_key or not data.api_key.strip():
+        raise HTTPException(status_code=400, detail="API key required")
+
+    # Default base URLs per vendor (mirrors frontend VENDOR_DEFAULT_URLS)
+    VENDOR_BASE_URLS = {
+        "gemini": "https://generativelanguage.googleapis.com",
+        "openai": "https://api.openai.com/v1",
+        "groq": "https://api.groq.com/openai/v1",
+        "grok": "https://api.x.ai/v1",
+        "deepseek": "https://api.deepseek.com/v1",
+        "openrouter": "https://openrouter.ai/api/v1",
+    }
+    base_url = (data.base_url or VENDOR_BASE_URLS.get(vendor) or "").rstrip("/")
+    if not base_url:
+        return {"models": []}
+
+    # SSRF validate
+    from utils.ssrf_validator import validate_url, SSRFValidationError
+    try:
+        validate_url(base_url)
+    except SSRFValidationError as e:
+        raise HTTPException(status_code=400, detail=f"SSRF blocked: {e}")
+
+    import httpx
+    models: List[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if vendor == "gemini":
+                headers = {"x-goog-api-key": data.api_key}
+                page_token = None
+                while True:
+                    params = {"pageSize": 100}
+                    if page_token:
+                        params["pageToken"] = page_token
+                    resp = await client.get(
+                        f"{base_url}/v1beta/models", headers=headers, params=params
+                    )
+                    if resp.status_code != 200:
+                        return {"models": []}
+                    body = resp.json()
+                    for m in body.get("models", []):
+                        name = m.get("name", "")
+                        methods = m.get("supportedGenerationMethods", [])
+                        if not name or "generateContent" not in methods:
+                            continue
+                        model_id = name[len("models/"):] if name.startswith("models/") else name
+                        models.append(model_id)
+                    page_token = body.get("nextPageToken")
+                    if not page_token:
+                        break
+                models = sorted(set(models))
+            else:
+                # OpenAI-compatible /models
+                headers = {"Authorization": f"Bearer {data.api_key}"}
+                resp = await client.get(f"{base_url}/models", headers=headers)
+                if resp.status_code != 200:
+                    return {"models": []}
+                body = resp.json()
+                models = sorted(
+                    {m.get("id") for m in body.get("data", []) if isinstance(m, dict) and m.get("id")}
+                )
+    except (httpx.ConnectError, httpx.TimeoutException):
+        return {"models": []}
+    except Exception as e:
+        logger.warning(f"Raw model discovery failed for {vendor}: {e}")
+        return {"models": []}
+
+    return {"models": models}
+
 
 @router.get("/provider-instances", response_model=List[ProviderInstanceResponse])
 def list_provider_instances(
@@ -742,6 +895,64 @@ async def discover_models(
         except httpx.TimeoutException:
             raise HTTPException(status_code=504, detail="Timeout connecting to custom endpoint")
 
+    elif instance.vendor == "gemini":
+        # Gemini: query /v1beta/models for live model list
+        import httpx
+        base_url = (instance.base_url or "https://generativelanguage.googleapis.com").rstrip("/")
+
+        # Validate URL to prevent SSRF
+        from utils.ssrf_validator import validate_url, SSRFValidationError
+        try:
+            validate_url(base_url)
+        except SSRFValidationError as e:
+            raise HTTPException(status_code=400, detail=f"SSRF blocked: {e}")
+
+        # Resolve API key (instance-specific first, then tenant-level)
+        api_key = _decrypt_provider_key(instance, db)
+        if not api_key:
+            from services.api_key_service import get_api_key
+            api_key = get_api_key("gemini", db, tenant_id=instance.tenant_id)
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="No Gemini API key configured for this instance or tenant"
+            )
+
+        headers = {"x-goog-api-key": api_key}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Paginate — Google returns nextPageToken when there are more models
+                page_token = None
+                while True:
+                    params = {"pageSize": 100}
+                    if page_token:
+                        params["pageToken"] = page_token
+                    response = await client.get(
+                        f"{base_url}/v1beta/models", headers=headers, params=params
+                    )
+                    if response.status_code != 200:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Gemini returned HTTP {response.status_code}"
+                        )
+                    data = response.json()
+                    for m in data.get("models", []):
+                        name = m.get("name", "")
+                        methods = m.get("supportedGenerationMethods", [])
+                        if not name or "generateContent" not in methods:
+                            continue
+                        # Strip "models/" prefix
+                        model_id = name[len("models/"):] if name.startswith("models/") else name
+                        models.append(model_id)
+                    page_token = data.get("nextPageToken")
+                    if not page_token:
+                        break
+                models = sorted(set(models))
+        except httpx.ConnectError:
+            raise HTTPException(status_code=502, detail="Cannot connect to Gemini API")
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Timeout connecting to Gemini API")
+
     elif instance.vendor == "openrouter" and instance.base_url:
         # OpenRouter-compatible: query /v1/models
         import httpx
@@ -779,36 +990,8 @@ async def discover_models(
             raise HTTPException(status_code=504, detail="Timeout connecting to OpenRouter")
 
     else:
-        # Cloud providers: return curated known models
-        KNOWN_MODELS = {
-            "openai": [
-                "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4",
-                "gpt-3.5-turbo", "o1", "o1-mini", "o3-mini",
-            ],
-            "anthropic": [
-                "claude-sonnet-4-20250514", "claude-3-5-haiku-20241022",
-                "claude-3-opus-20240229", "claude-3-haiku-20240307",
-            ],
-            "gemini": [
-                "gemini-2.5-flash", "gemini-2.5-pro",
-                "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
-            ],
-            "groq": [
-                "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
-                "mixtral-8x7b-32768", "gemma2-9b-it",
-            ],
-            "grok": [
-                "grok-3", "grok-3-mini", "grok-2",
-            ],
-            "deepseek": [
-                "deepseek-chat", "deepseek-reasoner",
-            ],
-            "openrouter": [
-                "google/gemini-2.5-flash", "anthropic/claude-sonnet-4",
-                "meta-llama/llama-3.1-8b-instruct:free",
-            ],
-        }
-        models = KNOWN_MODELS.get(instance.vendor, [])
+        # Cloud providers without live discovery: return curated list
+        models = list(PREDEFINED_MODELS.get(instance.vendor, []))
 
     # Update instance with discovered models
     instance.available_models = models

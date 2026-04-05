@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Webhook-as-a-Channel (v0.6.0)
+- **New first-class channel type** alongside WhatsApp/Telegram/Slack/Discord/Playground. Bidirectional HTTP integration for CRMs, Zapier, custom apps, ticketing systems.
+- **Inbound endpoint**: `POST /api/webhooks/{id}/inbound` (public, HMAC-gated). Accepts `X-Tsushin-Signature: sha256=<hex>` (HMAC-SHA256 over `timestamp + "." + body`) and `X-Tsushin-Timestamp` (±5 min replay window). Cryptographically authenticated, no bearer token.
+- **Outbound callbacks**: agent replies POSTed back to customer-provided callback URL (optional, enabled per integration). SSRF-validated on create via existing `utils.ssrf_validator`. HMAC-signed. 10s timeout, no redirects, 64 KB response cap.
+- **Defense-in-depth**: per-webhook rate limit (default 30 rpm), optional CIDR IP allowlist, configurable payload size cap (default 1 MB), generic 403 on auth failures (no detail leak).
+- **Management API** (`/api/webhook-integrations`, tenant-scoped via `filter_by_tenant`): POST create (returns plaintext secret ONCE), GET list/detail (masked `whsec_XXXX…` preview only), PATCH update, POST rotate-secret (returns new plaintext once, invalidates old), DELETE.
+- **Encryption at rest**: `webhook_encryption_key` in Config + Fernet per-tenant workspace key derivation via `TokenEncryption`. New `get_webhook_encryption_key()` helper in `encryption_key_service`.
+- **Agent binding**: `Agent.webhook_integration_id` FK (one webhook → one agent). `enabled_channels` accepts `"webhook"`. `AgentRouter` registers `WebhookChannelAdapter` per instance; `_is_agent_valid_for_channel` enforces binding.
+- **Queue dispatch**: `QueueWorker._process_webhook_message` normalizes payload into channel-agnostic message dict, routes through AgentRouter with `webhook_instance_id`, persists LLM result for `GET /api/v1/queue/{id}` polling.
+- **Security tested**: 13-point adversarial suite verifies HMAC verify, missing/wrong signature, replay, nonexistent webhook, oversized payload, rate limit, SSRF, unauthenticated access, secret rotation. All passing.
+- **UI integration**: Hub → Communication section ("Webhook Integrations" cards with Rotate Secret + Delete), `WebhookSetupModal` two-phase flow (form → secret reveal with copy-to-clipboard + signing instructions), Agent Channels tab toggle + radio selector, Studio/Graph channel nodes (cyan palette, reuses existing `isGlowing`/`isFading` animations identical to WhatsApp/Telegram), Flows step targeting, ChannelHealthTab, dashboard distribution chart color.
+- **Alembic 0023**: `webhook_integration` table + `agent.webhook_integration_id` FK + `config.webhook_encryption_key`.
+- **Graph View integration**: webhook channels now render as first-class nodes alongside WhatsApp/Telegram/Playground (cyan palette, integration name as subtitle). `/api/v2/agents/graph-preview` exposes `channels.webhook[]` with `WebhookChannelInfo` schema + `agent.webhook_integration_id`; `useGraphData.ts` creates webhook→agent edges; `GraphCanvas.getChannelType()` recognizes `channel-webhook-*` so the existing edge-glow/fade activity pipeline fires identically to other channels on inbound message activity.
+- **RBAC**: `integrations.webhook.{read,write}` permission scopes (owner/admin/member get write, readonly gets read). All 6 webhook CRUD routes gated by `require_permission()` matching the Slack/Discord pattern.
+- **Tenant binding validation**: `routes_agents.py` create/update handlers validate that the supplied `webhook_integration_id` resolves to a WebhookIntegration in the caller's tenant before persisting the FK, closing a cross-tenant binding gap.
+- **Emergency stop integration**: webhook inbound endpoint honors `Config.emergency_stop` and returns 503 at ingress (before enqueueing) when the global stop is active. Circuit breaker queuing in `AgentRouter` also maps `webhook_instance_id` for deferred-message tenant/agent resolution.
+
+#### Live Provider Model Discovery (v0.6.1)
+- **Self-updating model dropdowns**: `/setup` and the provider-instance modal now auto-refresh their model lists against the provider's real `/models` endpoint whenever a user pastes an API key — no more hand-maintained Gemini/OpenAI/etc. lists going stale when Google or OpenAI ship new models.
+- **New endpoint** `POST /api/provider-instances/discover-models-raw`: accepts `{vendor, api_key, base_url?}`, performs a single outbound request to the provider, returns the live model list. API key is used once and never stored.
+- **Gemini live discovery**: backend calls Google's `/v1beta/models` with pagination, filters to `generateContent`-capable models, strips the `models/` prefix. Works on both saved instances (Auto-detect button) and pre-save (as the user types their key).
+- **Unified static fallback**: the previously-inlined `KNOWN_MODELS` dict in `discover_models` was replaced by a module-level `PREDEFINED_MODELS` registry consumed by the new public `GET /api/provider-instances/predefined-models` endpoint — used as a suggestion fallback when no API key is available yet.
+- **Supported vendors for live pre-save discovery**: gemini, openai, groq, grok, deepseek, openrouter. Anthropic keeps the static list (no public `/models` endpoint).
+- **Refreshed Gemini static fallback**: added Gemini 3.x preview IDs (`gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`) and 2.5 stable (`gemini-2.5-flash-lite`) for the "no key entered yet" case.
+- **Datalist UX**: instance-modal model input now uses a `<datalist>` bound to the current vendor, so users get vendor-specific autocomplete while retaining free-text entry for custom IDs.
+
+#### Flows Bulk Actions & Page Size Selector (v0.6.1)
+- **Bulk actions bar**: Multi-select flows to Enable, Disable, or Delete them in bulk. Bar appears above the table when rows are selected with selection count and Clear selection link.
+- **Page size selector**: Per-page dropdown (10/25/50/100) added to the pagination footer, replacing the hardcoded 25-per-page limit. Changing page size resets to page 1 and clears any selection.
+- **Force-delete fallback**: Bulk delete detects flows with existing runs and prompts once to force-delete the affected set.
+
 #### OKG Term Memory Skill (v0.6.0)
 - **Ontological Knowledge Graph skill**: New `okg_term_memory` skill providing structured long-term memory with typed metadata (subject/relation/type/confidence). First multi-tool skill in Tsushin.
 - **Three LLM-callable tools**: `okg_store` (store memory with ontological metadata), `okg_recall` (search by query + metadata filters with temporal decay), `okg_forget` (delete by doc_id).
@@ -102,6 +133,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Docker env passthrough**: Added `GROQ_API_KEY`, `GROK_API_KEY`, `ELEVENLABS_API_KEY` to docker-compose.yml backend environment.
+- **Docker Compose v2 required**: Installer no longer supports `docker-compose` v1. Reverts the BUG-271 `DOCKER_BUILDKIT=0` workaround (installer would force-disable BuildKit for v1 compatibility). The backend Dockerfile now requires BuildKit for pip/nuclei cache mounts. Docker Compose v2 (`docker compose`) is bundled with Docker Desktop ≥20.10 and is the CLAUDE.md convention. Installer errors out with a clear upgrade message if only v1 is detected.
+
+### Performance
+
+#### Backend Container Build Optimization (2026-04-04)
+
+- **Backend image size: 11.5 GB → 4.89 GB (-58%)**. Full `--no-cache` build time: 14m22s → 3m59s (-72%). Layer export: 93s → 32s (-66%).
+- **Root cause**: `sentence-transformers` → default `torch` wheel was pulling ~4.3 GB of NVIDIA/CUDA/triton binaries (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, `triton`, etc.) that never execute — embeddings run on CPU via `asyncio.to_thread()`.
+- **Fix**: Install torch from the CPU-only index (`https://download.pytorch.org/whl/cpu`) as a dedicated step before `requirements-phase4.txt`. Saves 4.3 GB of unused CUDA runtime per image.
+- **BuildKit cache mounts**: Added `# syntax=docker/dockerfile:1.4` + `--mount=type=cache,target=/root/.cache/pip` to all pip install steps and the nuclei download. Wheels persist across `--no-cache` rebuilds.
+- **Tiered requirements**: Split `requirements.txt` into `requirements-base.txt` (stable core: fastapi, sqlalchemy, pydantic, security deps), `requirements-app.txt` (volatile integrations: anthropic, openai, google-*, slack, discord, telegram), and `requirements-optional.txt` (kubernetes, gcp-secret-manager, qdrant, pinecone, pymongo). Iterative rebuilds only invalidate the changed tier + below.
+- **Optional deps build arg**: New `INSTALL_OPTIONAL_DEPS` ARG (default: `true`). Local dev can build with `--build-arg INSTALL_OPTIONAL_DEPS=false` to skip K8s/GCP/vector clients (~50 MB saved). All five optional deps are lazy-imported at runtime, so disabling is safe as long as the corresponding feature isn't activated.
+- **Nuclei download cache**: Cached across builds, saving ~5-10s per full rebuild.
+- **Updated references**: `.github/workflows/gke-deploy.yml` and `ops/manage_servers.py` now reference the tiered requirements files.
 
 ### Fixed
 
