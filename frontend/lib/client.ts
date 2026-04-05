@@ -6444,6 +6444,14 @@ export const api = {
     return res.json()
   },
 
+  async getPredefinedModels(): Promise<Record<string, string[]>> {
+    // Public endpoint — no auth required (static suggestions data).
+    const res = await fetch(`${API_URL}/api/provider-instances/predefined-models`)
+    if (!res.ok) return {}
+    const data = await res.json()
+    return data.models || {}
+  },
+
   async discoverProviderModels(id: number): Promise<string[]> {
     const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/discover-models`, {
       method: 'POST',

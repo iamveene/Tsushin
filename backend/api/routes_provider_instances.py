@@ -109,6 +109,47 @@ class UrlValidationResponse(BaseModel):
 
 VALID_VENDORS = {"openai", "anthropic", "gemini", "groq", "grok", "deepseek", "openrouter", "ollama", "vertex_ai", "custom"}
 
+# Curated suggestions shown in the UI as model-name autocomplete.
+# Providers with a live /models endpoint (openai/groq/grok/deepseek/openrouter via
+# Auto-detect, gemini via live discovery below) will replace this list after
+# the instance is saved; the suggestions help users pick a sensible default
+# *before* saving. Kept free of `ollama`, `vertex_ai`, `custom` — those are
+# fully user-supplied (ollama via Auto-detect against the local daemon).
+PREDEFINED_MODELS = {
+    "openai": [
+        "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini",
+        "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
+        "o1", "o1-mini", "o3-mini", "o4-mini",
+    ],
+    "anthropic": [
+        "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
+        "claude-sonnet-4-20250514",
+        "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
+        "claude-3-opus-20240229", "claude-3-haiku-20240307",
+    ],
+    "gemini": [
+        # Live discovery is used when Auto-detect runs; this list is just
+        # a pre-save suggestion fallback. Google publishes new Gemini IDs
+        # frequently — Auto-detect after saving to see the current set.
+        "gemini-2.5-flash", "gemini-2.5-pro",
+        "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
+    ],
+    "groq": [
+        "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768", "gemma2-9b-it",
+    ],
+    "grok": [
+        "grok-3", "grok-3-mini", "grok-2",
+    ],
+    "deepseek": [
+        "deepseek-chat", "deepseek-reasoner",
+    ],
+    "openrouter": [
+        "google/gemini-2.5-flash", "anthropic/claude-sonnet-4",
+        "openai/gpt-4o-mini", "meta-llama/llama-3.1-8b-instruct:free",
+    ],
+}
+
 
 def _encrypt_provider_key(plaintext_key: str, tenant_id: str, instance_id: int, db: Session) -> Optional[str]:
     """Encrypt a provider instance API key for storage.
@@ -168,6 +209,17 @@ def _to_response(instance: ProviderInstance, db: Session) -> ProviderInstanceRes
 
 
 # ==================== Endpoints ====================
+
+@router.get("/provider-instances/predefined-models")
+def get_predefined_models():
+    """
+    Return the curated list of well-known model IDs per provider.
+    Public (no auth) — data is static and contains no tenant-specific info.
+    Used by the setup flow and the provider-instance modal to populate
+    model-name autocomplete suggestions.
+    """
+    return {"models": PREDEFINED_MODELS}
+
 
 @router.get("/provider-instances", response_model=List[ProviderInstanceResponse])
 def list_provider_instances(
@@ -742,6 +794,64 @@ async def discover_models(
         except httpx.TimeoutException:
             raise HTTPException(status_code=504, detail="Timeout connecting to custom endpoint")
 
+    elif instance.vendor == "gemini":
+        # Gemini: query /v1beta/models for live model list
+        import httpx
+        base_url = (instance.base_url or "https://generativelanguage.googleapis.com").rstrip("/")
+
+        # Validate URL to prevent SSRF
+        from utils.ssrf_validator import validate_url, SSRFValidationError
+        try:
+            validate_url(base_url)
+        except SSRFValidationError as e:
+            raise HTTPException(status_code=400, detail=f"SSRF blocked: {e}")
+
+        # Resolve API key (instance-specific first, then tenant-level)
+        api_key = _decrypt_provider_key(instance, db)
+        if not api_key:
+            from services.api_key_service import get_api_key
+            api_key = get_api_key("gemini", db, tenant_id=instance.tenant_id)
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="No Gemini API key configured for this instance or tenant"
+            )
+
+        headers = {"x-goog-api-key": api_key}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Paginate — Google returns nextPageToken when there are more models
+                page_token = None
+                while True:
+                    params = {"pageSize": 100}
+                    if page_token:
+                        params["pageToken"] = page_token
+                    response = await client.get(
+                        f"{base_url}/v1beta/models", headers=headers, params=params
+                    )
+                    if response.status_code != 200:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Gemini returned HTTP {response.status_code}"
+                        )
+                    data = response.json()
+                    for m in data.get("models", []):
+                        name = m.get("name", "")
+                        methods = m.get("supportedGenerationMethods", [])
+                        if not name or "generateContent" not in methods:
+                            continue
+                        # Strip "models/" prefix
+                        model_id = name[len("models/"):] if name.startswith("models/") else name
+                        models.append(model_id)
+                    page_token = data.get("nextPageToken")
+                    if not page_token:
+                        break
+                models = sorted(set(models))
+        except httpx.ConnectError:
+            raise HTTPException(status_code=502, detail="Cannot connect to Gemini API")
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Timeout connecting to Gemini API")
+
     elif instance.vendor == "openrouter" and instance.base_url:
         # OpenRouter-compatible: query /v1/models
         import httpx
@@ -779,36 +889,8 @@ async def discover_models(
             raise HTTPException(status_code=504, detail="Timeout connecting to OpenRouter")
 
     else:
-        # Cloud providers: return curated known models
-        KNOWN_MODELS = {
-            "openai": [
-                "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4",
-                "gpt-3.5-turbo", "o1", "o1-mini", "o3-mini",
-            ],
-            "anthropic": [
-                "claude-sonnet-4-20250514", "claude-3-5-haiku-20241022",
-                "claude-3-opus-20240229", "claude-3-haiku-20240307",
-            ],
-            "gemini": [
-                "gemini-2.5-flash", "gemini-2.5-pro",
-                "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
-            ],
-            "groq": [
-                "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
-                "mixtral-8x7b-32768", "gemma2-9b-it",
-            ],
-            "grok": [
-                "grok-3", "grok-3-mini", "grok-2",
-            ],
-            "deepseek": [
-                "deepseek-chat", "deepseek-reasoner",
-            ],
-            "openrouter": [
-                "google/gemini-2.5-flash", "anthropic/claude-sonnet-4",
-                "meta-llama/llama-3.1-8b-instruct:free",
-            ],
-        }
-        models = KNOWN_MODELS.get(instance.vendor, [])
+        # Cloud providers without live discovery: return curated list
+        models = list(PREDEFINED_MODELS.get(instance.vendor, []))
 
     # Update instance with discovered models
     instance.available_models = models
