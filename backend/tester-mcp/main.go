@@ -28,6 +28,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -1515,7 +1516,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		}
 
 		// Call IsOnWhatsApp to check if numbers are registered
-		results, err := client.IsOnWhatsApp(normalizedNumbers)
+		results, err := client.IsOnWhatsApp(r.Context(), normalizedNumbers)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -1569,6 +1570,29 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			fmt.Printf("REST API server error: %v\n", err)
 		}
 	}()
+}
+
+// syncWAWebVersion fetches the latest WhatsApp Web client version from Meta
+// and applies it to whatsmeow's client payload. This prevents the server from
+// rejecting connections with code 405 (Client outdated) when the version
+// hardcoded in the pinned whatsmeow module falls behind WhatsApp's live version.
+// On failure, the built-in version is kept and a warning is logged.
+func syncWAWebVersion(logger waLog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	oldVer := store.GetWAVersion()
+	latestVer, err := whatsmeow.GetLatestVersion(ctx, nil)
+	if err != nil {
+		logger.Warnf("Failed to fetch latest WhatsApp Web version (using built-in %s): %v", oldVer, err)
+		return
+	}
+	if latestVer == nil || latestVer.IsZero() || *latestVer == oldVer {
+		logger.Infof("WhatsApp Web version is up-to-date: %s", oldVer)
+		return
+	}
+	store.SetWAVersion(*latestVer)
+	logger.Infof("Updated WhatsApp Web client version from %s to %s", oldVer, latestVer)
 }
 
 // updateActivityTime updates the last activity timestamp
@@ -1665,7 +1689,7 @@ func startKeepalive(client *whatsmeow.Client, logger waLog.Logger, stopChan <-ch
 		case <-ticker.C:
 			if client.IsConnected() && client.IsLoggedIn() {
 				// Send presence available to keep session alive
-				err := client.SendPresence(types.PresenceAvailable)
+				err := client.SendPresence(context.Background(), types.PresenceAvailable)
 				if err != nil {
 					logger.Warnf("Failed to send keepalive presence: %v", err)
 				} else {
@@ -1718,12 +1742,21 @@ func main() {
 		}
 	}
 
+	// Sync WhatsApp Web client version with Meta before creating the client.
+	// Fixes 405 "Client outdated" errors when the pinned whatsmeow version falls behind.
+	syncWAWebVersion(logger)
+
 	// Create client instance
 	client := whatsmeow.NewClient(deviceStore, logger)
 	if client == nil {
 		logger.Errorf("Failed to create WhatsApp client")
 		return
 	}
+
+	// Disable whatsmeow's internal auto-reconnect — we manage reconnects ourselves
+	// via attemptReconnect(). Leaving both active causes "websocket is already
+	// connected" races between the lib's reconnector and our goroutine.
+	client.EnableAutoReconnect = false
 
 	// Initialize message store
 	messageStore, err := NewMessageStore()
@@ -1802,6 +1835,20 @@ func main() {
 			reconnectState.mutex.Lock()
 			reconnectState.reconnectAttempts = reconnectState.maxReconnectAttempts // Stop trying
 			reconnectState.mutex.Unlock()
+
+		case *events.ClientOutdated:
+			// WhatsApp rejected this client with 405 because the advertised web
+			// version is too old. Re-sync to the latest version and attempt a
+			// single reconnect. If this recurs, the whatsmeow dependency itself
+			// needs to be bumped (protocol/protobuf changes may be required).
+			logger.Errorf("❌ ClientOutdated (405) from WhatsApp — re-syncing version and reconnecting")
+			syncWAWebVersion(logger)
+			go func() {
+				time.Sleep(2 * time.Second)
+				if !client.IsConnected() {
+					attemptReconnect(client, logger)
+				}
+			}()
 		}
 	})
 
@@ -1992,7 +2039,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 		// If we didn't get a name, try group info
 		if name == "" {
-			groupInfo, err := client.GetGroupInfo(jid)
+			groupInfo, err := client.GetGroupInfo(context.Background(), jid)
 			if err == nil && groupInfo.Name != "" {
 				name = groupInfo.Name
 			} else {
