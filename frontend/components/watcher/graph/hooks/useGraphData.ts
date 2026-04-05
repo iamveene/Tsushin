@@ -18,6 +18,7 @@ import {
   AgentGraphPreviewItem,
   WhatsAppChannelInfo,
   TelegramChannelInfo,
+  WebhookChannelInfo,
   SentinelHierarchy,
   AgentCommPermission,
 } from '@/lib/client'
@@ -144,6 +145,16 @@ function transformBatchToAgentsGraphData(
         animated: true,
       })
     }
+
+    // v0.6.0: Webhook channel
+    if (enabledChannels.includes('webhook') && agent.webhook_integration_id) {
+      edges.push({
+        id: `e-webhook-${agent.webhook_integration_id}-${agentId}`,
+        source: `channel-webhook-${agent.webhook_integration_id}`,
+        target: agentId,
+        animated: true,
+      })
+    }
   })
 
   // Create WhatsApp channel nodes (for all instances in tenant, not just used ones)
@@ -175,6 +186,34 @@ function transformBatchToAgentsGraphData(
         channelNodeIds.add(nodeId)
       }
     })
+
+  // v0.6.0: Create Webhook channel nodes (for all instances in tenant)
+  ;(data.channels.webhook || []).forEach((instance: WebhookChannelInfo) => {
+    const nodeId = `channel-webhook-${instance.id}`
+    if (!channelNodeIds.has(nodeId)) {
+      let status: ChannelStatus = 'inactive'
+      if (instance.status === 'active' && instance.health_status === 'healthy') status = 'active'
+      else if (instance.status === 'active') status = 'running'
+      else if (instance.status === 'error') status = 'error'
+      else if (instance.status === 'paused') status = 'stopped'
+
+      nodes.push({
+        id: nodeId,
+        type: 'channel',
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'channel',
+          channelType: 'webhook',
+          label: 'Webhook',
+          instanceId: instance.id,
+          webhookName: instance.integration_name,
+          status,
+          healthStatus: instance.health_status,
+        },
+      })
+      channelNodeIds.add(nodeId)
+    }
+  })
 
   // Create Telegram channel nodes (for all instances in tenant)
   data.channels.telegram.forEach((instance: TelegramChannelInfo) => {
