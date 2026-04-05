@@ -28,6 +28,17 @@ The header global refresh button dispatches a `tsushin:refresh` CustomEvent that
 - **Pagination snapback** on Flows: when a delete drops the total below the current page's offset, the page auto-corrects to the last non-empty page without clobbering the list in between.
 - **Validated** via Playwright: clicking refresh on flows/agents/contacts/settings/hub fires a fresh `GET` on every click, zero stale data.
 
+#### BUG-LOG-015 — Memory table now has tenant_id for DB-level isolation (2026-04-05)
+Previously the `Memory` table enforced tenant isolation only via `agent_id` — every query site had to remember to scope by `agent_ids ∈ tenant's agents`. A missed site would be a cross-tenant leak. This change enforces isolation at the row level.
+
+- **Alembic migration 0024** adds `tenant_id VARCHAR(50) NOT NULL` with backfill from `Agent.tenant_id`, deletes orphan rows (28 in dev DB), and adds composite index `(tenant_id, agent_id, sender_key)`.
+- **Write paths** populate tenant_id on every INSERT: `agent_memory_system.save_to_db` (via lazy-caching `_get_tenant_id` helper — deduplicated with the pre-existing MemGuard helper), `playground_message_service.branch_conversation`.
+- **Read paths simplified**: `conversation_knowledge_service._get_thread_messages`, `conversation_search_service._search_like`, and `routes.py` stats now filter Memory directly on `tenant_id`, replacing the Agent-JOIN and tenant-agent-id-IN-list patterns.
+- **Validated**: 422 rows backfilled with correct tenant_id, 0 NULLs; live chat test creates Memory rows with tenant_id populated; backend starts clean with `alembic upgrade head 0023 → 0024`.
+
+#### /flows double-fire on global refresh (BUG-275 follow-up, 2026-04-05)
+Perfection QA caught that `frontend/app/flows/page.tsx` still used the raw `addEventListener('tsushin:refresh')` pattern INSIDE the `useEffect([currentPage, pageSize])` that loaded data. Every pagination change re-attached the listener, and on refresh click the page's three loader GETs (`flows/`, `flows/runs`, `conversations/active`) fired twice. Migrated flows/page.tsx to the `useGlobalRefresh` hook with an empty-deps mount registration — single subscription per mount.
+
 #### BUG-276 — Force-delete of flows with completed runs blocked by conversation_thread FK (2026-04-05)
 Three stress-test flows (IDs 140/139/123) could not be force-deleted. Root cause: conversation_thread rows 596/597/598 had `status='timeout'` referencing FlowNodeRun IDs — the force-delete path only nullified `flow_step_run_id` for threads with `status='active'`, so non-active threads kept the FK reference and blocked the FlowNodeRun cascade, rolling the transaction back under a generic 500.
 
