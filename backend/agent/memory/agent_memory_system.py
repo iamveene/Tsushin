@@ -835,16 +835,6 @@ class AgentMemorySystem:
         except Exception as e:
             self.logger.error(f"Fact extraction failed: {e}")
 
-    def _get_tenant_id(self) -> Optional[str]:
-        """Get tenant_id for this agent from the database."""
-        try:
-            from models import Agent
-            agent = self.db.query(Agent).filter(Agent.id == self.agent_id).first()
-            return agent.tenant_id if agent else None
-        except Exception as e:
-            self.logger.error(f"Failed to get tenant_id for agent {self.agent_id}: {e}")
-            return None
-
     def _validate_facts_memguard(self, facts: List[Dict], user_id: str) -> List[Dict]:
         """
         MemGuard Layer B: Validate extracted facts before storage.
