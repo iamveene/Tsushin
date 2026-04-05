@@ -141,17 +141,24 @@ def get_current_user_required(
                 detail="Account is disabled"
             )
 
-        # BUG-134 FIX: Reject tokens issued before the last password change
+        # BUG-134 FIX: Reject tokens issued before the last password change.
+        # V060-API-004 HARDENING: Missing `iat` claim is a fatal 401 instead of
+        # a silent skip — closes a JWT-stripping bypass.
         if user.password_changed_at:
             token_iat = payload.get("iat")
-            if token_iat:
-                token_issued = datetime.utcfromtimestamp(token_iat)
-                if token_issued < user.password_changed_at:
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Token invalidated by password change. Please log in again.",
-                        headers={"WWW-Authenticate": "Bearer"},
-                    )
+            if not token_iat:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token missing issued-at (iat) claim",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            token_issued = datetime.utcfromtimestamp(token_iat)
+            if token_issued < user.password_changed_at:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token invalidated by password change. Please log in again.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
 
         return user
 
