@@ -3002,6 +3002,7 @@ export const api = {
     enabled_channels: string[]
     whatsapp_integration_id: number | null
     telegram_integration_id: number | null
+    webhook_integration_id: number | null
     is_active: boolean
     is_default: boolean
   }>): Promise<Agent> {
