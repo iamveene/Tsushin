@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### BUG-277 — WhatsApp agent silent-drop regression (2026-04-05)
+Two compounding regressions silently broke the WhatsApp agent: the bot would receive DMs into its MCP container but never route them through the agent or respond. Watcher logs showed neither `Found N new messages` nor any Gemini call, leaving the user to believe the bot had hung.
+
+- **`backend/app.py` — `CachedContactService` missing `tenant_id`**: after V060-CHN-006 made the service fail-closed when `tenant_id` is unset, every `identify_sender()` lookup returned `None`. The MessageFilter relies on `contact.is_dm_trigger` to decide whether to wake the agent on DMs; with every contact lookup returning `None`, DMs fell through to `dm_auto_mode` (`False`) and the watcher silently advanced `last_timestamp` without routing. Fixed by creating a per-tenant `CachedContactService` scoped to `instance.tenant_id`, cached in `app.state.contact_services` (dict keyed by tenant). Same fix applied to the Telegram callback path, which now passes `bot_instance.tenant_id`.
+- **`backend/agent/router.py` — `UnboundLocalError: cannot access local variable 'os'`**: two redundant `import os` statements inside `route_message()` made `os` a function-local name across the entire 1200-line function, shadowing the module-level import. The CB-queue check at line 1297 (`elif os.getenv("TSN_CB_QUEUE_ENABLED", ...)`) runs before those inner imports and crashed with `UnboundLocalError` on every message. Fixed by deleting the two redundant inner imports; the module-level `import os` at the top of `router.py` is used everywhere.
+
+Validated with a tester → bot → Gemini → tester WhatsApp round-trip: bot responded with `"Olá, Vini! Tudo bem por aqui também. CUSTOM_SKILL_ACTIVE. Como posso te ajudar com este teste pós correção?"` and the tester instance received the response.
+
 #### v0.6.0 Critical Remediation — 11 Audit Findings (2026-04-05)
 Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, grouped into 5 remediation domains. Each fix programmatically verified; full regression (infrastructure + auth + API v1 sweep + tenant endpoint sweep + agent chat + 6-screen browser QA) passed zero new errors.
 

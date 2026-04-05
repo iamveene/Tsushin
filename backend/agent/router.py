@@ -1782,7 +1782,6 @@ class AgentRouter:
 
                     # Cleanup temporary file after sending (with delay for upload)
                     try:
-                        import os
                         import asyncio
                         await asyncio.sleep(3)  # Wait for upload to complete
                         if os.path.exists(media_path):
@@ -2411,7 +2410,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             # WhatsApp MCP needs time to fully upload the audio file
             if audio_path:
                 try:
-                    import os
                     import asyncio
                     # VOICE-003 Fix: Configurable cleanup delay (default 5 seconds)
                     cleanup_delay = float(os.getenv("TTS_CLEANUP_DELAY_SECONDS", "5"))
