@@ -393,13 +393,21 @@ async def lifespan(app: FastAPI):
                 contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
                 group_keywords = json_lib.loads(config.group_keywords) if config.group_keywords else []
 
-                # Initialize CachedContactService (reuse existing if available)
+                # Initialize CachedContactService scoped to this instance's tenant
+                # V060-CHN-006: CachedContactService is fail-closed when tenant_id is
+                # not set — queries return None — so every watcher MUST have its own
+                # tenant-scoped service (a shared one leaks across tenants and, worse,
+                # an unscoped one silently drops every contact lookup, which breaks
+                # DM trigger routing).
                 from agent.contact_service_cached import CachedContactService
-                if not hasattr(app.state, 'contact_service'):
-                    contact_service = CachedContactService(session)
-                    app.state.contact_service = contact_service
-                else:
-                    contact_service = app.state.contact_service
+                if not hasattr(app.state, 'contact_services'):
+                    app.state.contact_services = {}
+                contact_service = app.state.contact_services.get(instance.tenant_id)
+                if contact_service is None:
+                    contact_service = CachedContactService(session, tenant_id=instance.tenant_id)
+                    app.state.contact_services[instance.tenant_id] = contact_service
+                # Backward compat: keep a single reference for legacy callers
+                app.state.contact_service = contact_service
 
                 # Collect group filters from active agents for this tenant
                 all_group_filters = set(config.group_filters or [])
@@ -716,8 +724,12 @@ async def lifespan(app: FastAPI):
                     contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
 
                     # Initialize CachedContactService
+                    # V060-CHN-006: tenant_id is required or contact lookups fail closed
                     from agent.contact_service_cached import CachedContactService
-                    contact_service = CachedContactService(request_session)
+                    contact_service = CachedContactService(
+                        request_session,
+                        tenant_id=(bot_instance.tenant_id if bot_instance else None)
+                    )
 
                     # Create config dict
                     config_dict = {
