@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 # Tsushin Backend Dockerfile
 # Phase 9: Application Containerization
 #
@@ -7,6 +8,8 @@
 # Stage 1: Builder - Install dependencies
 # ============================================================================
 FROM python:3.11-slim AS builder
+
+ARG INSTALL_OPTIONAL_DEPS=true
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -24,14 +27,30 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /build
 
 # Copy requirements files
-COPY requirements.txt requirements-phase4.txt ./
+COPY requirements-base.txt requirements-app.txt requirements-optional.txt requirements-phase4.txt ./
 
-# Install main dependencies first (for layer caching)
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Install tiered dependencies with BuildKit cache mounts for fast iterative rebuilds
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install -r requirements-base.txt
 
-# Install additional Phase 4 dependencies (semantic search)
-RUN pip install --no-cache-dir -r requirements-phase4.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-app.txt
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$INSTALL_OPTIONAL_DEPS" = "true" ]; then \
+        pip install -r requirements-optional.txt; \
+    fi
+
+# CPU-only torch wheel — skips ~4.3GB of NVIDIA/CUDA/triton binaries.
+# Embeddings (sentence-transformers) run on CPU via asyncio.to_thread().
+# Must be installed BEFORE requirements-phase4.txt so sentence-transformers
+# finds the CPU torch wheel already satisfied.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --index-url https://download.pytorch.org/whl/cpu torch
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-phase4.txt
 
 # ============================================================================
 # Stage 2: Runtime - Minimal production image
@@ -72,14 +91,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Nuclei vulnerability scanner - architecture-aware
-RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
+# Install Nuclei vulnerability scanner - architecture-aware (cached across builds)
+RUN --mount=type=cache,target=/tmp/nuclei-cache \
+    ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
     echo "Installing nuclei for architecture: $ARCH" && \
-    wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v3.3.7/nuclei_3.3.7_linux_${ARCH}.zip" \
-    && unzip -o "nuclei_3.3.7_linux_${ARCH}.zip" \
-    && mv nuclei /usr/local/bin/ \
-    && rm -f "nuclei_3.3.7_linux_${ARCH}.zip" LICENSE.md README*.md \
-    && chmod +x /usr/local/bin/nuclei
+    cd /tmp/nuclei-cache && \
+    ([ -f "nuclei_3.3.7_linux_${ARCH}.zip" ] || wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v3.3.7/nuclei_3.3.7_linux_${ARCH}.zip") && \
+    unzip -o "nuclei_3.3.7_linux_${ARCH}.zip" -d /tmp/nuclei-extract && \
+    mv /tmp/nuclei-extract/nuclei /usr/local/bin/ && \
+    chmod +x /usr/local/bin/nuclei && \
+    rm -rf /tmp/nuclei-extract
 
 # Create non-root user for security
 # Also create docker group with same GID as host for Docker socket access (GID 999)

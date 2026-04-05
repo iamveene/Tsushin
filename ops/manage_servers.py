@@ -281,7 +281,7 @@ def start_backend():
 
     if not venv_python.exists():
         print(f"[ERROR] Virtual environment not found at {venv_python}")
-        print(f"        Run: cd backend && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt")
+        print(f"        Run: cd backend && python3 -m venv venv && source venv/bin/activate && pip install -r requirements-base.txt -r requirements-app.txt -r requirements-optional.txt -r requirements-phase4.txt")
         return None
 
     # Note: --reload removed due to persona router registration issue

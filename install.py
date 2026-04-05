@@ -329,25 +329,26 @@ class TsushinInstaller:
                 print_info("Ensure Docker Desktop is running (check the system tray icon)")
                 sys.exit(1)
 
-        # Check Docker Compose
+        # Check Docker Compose v2 (required — v1 is no longer supported).
+        # BuildKit cache mounts in backend/Dockerfile require Compose v2,
+        # which is bundled with Docker Desktop >=20.10 as the `docker compose` plugin.
         try:
-            result = subprocess.run(["docker-compose", "--version"], capture_output=True, text=True, check=True)
+            result = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True, check=True)
             compose_version = result.stdout.strip()
             print_success(f"Docker Compose: {compose_version}")
+            self.docker_compose_cmd = ["docker", "compose"]
         except (FileNotFoundError, subprocess.CalledProcessError):
-            # Try 'docker compose' (newer syntax)
+            # Fall back to checking for legacy docker-compose v1 and error out with guidance.
             try:
-                result = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True, check=True)
-                compose_version = result.stdout.strip()
-                print_success(f"Docker Compose: {compose_version}")
-                # Use 'docker compose' for future commands
-                self.docker_compose_cmd = ["docker", "compose"]
-            except (FileNotFoundError, subprocess.CalledProcessError):
-                print_error("Docker Compose is not installed")
-                print_info("Install Docker Compose: https://docs.docker.com/compose/install/")
+                result = subprocess.run(["docker-compose", "--version"], capture_output=True, text=True, check=True)
+                print_error("docker-compose v1 is no longer supported.")
+                print_info("Please install Docker Compose v2 (bundled with Docker Desktop >=20.10) and re-run the installer.")
+                print_info(f"Detected: {result.stdout.strip()}")
                 sys.exit(1)
-        else:
-            self.docker_compose_cmd = ["docker-compose"]
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                print_error("Docker Compose v2 is not installed")
+                print_info("Install Docker Compose v2: https://docs.docker.com/compose/install/")
+                sys.exit(1)
 
         # Check Python version
         python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
@@ -901,13 +902,10 @@ NEXT_PUBLIC_API_URL={backend_url}
         print_info("Downloading base images, building custom images, and starting services...")
         print()
 
-        # docker-compose v1 + BuildKit compatibility: BuildKit images lack the
-        # 'ContainerConfig' key that docker-compose v1 expects when recreating
-        # containers, causing "KeyError: 'ContainerConfig'" on subsequent `up`.
-        # Disabling BuildKit produces legacy-format images that v1 can handle.
+        # BuildKit is required for cache mounts in backend/Dockerfile (v0.6.0+).
+        # Docker Compose v2 (bundled with Docker Desktop >=20.10) enables BuildKit
+        # by default. docker-compose v1 is no longer supported.
         compose_env = os.environ.copy()
-        if self.docker_compose_cmd[0] == "docker-compose":
-            compose_env["DOCKER_BUILDKIT"] = "0"
 
         # Build compose command with SSL override if enabled
         ssl_mode = self.config.get('SSL_MODE', 'disabled')
@@ -957,10 +955,8 @@ NEXT_PUBLIC_API_URL={backend_url}
         """Build additional Docker images required for integrations"""
         print_header("Building Integration Images")
 
-        # docker-compose v1 + BuildKit compatibility (same as run_docker_compose)
+        # BuildKit required for backend/Dockerfile cache mounts (v0.6.0+).
         build_env = os.environ.copy()
-        if self.docker_compose_cmd[0] == "docker-compose":
-            build_env["DOCKER_BUILDKIT"] = "0"
 
         images_to_build = [
             {
