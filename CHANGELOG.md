@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - develop
 
+### Fixed
+
+#### v0.6.0 Critical Remediation — 11 Audit Findings (2026-04-05)
+Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, grouped into 5 remediation domains. Each fix programmatically verified; full regression (infrastructure + auth + API v1 sweep + tenant endpoint sweep + agent chat + 6-screen browser QA) passed zero new errors.
+
+**Group A — Auth & Security Hardening** (commits 2327bb6 + 829877b)
+- `V060-API-004`: `/api/v1/*` UI-JWT path now enforces password-reset invalidation (`password_changed_at` vs `token.iat`), parity with SEC-001/BUG-134 UI path. Missing `iat` claim rejected with 401, closing a JWT-stripping bypass. Same hardening backported to `auth_dependencies.py`.
+- `V060-HLT-005`: `PUT /api/channel-health/alerts/config` now SSRF-validates the webhook URL via `utils.ssrf_validator.validate_url()`. Blocks `file://`, cloud metadata IPs (`169.254.169.254`, etc.), localhost, private ranges, and non-http(s) schemes. `HTTPException` re-raise prevents 400→500 downgrade.
+- `V060-SKL-002`: MCP server create/update now require HTTPS whenever `auth_type != 'none'` (bearer/header/api_key). Prevents plaintext transmission of credentials over HTTP; rejects downgrade attempts on existing HTTPS+auth configs.
+
+**Group B — Tenant Isolation + Queue Safety** (commits 7971b4e + 1e5e241)
+- `V060-CHN-006`: `CachedContactService` and base `ContactService` now accept `tenant_id` and filter `Contact`/`ContactChannelMapping` queries by tenant. Cache keys prefixed per tenant. Fail-closed on missing tenant_id. `AgentRouter` threads tenant_id to CachedContactService from all 6 call sites (queue_worker, watcher_manager, routes.py, app.py). Follow-up extends to `SchedulerService` (12 sites) and `FlowEngine._resolve_contact_to_phone` — closes cross-tenant leaks in scheduled messages and flow recipient resolution.
+- `V060-HLT-003`: `QueueWorker._poll_and_dispatch` now consults `ChannelHealthService.is_circuit_open()` for whatsapp/telegram channels before dispatching. When CB is OPEN, dispatch is deferred (item remains pending, no retry burn, no 500ms re-enqueue spiral). Router's CB-enqueue guard skipped when `trigger_type=='queue'`. Instance-id resolution now uses agent's explicit `whatsapp_integration_id`/`telegram_integration_id` FK instead of tenant-wide `.first()`.
+
+**Group C — Slack/Discord Channel Integration** (commit e1c1949)
+- `V060-CHN-001`: `AgentRouter` now registers `SlackChannelAdapter` and `DiscordChannelAdapter` with the channel registry when a tenant has exactly one active integration (or when explicit integration_id is passed). Bot tokens decrypted via `TokenEncryption` + per-channel encryption key, matching existing routes_slack/routes_discord patterns.
+- `V060-CHN-002`: New public router `backend/api/routes_channel_webhooks.py` exposes two unauthenticated endpoints gated by cryptographic signature verification:
+  - `POST /api/slack/events` — HMAC-SHA256 verification against `signing_secret_encrypted`, 5-minute timestamp skew for replay protection, `url_verification` challenge handled.
+  - `POST /api/discord/interactions` — Ed25519 verification via PyNaCl, type-1 PING handshake, type-5 deferred response.
+  - Verified events enqueue to `message_queue` with channel='slack'/'discord'; QueueWorker's new `_process_slack_message`/`_process_discord_message` handlers instantiate AgentRouter with tenant_id + integration_id threaded through.
+- **Dep added:** `PyNaCl>=1.5.0` for Ed25519 signature verification.
+
+**Group D — Memory (OKG) + Provider Wiring** (commit 36d694c)
+- `V060-MEM-001`: `ProviderBridgeStore._records_to_dicts` now preserves the full metadata dict under a nested `'metadata'` key. OKG recall post-filter reads `record.get('metadata',{}).get('is_okg')` and was seeing `{}` for every record — so every OKG record was skipped, making OKG recall return zero results with any external vector store. Flat spread retained for backwards compat.
+- `V060-PRV-001`: `AIClient.__init__` now accepts an optional `api_key` kwarg that bypasses DB/env lookup. Raw test-connection in first-time-setup wizard (tenant with no provider key) previously failed at AIClient construction with "No API key found" before the route handler could apply the user's credential. Now the raw key is passed directly.
+- `V060-PRV-002`: Saved-instance test-connection now passes the instance's own decrypted api_key to AIClient (falling back to tenant key only when instance has none). Previously the resolved api_key was never applied, so a valid tenant key masked a broken instance key and produced a false success.
+
+**Group E — Custom Skill Security** (commit cc0de12)
+- `V060-SKL-001`: New `_scan_skill_content()` helper concatenates `instructions_md` + `script_content` into a single analyzable blob and submits to `SentinelService.analyze_skill_instructions`. Both `create_custom_skill` and `update_custom_skill` now invoke this helper whenever either field is present/changed. Previously script-type skills with empty instructions landed as `scan_status='clean'` without Sentinel ever seeing the code — an attacker could upload a script that reads `OPENAI_API_KEY` + `/etc/passwd` and exfiltrates via HTTP and it would auto-enable in the agent sandbox. The network-import advisory is retained as an augmenting signal, no longer the primary defense.
+
 ### Added
 
 #### Webhook-as-a-Channel (v0.6.0)
