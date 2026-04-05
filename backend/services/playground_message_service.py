@@ -648,6 +648,7 @@ class PlaygroundMessageService:
             new_recipient = f"playground_u{user_id}_a{agent_id}_t{new_thread['id']}"
 
             new_memory = Memory(
+                tenant_id=tenant_id,
                 agent_id=agent_id,
                 sender_key=new_recipient,
                 messages_json=branched_messages

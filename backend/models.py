@@ -113,10 +113,17 @@ class Memory(Base):
     __tablename__ = "memory"
 
     id = Column(Integer, primary_key=True)
+    # BUG-LOG-015: tenant_id enforces isolation at the DB level alongside agent_id.
+    # Backfilled from Agent.tenant_id by alembic 0024.
+    tenant_id = Column(String(50), nullable=False, index=True)
     agent_id = Column(Integer, nullable=False, index=True)  # FK to Agent - per-agent memory isolation
     sender_key = Column(String(255), nullable=False, index=True)  # chat_id or phone number
     messages_json = Column(JSON, default=list)  # [{"role": "user", "content": "...", "timestamp": "..."}]
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_memory_tenant_agent_sender', 'tenant_id', 'agent_id', 'sender_key'),
+    )
 
 
 class MessageCache(Base):

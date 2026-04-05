@@ -56,6 +56,7 @@ class AgentMemorySystem:
         self.agent_id = agent_id
         self.db = db_session
         self.config = config
+        self._tenant_id_cache: Optional[str] = None  # BUG-LOG-015: lazy-loaded from Agent
 
         # Layer 1 + 2: Working memory + Episodic memory (via SemanticMemoryService)
         self.semantic_memory = SemanticMemoryService(
@@ -91,6 +92,16 @@ class AgentMemorySystem:
         self._load_memory_from_db()
 
         self.logger.info(f"AgentMemorySystem initialized for agent {agent_id}")
+
+    def _get_tenant_id(self) -> Optional[str]:
+        """BUG-LOG-015: lazy-load + cache the agent's tenant_id for Memory writes."""
+        if self._tenant_id_cache is not None:
+            return self._tenant_id_cache
+        from models import Agent as AgentModel
+        agent = self.db.query(AgentModel).filter(AgentModel.id == self.agent_id).first()
+        if agent and agent.tenant_id:
+            self._tenant_id_cache = agent.tenant_id
+        return self._tenant_id_cache
 
     def _load_memory_from_db(self) -> None:
         """
@@ -641,7 +652,14 @@ class AgentMemorySystem:
                 memory_record.updated_at = datetime.utcnow()
             else:
                 # Create new record
+                tenant_id = self._get_tenant_id()
+                if not tenant_id:
+                    self.logger.warning(
+                        f"Skipping memory persistence: agent {self.agent_id} has no tenant_id"
+                    )
+                    return
                 memory_record = Memory(
+                    tenant_id=tenant_id,
                     agent_id=self.agent_id,
                     sender_key=user_id,
                     messages_json=messages

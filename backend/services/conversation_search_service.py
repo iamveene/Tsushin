@@ -305,14 +305,12 @@ class ConversationSearchService:
         """Fallback search using LIKE queries."""
 
         # Search in Memory table (messages stored as JSON)
-        from models import Memory, Agent, ConversationThread
+        from models import Memory, ConversationThread
 
-        # BUG-083 FIX: Join through Agent table for tenant isolation
-        # (Memory model has no tenant_id or user_id columns)
-        query_obj = self.db.query(Memory).join(
-            Agent, Memory.agent_id == Agent.id
-        ).filter(
-            Agent.tenant_id == tenant_id,
+        # BUG-LOG-015: Memory now has tenant_id — filter directly, no join needed.
+        # (Previously required Agent join for tenant isolation; see BUG-083 history.)
+        query_obj = self.db.query(Memory).filter(
+            Memory.tenant_id == tenant_id,
             Memory.sender_key.like(f'playground_{user_id}_%')
         )
 
