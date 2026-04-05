@@ -240,6 +240,12 @@ async def lifespan(app: FastAPI):
         if created > 0:
             print(f"📦 Migration: Created sandboxed_tools skill for {created} agents")
 
+        # BUG-273: Seed shell skill for every agent (per-agent enable/disable UI)
+        from services.shell_skill_seeding import backfill_shell_skill_all_tenants
+        shell_created = backfill_shell_skill_all_tenants(migration_db)
+        if shell_created > 0:
+            print(f"📦 Migration: Created shell skill for {shell_created} agents")
+
         # BUG-044: Deduplicate tool commands/params before updating from manifests
         dedup_result = deduplicate_tool_commands(migration_db)
         if dedup_result["deleted_commands"] > 0 or dedup_result["deleted_params"] > 0:
