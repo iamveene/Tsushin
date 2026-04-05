@@ -427,6 +427,7 @@
   align-items: center;
   padding: var(--pg-space-xs) 0;
   font-size: 13px;
+  min-width: 0;
 }
 
 .inspector-stat-label {
@@ -437,6 +438,10 @@
   font-family: var(--pg-font-mono);
   font-size: 12px;
   color: var(--pg-accent);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* Quick Tools Grid */

@@ -322,7 +322,7 @@ export default function DebugPanel({ agentId }: DebugPanelProps) {
                           {Object.keys(call.parameters).length > 0 && (
                             <div>
                               <label className="text-[10px] text-white/40 uppercase tracking-wider block mb-1">Parameters</label>
-                              <pre className="text-xs text-white/70 bg-white/[0.02] rounded-lg p-2 font-mono overflow-auto">
+                              <pre className="text-xs text-white/70 bg-white/[0.02] rounded-lg p-2 font-mono overflow-x-auto break-all whitespace-pre-wrap max-w-full">
                                 {JSON.stringify(call.parameters, null, 2)}
                               </pre>
                             </div>
