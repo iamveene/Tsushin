@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -1820,6 +1821,211 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 				"latest_timestamp": nil,
 			})
 		}
+	}))
+
+	// Handler for listing WhatsApp groups from the local chats store.
+	// Supports optional substring filter via ?q= and limit via ?limit= (default 50, max 200).
+	// Used by the backend to power typeahead in Hub > Communications > WhatsApp filters.
+	http.HandleFunc("/api/groups", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+		limit := 50
+		if lp := r.URL.Query().Get("limit"); lp != "" {
+			var parsed int
+			if _, err := fmt.Sscanf(lp, "%d", &parsed); err == nil && parsed > 0 {
+				limit = parsed
+			}
+			if limit > 200 {
+				limit = 200
+			}
+		}
+
+		rows, err := messageStore.db.Query(`
+			SELECT jid, name FROM chats
+			WHERE jid LIKE '%@g.us' AND name IS NOT NULL AND name != ''
+			ORDER BY last_message_time DESC
+		`)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("Database query failed: %v", err),
+			})
+			return
+		}
+		defer rows.Close()
+
+		type GroupResponse struct {
+			JID  string `json:"jid"`
+			Name string `json:"name"`
+		}
+		groups := []GroupResponse{}
+		for rows.Next() {
+			var jid, name string
+			if err := rows.Scan(&jid, &name); err != nil {
+				continue
+			}
+			if q != "" && !strings.Contains(strings.ToLower(name), q) {
+				continue
+			}
+			groups = append(groups, GroupResponse{JID: jid, Name: name})
+			if len(groups) >= limit {
+				break
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"groups":  groups,
+			"count":   len(groups),
+		})
+	}))
+
+	// Handler for listing WhatsApp contacts from the whatsmeow address book,
+	// merged with DM chats the user has messaged.
+	// Supports ?q= (case-insensitive name substring OR phone-prefix match) and ?limit= (default 50, max 200).
+	http.HandleFunc("/api/contacts", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+		qDigits := strings.TrimPrefix(q, "+")
+		// Strip non-digits from qDigits for phone-prefix matching
+		var digitsBuilder strings.Builder
+		for _, ch := range qDigits {
+			if ch >= '0' && ch <= '9' {
+				digitsBuilder.WriteRune(ch)
+			}
+		}
+		qDigits = digitsBuilder.String()
+
+		limit := 50
+		if lp := r.URL.Query().Get("limit"); lp != "" {
+			var parsed int
+			if _, err := fmt.Sscanf(lp, "%d", &parsed); err == nil && parsed > 0 {
+				limit = parsed
+			}
+			if limit > 200 {
+				limit = 200
+			}
+		}
+
+		if !client.IsLoggedIn() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "WhatsApp client not authenticated",
+			})
+			return
+		}
+
+		type ContactResponse struct {
+			JID   string `json:"jid"`
+			Phone string `json:"phone"`
+			Name  string `json:"name"`
+		}
+		byJID := map[string]ContactResponse{}
+
+		// Source 1: whatsmeow address book
+		contacts, err := client.Store.Contacts.GetAllContacts(r.Context())
+		if err == nil {
+			for jid, info := range contacts {
+				if jid.Server != types.DefaultUserServer { // "s.whatsapp.net"
+					continue
+				}
+				name := info.FullName
+				if name == "" {
+					name = info.PushName
+				}
+				if name == "" {
+					name = info.FirstName
+				}
+				if name == "" {
+					name = info.BusinessName
+				}
+				byJID[jid.String()] = ContactResponse{
+					JID:   jid.String(),
+					Phone: jid.User,
+					Name:  name,
+				}
+			}
+		}
+
+		// Source 2: DM chats the user has messaged (fallback for contacts not in address book)
+		dmRows, dmErr := messageStore.db.Query(`
+			SELECT jid, name FROM chats
+			WHERE jid LIKE '%@s.whatsapp.net'
+			ORDER BY last_message_time DESC
+		`)
+		if dmErr == nil {
+			defer dmRows.Close()
+			for dmRows.Next() {
+				var jid, name string
+				if err := dmRows.Scan(&jid, &name); err != nil {
+					continue
+				}
+				existing, found := byJID[jid]
+				phone := jid
+				if at := strings.Index(jid, "@"); at > 0 {
+					phone = jid[:at]
+				}
+				if !found {
+					byJID[jid] = ContactResponse{JID: jid, Phone: phone, Name: name}
+				} else if existing.Name == "" && name != "" {
+					existing.Name = name
+					byJID[jid] = existing
+				}
+			}
+		}
+
+		// Filter + sort
+		results := []ContactResponse{}
+		for _, c := range byJID {
+			if q == "" {
+				results = append(results, c)
+				continue
+			}
+			if strings.Contains(strings.ToLower(c.Name), q) {
+				results = append(results, c)
+				continue
+			}
+			if qDigits != "" && strings.HasPrefix(c.Phone, qDigits) {
+				results = append(results, c)
+				continue
+			}
+		}
+		sort.Slice(results, func(i, j int) bool {
+			// Named contacts first, then by name (case-insensitive), then by phone
+			ai, aj := results[i].Name != "", results[j].Name != ""
+			if ai != aj {
+				return ai
+			}
+			ln := strings.ToLower(results[i].Name)
+			rn := strings.ToLower(results[j].Name)
+			if ln != rn {
+				return ln < rn
+			}
+			return results[i].Phone < results[j].Phone
+		})
+		if len(results) > limit {
+			results = results[:limit]
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"contacts": results,
+			"count":    len(results),
+		})
 	}))
 
 	// Start the server

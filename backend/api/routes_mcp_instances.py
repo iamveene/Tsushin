@@ -881,3 +881,107 @@ async def logout_mcp_instance(
     except RuntimeError as e:
         logger.error(f"Logout failed for instance {instance_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Logout failed. Check server logs for details.")
+
+
+# ============================================================================
+# WhatsApp Typeahead Proxies (Groups / Contacts)
+# Used by Hub > Communications > WhatsApp filter autocomplete
+# ============================================================================
+
+
+@router.get("/{instance_id}/wa/groups")
+async def list_wa_groups(
+    instance_id: int,
+    q: str = Query("", description="Case-insensitive substring filter on group name"),
+    limit: int = Query(20, ge=1, le=100, description="Max results (1-100)"),
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db)
+):
+    """
+    List WhatsApp groups the instance is a member of (typeahead source).
+
+    **Permissions Required:** `mcp.instances.read`
+
+    Returns groups filtered by name substring, sorted by recent activity.
+    Result shape: {"success": bool, "groups": [{"jid": str, "name": str}], "count": int}
+    """
+    import httpx
+    from services.mcp_auth_service import get_auth_headers
+
+    instance = db.query(WhatsAppMCPInstance).filter(WhatsAppMCPInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail=f"MCP instance {instance_id} not found")
+    if not context.can_access_resource(instance.tenant_id):
+        raise HTTPException(status_code=404, detail="MCP instance not found")
+
+    headers = get_auth_headers(instance.api_secret)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{instance.mcp_api_url}/groups",
+                params={"q": q, "limit": limit},
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                f"MCP /groups returned HTTP {resp.status_code} for instance {instance_id}: {resp.text[:200]}"
+            )
+            return {"success": False, "groups": [], "count": 0, "message": f"MCP returned HTTP {resp.status_code}"}
+        return resp.json()
+    except httpx.TimeoutException:
+        logger.warning(f"Timeout calling MCP /groups for instance {instance_id}")
+        return {"success": False, "groups": [], "count": 0, "message": "MCP timeout"}
+    except Exception as e:
+        logger.error(f"Failed listing WA groups for instance {instance_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Failed to query MCP for groups")
+
+
+@router.get("/{instance_id}/wa/contacts")
+async def list_wa_contacts(
+    instance_id: int,
+    q: str = Query("", description="Case-insensitive name substring OR phone-prefix filter"),
+    limit: int = Query(20, ge=1, le=100, description="Max results (1-100)"),
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db)
+):
+    """
+    List WhatsApp contacts known to the instance (typeahead source).
+
+    **Permissions Required:** `mcp.instances.read`
+
+    Merges the whatsmeow address book with DM chats the user has messaged.
+    Result shape: {"success": bool, "contacts": [{"jid": str, "phone": str, "name": str}], "count": int}
+    """
+    import httpx
+    from services.mcp_auth_service import get_auth_headers
+
+    instance = db.query(WhatsAppMCPInstance).filter(WhatsAppMCPInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail=f"MCP instance {instance_id} not found")
+    if not context.can_access_resource(instance.tenant_id):
+        raise HTTPException(status_code=404, detail="MCP instance not found")
+
+    headers = get_auth_headers(instance.api_secret)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{instance.mcp_api_url}/contacts",
+                params={"q": q, "limit": limit},
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                f"MCP /contacts returned HTTP {resp.status_code} for instance {instance_id}: {resp.text[:200]}"
+            )
+            return {"success": False, "contacts": [], "count": 0, "message": f"MCP returned HTTP {resp.status_code}"}
+        return resp.json()
+    except httpx.TimeoutException:
+        logger.warning(f"Timeout calling MCP /contacts for instance {instance_id}")
+        return {"success": False, "contacts": [], "count": 0, "message": "MCP timeout"}
+    except Exception as e:
+        logger.error(f"Failed listing WA contacts for instance {instance_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Failed to query MCP for contacts")

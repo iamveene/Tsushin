@@ -25,6 +25,7 @@ import WebhookSetupModal from '@/components/WebhookSetupModal'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
 import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
+import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/TypeaheadChipInput'
 import {
   GeminiIcon,
   OpenAIIcon,
@@ -4201,37 +4202,20 @@ export default function HubPage() {
             <p className="text-xs text-tsushin-slate mb-2">
               WhatsApp group names to monitor. Messages from other groups will be ignored.
             </p>
-            <div className="flex gap-2 mb-2">
-              <input
-                type="text"
-                value={filterInputGroup}
-                onChange={(e) => setFilterInputGroup(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && addFilterItem('group')}
-                placeholder="Enter group name"
-                className="flex-1 bg-tsushin-deep border border-tsushin-slate/30 rounded px-3 py-2 text-white text-sm"
-              />
-              <button
-                onClick={() => addFilterItem('group')}
-                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded text-sm"
-              >
-                Add
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {filterGroupFilters.length === 0 ? (
-                <p className="text-xs text-tsushin-slate italic">No groups configured. All groups will be monitored.</p>
-              ) : (
-                filterGroupFilters.map((filter) => (
-                  <span
-                    key={filter}
-                    className="inline-flex items-center gap-1 px-2 py-1 bg-teal-500/20 border border-teal-500/30 rounded text-xs text-teal-300"
-                  >
-                    {filter}
-                    <button onClick={() => removeFilterItem('group', filter)} className="text-teal-400 hover:text-red-400">×</button>
-                  </span>
-                ))
-              )}
-            </div>
+            <TypeaheadChipInput
+              value={filterGroupFilters}
+              onChange={setFilterGroupFilters}
+              onSearch={async (query): Promise<TypeaheadSuggestion[]> => {
+                if (!selectedMcpInstance) return []
+                const res = await api.searchWhatsAppGroups(selectedMcpInstance.id, query, 20)
+                return (res.groups || []).map((g) => ({ value: g.name, label: g.name, sublabel: g.jid }))
+              }}
+              placeholder="Type to search groups, or enter a name"
+              emptyStateText="No groups configured. All groups will be monitored."
+              chipClassName="bg-teal-500/20 border-teal-500/30 text-teal-300"
+              chipRemoveClassName="text-teal-400 hover:text-red-400"
+              addButtonClassName="bg-teal-600 hover:bg-teal-700"
+            />
           </div>
 
           {/* Number Filters */}
@@ -4242,37 +4226,27 @@ export default function HubPage() {
             <p className="text-xs text-tsushin-slate mb-2">
               Phone numbers allowed to DM the agent. Include country code.
             </p>
-            <div className="flex gap-2 mb-2">
-              <input
-                type="text"
-                value={filterInputNumber}
-                onChange={(e) => setFilterInputNumber(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && addFilterItem('number')}
-                placeholder="+5500000000001"
-                className="flex-1 bg-tsushin-deep border border-tsushin-slate/30 rounded px-3 py-2 text-white text-sm"
-              />
-              <button
-                onClick={() => addFilterItem('number')}
-                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm"
-              >
-                Add
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {filterNumberFilters.length === 0 ? (
-                <p className="text-xs text-tsushin-slate italic">No numbers configured.</p>
-              ) : (
-                filterNumberFilters.map((filter) => (
-                  <span
-                    key={filter}
-                    className="inline-flex items-center gap-1 px-2 py-1 bg-purple-500/20 border border-purple-500/30 rounded text-xs text-purple-300"
-                  >
-                    {filter}
-                    <button onClick={() => removeFilterItem('number', filter)} className="text-purple-400 hover:text-red-400">×</button>
-                  </span>
-                ))
-              )}
-            </div>
+            <TypeaheadChipInput
+              value={filterNumberFilters}
+              onChange={setFilterNumberFilters}
+              onSearch={async (query): Promise<TypeaheadSuggestion[]> => {
+                if (!selectedMcpInstance) return []
+                const res = await api.searchWhatsAppContacts(selectedMcpInstance.id, query, 20)
+                return (res.contacts || []).map((c) => {
+                  const phoneStr = c.phone.startsWith('+') ? c.phone : `+${c.phone}`
+                  return {
+                    value: phoneStr,
+                    label: c.name || phoneStr,
+                    sublabel: c.name ? phoneStr : undefined,
+                  }
+                })
+              }}
+              placeholder="Type a name or phone (+5500000000001)"
+              emptyStateText="No numbers configured."
+              chipClassName="bg-purple-500/20 border-purple-500/30 text-purple-300"
+              chipRemoveClassName="text-purple-400 hover:text-red-400"
+              addButtonClassName="bg-purple-600 hover:bg-purple-700"
+            />
           </div>
 
           {/* Group Keywords */}
