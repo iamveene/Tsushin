@@ -5,7 +5,7 @@
  * Manages contacts and agent assignments
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -13,11 +13,10 @@ import StudioTabs from '@/components/studio/StudioTabs'
 import { api, Agent, Contact, ContactAgentMapping, TeamMember, ChannelMapping } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import { useToast } from '@/contexts/ToastContext'
-import { SmartphoneIcon, WhatsAppIcon, TelegramIcon, UserIcon, FileTextIcon, RefreshIcon, SlackIcon, DiscordIcon } from '@/components/ui/icons'
+import { SmartphoneIcon, WhatsAppIcon, TelegramIcon, UserIcon, FileTextIcon, SlackIcon, DiscordIcon } from '@/components/ui/icons'
 
 interface ContactFormData {
   friendly_name: string
-  whatsapp_id: string
   phone_number: string
   telegram_id: string
   telegram_username: string
@@ -26,6 +25,8 @@ interface ContactFormData {
   slash_commands_enabled: boolean | null
   notes: string
   linked_user_id: number | null
+  // Default agent assignment (persists as a ContactAgentMapping on save)
+  default_agent_id: number | null
 }
 
 export default function ContactsPage() {
@@ -40,7 +41,6 @@ export default function ContactsPage() {
   const [creating, setCreating] = useState(false)
   const [formData, setFormData] = useState<ContactFormData>({
     friendly_name: '',
-    whatsapp_id: '',
     phone_number: '',
     telegram_id: '',
     telegram_username: '',
@@ -48,10 +48,9 @@ export default function ContactsPage() {
     is_dm_trigger: true,
     slash_commands_enabled: null,
     notes: '',
-    linked_user_id: null
+    linked_user_id: null,
+    default_agent_id: null
   })
-  const [resolvingWhatsApp, setResolvingWhatsApp] = useState<number | null>(null)
-  const [resolvingAll, setResolvingAll] = useState(false)
 
   // Channel mapping management
   const [showAddMappingForm, setShowAddMappingForm] = useState(false)
@@ -59,8 +58,14 @@ export default function ContactsPage() {
   const [addMappingIdentifier, setAddMappingIdentifier] = useState('')
   const [addMappingLoading, setAddMappingLoading] = useState(false)
 
+  // Tracks deferred loadData() timers so they can be cancelled on unmount.
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     loadData()
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+    }
   }, [])
 
   useGlobalRefresh(() => loadData())
@@ -86,9 +91,10 @@ export default function ContactsPage() {
 
   const handleCreate = async () => {
     try {
-      await api.createContact({
-        ...formData,
-        whatsapp_id: formData.whatsapp_id || undefined,
+      const created = await api.createContact({
+        friendly_name: formData.friendly_name,
+        role: formData.role,
+        is_dm_trigger: formData.is_dm_trigger,
         phone_number: formData.phone_number || undefined,
         telegram_id: formData.telegram_id || undefined,
         telegram_username: formData.telegram_username || undefined,
@@ -97,9 +103,24 @@ export default function ContactsPage() {
         linked_user_id: formData.linked_user_id || undefined
       })
 
+      // Persist default agent mapping if selected
+      if (formData.default_agent_id && formData.role === 'user') {
+        try {
+          await api.setContactAgentMapping(created.id, formData.default_agent_id)
+        } catch (err) {
+          console.error('Failed to set default agent mapping:', err)
+        }
+      }
+
       await loadData()
       setCreating(false)
       resetForm()
+      // Background WhatsApp ID resolution runs server-side after create;
+      // refresh again shortly to surface the auto-resolved WA ID without user action.
+      if (created.phone_number) {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = setTimeout(() => { loadData() }, 2500)
+      }
     } catch (err) {
       console.error('Failed to create contact:', err)
       toast.error('Creation Failed', err instanceof Error ? err.message : 'Failed to create contact')
@@ -126,8 +147,9 @@ export default function ContactsPage() {
       }
 
       await api.updateContact(contactId, {
-        ...formData,
-        whatsapp_id: formData.whatsapp_id || undefined,
+        friendly_name: formData.friendly_name,
+        role: formData.role,
+        is_dm_trigger: formData.is_dm_trigger,
         phone_number: formData.phone_number || undefined,
         telegram_id: formData.telegram_id || undefined,
         telegram_username: formData.telegram_username || undefined,
@@ -136,9 +158,31 @@ export default function ContactsPage() {
         linked_user_id: linkedUserIdToSend
       })
 
+      // Sync default agent mapping: create/update or delete based on form state
+      const existingMapping = mappings.find(m => m.contact_id === contactId)
+      const targetAgentId = formData.role === 'user' ? formData.default_agent_id : null
+      if (targetAgentId && targetAgentId !== existingMapping?.agent_id) {
+        try {
+          await api.setContactAgentMapping(contactId, targetAgentId)
+        } catch (err) {
+          console.error('Failed to update default agent mapping:', err)
+        }
+      } else if (!targetAgentId && existingMapping) {
+        try {
+          await api.deleteContactAgentMapping(contactId)
+        } catch (err) {
+          console.error('Failed to remove default agent mapping:', err)
+        }
+      }
+
       await loadData()
       setEditing(null)
       resetForm()
+      // Refresh after background WhatsApp resolution finishes
+      if (formData.phone_number) {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = setTimeout(() => { loadData() }, 2500)
+      }
     } catch (err) {
       console.error('Failed to update contact:', err)
       toast.error('Update Failed', err instanceof Error ? err.message : 'Failed to update contact')
@@ -179,9 +223,9 @@ export default function ContactsPage() {
 
   const startEdit = (contact: Contact) => {
     setEditing(contact.id)
+    const mapping = mappings.find(m => m.contact_id === contact.id)
     setFormData({
       friendly_name: contact.friendly_name,
-      whatsapp_id: contact.whatsapp_id || '',
       phone_number: contact.phone_number || '',
       telegram_id: contact.telegram_id || '',
       telegram_username: contact.telegram_username || '',
@@ -189,14 +233,14 @@ export default function ContactsPage() {
       is_dm_trigger: contact.is_dm_trigger || false,
       slash_commands_enabled: contact.slash_commands_enabled ?? null,
       notes: contact.notes || '',
-      linked_user_id: contact.linked_user_id || null
+      linked_user_id: contact.linked_user_id || null,
+      default_agent_id: mapping?.agent_id ?? null
     })
   }
 
   const resetForm = () => {
     setFormData({
       friendly_name: '',
-      whatsapp_id: '',
       phone_number: '',
       telegram_id: '',
       telegram_username: '',
@@ -204,41 +248,9 @@ export default function ContactsPage() {
       is_dm_trigger: true,
       slash_commands_enabled: null,
       notes: '',
-      linked_user_id: null
+      linked_user_id: null,
+      default_agent_id: null
     })
-  }
-
-  const handleResolveWhatsApp = async (contactId: number) => {
-    setResolvingWhatsApp(contactId)
-    try {
-      const result = await api.resolveContactWhatsApp(contactId, true)
-      if (result.success) {
-        toast.success('WhatsApp Resolved', result.message)
-        await loadData()
-      } else {
-        toast.warning('Resolution Failed', result.message)
-      }
-    } catch (err) {
-      console.error('Failed to resolve WhatsApp ID:', err)
-      toast.error('Resolution Failed', err instanceof Error ? err.message : 'Failed to resolve WhatsApp ID')
-    } finally {
-      setResolvingWhatsApp(null)
-    }
-  }
-
-  const handleResolveAllWhatsApp = async () => {
-    if (!confirm('Resolve WhatsApp IDs for all contacts with phone numbers? This may take a moment.')) return
-    setResolvingAll(true)
-    try {
-      const result = await api.resolveAllContactsWhatsApp()
-      toast.success('Bulk Resolution Complete', `Resolved: ${result.resolved}, Failed: ${result.failed}, Skipped: ${result.skipped}`)
-      await loadData()
-    } catch (err) {
-      console.error('Failed to resolve all WhatsApp IDs:', err)
-      toast.error('Resolution Failed', err instanceof Error ? err.message : 'Failed to resolve WhatsApp IDs')
-    } finally {
-      setResolvingAll(false)
-    }
   }
 
   const cancelEdit = () => {
@@ -331,13 +343,6 @@ export default function ContactsPage() {
             <p className="text-tsushin-slate">Manage contacts and agent assignments</p>
           </div>
           <div className="flex gap-3">
-            <button
-              onClick={handleResolveAllWhatsApp}
-              disabled={resolvingAll}
-              className="px-4 py-2 bg-green-600/20 text-green-400 border border-green-600/30 rounded-lg hover:bg-green-600/30 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {resolvingAll ? <><RefreshIcon size={16} className="animate-spin" /> Resolving...</> : <><RefreshIcon size={16} /> Resolve All WhatsApp</>}
-            </button>
             <button
               onClick={() => setCreating(true)}
               className="px-4 py-2 bg-tsushin-indigo text-white rounded-lg hover:bg-tsushin-indigo/90 transition-colors font-medium"
@@ -445,15 +450,6 @@ export default function ContactsPage() {
                       </div>
                     </div>
                     <div className="flex gap-2 ml-4">
-                      {contact.phone_number && !contact.whatsapp_id && (
-                        <button
-                          onClick={() => handleResolveWhatsApp(contact.id)}
-                          disabled={resolvingWhatsApp === contact.id}
-                          className="px-3 py-1.5 text-sm bg-green-600/10 text-green-400 border border-green-600/20 rounded-md hover:bg-green-600/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-                        >
-                          {resolvingWhatsApp === contact.id ? <RefreshIcon size={14} className="animate-spin" /> : <><RefreshIcon size={14} /> Resolve WA</>}
-                        </button>
-                      )}
                       <button
                         onClick={() => startEdit(contact)}
                         className="px-3 py-1.5 text-sm bg-tsushin-indigo/10 text-tsushin-indigo border border-tsushin-indigo/20 rounded-md hover:bg-tsushin-indigo/20"
@@ -608,29 +604,45 @@ export default function ContactsPage() {
 
             <div>
               <label className="block text-sm font-medium mb-2 text-tsushin-slate">
-                WhatsApp ID
-              </label>
-              <input
-                type="text"
-                value={formData.whatsapp_id}
-                onChange={(e) => setFormData({ ...formData, whatsapp_id: e.target.value })}
-                placeholder="e.g., 140127703679231"
-                className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-elevated text-white focus:ring-2 focus:ring-tsushin-indigo"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2 text-tsushin-slate">
                 Phone Number
               </label>
               <input
                 type="text"
                 value={formData.phone_number}
                 onChange={(e) => setFormData({ ...formData, phone_number: e.target.value })}
-                placeholder="e.g., 5500000000001"
+                placeholder="+5500000000001"
                 className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-elevated text-white focus:ring-2 focus:ring-tsushin-indigo"
               />
+              <p className="text-xs text-tsushin-slate mt-1">
+                WhatsApp ID will be auto-detected from the phone number after saving.
+              </p>
             </div>
+
+            {formData.role === 'user' && (
+              <div>
+                <label className="block text-sm font-medium mb-2 text-tsushin-slate">
+                  Default Agent
+                </label>
+                <select
+                  value={formData.default_agent_id ?? ''}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    default_agent_id: e.target.value ? Number(e.target.value) : null
+                  })}
+                  className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-elevated text-white focus:ring-2 focus:ring-tsushin-indigo"
+                >
+                  <option value="">— Use system default —</option>
+                  {agents.filter(a => a.is_active).map(agent => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.contact_name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-tsushin-slate mt-1">
+                  Agent that responds to this contact&apos;s DMs. Also editable in the Agent Assignments table below.
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium mb-2 text-tsushin-slate">

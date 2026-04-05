@@ -24,13 +24,14 @@ ARG TARGETARCH
 # System Dependencies & Security Tools
 # ============================================================================
 
-# Install system dependencies, nmap, and sqlmap
+# Install system dependencies, nmap, sqlmap, and whois (for whois_lookup tool manifest)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     unzip \
     ca-certificates \
     nmap \
+    whois \
     dnsutils \
     iputils-ping \
     net-tools \

@@ -18,6 +18,66 @@ New "From Template" button on `/flows` opens a 3-step wizard (pick → configure
 - **Scheduling correctness**: `_first_scheduled_at` uses pytz to compute UTC-naive `scheduled_at` from the user's wall-clock HH:MM in their chosen timezone (verified: 08:00 São Paulo → 11:00 UTC).
 - **Frontend**: `CreateFromTemplateModal.tsx` dynamically renders parameter forms from each template's `params_schema`. Matches existing design system (slate-800 shell, teal/cyan accents, rounded-2xl, backdrop-blur).
 
+### Changed
+
+#### WhatsApp filter typeahead + Studio Contacts UX overhaul (2026-04-05, branch `wpp`)
+Replaced free-text entry in Hub > Communications > WhatsApp "Message Filters" (Group Filters + DM Allowlist) with live-autocomplete dropdowns, and streamlined the Studio > Contacts add/edit workflow so users no longer have to manage WhatsApp IDs or click resolve buttons.
+
+**Hub filter typeahead**
+- New `TypeaheadChipInput` component (`frontend/components/hub/TypeaheadChipInput.tsx`) with 250 ms debounce, arrow-key nav, free-text fallback, chip × removal.
+- New WhatsApp MCP endpoints (`backend/whatsapp-mcp/main.go`): `GET /api/groups` lists joined groups from the local chats store; `GET /api/contacts` merges the whatsmeow address book with DM chats, with `?q=` substring/phone-prefix filter.
+- New backend proxy routes (`backend/api/routes_mcp_instances.py`): `GET /api/mcp/instances/{id}/wa/groups` and `…/wa/contacts`, tenant-scoped via `context.can_access_resource`, using `MCPAuthService` Bearer auth.
+- Frontend: `api.searchWhatsAppGroups()` / `searchWhatsAppContacts()` and the typeahead wired into both Group Filters and DM Allowlist fields in `hub/page.tsx`.
+
+**Studio > Contacts**
+- Removed "Resolve All WhatsApp" header button and per-row "Resolve WA" button — resolution is now silent/automatic.
+- Removed manual "WhatsApp ID" text field from the add/edit form (users no longer need to know this value).
+- Added "Default Agent" dropdown to the contact add/edit form (only for `role=user`); creates/updates/deletes a `ContactAgentMapping` on save.
+- Helper text under Phone Number: *"WhatsApp ID will be auto-detected from the phone number after saving."*
+- Contacts page schedules a `loadData()` refresh 2.5 s after create/update to surface server-side resolution without manual reload.
+
+### Fixed
+
+#### WhatsApp proactive resolver missing Bearer auth (2026-04-05, branch `wpp`)
+`services/whatsapp_proactive_resolver.py` was calling the MCP `/check-numbers` endpoint without an `Authorization` header, causing auto-resolution to fail with **HTTP 401** after Phase Security-1 enabled `MCP_API_SECRET` enforcement. Both single-number and batch resolution paths now pull the instance's `api_secret` via `get_auth_headers()` and include the Bearer token. Verified end-to-end: creating a contact with phone `+5527998701042` auto-populates `whatsapp_id=5527998701042` within ~2 s.
+
+### Performance
+
+#### Backend image optimization — dependency hygiene + opt-out flags (2026-04-05)
+Follow-up to commit `c2402bd` (CPU-only torch). Removed declared-but-unused dependencies, deduped conflicting pytest declarations, split test deps into a dev-only tier, removed system packages that belong in the `toolbox` sandbox container, and added opt-out ARG flags for heavy optional assets. Default image preserves every existing feature; new lean build variant drops ~2.05 GB.
+
+**Dependency removals & reshuffling:**
+- **Removed `slack-bolt>=1.20.0`** from `backend/requirements-app.txt` — declared but zero imports. Slack adapter uses `slack-sdk` exclusively (verified in `backend/channels/slack/adapter.py` and `backend/api/routes_slack.py`).
+- **Removed duplicate pytest stack** from production tiers: `pytest`, `pytest-asyncio` deleted from `requirements-base.txt`; `pytest`, `pytest-asyncio`, `pytest-cov` deleted from `requirements-phase4.txt`. Conflicting version floors (`>=7.4.4` vs `>=7.4.0`) resolved.
+- **New `backend/requirements-dev.txt`** — unified dev/CI testing deps (pytest, pytest-asyncio, pytest-cov), NOT installed in the production Docker image. Run locally: `pip install -r backend/requirements-dev.txt`.
+- **Moved `docker>=7.0.0`** from `requirements-base.txt` → `requirements-app.txt` with accurate usage comment (Phase 8 MCP container lifecycle via `services/container_runtime.py`).
+- **Bumped `google-generativeai>=0.4.0` → `>=0.8.0`** — ancient floor (Jan 2024) replaced with current floor.
+
+**System packages:**
+- **Removed `nmap` and `whois`** from `backend/Dockerfile` apt install — sandboxed tools run in the per-tenant `toolbox` container (`backend/containers/Dockerfile.toolbox`), not in the backend image. Backend Python code references them only as string tokens for routing.
+
+**New Docker build flags (both default=true, zero behavior change by default):**
+- **`INSTALL_PLAYWRIGHT=true`** — gates `playwright install chromium` (~1.1 GB Chromium binary) and Chromium system libs (libnss3, libatk, libcups2, etc.). Set `false` if the deployment does not use browser automation skills.
+- **`INSTALL_FFMPEG=true`** — gates ffmpeg (~250 MB). Required by Kokoro TTS for WAV→Opus conversion (`backend/hub/providers/kokoro_tts_provider.py:457`). Set `false` if TTS is not used.
+
+**Example lean build:**
+```bash
+docker build --build-arg INSTALL_PLAYWRIGHT=false --build-arg INSTALL_FFMPEG=false \
+  -t tsushin-backend:lean backend/
+```
+
+**Measured results (multi-arch arm64 image):**
+
+| Variant | Image Size | vs Baseline | Notes |
+|---------|-----------|-------------|-------|
+| Baseline (pre-c2402bd) | 4.89 GB | — | Before CPU-only torch fix landed |
+| Default (after this change) | 4.84 GB | −50 MB | Playwright + ffmpeg still installed |
+| Lean (both flags false) | 2.79 GB | **−2.10 GB (−43%)** | No Chromium, no ffmpeg |
+
+Build time (no-cache, BuildKit pip mounts intact): ~3m 23s for default rebuild.
+
+**Verified end-to-end:** backend health + readiness endpoints return 200; API v1 `/agents` sweep returns 200; `slack_sdk`/`docker`/`google.generativeai`/`playwright`/`ffmpeg`/`sentence-transformers` all importable; `import pytest` + `import slack_bolt` correctly raise `ModuleNotFoundError` in production image; torch remains `2.11.0+cpu` (no CUDA regression); Kokoro TTS provider imports; Slack adapter imports; per-tenant toolbox container still reachable with nmap + dig available.
+
 ### Fixed
 
 #### BUG-275 — Global refresh button did not reliably update lists across pages (2026-04-05)
