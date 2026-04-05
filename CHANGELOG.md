@@ -102,6 +102,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Docker env passthrough**: Added `GROQ_API_KEY`, `GROK_API_KEY`, `ELEVENLABS_API_KEY` to docker-compose.yml backend environment.
+- **Docker Compose v2 required**: Installer no longer supports `docker-compose` v1. Reverts the BUG-271 `DOCKER_BUILDKIT=0` workaround (installer would force-disable BuildKit for v1 compatibility). The backend Dockerfile now requires BuildKit for pip/nuclei cache mounts. Docker Compose v2 (`docker compose`) is bundled with Docker Desktop ≥20.10 and is the CLAUDE.md convention. Installer errors out with a clear upgrade message if only v1 is detected.
+
+### Performance
+
+#### Backend Container Build Optimization (2026-04-04)
+
+- **Backend image size: 11.5 GB → 4.89 GB (-58%)**. Full `--no-cache` build time: 14m22s → 3m59s (-72%). Layer export: 93s → 32s (-66%).
+- **Root cause**: `sentence-transformers` → default `torch` wheel was pulling ~4.3 GB of NVIDIA/CUDA/triton binaries (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, `triton`, etc.) that never execute — embeddings run on CPU via `asyncio.to_thread()`.
+- **Fix**: Install torch from the CPU-only index (`https://download.pytorch.org/whl/cpu`) as a dedicated step before `requirements-phase4.txt`. Saves 4.3 GB of unused CUDA runtime per image.
+- **BuildKit cache mounts**: Added `# syntax=docker/dockerfile:1.4` + `--mount=type=cache,target=/root/.cache/pip` to all pip install steps and the nuclei download. Wheels persist across `--no-cache` rebuilds.
+- **Tiered requirements**: Split `requirements.txt` into `requirements-base.txt` (stable core: fastapi, sqlalchemy, pydantic, security deps), `requirements-app.txt` (volatile integrations: anthropic, openai, google-*, slack, discord, telegram), and `requirements-optional.txt` (kubernetes, gcp-secret-manager, qdrant, pinecone, pymongo). Iterative rebuilds only invalidate the changed tier + below.
+- **Optional deps build arg**: New `INSTALL_OPTIONAL_DEPS` ARG (default: `true`). Local dev can build with `--build-arg INSTALL_OPTIONAL_DEPS=false` to skip K8s/GCP/vector clients (~50 MB saved). All five optional deps are lazy-imported at runtime, so disabling is safe as long as the corresponding feature isn't activated.
+- **Nuclei download cache**: Cached across builds, saving ~5-10s per full rebuild.
+- **Updated references**: `.github/workflows/gke-deploy.yml` and `ops/manage_servers.py` now reference the tiered requirements files.
 
 ### Fixed
 
