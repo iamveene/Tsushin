@@ -1335,23 +1335,54 @@ class AgentRouter:
                                     if _inst:
                                         _tenant_id = _inst.tenant_id
 
-                            _agent_id = message.get("agent_id") or 0
-                            mqs = MessageQueueService(self.db)
-                            mqs.enqueue(
-                                channel=cb_channel,
-                                tenant_id=_tenant_id,
-                                agent_id=int(_agent_id),
-                                sender_key=sender_key,
-                                payload={
-                                    "message": message,
-                                    "trigger_type": trigger_type,
-                                    "queued_reason": "circuit_breaker_open",
-                                },
-                                priority=0,
-                            )
-                            return  # Do not process — message is safely queued
+                            _agent_id = message.get("agent_id")
+                            if not _agent_id:
+                                # Resolve agent from channel instance binding (tenant-scoped)
+                                from models import Agent
+                                _bound = None
+                                if cb_channel == "whatsapp" and self.mcp_instance_id:
+                                    _bound = self.db.query(Agent.id).filter_by(
+                                        whatsapp_integration_id=self.mcp_instance_id, tenant_id=_tenant_id
+                                    ).first()
+                                elif cb_channel == "telegram" and self.telegram_instance_id:
+                                    _bound = self.db.query(Agent.id).filter_by(
+                                        telegram_integration_id=self.telegram_instance_id, tenant_id=_tenant_id
+                                    ).first()
+                                elif cb_channel == "webhook" and self.webhook_instance_id:
+                                    _bound = self.db.query(Agent.id).filter_by(
+                                        webhook_integration_id=self.webhook_instance_id, tenant_id=_tenant_id
+                                    ).first()
+                                if _bound:
+                                    _agent_id = _bound[0]
+                                else:
+                                    self.logger.error(
+                                        f"[CB_QUEUE] No agent bound to {cb_channel}/{cb_instance_id} — cannot queue, falling through"
+                                    )
+                                    # Fall through to normal processing
+                            if _agent_id:
+                                mqs = MessageQueueService(self.db)
+                                mqs.enqueue(
+                                    channel=cb_channel,
+                                    tenant_id=_tenant_id,
+                                    agent_id=int(_agent_id),
+                                    sender_key=sender_key,
+                                    payload={
+                                        "message": message,
+                                        "trigger_type": trigger_type,
+                                        "queued_reason": "circuit_breaker_open",
+                                    },
+                                    priority=0,
+                                )
+                                return  # Do not process — message is safely queued
                         except Exception as eq:
                             self.logger.error(f"[CB_QUEUE] Failed to enqueue message: {eq}", exc_info=True)
+                            # Recover session so subsequent DB ops don't hit PendingRollbackError.
+                            # Safe here: no watcher writes are pending at the CB-queue code point
+                            # (only read-only message_cache checks precede this).
+                            try:
+                                self.db.rollback()
+                            except Exception:
+                                pass
                             # Fall through to normal processing rather than losing the message
             except Exception as ecb:
                 self.logger.debug(f"[CB_QUEUE] CB check skipped: {ecb}")
