@@ -196,7 +196,7 @@ Real-time monitoring and analytics platform.
 | Category | Integrations |
 |----------|-------------|
 | AI Providers | Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter |
-| Communication | WhatsApp, Telegram, Slack, Discord |
+| Communication | WhatsApp, Telegram, Slack, Discord, HTTP Webhook (bidirectional, HMAC-signed) |
 | Productivity | Asana, Google Calendar |
 | Developer Tools | Shell, Browser Automation |
 | Tool APIs | Brave Search, SerpAPI, Amadeus |
@@ -321,7 +321,7 @@ Programmatic REST API for external applications.
 │  ┌──────────────────────────────┐     ┌──────────────────────────────────┐   │
 │  │       SANDBOXED TOOLS        │     │           CHANNELS               │   │
 │  │  Per-tenant Docker isolation  │     │  WhatsApp │ Telegram │ Slack    │   │
-│  │  9 pre-installed tools        │     │  Discord  │ Playground          │   │
+│  │  9 pre-installed tools        │     │  Discord  │ Webhook  │ Playground │   │
 │  └──────────────────────────────┘     └──────────────────────────────────┘   │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
