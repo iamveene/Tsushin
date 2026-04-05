@@ -67,6 +67,8 @@ import {
   type IconProps
 } from '@/components/ui/icons'
 import { parseUTCTimestamp, formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
+import CreateFromTemplateModal from '@/components/flows/CreateFromTemplateModal'
 
 // ==================== CONSTANTS ====================
 
@@ -163,6 +165,7 @@ export default function FlowsPage() {
 
   // Modal states
   const [showCreateFlow, setShowCreateFlow] = useState(false)
+  const [showCreateFromTemplate, setShowCreateFromTemplate] = useState(false)
   const [editingFlowId, setEditingFlowId] = useState<number | null>(null)
   const [viewingRunId, setViewingRunId] = useState<number | null>(null)
   const [activeThreads, setActiveThreads] = useState<ConversationThread[]>([])
@@ -180,14 +183,9 @@ export default function FlowsPage() {
 
   useEffect(() => {
     loadData()
-
-    const handleRefresh = () => loadData()
-    window.addEventListener('tsushin:refresh', handleRefresh)
-
-    return () => {
-      window.removeEventListener('tsushin:refresh', handleRefresh)
-    }
   }, [currentPage, pageSize])
+
+  useGlobalRefresh(() => loadData())
 
   async function loadData() {
     setLoading(true)
@@ -203,8 +201,18 @@ export default function FlowsPage() {
       ])
 
       if (flowsData.status === 'fulfilled') {
-        setAllFlows(flowsData.value.items)
-        setTotalFlows(flowsData.value.total)
+        // Auto-correct pagination: if current page is now past the last page
+        // (e.g., after deletion), snap back and let useEffect re-fetch the right
+        // window — do not overwrite list with empty results in the meantime.
+        const total = flowsData.value.total
+        const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
+        if (currentPage > lastPage) {
+          setTotalFlows(total)
+          setCurrentPage(lastPage)
+        } else {
+          setAllFlows(flowsData.value.items)
+          setTotalFlows(total)
+        }
       }
       if (runsData.status === 'fulfilled') setRuns(runsData.value)
       if (agentsData.status === 'fulfilled') setAgents(agentsData.value)
@@ -496,6 +504,19 @@ export default function FlowsPage() {
             <p className="text-slate-500 mt-1 text-sm">Manage automated workflows, conversations, and notifications</p>
           </div>
           <div className="flex items-center gap-3">
+            {/* From Template Button */}
+            <button
+              onClick={() => setShowCreateFromTemplate(true)}
+              className="px-4 py-2.5 bg-teal-500/10 text-teal-300 border border-teal-500/30 font-medium rounded-lg
+                         hover:bg-teal-500/15 hover:border-teal-500/50 transition-all
+                         flex items-center gap-2"
+              title="Create a flow from a pre-built hybrid automation template"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              From Template
+            </button>
             {/* New Flow Button */}
             <button
               onClick={() => setShowCreateFlow(true)}
@@ -1008,6 +1029,22 @@ export default function FlowsPage() {
           onClose={() => setShowCreateFlow(false)}
           onSuccess={() => {
             setShowCreateFlow(false)
+            loadData()
+          }}
+        />
+      )}
+
+      {/* Create from Template Modal */}
+      {showCreateFromTemplate && (
+        <CreateFromTemplateModal
+          agents={agents}
+          contacts={contacts}
+          personas={personas}
+          customTools={customTools}
+          onClose={() => setShowCreateFromTemplate(false)}
+          onSuccess={(flowId, flowName) => {
+            setShowCreateFromTemplate(false)
+            toast.success('Flow Created', `${flowName} is ready. Configure and enable it when you're set.`)
             loadData()
           }}
         />

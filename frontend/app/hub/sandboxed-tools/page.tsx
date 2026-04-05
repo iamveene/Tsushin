@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { useAuth } from '@/contexts/AuthContext'
 import { authenticatedFetch } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
@@ -263,16 +264,7 @@ export default function CustomToolsPage() {
     }
   }, [isPolling])
 
-  // Listen for global refresh events
-  useEffect(() => {
-    const handleRefresh = () => {
-      loadContainerStatus()
-      loadTools()
-      loadPackages()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-    return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [])
+  useGlobalRefresh(() => { loadContainerStatus(); loadTools(); loadPackages() })
 
   const loadContainerStatus = async (showRefreshing = false) => {
     if (showRefreshing) setIsRefreshing(true)

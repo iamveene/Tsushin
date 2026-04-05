@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import StudioTabs from '@/components/studio/StudioTabs'
 import { api, Agent, TonePreset, Contact, Persona } from '@/lib/client'
@@ -120,14 +121,7 @@ export default function AgentsPage() {
     }
   }, [formData.model_provider])
 
-  useEffect(() => {
-    const handleRefresh = () => {
-      loadData()
-      checkOllamaHealth()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-    return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [])
+  useGlobalRefresh(() => { loadData(); checkOllamaHealth() })
 
   const resetForm = () => {
     setFormData({

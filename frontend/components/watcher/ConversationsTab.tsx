@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { api, type Message, type AgentRun } from '@/lib/client'
 import { formatTime } from '@/lib/dateUtils'
 import {
@@ -35,19 +36,10 @@ export default function ConversationsTab() {
   useEffect(() => {
     loadData()
     const interval = setInterval(loadData, 5000) // Poll every 5s
-
-    // Listen for global refresh events
-    const handleRefresh = () => {
-      console.log('[ConversationsTab] Refresh event received')
-      loadData()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-
-    return () => {
-      clearInterval(interval)
-      window.removeEventListener('tsushin:refresh', handleRefresh)
-    }
+    return () => clearInterval(interval)
   }, [])
+
+  useGlobalRefresh(() => loadData())
 
   const loadData = async () => {
     try {

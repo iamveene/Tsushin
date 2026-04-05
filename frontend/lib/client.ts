@@ -1239,6 +1239,29 @@ export interface SchedulerStats {
 
 // Phase 6.6-6.7: Multi-Step Flows
 // Phase 8.0: Unified Flow Architecture
+export interface FlowTemplateParamSpec {
+  key: string
+  label: string
+  type: 'text' | 'number' | 'select' | 'time' | 'contact' | 'agent' | 'channel' | 'textarea' | 'toggle' | 'tool' | 'persona'
+  required: boolean
+  default: any
+  options: Array<{ value: any; label: string }> | null
+  help: string | null
+  min: number | null
+  max: number | null
+}
+
+export interface FlowTemplateSummary {
+  id: string
+  name: string
+  description: string
+  category: string
+  icon: string
+  highlights: string[]
+  required_credentials: string[]
+  params_schema: FlowTemplateParamSpec[]
+}
+
 export interface FlowDefinition {
   id: number
   name: string
@@ -3839,6 +3862,22 @@ export const api = {
       body: JSON.stringify(flow),
     })
     if (!res.ok) await handleApiError(res, 'Failed to create flow')
+    return res.json()
+  },
+
+  async listFlowTemplates(): Promise<FlowTemplateSummary[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/flows/templates`)
+    if (!res.ok) await handleApiError(res, 'Failed to load flow templates')
+    return res.json()
+  },
+
+  async instantiateFlowTemplate(templateId: string, params: Record<string, any>): Promise<{ flow_id: number; name: string; steps_created: number; template_id: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/flows/templates/${templateId}/instantiate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ params }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to instantiate template')
     return res.json()
   },
 

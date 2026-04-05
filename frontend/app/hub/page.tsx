@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
@@ -422,13 +423,7 @@ export default function HubPage() {
     return () => clearInterval(interval)
   }, [activeTab])
 
-  useEffect(() => {
-    const handleRefresh = () => {
-      loadAllData()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-    return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [])
+  useGlobalRefresh(() => loadAllData())
 
   // Close instance dropdown menu when clicking outside
   useEffect(() => {
