@@ -910,6 +910,218 @@ def create_flow_v2(
         raise HTTPException(status_code=500, detail="Failed to create flow")
 
 
+# ============= FLOW TEMPLATES (WIZARD) ==============
+
+class FlowTemplateInstantiateRequest(BaseModel):
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FlowTemplateInstantiateResponse(BaseModel):
+    flow_id: int
+    name: str
+    steps_created: int
+    template_id: str
+
+
+@router.get("/templates", dependencies=[Depends(require_permission("flows.read"))])
+def list_flow_templates():
+    """List all available pre-built flow templates (wizard catalog)."""
+    from services.flow_template_seeding import list_templates
+    return [t.to_summary() for t in list_templates()]
+
+
+def _validate_template_params(template, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Enforce the template's declared params_schema (required / options / min / max).
+
+    Mutates-and-returns a sanitized copy of the params dict. Numeric bounds are
+    clamped (never trust client-side clamping). Unknown keys are preserved but
+    logged — they are ignored by builders that don't read them.
+    """
+    cleaned: Dict[str, Any] = dict(params or {})
+    # Pass 1: apply defaults for missing keys
+    for spec in template.params_schema:
+        if (cleaned.get(spec.key) is None or cleaned.get(spec.key) == "") and spec.default is not None:
+            cleaned[spec.key] = spec.default
+    # Pass 2: validate
+    for spec in template.params_schema:
+        key = spec.key
+        v = cleaned.get(key)
+        if v is None or v == "":
+            if spec.required:
+                raise HTTPException(status_code=422, detail=f"Missing required parameter: {key}")
+            continue
+        # Numeric clamping
+        if spec.type == "number":
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail=f"Parameter '{key}' must be a number")
+            if spec.min is not None and iv < spec.min:
+                iv = spec.min
+            if spec.max is not None and iv > spec.max:
+                iv = spec.max
+            cleaned[key] = iv
+        # Select / channel — validate against options whitelist
+        if spec.type in ("select", "channel") and spec.options:
+            allowed = [str(o.get("value")) for o in spec.options]
+            if str(v) not in allowed:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Parameter '{key}' must be one of: {', '.join(allowed)}",
+                )
+        # Bound recipient length (defence-in-depth)
+        if spec.type in ("text", "contact", "textarea") and isinstance(v, str) and len(v) > 4000:
+            raise HTTPException(status_code=422, detail=f"Parameter '{key}' exceeds 4000 chars")
+    return cleaned
+
+
+def _validate_tenant_refs(db: Session, tenant_id: str, flow_create) -> None:
+    """Verify every agent_id / persona_id / sandboxed tool referenced by the
+    generated FlowCreate belongs to the caller's tenant. Prevents cross-tenant
+    resource leak through wizard-generated flows.
+    """
+    from models import Persona as PersonaModel, SandboxedTool as SandboxedToolModel
+
+    def _check_agent(agent_id):
+        if agent_id is None:
+            return
+        row = db.query(Agent.id).filter(
+            Agent.id == int(agent_id), Agent.tenant_id == tenant_id
+        ).first()
+        if not row:
+            raise HTTPException(status_code=422, detail=f"Agent {agent_id} not found in this tenant")
+
+    def _check_persona(persona_id):
+        if persona_id is None:
+            return
+        row = db.query(PersonaModel.id).filter(
+            PersonaModel.id == int(persona_id), PersonaModel.tenant_id == tenant_id
+        ).first()
+        if not row:
+            raise HTTPException(status_code=422, detail=f"Persona {persona_id} not found in this tenant")
+
+    def _check_tool(tool_name):
+        if not tool_name:
+            return
+        row = db.query(SandboxedToolModel.id).filter(
+            SandboxedToolModel.name == tool_name,
+            SandboxedToolModel.tenant_id == tenant_id,
+            SandboxedToolModel.is_enabled == True,  # noqa: E712
+        ).first()
+        if not row:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Tool '{tool_name}' not found or disabled in this tenant",
+            )
+
+    _check_agent(flow_create.default_agent_id)
+    for step in (flow_create.steps or []):
+        _check_agent(step.agent_id)
+        _check_persona(step.persona_id)
+        if step.config and getattr(step.config, "tool_name", None) and step.config.tool_type == "custom":
+            _check_tool(step.config.tool_name)
+
+
+@router.post(
+    "/templates/{template_id}/instantiate",
+    response_model=FlowTemplateInstantiateResponse,
+    status_code=201,
+    dependencies=[Depends(require_permission("flows.write"))],
+)
+def instantiate_flow_template(
+    template_id: str,
+    req: FlowTemplateInstantiateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    tenant_context: TenantContext = Depends(get_tenant_context),
+):
+    """Instantiate a pre-built flow template with user-supplied parameters."""
+    from services.flow_template_seeding import get_template
+
+    tmpl = get_template(template_id)
+    if tmpl is None:
+        raise HTTPException(status_code=404, detail=f"Unknown template: {template_id}")
+
+    # 1. Validate + sanitize params against template's declared schema
+    cleaned_params = _validate_template_params(tmpl, req.params)
+
+    # 2. Run builder
+    try:
+        flow_create = tmpl.build(cleaned_params, tenant_context.tenant_id)
+    except KeyError as e:
+        raise HTTPException(status_code=422, detail=f"Missing required parameter: {e}")
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"Invalid parameter: {e}")
+    except Exception:
+        logger.exception(f"Template build failed for {template_id}")
+        raise HTTPException(status_code=500, detail="Template build failed")
+
+    # 3. Enforce multi-tenant isolation on every referenced resource
+    _validate_tenant_refs(db, tenant_context.tenant_id, flow_create)
+
+    try:
+        db_flow = FlowDefinition(
+            name=flow_create.name,
+            description=flow_create.description,
+            tenant_id=tenant_context.tenant_id,
+            execution_method=flow_create.execution_method.value,
+            scheduled_at=flow_create.scheduled_at,
+            recurrence_rule=flow_create.recurrence_rule.model_dump() if flow_create.recurrence_rule else None,
+            flow_type=flow_create.flow_type.value,
+            default_agent_id=flow_create.default_agent_id,
+            is_active=True,
+        )
+        db.add(db_flow)
+        db.commit()
+        db.refresh(db_flow)
+
+        steps_created = 0
+        if flow_create.steps:
+            for step_data in flow_create.steps:
+                db_step = FlowNode(
+                    flow_definition_id=db_flow.id,
+                    name=step_data.name,
+                    step_description=step_data.description,
+                    type=step_data.type.value,
+                    position=step_data.position,
+                    config_json=json.dumps(step_data.config.model_dump() if step_data.config else {}),
+                    timeout_seconds=step_data.timeout_seconds,
+                    retry_on_failure=step_data.retry_on_failure,
+                    max_retries=step_data.max_retries,
+                    retry_delay_seconds=step_data.retry_delay_seconds,
+                    condition=step_data.condition,
+                    on_success=step_data.on_success,
+                    on_failure=step_data.on_failure,
+                    allow_multi_turn=step_data.allow_multi_turn,
+                    max_turns=step_data.max_turns,
+                    conversation_objective=step_data.conversation_objective,
+                    agent_id=step_data.agent_id,
+                    persona_id=step_data.persona_id,
+                )
+                db.add(db_step)
+                steps_created += 1
+            db.commit()
+
+        log_tenant_event(
+            db, tenant_context.tenant_id, tenant_context.user.id,
+            TenantAuditActions.FLOW_CREATE, "flow", str(db_flow.id),
+            {"name": db_flow.name, "template_id": template_id}, request,
+        )
+        logger.info(f"Instantiated flow {db_flow.id} from template {template_id} ({steps_created} steps)")
+
+        return FlowTemplateInstantiateResponse(
+            flow_id=db_flow.id,
+            name=db_flow.name,
+            steps_created=steps_created,
+            template_id=template_id,
+        )
+
+    except Exception:
+        db.rollback()
+        logger.exception(f"Error instantiating flow template {template_id}")
+        raise HTTPException(status_code=500, detail="Failed to instantiate template")
+
+
 @router.get("/", dependencies=[Depends(require_permission("flows.read"))])
 def list_flows(
     active: Optional[bool] = None,
@@ -1353,23 +1565,30 @@ def delete_flow(
                 detail=f"Cannot delete flow with {run_count} existing run(s). Use force=true or deactivate instead."
             )
 
-        # Cancel any active conversation threads before deleting
+        # Cancel conversation threads and clear FK references before deleting runs
         if force and run_count > 0:
             # Find all FlowNodeRun IDs for this flow's runs
             run_ids = [r.id for r in db.query(FlowRun.id).filter(FlowRun.flow_definition_id == flow_id).all()]
             if run_ids:
                 node_run_ids = [nr.id for nr in db.query(FlowNodeRun.id).filter(FlowNodeRun.flow_run_id.in_(run_ids)).all()]
                 if node_run_ids:
-                    # Mark active conversation threads as cancelled (not deleted)
                     from datetime import datetime
+                    now = datetime.utcnow()
+                    # Cancel ACTIVE threads (state transition)
                     db.query(ConversationThread).filter(
                         ConversationThread.flow_step_run_id.in_(node_run_ids),
                         ConversationThread.status == 'active'
                     ).update({
                         'status': 'cancelled',
-                        'completed_at': datetime.utcnow(),
+                        'completed_at': now,
                         'goal_summary': 'Flow was deleted'
                     }, synchronize_session=False)
+                    # Clear FK on ALL remaining threads (any status — completed/timeout/cancelled/etc.)
+                    # This is required because the FK has no ON DELETE action and would
+                    # otherwise block the FlowNodeRun cascade below.
+                    db.query(ConversationThread).filter(
+                        ConversationThread.flow_step_run_id.in_(node_run_ids)
+                    ).update({'flow_step_run_id': None}, synchronize_session=False)
 
             # Delete related node runs first (FK to FlowRun), then runs
             if run_ids:
@@ -1387,7 +1606,7 @@ def delete_flow(
         raise
     except Exception as e:
         db.rollback()
-        logger.exception(f"Error deleting flow {flow_id}")
+        logger.exception(f"Error deleting flow {flow_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete flow")
 
 

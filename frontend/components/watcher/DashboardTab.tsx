@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState, useMemo } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { api, type Message, type AgentRun } from '@/lib/client'
 
 // Dashboard sections
@@ -41,22 +42,12 @@ export default function DashboardTab() {
 
   useEffect(() => {
     loadData()
-
     // Polling every 5 seconds for dashboard updates
     const interval = setInterval(loadData, 5000)
-
-    // Listen for global refresh events
-    const handleRefresh = () => {
-      console.log('[DashboardTab] Refresh event received')
-      loadData()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-
-    return () => {
-      clearInterval(interval)
-      window.removeEventListener('tsushin:refresh', handleRefresh)
-    }
+    return () => clearInterval(interval)
   }, [])
+
+  useGlobalRefresh(() => loadData())
 
   const loadData = async () => {
     try {
