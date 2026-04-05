@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - develop
 
+### Changed
+
+#### WhatsApp filter typeahead + Studio Contacts UX overhaul (2026-04-05, branch `wpp`)
+Replaced free-text entry in Hub > Communications > WhatsApp "Message Filters" (Group Filters + DM Allowlist) with live-autocomplete dropdowns, and streamlined the Studio > Contacts add/edit workflow so users no longer have to manage WhatsApp IDs or click resolve buttons.
+
+**Hub filter typeahead**
+- New `TypeaheadChipInput` component (`frontend/components/hub/TypeaheadChipInput.tsx`) with 250 ms debounce, arrow-key nav, free-text fallback, chip × removal.
+- New WhatsApp MCP endpoints (`backend/whatsapp-mcp/main.go`): `GET /api/groups` lists joined groups from the local chats store; `GET /api/contacts` merges the whatsmeow address book with DM chats, with `?q=` substring/phone-prefix filter.
+- New backend proxy routes (`backend/api/routes_mcp_instances.py`): `GET /api/mcp/instances/{id}/wa/groups` and `…/wa/contacts`, tenant-scoped via `context.can_access_resource`, using `MCPAuthService` Bearer auth.
+- Frontend: `api.searchWhatsAppGroups()` / `searchWhatsAppContacts()` and the typeahead wired into both Group Filters and DM Allowlist fields in `hub/page.tsx`.
+
+**Studio > Contacts**
+- Removed "Resolve All WhatsApp" header button and per-row "Resolve WA" button — resolution is now silent/automatic.
+- Removed manual "WhatsApp ID" text field from the add/edit form (users no longer need to know this value).
+- Added "Default Agent" dropdown to the contact add/edit form (only for `role=user`); creates/updates/deletes a `ContactAgentMapping` on save.
+- Helper text under Phone Number: *"WhatsApp ID will be auto-detected from the phone number after saving."*
+- Contacts page schedules a `loadData()` refresh 2.5 s after create/update to surface server-side resolution without manual reload.
+
+### Fixed
+
+#### WhatsApp proactive resolver missing Bearer auth (2026-04-05, branch `wpp`)
+`services/whatsapp_proactive_resolver.py` was calling the MCP `/check-numbers` endpoint without an `Authorization` header, causing auto-resolution to fail with **HTTP 401** after Phase Security-1 enabled `MCP_API_SECRET` enforcement. Both single-number and batch resolution paths now pull the instance's `api_secret` via `get_auth_headers()` and include the Bearer token. Verified end-to-end: creating a contact with phone `+5527998701042` auto-populates `whatsapp_id=5527998701042` within ~2 s.
+
 ### Performance
 
 #### Backend image optimization — dependency hygiene + opt-out flags (2026-04-05)
