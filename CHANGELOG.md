@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - develop
 
+### Performance
+
+#### Backend image optimization — dependency hygiene + opt-out flags (2026-04-05)
+Follow-up to commit `c2402bd` (CPU-only torch). Removed declared-but-unused dependencies, deduped conflicting pytest declarations, split test deps into a dev-only tier, removed system packages that belong in the `toolbox` sandbox container, and added opt-out ARG flags for heavy optional assets. Default image preserves every existing feature; new lean build variant drops ~2.05 GB.
+
+**Dependency removals & reshuffling:**
+- **Removed `slack-bolt>=1.20.0`** from `backend/requirements-app.txt` — declared but zero imports. Slack adapter uses `slack-sdk` exclusively (verified in `backend/channels/slack/adapter.py` and `backend/api/routes_slack.py`).
+- **Removed duplicate pytest stack** from production tiers: `pytest`, `pytest-asyncio` deleted from `requirements-base.txt`; `pytest`, `pytest-asyncio`, `pytest-cov` deleted from `requirements-phase4.txt`. Conflicting version floors (`>=7.4.4` vs `>=7.4.0`) resolved.
+- **New `backend/requirements-dev.txt`** — unified dev/CI testing deps (pytest, pytest-asyncio, pytest-cov), NOT installed in the production Docker image. Run locally: `pip install -r backend/requirements-dev.txt`.
+- **Moved `docker>=7.0.0`** from `requirements-base.txt` → `requirements-app.txt` with accurate usage comment (Phase 8 MCP container lifecycle via `services/container_runtime.py`).
+- **Bumped `google-generativeai>=0.4.0` → `>=0.8.0`** — ancient floor (Jan 2024) replaced with current floor.
+
+**System packages:**
+- **Removed `nmap` and `whois`** from `backend/Dockerfile` apt install — sandboxed tools run in the per-tenant `toolbox` container (`backend/containers/Dockerfile.toolbox`), not in the backend image. Backend Python code references them only as string tokens for routing.
+
+**New Docker build flags (both default=true, zero behavior change by default):**
+- **`INSTALL_PLAYWRIGHT=true`** — gates `playwright install chromium` (~1.1 GB Chromium binary) and Chromium system libs (libnss3, libatk, libcups2, etc.). Set `false` if the deployment does not use browser automation skills.
+- **`INSTALL_FFMPEG=true`** — gates ffmpeg (~250 MB). Required by Kokoro TTS for WAV→Opus conversion (`backend/hub/providers/kokoro_tts_provider.py:457`). Set `false` if TTS is not used.
+
+**Example lean build:**
+```bash
+docker build --build-arg INSTALL_PLAYWRIGHT=false --build-arg INSTALL_FFMPEG=false \
+  -t tsushin-backend:lean backend/
+```
+
+**Measured results (multi-arch arm64 image):**
+
+| Variant | Image Size | vs Baseline | Notes |
+|---------|-----------|-------------|-------|
+| Baseline (pre-c2402bd) | 4.89 GB | — | Before CPU-only torch fix landed |
+| Default (after this change) | 4.84 GB | −50 MB | Playwright + ffmpeg still installed |
+| Lean (both flags false) | 2.79 GB | **−2.10 GB (−43%)** | No Chromium, no ffmpeg |
+
+Build time (no-cache, BuildKit pip mounts intact): ~3m 23s for default rebuild.
+
+**Verified end-to-end:** backend health + readiness endpoints return 200; API v1 `/agents` sweep returns 200; `slack_sdk`/`docker`/`google.generativeai`/`playwright`/`ffmpeg`/`sentence-transformers` all importable; `import pytest` + `import slack_bolt` correctly raise `ModuleNotFoundError` in production image; torch remains `2.11.0+cpu` (no CUDA regression); Kokoro TTS provider imports; Slack adapter imports; per-tenant toolbox container still reachable with nmap + dig available.
+
 ### Fixed
 
 #### BUG-277 — WhatsApp agent silent-drop regression (2026-04-05)

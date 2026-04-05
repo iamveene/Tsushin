@@ -1,10 +1,5 @@
 # Phase 4: Enhanced Memory & Context - Additional Dependencies
 
-# Testing
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
-pytest-cov>=4.1.0
-
 # Semantic Search (Feature 4.1)
 # NOTE: torch is installed as a separate step in the Dockerfile using the CPU-only
 # PyTorch index (https://download.pytorch.org/whl/cpu) to avoid the ~4.3GB

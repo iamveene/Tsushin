@@ -39,10 +39,5 @@ slowapi>=0.1.9  # MED-004: Rate limiting for auth endpoints
 # Observability
 prometheus_client>=0.20.0  # Prometheus metrics exposition
 
-# Docker & MCP
-docker>=7.0.0  # Phase 8: Multi-tenant MCP containerization
+# MCP
 mcp>=1.0.0  # Model Context Protocol client
-
-# Testing
-pytest>=7.4.4
-pytest-asyncio>=0.23.3

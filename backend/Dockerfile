@@ -60,36 +60,50 @@ FROM python:3.11-slim AS runtime
 # Phase 9.3: Architecture detection for multi-platform support
 ARG TARGETARCH
 
-# Install runtime dependencies, security scanning tools, and Playwright system dependencies
+# Optional-asset build flags (default true for backwards compatibility).
+# Set to false at build time to produce lean images:
+#   docker build --build-arg INSTALL_PLAYWRIGHT=false --build-arg INSTALL_FFMPEG=false ...
+ARG INSTALL_PLAYWRIGHT=true
+ARG INSTALL_FFMPEG=true
+
+# Install core runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     sqlite3 \
     libpq5 \
-    nmap \
     wget \
     unzip \
-    whois \
-    ffmpeg \
-    # Playwright system dependencies for Chromium
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libdbus-1-3 \
-    libxkbcommon0 \
-    libatspi2.0-0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libasound2 \
     && rm -rf /var/lib/apt/lists/*
+
+# Optional: ffmpeg (used by kokoro_tts_provider.py for WAV->Opus conversion)
+RUN if [ "$INSTALL_FFMPEG" = "true" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Optional: Playwright Chromium system dependencies
+RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            libnss3 \
+            libnspr4 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libdbus-1-3 \
+            libxkbcommon0 \
+            libatspi2.0-0 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxrandr2 \
+            libgbm1 \
+            libpango-1.0-0 \
+            libcairo2 \
+            libasound2 \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # Install Nuclei vulnerability scanner - architecture-aware (cached across builds)
 RUN --mount=type=cache,target=/tmp/nuclei-cache \
@@ -117,8 +131,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 # Install Playwright browser (Chromium only for smaller image size)
 # Must run as root before switching to non-root user
-RUN playwright install chromium && \
-    playwright install-deps chromium
+# Gated by INSTALL_PLAYWRIGHT ARG — Chromium binary is ~1.1GB
+RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+        playwright install chromium && playwright install-deps chromium; \
+    fi
 
 # Set working directory
 WORKDIR /app
