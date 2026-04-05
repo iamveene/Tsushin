@@ -4262,6 +4262,27 @@ export const api = {
     return res.json()
   },
 
+  // WhatsApp typeahead: list groups known to the instance (Hub filter autocomplete)
+  async searchWhatsAppGroups(instanceId: number, query: string, limit: number = 20): Promise<{ success: boolean; groups: Array<{ jid: string; name: string }>; count: number; message?: string }> {
+    const params = new URLSearchParams({ q: query, limit: String(limit) })
+    const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/${instanceId}/wa/groups?${params.toString()}`)
+    if (!res.ok) {
+      // Non-fatal — typeahead should degrade gracefully to free-text entry
+      return { success: false, groups: [], count: 0, message: `HTTP ${res.status}` }
+    }
+    return res.json()
+  },
+
+  // WhatsApp typeahead: list contacts known to the instance (Hub filter autocomplete)
+  async searchWhatsAppContacts(instanceId: number, query: string, limit: number = 20): Promise<{ success: boolean; contacts: Array<{ jid: string; phone: string; name: string }>; count: number; message?: string }> {
+    const params = new URLSearchParams({ q: query, limit: String(limit) })
+    const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/${instanceId}/wa/contacts?${params.toString()}`)
+    if (!res.ok) {
+      return { success: false, contacts: [], count: 0, message: `HTTP ${res.status}` }
+    }
+    return res.json()
+  },
+
   async logoutMCPInstance(id: number, backup: boolean = true): Promise<LogoutResponse> {
     const res = await authenticatedFetch(
       `${API_URL}/api/mcp/instances/${id}/logout?backup=${backup}`,
