@@ -19,15 +19,35 @@ export default function SetupPage() {
   const [currentModel, setCurrentModel] = useState('')
   const [providerKeysOpen, setProviderKeysOpen] = useState(true)
 
-  const PROVIDERS: Record<string, { label: string; field: string; placeholder: string; models: string[]; defaultModel: string }> = {
-    gemini:     { label: 'Google Gemini',    field: 'gemini_api_key',     placeholder: 'AIza...',    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'], defaultModel: 'gemini-2.5-flash' },
-    openai:     { label: 'OpenAI',           field: 'openai_api_key',     placeholder: 'sk-...',     models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o4-mini'], defaultModel: 'gpt-4o-mini' },
-    anthropic:  { label: 'Anthropic Claude', field: 'anthropic_api_key',  placeholder: 'sk-ant-...', models: ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-6'], defaultModel: 'claude-haiku-4-5' },
-    groq:       { label: 'Groq',             field: 'groq_api_key',       placeholder: 'gsk_...',    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'], defaultModel: 'llama-3.3-70b-versatile' },
-    grok:       { label: 'Grok (xAI)',       field: 'grok_api_key',       placeholder: 'xai-...',    models: ['grok-3-mini', 'grok-3'], defaultModel: 'grok-3-mini' },
-    deepseek:   { label: 'DeepSeek',         field: 'deepseek_api_key',   placeholder: 'sk-...',     models: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat' },
-    openrouter: { label: 'OpenRouter',       field: 'openrouter_api_key', placeholder: 'sk-or-...',  models: ['google/gemini-2.5-flash', 'anthropic/claude-sonnet-4', 'openai/gpt-4o-mini'], defaultModel: 'google/gemini-2.5-flash' },
+  // Per-provider metadata + fallback model list (used if the backend
+  // predefined-models endpoint is unreachable). Live list is fetched
+  // on mount and merged into PROVIDERS_STATE below.
+  const PROVIDERS_META: Record<string, { label: string; field: string; placeholder: string; fallbackModels: string[]; defaultModel: string }> = {
+    gemini:     { label: 'Google Gemini',    field: 'gemini_api_key',     placeholder: 'AIza...',    fallbackModels: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'], defaultModel: 'gemini-2.5-flash' },
+    openai:     { label: 'OpenAI',           field: 'openai_api_key',     placeholder: 'sk-...',     fallbackModels: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o4-mini'], defaultModel: 'gpt-4o-mini' },
+    anthropic:  { label: 'Anthropic Claude', field: 'anthropic_api_key',  placeholder: 'sk-ant-...', fallbackModels: ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-6'], defaultModel: 'claude-haiku-4-5' },
+    groq:       { label: 'Groq',             field: 'groq_api_key',       placeholder: 'gsk_...',    fallbackModels: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'], defaultModel: 'llama-3.3-70b-versatile' },
+    grok:       { label: 'Grok (xAI)',       field: 'grok_api_key',       placeholder: 'xai-...',    fallbackModels: ['grok-3-mini', 'grok-3'], defaultModel: 'grok-3-mini' },
+    deepseek:   { label: 'DeepSeek',         field: 'deepseek_api_key',   placeholder: 'sk-...',     fallbackModels: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat' },
+    openrouter: { label: 'OpenRouter',       field: 'openrouter_api_key', placeholder: 'sk-or-...',  fallbackModels: ['google/gemini-2.5-flash', 'anthropic/claude-sonnet-4', 'openai/gpt-4o-mini'], defaultModel: 'google/gemini-2.5-flash' },
   }
+
+  const [predefinedModels, setPredefinedModels] = useState<Record<string, string[]>>({})
+  // Live-discovered models per provider, keyed by provider — overrides
+  // predefinedModels when populated (user has entered their API key).
+  const [liveModels, setLiveModels] = useState<Record<string, string[]>>({})
+
+  // PROVIDERS is the merged view: liveModels > predefinedModels > fallback.
+  const PROVIDERS = Object.fromEntries(
+    Object.entries(PROVIDERS_META).map(([key, meta]) => {
+      const live = liveModels[key]
+      const predefined = predefinedModels[key]
+      const models = (live && live.length > 0)
+        ? live
+        : (predefined && predefined.length > 0 ? predefined : meta.fallbackModels)
+      return [key, { label: meta.label, field: meta.field, placeholder: meta.placeholder, models, defaultModel: meta.defaultModel }]
+    })
+  ) as Record<string, { label: string; field: string; placeholder: string; models: string[]; defaultModel: string }>
 
   const maskKey = (key: string) => {
     if (key.length <= 6) return key.replace(/./g, '*')
@@ -62,7 +82,26 @@ export default function SetupPage() {
         setChecking(false)
       }
     })
+    // Fetch curated model suggestions (static fallback).
+    // Failure is non-fatal — falls back to hardcoded PROVIDERS_META lists.
+    api.getPredefinedModels().then(setPredefinedModels).catch(() => {})
   }, [router])
+
+  // When the user has typed an API key for the selected provider, debounce
+  // a live /models fetch so the dropdown reflects the provider's current
+  // catalog (e.g. newly-released Gemini 3.x models) without requiring
+  // anyone to hand-update a list.
+  useEffect(() => {
+    const LIVE_SUPPORTED = new Set(['gemini', 'openai', 'groq', 'grok', 'deepseek', 'openrouter'])
+    if (!currentKey.trim() || !LIVE_SUPPORTED.has(selectedProvider)) return
+    const t = setTimeout(async () => {
+      const discovered = await api.discoverModelsRaw(selectedProvider, currentKey.trim())
+      if (discovered.length > 0) {
+        setLiveModels(prev => ({ ...prev, [selectedProvider]: discovered }))
+      }
+    }, 800)
+    return () => clearTimeout(t)
+  }, [currentKey, selectedProvider])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

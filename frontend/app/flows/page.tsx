@@ -60,6 +60,7 @@ import {
   TelegramIcon,
   SlackIcon,
   DiscordIcon,
+  WebhookIcon,
   LightbulbIcon,
   FileTextIcon,
   ClipboardIcon,
@@ -92,11 +93,12 @@ const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; d
   { value: 'slash_command', label: 'Slash Command', Icon: CommandIcon, description: 'Execute a slash command (/scheduler, /memory, etc.)' },
 ]
 
-const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram' | 'slack' | 'discord'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
+const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram' | 'slack' | 'discord' | 'webhook'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
   { value: 'whatsapp', label: 'WhatsApp', Icon: WhatsAppIcon, activeColor: 'text-green-400', enabled: true },
   { value: 'telegram', label: 'Telegram', Icon: TelegramIcon, activeColor: 'text-blue-400', enabled: true },
   { value: 'slack', label: 'Slack', Icon: SlackIcon, activeColor: 'text-purple-400', enabled: true },
   { value: 'discord', label: 'Discord', Icon: DiscordIcon, activeColor: 'text-indigo-400', enabled: true },
+  { value: 'webhook', label: 'Webhook', Icon: WebhookIcon, activeColor: 'text-cyan-400', enabled: true },
 ]
 
 // Summarization output format options
@@ -168,10 +170,13 @@ export default function FlowsPage() {
   // Pagination
   const [currentPage, setCurrentPage] = useState(1)
   const [totalFlows, setTotalFlows] = useState(0)
-  const PAGE_SIZE = 25
+  const [pageSize, setPageSize] = useState<number>(25)
+  const PAGE_SIZE = pageSize
+  const PAGE_SIZE_OPTIONS = [10, 25, 50, 100]
 
   // Selected rows for bulk actions
   const [selectedFlows, setSelectedFlows] = useState<Set<number>>(new Set())
+  const [bulkActionLoading, setBulkActionLoading] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -182,7 +187,7 @@ export default function FlowsPage() {
     return () => {
       window.removeEventListener('tsushin:refresh', handleRefresh)
     }
-  }, [currentPage])
+  }, [currentPage, pageSize])
 
   async function loadData() {
     setLoading(true)
@@ -358,6 +363,83 @@ export default function FlowsPage() {
       console.error('Failed to toggle flow status:', error)
       toast.error('Toggle Failed', 'Failed to toggle flow status')
     }
+  }
+
+  async function handleBulkSetActive(active: boolean) {
+    if (selectedFlows.size === 0) return
+    setBulkActionLoading(true)
+    const ids = Array.from(selectedFlows)
+    let success = 0
+    let failed = 0
+    for (const id of ids) {
+      try {
+        await api.patchFlow(id, { is_active: active })
+        success++
+      } catch (error) {
+        console.error(`Failed to ${active ? 'enable' : 'disable'} flow ${id}:`, error)
+        failed++
+      }
+    }
+    setBulkActionLoading(false)
+    setSelectedFlows(new Set())
+    if (failed === 0) {
+      toast.success(
+        active ? 'Flows Enabled' : 'Flows Disabled',
+        `${success} flow${success === 1 ? '' : 's'} ${active ? 'enabled' : 'disabled'}`
+      )
+    } else {
+      toast.error('Bulk Action Partial', `${success} succeeded, ${failed} failed`)
+    }
+    await loadData()
+  }
+
+  async function handleBulkDelete() {
+    if (selectedFlows.size === 0) return
+    const count = selectedFlows.size
+    if (!confirm(`Delete ${count} flow${count === 1 ? '' : 's'}? This cannot be undone.`)) return
+    setBulkActionLoading(true)
+    const ids = Array.from(selectedFlows)
+    let success = 0
+    let failed = 0
+    let needsForce: number[] = []
+    for (const id of ids) {
+      try {
+        await api.deleteFlow(id, false)
+        success++
+      } catch (error: any) {
+        const errorMessage = error?.message || ''
+        if (errorMessage.includes('existing run')) {
+          needsForce.push(id)
+        } else {
+          console.error(`Failed to delete flow ${id}:`, error)
+          failed++
+        }
+      }
+    }
+    if (needsForce.length > 0) {
+      const forceDelete = confirm(
+        `${needsForce.length} flow${needsForce.length === 1 ? ' has' : 's have'} existing runs.\n\nForce delete ${needsForce.length === 1 ? 'it' : 'them'}? This will also delete all run history.`
+      )
+      if (forceDelete) {
+        for (const id of needsForce) {
+          try {
+            await api.deleteFlow(id, true)
+            success++
+          } catch (forceError) {
+            console.error(`Failed to force delete flow ${id}:`, forceError)
+            failed++
+          }
+        }
+      }
+    }
+    setBulkActionLoading(false)
+    setSelectedFlows(new Set())
+    if (failed === 0) {
+      toast.success('Flows Deleted', `${success} flow${success === 1 ? '' : 's'} deleted`)
+    } else {
+      toast.error('Bulk Delete Partial', `${success} deleted, ${failed} failed`)
+    }
+    await loadData()
   }
 
   async function handleCancelRun(runId: number) {
@@ -547,6 +629,45 @@ export default function FlowsPage() {
             </div>
           ) : (
             <>
+            {/* Bulk Actions Bar */}
+            {selectedFlows.size > 0 && (
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/50 bg-teal-500/5">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-teal-300 font-medium">
+                    {selectedFlows.size} selected
+                  </span>
+                  <button
+                    onClick={() => setSelectedFlows(new Set())}
+                    className="text-xs text-slate-400 hover:text-white transition-colors"
+                  >
+                    Clear selection
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleBulkSetActive(true)}
+                    disabled={bulkActionLoading}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Enable
+                  </button>
+                  <button
+                    onClick={() => handleBulkSetActive(false)}
+                    disabled={bulkActionLoading}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Disable
+                  </button>
+                  <button
+                    onClick={handleBulkDelete}
+                    disabled={bulkActionLoading}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-red-500/30 text-red-300 hover:bg-red-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -713,11 +834,29 @@ export default function FlowsPage() {
             </div>
 
             {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800/50">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800/50 flex-wrap gap-3">
+              <div className="flex items-center gap-4 flex-wrap">
                 <div className="text-sm text-slate-400">
-                  Showing {((currentPage - 1) * PAGE_SIZE) + 1}–{Math.min(currentPage * PAGE_SIZE, totalFlows)} of {totalFlows} flows
+                  Showing {totalFlows === 0 ? 0 : ((currentPage - 1) * PAGE_SIZE) + 1}–{Math.min(currentPage * PAGE_SIZE, totalFlows)} of {totalFlows} flows
                 </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-slate-500">Per page:</label>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value))
+                      setCurrentPage(1)
+                      setSelectedFlows(new Set())
+                    }}
+                    className="px-2 py-1 bg-slate-800/50 border border-slate-700 rounded-lg text-slate-300 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none"
+                  >
+                    {PAGE_SIZE_OPTIONS.map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {totalPages > 1 && (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
@@ -759,8 +898,8 @@ export default function FlowsPage() {
                     Next
                   </button>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </>
           )}
         </div>

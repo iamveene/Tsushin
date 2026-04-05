@@ -99,6 +99,8 @@ from api.routes_agents_protected import router as agents_protected_router
 from api.routes_agent_builder import router as agent_builder_router
 # Phase 8: MCP Instance Management
 from api.routes_mcp_instances import router as mcp_instances_router
+from api.routes_webhook_inbound import router as webhook_inbound_router  # v0.6.0: Webhook-as-Channel
+from api.routes_webhook_instances import router as webhook_instances_router  # v0.6.0: Webhook-as-Channel
 # Playground Feature
 from api.routes_playground import router as playground_router
 # Phase 14.4: Projects
@@ -1253,6 +1255,8 @@ app.include_router(toolbox_router)  # Toolbox Container Management (Custom Tools
 app.include_router(skill_integrations_router, prefix="/api")  # Skill Integrations (Provider Configuration)
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
+app.include_router(webhook_inbound_router)  # v0.6.0: Webhook-as-Channel (public, HMAC-gated)
+app.include_router(webhook_instances_router)  # v0.6.0: Webhook-as-Channel (tenant-scoped CRUD)
 app.include_router(slack_router, prefix="/api/integrations/slack")  # v0.6.0 Item 33: Slack Integration
 
 # v0.6.0 Item 38: Channel Health Monitor
