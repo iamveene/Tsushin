@@ -261,7 +261,20 @@ async def update_alert_config(
         if data.enabled is not None:
             config.is_enabled = data.enabled
         if data.webhook_url is not None:
-            config.webhook_url = data.webhook_url
+            # V060-HLT-005 FIX: Prevent SSRF — block file://, cloud metadata IPs,
+            # localhost, private ranges, and non-http(s) schemes from webhook URLs.
+            if data.webhook_url.strip():
+                from utils.ssrf_validator import validate_url, SSRFValidationError
+                try:
+                    validate_url(data.webhook_url.strip())
+                except SSRFValidationError as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid webhook URL: {e}",
+                    )
+                config.webhook_url = data.webhook_url.strip()
+            else:
+                config.webhook_url = None
         if data.email_recipients is not None:
             config.email_recipients = data.email_recipients
         if data.cooldown_seconds is not None:
@@ -277,6 +290,14 @@ async def update_alert_config(
         )
     except ImportError:
         raise HTTPException(status_code=503, detail="ChannelAlertConfig model not yet available")
+    except HTTPException:
+        # V060-HLT-005: preserve validation errors (e.g., 400 SSRF) instead of
+        # downgrading them to 500 via the generic handler below.
+        try:
+            ctx.db.rollback()
+        except Exception:
+            pass
+        raise
     except Exception as e:
         logger.error(f"Error updating alert config: {e}")
         try:

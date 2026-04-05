@@ -302,6 +302,21 @@ def create_mcp_server(
         except SSRFValidationError as e:
             raise HTTPException(status_code=400, detail=f"Invalid server URL: {e}")
 
+        # V060-SKL-002 FIX: Require HTTPS whenever an authentication credential
+        # (bearer/header/api_key) is attached — bearer tokens over plaintext HTTP
+        # are vulnerable to MITM interception.
+        if data.auth_type and data.auth_type != "none":
+            from urllib.parse import urlparse
+            scheme = (urlparse(data.server_url).scheme or "").lower()
+            if scheme != "https":
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "MCP servers with authentication (bearer/header/api_key) "
+                        "must use HTTPS — plaintext HTTP transmits credentials in the clear."
+                    ),
+                )
+
     # Check for duplicate server name within tenant
     existing = db.query(MCPServerConfig).filter(
         MCPServerConfig.tenant_id == ctx.tenant_id,
@@ -404,6 +419,20 @@ def update_mcp_server(
         if data.auth_type not in VALID_AUTH_TYPES:
             raise HTTPException(status_code=400, detail=f"Invalid auth_type")
         config.auth_type = data.auth_type
+
+    # V060-SKL-002 FIX: After applying server_url/auth_type updates, enforce
+    # HTTPS whenever the server has an authentication credential attached.
+    if config.server_url and config.auth_type and config.auth_type != "none":
+        from urllib.parse import urlparse
+        scheme = (urlparse(config.server_url).scheme or "").lower()
+        if scheme != "https":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "MCP servers with authentication (bearer/header/api_key) "
+                    "must use HTTPS — plaintext HTTP transmits credentials in the clear."
+                ),
+            )
 
     if data.auth_token is not None:
         if data.auth_token:

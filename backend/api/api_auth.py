@@ -175,6 +175,26 @@ def _resolve_user_jwt(payload: dict, db: Session) -> ApiCaller:
             detail="Account is disabled",
         )
 
+    # V060-API-004 FIX: Reject tokens issued before the last password change.
+    # Parity with auth_dependencies.get_current_user (SEC-001 / BUG-134) —
+    # without this check the /api/v1/* surface accepts replayed pre-reset JWTs.
+    if user.password_changed_at:
+        token_iat = payload.get("iat")
+        if token_iat:
+            try:
+                token_issued = datetime.utcfromtimestamp(token_iat)
+            except (TypeError, ValueError, OSError):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token issued-at claim",
+                )
+            if token_issued < user.password_changed_at:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token invalidated by password change. Please log in again.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
     # Get user permissions
     user_permissions = set(auth_service.get_user_permissions(user.id))
 
