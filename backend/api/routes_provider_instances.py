@@ -95,6 +95,12 @@ class TestConnectionRawRequest(BaseModel):
     api_key: Optional[str] = None
 
 
+class DiscoverModelsRawRequest(BaseModel):
+    vendor: str
+    api_key: str
+    base_url: Optional[str] = None
+
+
 class UrlValidationRequest(BaseModel):
     url: str
     vendor: Optional[str] = None
@@ -128,10 +134,16 @@ PREDEFINED_MODELS = {
         "claude-3-opus-20240229", "claude-3-haiku-20240307",
     ],
     "gemini": [
-        # Live discovery is used when Auto-detect runs; this list is just
-        # a pre-save suggestion fallback. Google publishes new Gemini IDs
-        # frequently — Auto-detect after saving to see the current set.
-        "gemini-2.5-flash", "gemini-2.5-pro",
+        # Static fallback only — used when the live /v1beta/models call fails
+        # or no API key is available yet. The modal and setup page call
+        # /provider-instances/discover-models-raw with the user's key to
+        # refresh this list live from Google.
+        # Gemini 3.x (preview):
+        "gemini-3.1-pro-preview", "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+        # Gemini 2.5 (stable):
+        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+        # Gemini 2.0 / 1.5 (legacy):
         "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
     ],
     "groq": [
@@ -219,6 +231,95 @@ def get_predefined_models():
     model-name autocomplete suggestions.
     """
     return {"models": PREDEFINED_MODELS}
+
+
+@router.post("/provider-instances/discover-models-raw")
+async def discover_models_raw(data: DiscoverModelsRawRequest):
+    """
+    Live-discover models from a provider endpoint using a raw API key
+    (no saved instance required). Public endpoint — intended to be called
+    during setup and during pre-save modal configuration, so the model
+    dropdown reflects what the provider actually exposes right now.
+
+    The supplied API key is used only for this single outbound request
+    and is never stored or logged.
+
+    Supports: gemini, openai, groq, grok, deepseek, openrouter (any
+    OpenAI-compatible /models endpoint). Falls back to {"models": []}
+    on failure — callers should keep their static suggestions as a
+    secondary fallback.
+    """
+    vendor = data.vendor.lower()
+    if vendor not in VALID_VENDORS:
+        raise HTTPException(status_code=400, detail="Invalid vendor")
+    if not data.api_key or not data.api_key.strip():
+        raise HTTPException(status_code=400, detail="API key required")
+
+    # Default base URLs per vendor (mirrors frontend VENDOR_DEFAULT_URLS)
+    VENDOR_BASE_URLS = {
+        "gemini": "https://generativelanguage.googleapis.com",
+        "openai": "https://api.openai.com/v1",
+        "groq": "https://api.groq.com/openai/v1",
+        "grok": "https://api.x.ai/v1",
+        "deepseek": "https://api.deepseek.com/v1",
+        "openrouter": "https://openrouter.ai/api/v1",
+    }
+    base_url = (data.base_url or VENDOR_BASE_URLS.get(vendor) or "").rstrip("/")
+    if not base_url:
+        return {"models": []}
+
+    # SSRF validate
+    from utils.ssrf_validator import validate_url, SSRFValidationError
+    try:
+        validate_url(base_url)
+    except SSRFValidationError as e:
+        raise HTTPException(status_code=400, detail=f"SSRF blocked: {e}")
+
+    import httpx
+    models: List[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if vendor == "gemini":
+                headers = {"x-goog-api-key": data.api_key}
+                page_token = None
+                while True:
+                    params = {"pageSize": 100}
+                    if page_token:
+                        params["pageToken"] = page_token
+                    resp = await client.get(
+                        f"{base_url}/v1beta/models", headers=headers, params=params
+                    )
+                    if resp.status_code != 200:
+                        return {"models": []}
+                    body = resp.json()
+                    for m in body.get("models", []):
+                        name = m.get("name", "")
+                        methods = m.get("supportedGenerationMethods", [])
+                        if not name or "generateContent" not in methods:
+                            continue
+                        model_id = name[len("models/"):] if name.startswith("models/") else name
+                        models.append(model_id)
+                    page_token = body.get("nextPageToken")
+                    if not page_token:
+                        break
+                models = sorted(set(models))
+            else:
+                # OpenAI-compatible /models
+                headers = {"Authorization": f"Bearer {data.api_key}"}
+                resp = await client.get(f"{base_url}/models", headers=headers)
+                if resp.status_code != 200:
+                    return {"models": []}
+                body = resp.json()
+                models = sorted(
+                    {m.get("id") for m in body.get("data", []) if isinstance(m, dict) and m.get("id")}
+                )
+    except (httpx.ConnectError, httpx.TimeoutException):
+        return {"models": []}
+    except Exception as e:
+        logger.warning(f"Raw model discovery failed for {vendor}: {e}")
+        return {"models": []}
+
+    return {"models": models}
 
 
 @router.get("/provider-instances", response_model=List[ProviderInstanceResponse])

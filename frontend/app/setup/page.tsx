@@ -33,12 +33,18 @@ export default function SetupPage() {
   }
 
   const [predefinedModels, setPredefinedModels] = useState<Record<string, string[]>>({})
+  // Live-discovered models per provider, keyed by provider — overrides
+  // predefinedModels when populated (user has entered their API key).
+  const [liveModels, setLiveModels] = useState<Record<string, string[]>>({})
 
-  // PROVIDERS is the merged view: backend list takes precedence, fallback kept.
+  // PROVIDERS is the merged view: liveModels > predefinedModels > fallback.
   const PROVIDERS = Object.fromEntries(
     Object.entries(PROVIDERS_META).map(([key, meta]) => {
-      const live = predefinedModels[key]
-      const models = live && live.length > 0 ? live : meta.fallbackModels
+      const live = liveModels[key]
+      const predefined = predefinedModels[key]
+      const models = (live && live.length > 0)
+        ? live
+        : (predefined && predefined.length > 0 ? predefined : meta.fallbackModels)
       return [key, { label: meta.label, field: meta.field, placeholder: meta.placeholder, models, defaultModel: meta.defaultModel }]
     })
   ) as Record<string, { label: string; field: string; placeholder: string; models: string[]; defaultModel: string }>
@@ -76,10 +82,26 @@ export default function SetupPage() {
         setChecking(false)
       }
     })
-    // Fetch curated model suggestions (includes live Gemini list via backend).
+    // Fetch curated model suggestions (static fallback).
     // Failure is non-fatal — falls back to hardcoded PROVIDERS_META lists.
     api.getPredefinedModels().then(setPredefinedModels).catch(() => {})
   }, [router])
+
+  // When the user has typed an API key for the selected provider, debounce
+  // a live /models fetch so the dropdown reflects the provider's current
+  // catalog (e.g. newly-released Gemini 3.x models) without requiring
+  // anyone to hand-update a list.
+  useEffect(() => {
+    const LIVE_SUPPORTED = new Set(['gemini', 'openai', 'groq', 'grok', 'deepseek', 'openrouter'])
+    if (!currentKey.trim() || !LIVE_SUPPORTED.has(selectedProvider)) return
+    const t = setTimeout(async () => {
+      const discovered = await api.discoverModelsRaw(selectedProvider, currentKey.trim())
+      if (discovered.length > 0) {
+        setLiveModels(prev => ({ ...prev, [selectedProvider]: discovered }))
+      }
+    }, 800)
+    return () => clearTimeout(t)
+  }, [currentKey, selectedProvider])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

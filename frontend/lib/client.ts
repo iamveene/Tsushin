@@ -6559,6 +6559,21 @@ export const api = {
     return data.models || {}
   },
 
+  async discoverModelsRaw(vendor: string, apiKey: string, baseUrl?: string): Promise<string[]> {
+    // Live-discover models from a provider using a raw API key (no saved
+    // instance). Backend does a single outbound request and returns the
+    // current model list. Returns [] on any failure — caller should keep
+    // their static suggestions as a fallback.
+    const res = await fetch(`${API_URL}/api/provider-instances/discover-models-raw`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vendor, api_key: apiKey, base_url: baseUrl }),
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    return data.models || []
+  },
+
   async discoverProviderModels(id: number): Promise<string[]> {
     const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/discover-models`, {
       method: 'POST',
