@@ -229,12 +229,15 @@ class FlowStepHandler:
         parser = TemplateParser(data)
         return parser.render(template)
 
-    def _resolve_contact_to_phone(self, identifier: str) -> Optional[str]:
+    def _resolve_contact_to_phone(self, identifier: str, tenant_id: Optional[str] = None) -> Optional[str]:
         """
         Resolve a contact identifier (friendly name, @mention) to phone number or group JID.
 
         Args:
             identifier: Contact identifier (e.g., "@Alice", "Alice", "+5500000000001", "120363...@g.us")
+            tenant_id: V060-CHN-006 follow-up — scope contact lookups to this tenant
+                so a flow step for Tenant A can't resolve "@Alice" to Tenant B's
+                contact. Callers should derive this from flow_run.tenant_id.
 
         Returns:
             Phone number or group JID if found, None otherwise
@@ -253,9 +256,9 @@ class FlowStepHandler:
         if identifier.replace("+", "").replace(" ", "").replace("-", "").isdigit():
             return identifier.replace(" ", "").replace("-", "")
 
-        # Try to resolve as contact identifier
+        # Try to resolve as contact identifier (tenant-scoped — V060-CHN-006)
         try:
-            contact_service = ContactService(self.db)
+            contact_service = ContactService(self.db, tenant_id=tenant_id)
             contact = contact_service.resolve_identifier(identifier)
 
             if contact:
@@ -375,8 +378,10 @@ class NotificationStepHandler(FlowStepHandler):
         message = self._replace_variables(message_template, enriched_data)
 
         if channel == "whatsapp":
-            # Resolve contact identifier (e.g., "@alice") to phone number
-            resolved_recipient = self._resolve_contact_to_phone(recipient)
+            # Resolve contact identifier (e.g., "@alice") to phone number — tenant-scoped (V060-CHN-006)
+            resolved_recipient = self._resolve_contact_to_phone(
+                recipient, tenant_id=(flow_run.tenant_id if flow_run else None)
+            )
             if not resolved_recipient:
                 logger.error(f"Could not resolve recipient '{recipient}' to a phone number")
                 return {
@@ -531,10 +536,11 @@ class MessageStepHandler(FlowStepHandler):
             }
 
         if channel == "whatsapp":
-            # Resolve contact identifiers to phone numbers
+            # Resolve contact identifiers to phone numbers — tenant-scoped (V060-CHN-006)
+            _flow_tenant = flow_run.tenant_id if flow_run else None
             resolved_recipients = []
             for recipient in recipients:
-                resolved = self._resolve_contact_to_phone(recipient)
+                resolved = self._resolve_contact_to_phone(recipient, tenant_id=_flow_tenant)
                 if resolved:
                     resolved_recipients.append(resolved)
                 else:

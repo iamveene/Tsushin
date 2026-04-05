@@ -16,8 +16,17 @@ class ContactService:
     Provides mention detection and user recognition capabilities.
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, tenant_id: Optional[str] = None):
+        """
+        V060-CHN-006: tenant_id scopes all contact queries to a single tenant.
+        Optional for backwards-compat with legacy call sites, but queries that
+        touch Contact/ContactChannelMapping will ALWAYS filter by tenant_id
+        when it is set. When unset, queries remain broad — callers that haven't
+        been upgraded yet preserve legacy behavior (log a warning if caller can
+        access other tenants' contacts).
+        """
         self.db = db
+        self.tenant_id = tenant_id
         # CACHE REMOVED: Query database directly for reliability
         # No more stale data issues after updates
 
@@ -25,19 +34,25 @@ class ContactService:
         """No-op: Cache removed, queries are always fresh"""
         pass
 
+    def _apply_tenant_filter(self, query):
+        """V060-CHN-006: Scope Contact queries to self.tenant_id when set."""
+        if self.tenant_id:
+            return query.filter(Contact.tenant_id == self.tenant_id)
+        return query
+
     def get_agent_contacts(self) -> List[Contact]:
         """Get all active agent contacts"""
-        return self.db.query(Contact).filter(
+        return self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.role == "agent"
-        ).all()
+        )).all()
 
     def get_user_contacts(self) -> List[Contact]:
         """Get all active user contacts"""
-        return self.db.query(Contact).filter(
+        return self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.role == "user"
-        ).all()
+        )).all()
 
     def get_dm_trigger_contacts(self) -> List[Contact]:
         """
@@ -47,10 +62,10 @@ class ContactService:
         Returns:
             List of Contact objects with is_dm_trigger enabled
         """
-        return self.db.query(Contact).filter(
+        return self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.is_dm_trigger == True
-        ).all()
+        )).all()
 
     def identify_sender(self, sender: str, sender_name: str = None) -> Optional[Contact]:
         """
@@ -66,19 +81,19 @@ class ContactService:
         # Normalize sender (remove + prefix)
         sender_normalized = sender.lstrip("+")
 
-        # Search by phone number (query database directly)
-        contact = self.db.query(Contact).filter(
+        # Search by phone number (query database directly) — V060-CHN-006 tenant scoped
+        contact = self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.phone_number.like(f"%{sender_normalized}")
-        ).first()
+        )).first()
         if contact:
             return contact
 
-        # Search by WhatsApp ID (query database directly)
-        contact = self.db.query(Contact).filter(
+        # Search by WhatsApp ID (query database directly) — V060-CHN-006 tenant scoped
+        contact = self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.whatsapp_id == sender_normalized
-        ).first()
+        )).first()
         if contact:
             return contact
 
@@ -90,22 +105,26 @@ class ContactService:
         Lookup contact via ContactChannelMapping table.
         Handles both exact matches (Discord snowflake) and composite
         identifiers (Slack workspace_id:user_id).
+        V060-CHN-006: scoped to self.tenant_id when set.
         """
         if not identifier:
             return None
 
-        mapping = self.db.query(ContactChannelMapping).filter(
+        mapping_q = self.db.query(ContactChannelMapping).filter(
             or_(
                 ContactChannelMapping.channel_identifier == identifier,
                 ContactChannelMapping.channel_identifier.like(f"%:{identifier}")
             )
-        ).first()
+        )
+        if self.tenant_id:
+            mapping_q = mapping_q.filter(ContactChannelMapping.tenant_id == self.tenant_id)
+        mapping = mapping_q.first()
 
         if mapping:
-            contact = self.db.query(Contact).filter(
+            contact = self._apply_tenant_filter(self.db.query(Contact).filter(
                 Contact.id == mapping.contact_id,
                 Contact.is_active == True
-            ).first()
+            )).first()
             return contact
 
         return None
@@ -146,8 +165,10 @@ class ContactService:
         """
         mention_normalized = mention.lstrip("+").lower()
 
-        # Get all active contacts (query database directly)
-        contacts = self.db.query(Contact).filter(Contact.is_active == True).all()
+        # Get all active contacts (query database directly) — V060-CHN-006 tenant scoped
+        contacts = self._apply_tenant_filter(
+            self.db.query(Contact).filter(Contact.is_active == True)
+        ).all()
 
         for contact in contacts:
             # Check friendly name (case-insensitive)

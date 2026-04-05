@@ -269,6 +269,41 @@ async def _scan_instructions(instructions: str, db, tenant_id: str = None, senti
         return {"scan_status": "pending", "last_scan_result": None}
 
 
+async def _scan_skill_content(
+    instructions: Optional[str],
+    script_content: Optional[str],
+    script_language: Optional[str],
+    db,
+    tenant_id: str = None,
+    sentinel_profile_id: int = None,
+) -> dict:
+    """V060-SKL-001 FIX: Scan ANY skill content (instructions or script_content)
+    via Sentinel. Previously script_content was never sent to Sentinel — only a
+    non-blocking ShellSecurityService advisory ran — leaving script skills
+    approved as 'clean' even when script_content contained malicious code.
+
+    When both instructions and script are present, content is merged with
+    section markers so Sentinel's LLM analyzer sees the full attack surface in
+    one call. The whole blob is analyzed via analyze_skill_instructions()
+    which is tuned for prompt-injection / exfiltration / malware patterns —
+    the same class of threats that apply to executable scripts.
+    """
+    sections = []
+    if instructions and instructions.strip():
+        sections.append(f"## Skill Instructions\n{instructions}")
+    if script_content and script_content.strip():
+        lang = script_language or "script"
+        sections.append(f"## Executable {lang} Script\n```{lang}\n{script_content}\n```")
+    if not sections:
+        # Nothing to scan — the skill has no content. Flag as clean (no
+        # content surface means no scannable threat surface).
+        return {"scan_status": "clean", "last_scan_result": None}
+    combined = "\n\n".join(sections)
+    return await _scan_instructions(
+        combined, db, tenant_id=tenant_id, sentinel_profile_id=sentinel_profile_id
+    )
+
+
 def _snapshot_skill(skill: CustomSkill) -> dict:
     """Create a JSON snapshot of the current skill state for versioning."""
     return {
@@ -433,15 +468,23 @@ async def create_custom_skill(
     db.add(skill)
     db.flush()
 
-    # Run Sentinel scan on instructions if provided
-    if payload.instructions_md:
-        scan_result = await _scan_instructions(payload.instructions_md, db, tenant_id=ctx.tenant_id, sentinel_profile_id=payload.sentinel_profile_id)
-        skill.scan_status = scan_result["scan_status"]
-        skill.last_scan_result = scan_result.get("last_scan_result")
-    else:
-        skill.scan_status = 'clean'
+    # V060-SKL-001 FIX: Run Sentinel on BOTH instructions AND script_content
+    # (merged if both present) so executable scripts can't sneak through as
+    # 'clean' just because instructions_md is empty.
+    scan_result = await _scan_skill_content(
+        instructions=payload.instructions_md,
+        script_content=payload.script_content,
+        script_language=payload.script_language,
+        db=db,
+        tenant_id=ctx.tenant_id,
+        sentinel_profile_id=payload.sentinel_profile_id,
+    )
+    skill.scan_status = scan_result["scan_status"]
+    skill.last_scan_result = scan_result.get("last_scan_result")
 
-    # Security H-1: Scan script skills for network imports (non-blocking advisory)
+    # Security H-1: Script network-import advisory (augments Sentinel, not a
+    # substitute). Annotates last_scan_result with warnings even when Sentinel
+    # returned 'clean', so operators can see import-level findings.
     if payload.skill_type_variant == 'script' and payload.script_content:
         from services.shell_security_service import ShellSecurityService
         network_warnings = ShellSecurityService.scan_for_network_imports(payload.script_content)
@@ -558,9 +601,18 @@ async def update_custom_skill(
 
     skill.updated_at = datetime.utcnow()
 
-    # Re-scan if instructions changed
-    if instructions_changed and skill.instructions_md:
-        scan_result = await _scan_instructions(skill.instructions_md, db, tenant_id=ctx.tenant_id, sentinel_profile_id=skill.sentinel_profile_id)
+    # V060-SKL-001 FIX: Re-run Sentinel whenever instructions OR script changed,
+    # scanning both current values together so script_content mutations are
+    # always assessed (previously only an advisory for network imports ran).
+    if instructions_changed or script_changed:
+        scan_result = await _scan_skill_content(
+            instructions=skill.instructions_md,
+            script_content=skill.script_content,
+            script_language=skill.script_language,
+            db=db,
+            tenant_id=ctx.tenant_id,
+            sentinel_profile_id=skill.sentinel_profile_id,
+        )
         skill.scan_status = scan_result["scan_status"]
         skill.last_scan_result = scan_result.get("last_scan_result")
 

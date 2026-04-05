@@ -104,7 +104,15 @@ class QueueWorker:
             await asyncio.sleep(self.poll_interval)
 
     async def _poll_and_dispatch(self):
-        """Poll for pending items and dispatch processing tasks."""
+        """Poll for pending items and dispatch processing tasks.
+
+        V060-HLT-003: Before spawning a processing task for a (tenant, agent)
+        pair, peek at the next pending item's channel/instance and consult
+        ChannelHealthService.is_circuit_open(). If the circuit is still OPEN
+        we DO NOT claim/dispatch — we leave the item pending and poll again
+        next tick. This prevents the infinite re-queue loop where router.py's
+        CB gate re-enqueued every drained item while CB stayed OPEN.
+        """
         db = self.SessionLocal()
         try:
             from services.message_queue_service import MessageQueueService
@@ -128,6 +136,11 @@ class QueueWorker:
                         # Clean up completed task
                         del self._active_tasks[task_key]
 
+                # V060-HLT-003: Peek at the next pending item for this agent
+                # and check its channel CB. Defer dispatch if OPEN.
+                if self._should_defer_for_circuit_breaker(db, tenant_id, agent_id):
+                    continue
+
                 # Create a new processing task for this agent
                 task = asyncio.create_task(
                     self._process_agent_queue(tenant_id, agent_id)
@@ -136,6 +149,79 @@ class QueueWorker:
 
         finally:
             db.close()
+
+    def _should_defer_for_circuit_breaker(self, db: Session, tenant_id: str, agent_id: int) -> bool:
+        """V060-HLT-003: Return True when the next pending item's channel CB
+        is OPEN — in that case we skip dispatch this tick and let the item
+        remain queued. Returns False on any lookup failure (fail-open so
+        legitimate traffic isn't held hostage by a bug in this gate)."""
+        try:
+            from models import MessageQueue, Agent
+            from services.channel_health_service import ChannelHealthService
+
+            chs = ChannelHealthService.get_instance()
+            if chs is None:
+                return False
+
+            # Peek at the highest-priority oldest pending item for this pair.
+            item = (
+                db.query(MessageQueue)
+                .filter(
+                    MessageQueue.tenant_id == tenant_id,
+                    MessageQueue.agent_id == agent_id,
+                    MessageQueue.status == "pending",
+                )
+                .order_by(MessageQueue.priority.desc(), MessageQueue.id.asc())
+                .first()
+            )
+            if not item:
+                return False
+
+            channel = item.channel
+            # Playground/api channels are in-process — no external CB applies.
+            if channel not in ("whatsapp", "telegram"):
+                return False
+
+            # Resolve the instance_id for the CB key.
+            instance_id: Optional[int] = None
+            payload = item.payload or {}
+            if channel == "whatsapp":
+                instance_id = payload.get("mcp_instance_id")
+                if not instance_id:
+                    # Use the agent's explicit whatsapp_integration_id FK rather
+                    # than a blind .first() lookup — multi-instance tenants would
+                    # otherwise get arbitrary CB decisions.
+                    agent = db.query(Agent).filter(
+                        Agent.id == agent_id,
+                        Agent.tenant_id == tenant_id,
+                    ).first()
+                    if agent and agent.whatsapp_integration_id:
+                        instance_id = agent.whatsapp_integration_id
+            elif channel == "telegram":
+                instance_id = payload.get("instance_id") or payload.get("telegram_instance_id")
+                if not instance_id:
+                    # Same fix for telegram: prefer the agent's explicit FK over
+                    # a tenant-wide .first() lookup.
+                    agent = db.query(Agent).filter(
+                        Agent.id == agent_id,
+                        Agent.tenant_id == tenant_id,
+                    ).first()
+                    if agent and getattr(agent, "telegram_integration_id", None):
+                        instance_id = agent.telegram_integration_id
+
+            if not instance_id:
+                return False  # Can't identify instance → don't block dispatch
+
+            if chs.is_circuit_open(channel, instance_id):
+                logger.info(
+                    f"[V060-HLT-003] Deferring dispatch: CB OPEN for {channel}/{instance_id} "
+                    f"(tenant={tenant_id}, agent={agent_id}, pending_item={item.id})"
+                )
+                return True
+            return False
+        except Exception as e:
+            logger.debug(f"_should_defer_for_circuit_breaker: lookup failed, not deferring: {e}")
+            return False
 
     async def _process_agent_queue(self, tenant_id: str, agent_id: int):
         """
@@ -179,6 +265,12 @@ class QueueWorker:
                         result = await self._process_webhook_message(db, item)
                     elif channel == "api":
                         result = await self._process_api_message(db, item)
+                    elif channel == "slack":
+                        # V060-CHN-002
+                        await self._process_slack_message(db, item)
+                    elif channel == "discord":
+                        # V060-CHN-002
+                        await self._process_discord_message(db, item)
                     else:
                         raise ValueError(f"Unknown channel: {channel}")
 
@@ -286,7 +378,8 @@ class QueueWorker:
         mcp_instance_id = payload.get("mcp_instance_id")
 
         agent_router = AgentRouter(
-            db, config_dict, mcp_reader=None, mcp_instance_id=mcp_instance_id
+            db, config_dict, mcp_reader=None, mcp_instance_id=mcp_instance_id,
+            tenant_id=item.tenant_id,  # V060-CHN-006
         )
         await agent_router.route_message(message, "queue")
 
@@ -323,7 +416,114 @@ class QueueWorker:
         }
 
         agent_router = AgentRouter(
-            db, config_dict, mcp_reader=None, telegram_instance_id=instance_id
+            db, config_dict, mcp_reader=None, telegram_instance_id=instance_id,
+            tenant_id=item.tenant_id,  # V060-CHN-006
+        )
+        await agent_router.route_message(message, "queue")
+
+    async def _process_slack_message(self, db: Session, item):
+        """V060-CHN-002: Process a queued inbound Slack event through AgentRouter."""
+        from models import Config
+        from agent.router import AgentRouter
+        import json as json_lib
+
+        payload = item.payload or {}
+        event = payload.get("event", {})
+        slack_integration_id = payload.get("slack_integration_id")
+
+        config = db.query(Config).first()
+        if not config:
+            raise Exception("No config found for Slack processing")
+
+        contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
+        config_dict = {
+            "model_provider": config.model_provider,
+            "model_name": config.model_name,
+            "system_prompt": config.system_prompt,
+            "memory_size": config.memory_size,
+            "contact_mappings": contact_mappings,
+            "maintenance_mode": config.maintenance_mode,
+            "maintenance_message": config.maintenance_message,
+            "context_message_count": config.context_message_count,
+            "context_char_limit": config.context_char_limit,
+            "enable_semantic_search": getattr(config, "enable_semantic_search", False),
+            "semantic_search_results": getattr(config, "semantic_search_results", 5),
+            "semantic_similarity_threshold": getattr(config, "semantic_similarity_threshold", 0.3),
+        }
+
+        # Normalize Slack event into router message envelope
+        message = {
+            "channel": "slack",
+            "sender": f"{payload.get('team_id', '')}:{event.get('user', '')}",
+            "sender_name": event.get("user", ""),
+            "body": event.get("text", ""),
+            "to": event.get("channel"),  # Slack channel ID to reply to
+            "thread_ts": event.get("thread_ts") or event.get("ts"),
+            "tenant_id": item.tenant_id,
+            "agent_id": item.agent_id,
+            "slack_integration_id": slack_integration_id,
+        }
+
+        agent_router = AgentRouter(
+            db, config_dict, mcp_reader=None,
+            tenant_id=item.tenant_id,
+            slack_integration_id=slack_integration_id,
+        )
+        await agent_router.route_message(message, "queue")
+
+    async def _process_discord_message(self, db: Session, item):
+        """V060-CHN-002: Process a queued inbound Discord interaction through AgentRouter."""
+        from models import Config
+        from agent.router import AgentRouter
+        import json as json_lib
+
+        payload = item.payload or {}
+        interaction = payload.get("interaction", {})
+        discord_integration_id = payload.get("discord_integration_id")
+
+        config = db.query(Config).first()
+        if not config:
+            raise Exception("No config found for Discord processing")
+
+        contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
+        config_dict = {
+            "model_provider": config.model_provider,
+            "model_name": config.model_name,
+            "system_prompt": config.system_prompt,
+            "memory_size": config.memory_size,
+            "contact_mappings": contact_mappings,
+            "maintenance_mode": config.maintenance_mode,
+            "maintenance_message": config.maintenance_message,
+            "context_message_count": config.context_message_count,
+            "context_char_limit": config.context_char_limit,
+            "enable_semantic_search": getattr(config, "enable_semantic_search", False),
+            "semantic_search_results": getattr(config, "semantic_search_results", 5),
+            "semantic_similarity_threshold": getattr(config, "semantic_similarity_threshold", 0.3),
+        }
+
+        user = (interaction.get("member") or {}).get("user") or interaction.get("user") or {}
+        data = interaction.get("data") or {}
+        # Pull slash-command text or options
+        command_text = data.get("name", "") or ""
+        for opt in data.get("options") or []:
+            if opt.get("type") == 3 and opt.get("value"):  # STRING option
+                command_text += f" {opt.get('value')}"
+
+        message = {
+            "channel": "discord",
+            "sender": f"discord:{user.get('id', '')}",
+            "sender_name": user.get("username", ""),
+            "body": command_text.strip(),
+            "to": interaction.get("channel_id"),
+            "tenant_id": item.tenant_id,
+            "agent_id": item.agent_id,
+            "discord_integration_id": discord_integration_id,
+        }
+
+        agent_router = AgentRouter(
+            db, config_dict, mcp_reader=None,
+            tenant_id=item.tenant_id,
+            discord_integration_id=discord_integration_id,
         )
         await agent_router.route_message(message, "queue")
 

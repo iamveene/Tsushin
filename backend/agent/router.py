@@ -79,11 +79,17 @@ def _determine_agent_run_status(result: Dict) -> str:
 
 
 class AgentRouter:
-    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None, webhook_instance_id: int = None):
+    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None, tenant_id: str = None, slack_integration_id: int = None, discord_integration_id: int = None, webhook_instance_id: int = None):
         self.db = db_session
         self.config = config
         self.contact_mappings = config.get("contact_mappings", {})
         self.logger = logging.getLogger(__name__)
+
+        # V060-CHN-006: Track tenant_id so CachedContactService (and any other
+        # tenant-scoped service spun up from the router) can filter by tenant.
+        # Fall back to config['tenant_id'] if caller didn't pass it explicitly,
+        # to preserve back-compat with legacy call sites during rollout.
+        self.tenant_id = tenant_id or config.get("tenant_id")
 
         # Phase 10: Track which MCP instance this router serves for channel-based filtering
         self.mcp_instance_id = mcp_instance_id
@@ -93,7 +99,8 @@ class AgentRouter:
         self.webhook_instance_id = webhook_instance_id
 
         # Phase 6.11.3: Initialize CachedContactService for faster lookups
-        self.contact_service = CachedContactService(db_session)
+        # V060-CHN-006: Pass tenant_id to prevent cross-tenant contact leakage.
+        self.contact_service = CachedContactService(db_session, tenant_id=self.tenant_id)
 
         # Phase 7.2: Initialize TokenTracker for usage analytics
         self.token_tracker = TokenTracker(db_session)
@@ -171,6 +178,15 @@ class AgentRouter:
             "playground",
             PlaygroundChannelAdapter(self.logger)
         )
+
+        # V060-CHN-001: Register Slack/Discord adapters so outbound routing
+        # can actually deliver to those channels. Previously only whatsapp,
+        # telegram, and playground were registered — any agent flow targeting
+        # slack/discord failed silently. Resolution order: explicit
+        # integration_id → tenant's single active integration.
+        self._register_slack_adapter(db_session, slack_integration_id)
+        self._register_discord_adapter(db_session, discord_integration_id)
+
         self.logger.info(f"ChannelRegistry initialized with channels: {self.channel_registry.list_channels()}")
 
         # Phase 5.0: Initialize SkillManager for audio transcription, TTS, etc.
@@ -184,7 +200,7 @@ class AgentRouter:
 
         # Phase 6.4 Week 3: Initialize SchedulerService for conversation detection
         # Item 11.4: Pass memory_manager to SchedulerService for semantic memory in conversations
-        self.scheduler_service = SchedulerService(db_session, memory_manager=self.memory_manager, token_tracker=self.token_tracker)
+        self.scheduler_service = SchedulerService(db_session, memory_manager=self.memory_manager, token_tracker=self.token_tracker, tenant_id=self.tenant_id)  # V060-CHN-006 follow-up
         self.logger.info("SchedulerService initialized for conversation routing with memory integration")
 
         # Phase 4.8: Ring buffer memory loading deprecated
@@ -1127,6 +1143,113 @@ class AgentRouter:
             self.logger.error(f"Error finding active conversation: {e}", exc_info=True)
             return None
 
+    def _register_slack_adapter(self, db_session, slack_integration_id):
+        """V060-CHN-001: Register a SlackChannelAdapter with the registry.
+
+        Resolution order:
+        1. explicit slack_integration_id argument
+        2. tenant's single active SlackIntegration (if exactly one active)
+        """
+        try:
+            from models import SlackIntegration
+            from channels.slack.adapter import SlackChannelAdapter
+            from hub.security import TokenEncryption
+            from services.encryption_key_service import get_slack_encryption_key
+
+            integration = None
+            if slack_integration_id:
+                integration = db_session.query(SlackIntegration).filter(
+                    SlackIntegration.id == slack_integration_id,
+                    SlackIntegration.is_active == True,
+                ).first()
+            elif self.tenant_id:
+                actives = db_session.query(SlackIntegration).filter(
+                    SlackIntegration.tenant_id == self.tenant_id,
+                    SlackIntegration.is_active == True,
+                ).all()
+                if len(actives) == 1:
+                    integration = actives[0]
+                elif len(actives) > 1:
+                    self.logger.info(
+                        f"[CHN-001] Tenant {self.tenant_id} has {len(actives)} active "
+                        "Slack integrations — skipping auto-registration (pass "
+                        "slack_integration_id explicitly to select one)."
+                    )
+                    return
+
+            if not integration:
+                return
+
+            key = get_slack_encryption_key(db_session)
+            if not key:
+                self.logger.warning("[CHN-001] Slack encryption key not configured — cannot register adapter")
+                return
+            enc = TokenEncryption(key.encode())
+            try:
+                bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+            except Exception as e:
+                self.logger.error(f"[CHN-001] Slack bot_token decrypt failed for integration {integration.id}: {e}")
+                return
+
+            self.channel_registry.register("slack", SlackChannelAdapter(bot_token, self.logger))
+            self.logger.info(
+                f"[CHN-001] Registered Slack adapter (integration_id={integration.id}, workspace={integration.workspace_name})"
+            )
+        except Exception as e:
+            self.logger.warning(f"[CHN-001] Slack adapter registration skipped: {e}")
+
+    def _register_discord_adapter(self, db_session, discord_integration_id):
+        """V060-CHN-001: Register a DiscordChannelAdapter with the registry.
+
+        Resolution order identical to Slack.
+        """
+        try:
+            from models import DiscordIntegration
+            from channels.discord.adapter import DiscordChannelAdapter
+            from hub.security import TokenEncryption
+            from services.encryption_key_service import get_discord_encryption_key
+
+            integration = None
+            if discord_integration_id:
+                integration = db_session.query(DiscordIntegration).filter(
+                    DiscordIntegration.id == discord_integration_id,
+                    DiscordIntegration.is_active == True,
+                ).first()
+            elif self.tenant_id:
+                actives = db_session.query(DiscordIntegration).filter(
+                    DiscordIntegration.tenant_id == self.tenant_id,
+                    DiscordIntegration.is_active == True,
+                ).all()
+                if len(actives) == 1:
+                    integration = actives[0]
+                elif len(actives) > 1:
+                    self.logger.info(
+                        f"[CHN-001] Tenant {self.tenant_id} has {len(actives)} active "
+                        "Discord integrations — skipping auto-registration."
+                    )
+                    return
+
+            if not integration:
+                return
+
+            key = get_discord_encryption_key(db_session)
+            if not key:
+                self.logger.warning("[CHN-001] Discord encryption key not configured — cannot register adapter")
+                return
+            enc = TokenEncryption(key.encode())
+            try:
+                bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+            except Exception as e:
+                self.logger.error(f"[CHN-001] Discord bot_token decrypt failed for integration {integration.id}: {e}")
+                return
+
+            self.channel_registry.register("discord", DiscordChannelAdapter(bot_token, self.logger))
+            self.logger.info(
+                f"[CHN-001] Registered Discord adapter (integration_id={integration.id})"
+            )
+        except Exception as e:
+            self.logger.warning(f"[CHN-001] Discord adapter registration skipped: {e}")
+
     async def route_message(self, message: Dict, trigger_type: str):
         """
         Process a message through the agent and save the run.
@@ -1160,7 +1283,18 @@ class AgentRouter:
         # Item 38: Circuit breaker queuing — if the channel's CB is OPEN, enqueue
         # the message instead of processing it immediately.  When the circuit
         # recovers the queue worker will pick up the deferred messages.
-        if os.getenv("TSN_CB_QUEUE_ENABLED", "true").lower() == "true":
+        #
+        # V060-HLT-003 FIX: DO NOT re-run the CB-enqueue guard when we're
+        # already processing a message that was drained FROM the queue
+        # (trigger_type == "queue"). Otherwise, a still-OPEN CB would cause the
+        # QueueWorker's dispatch to re-enqueue as a NEW row every 500ms, while
+        # marking the claimed item "completed" — an infinite re-queue loop with
+        # unbounded message_queue growth. The QueueWorker itself defers
+        # dispatch while CB is open (see queue_worker._poll_and_dispatch); here
+        # we just guard against self-reentry.
+        if trigger_type == "queue":
+            pass  # skip CB enqueue guard — item was already drained from queue
+        elif os.getenv("TSN_CB_QUEUE_ENABLED", "true").lower() == "true":
             try:
                 from services.channel_health_service import ChannelHealthService
                 chs = ChannelHealthService.get_instance()

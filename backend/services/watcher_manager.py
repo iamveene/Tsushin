@@ -191,7 +191,7 @@ class WatcherManager:
 
             # Create agent router
             # Phase 10: Pass mcp_instance_id for channel-based agent filtering
-            agent_router = AgentRouter(db, config_dict, mcp_reader=mcp_reader, mcp_instance_id=instance_id)
+            agent_router = AgentRouter(db, config_dict, mcp_reader=mcp_reader, mcp_instance_id=instance_id, tenant_id=instance.tenant_id)  # V060-CHN-006
 
             # Determine starting timestamp to prevent message replay on new instances
             # For dynamically started watchers, use creation time if instance is new

@@ -46,7 +46,7 @@ COMPLETION_PHRASES = [
 class SchedulerService:
     """Service for managing scheduled events with conversation support."""
 
-    def __init__(self, db: Session, memory_manager=None, token_tracker=None):
+    def __init__(self, db: Session, memory_manager=None, token_tracker=None, tenant_id: Optional[str] = None):
         """
         Initialize SchedulerService.
 
@@ -54,9 +54,15 @@ class SchedulerService:
             db: Database session
             memory_manager: Optional MultiAgentMemoryManager for semantic memory integration (Item 11)
             token_tracker: Optional TokenTracker for LLM cost monitoring (Phase 0.6.0)
+            tenant_id: V060-CHN-006 follow-up — scoping ContactService queries so
+                that scheduled messages for Tenant A can't resolve recipients/
+                senders to contacts belonging to Tenant B. Optional for back-
+                compat; when None, ContactService falls back to its legacy
+                unscoped behavior (logs a warning via _fetch_from_db).
         """
         self.db = db
-        self.contact_service = ContactService(db)
+        self.tenant_id = tenant_id
+        self.contact_service = ContactService(db, tenant_id=tenant_id)
         self.memory_manager = memory_manager  # Item 11: For semantic memory in conversations
         self.token_tracker = token_tracker  # Phase 0.6.0: Track background LLM costs
 

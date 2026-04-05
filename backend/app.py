@@ -489,7 +489,7 @@ async def lifespan(app: FastAPI):
 
                 # Create agent router (only for agent instances)
                 # Phase 10: Pass mcp_instance_id for channel-based agent filtering
-                instance_agent_router = AgentRouter(session, config_dict, mcp_reader=mcp_reader, mcp_instance_id=instance.id)
+                instance_agent_router = AgentRouter(session, config_dict, mcp_reader=mcp_reader, mcp_instance_id=instance.id, tenant_id=instance.tenant_id)  # V060-CHN-006
 
                 # Determine starting timestamp to prevent message replay
                 # For NEW instances (created within last 5 minutes), use creation time to skip history sync
@@ -740,7 +740,8 @@ async def lifespan(app: FastAPI):
                         request_session,
                         config_dict,
                         mcp_reader=None,
-                        telegram_instance_id=telegram_instance_id
+                        telegram_instance_id=telegram_instance_id,
+                        tenant_id=bot_instance.tenant_id,  # V060-CHN-006
                     )
 
                     # Route message
@@ -1264,6 +1265,13 @@ app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integrat
 app.include_router(webhook_inbound_router)  # v0.6.0: Webhook-as-Channel (public, HMAC-gated)
 app.include_router(webhook_instances_router)  # v0.6.0: Webhook-as-Channel (tenant-scoped CRUD)
 app.include_router(slack_router, prefix="/api/integrations/slack")  # v0.6.0 Item 33: Slack Integration
+
+# V060-CHN-002: Public inbound webhooks for Slack Events + Discord Interactions
+try:
+    from api.routes_channel_webhooks import router as channel_webhooks_router
+    app.include_router(channel_webhooks_router, prefix="/api")  # POST /api/slack/events + /api/discord/interactions
+except ImportError as _e:
+    logging.warning(f"Channel webhook routes not available: {_e}")
 
 # v0.6.0 Item 38: Channel Health Monitor
 try:

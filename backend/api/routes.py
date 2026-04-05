@@ -478,7 +478,7 @@ async def trigger_test(
         "context_message_count": agent.context_message_count or 10,
     }
 
-    agent_router = AgentRouter(db, config_dict)
+    agent_router = AgentRouter(db, config_dict, tenant_id=agent.tenant_id)  # V060-CHN-006
 
     result = await agent_router.agent_service.process_message(
         sender_key=request.sender_key,
