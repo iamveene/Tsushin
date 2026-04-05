@@ -851,6 +851,7 @@ export interface AgentGraphPreviewItem {
   enabled_channels: string[]
   whatsapp_integration_id: number | null
   telegram_integration_id: number | null
+  webhook_integration_id?: number | null  // v0.6.0
   skills_count: number
   knowledge_doc_count: number
   knowledge_chunk_count: number
@@ -872,11 +873,20 @@ export interface TelegramChannelInfo {
   health_status: string
 }
 
+export interface WebhookChannelInfo {
+  id: number
+  integration_name: string
+  status: string
+  health_status: string
+  callback_enabled: boolean
+}
+
 export interface GraphPreviewResponse {
   agents: AgentGraphPreviewItem[]
   channels: {
     whatsapp: WhatsAppChannelInfo[]
     telegram: TelegramChannelInfo[]
+    webhook?: WebhookChannelInfo[]
   }
 }
 

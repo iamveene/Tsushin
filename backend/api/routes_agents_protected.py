@@ -112,6 +112,7 @@ class AgentGraphPreviewItem(BaseModel):
     enabled_channels: List[str]
     whatsapp_integration_id: Optional[int]
     telegram_integration_id: Optional[int]
+    webhook_integration_id: Optional[int] = None  # v0.6.0
     skills_count: int
     knowledge_doc_count: int
     knowledge_chunk_count: int
@@ -133,6 +134,15 @@ class TelegramChannelInfo(BaseModel):
     bot_username: str
     status: str
     health_status: str
+
+
+class WebhookChannelInfo(BaseModel):
+    """Webhook channel info for Graph View (v0.6.0)"""
+    id: int
+    integration_name: str
+    status: str
+    health_status: str
+    callback_enabled: bool
 
 
 class GraphPreviewResponse(BaseModel):
@@ -242,6 +252,7 @@ async def get_agents_graph_preview(
             enabled_channels=enabled_channels,
             whatsapp_integration_id=agent.whatsapp_integration_id,
             telegram_integration_id=agent.telegram_integration_id,
+            webhook_integration_id=getattr(agent, "webhook_integration_id", None),
             skills_count=skills_count,
             knowledge_doc_count=knowledge_doc_count,
             knowledge_chunk_count=knowledge_chunk_count,
@@ -262,6 +273,12 @@ async def get_agents_graph_preview(
     telegram_query = ctx.filter_by_tenant(telegram_query, TelegramBotInstance.tenant_id)
     telegram_instances = telegram_query.all()
 
+    # v0.6.0: Webhook integrations
+    from models import WebhookIntegration
+    webhook_query = ctx.db.query(WebhookIntegration)
+    webhook_query = ctx.filter_by_tenant(webhook_query, WebhookIntegration.tenant_id)
+    webhook_instances = webhook_query.all()
+
     channels = {
         "whatsapp": [
             WhatsAppChannelInfo(
@@ -280,7 +297,17 @@ async def get_agents_graph_preview(
                 health_status=inst.health_status or "unknown"
             ).model_dump()
             for inst in telegram_instances
-        ]
+        ],
+        "webhook": [
+            WebhookChannelInfo(
+                id=inst.id,
+                integration_name=inst.integration_name,
+                status="active" if inst.is_active and inst.status != "paused" else "paused",
+                health_status=inst.health_status or "unknown",
+                callback_enabled=bool(inst.callback_enabled),
+            ).model_dump()
+            for inst in webhook_instances
+        ],
     }
 
     return GraphPreviewResponse(agents=agents, channels=channels)
