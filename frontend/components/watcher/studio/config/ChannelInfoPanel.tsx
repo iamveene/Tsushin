@@ -14,6 +14,7 @@ const channelIcons: Record<string, string> = {
   discord: '#5865F2',
   email: '#EA4335',
   sms: '#F59E0B',
+  webhook: '#06B6D4',  // cyan-500
 }
 
 export default function ChannelInfoPanel({ data }: ChannelInfoPanelProps) {
@@ -40,6 +41,13 @@ export default function ChannelInfoPanel({ data }: ChannelInfoPanelProps) {
         <div className="config-field">
           <label>Bot Username</label>
           <p className="text-sm text-tsushin-slate">@{data.botUsername}</p>
+        </div>
+      )}
+
+      {data.webhookName && (
+        <div className="config-field">
+          <label>Webhook Name</label>
+          <p className="text-sm text-tsushin-slate">{data.webhookName}</p>
         </div>
       )}
 
