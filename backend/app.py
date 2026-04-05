@@ -481,7 +481,7 @@ async def lifespan(app: FastAPI):
 
                 # Create agent router (only for agent instances)
                 # Phase 10: Pass mcp_instance_id for channel-based agent filtering
-                instance_agent_router = AgentRouter(session, config_dict, mcp_reader=mcp_reader, mcp_instance_id=instance.id)
+                instance_agent_router = AgentRouter(session, config_dict, mcp_reader=mcp_reader, mcp_instance_id=instance.id, tenant_id=instance.tenant_id)  # V060-CHN-006
 
                 # Determine starting timestamp to prevent message replay
                 # For NEW instances (created within last 5 minutes), use creation time to skip history sync
@@ -732,7 +732,8 @@ async def lifespan(app: FastAPI):
                         request_session,
                         config_dict,
                         mcp_reader=None,
-                        telegram_instance_id=telegram_instance_id
+                        telegram_instance_id=telegram_instance_id,
+                        tenant_id=bot_instance.tenant_id,  # V060-CHN-006
                     )
 
                     # Route message

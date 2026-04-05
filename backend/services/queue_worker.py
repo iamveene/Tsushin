@@ -104,7 +104,15 @@ class QueueWorker:
             await asyncio.sleep(self.poll_interval)
 
     async def _poll_and_dispatch(self):
-        """Poll for pending items and dispatch processing tasks."""
+        """Poll for pending items and dispatch processing tasks.
+
+        V060-HLT-003: Before spawning a processing task for a (tenant, agent)
+        pair, peek at the next pending item's channel/instance and consult
+        ChannelHealthService.is_circuit_open(). If the circuit is still OPEN
+        we DO NOT claim/dispatch — we leave the item pending and poll again
+        next tick. This prevents the infinite re-queue loop where router.py's
+        CB gate re-enqueued every drained item while CB stayed OPEN.
+        """
         db = self.SessionLocal()
         try:
             from services.message_queue_service import MessageQueueService
@@ -128,6 +136,11 @@ class QueueWorker:
                         # Clean up completed task
                         del self._active_tasks[task_key]
 
+                # V060-HLT-003: Peek at the next pending item for this agent
+                # and check its channel CB. Defer dispatch if OPEN.
+                if self._should_defer_for_circuit_breaker(db, tenant_id, agent_id):
+                    continue
+
                 # Create a new processing task for this agent
                 task = asyncio.create_task(
                     self._process_agent_queue(tenant_id, agent_id)
@@ -136,6 +149,71 @@ class QueueWorker:
 
         finally:
             db.close()
+
+    def _should_defer_for_circuit_breaker(self, db: Session, tenant_id: str, agent_id: int) -> bool:
+        """V060-HLT-003: Return True when the next pending item's channel CB
+        is OPEN — in that case we skip dispatch this tick and let the item
+        remain queued. Returns False on any lookup failure (fail-open so
+        legitimate traffic isn't held hostage by a bug in this gate)."""
+        try:
+            from models import MessageQueue, WhatsAppMCPInstance, TelegramBotInstance, Agent
+            from services.channel_health_service import ChannelHealthService
+
+            chs = ChannelHealthService.get_instance()
+            if chs is None:
+                return False
+
+            # Peek at the highest-priority oldest pending item for this pair.
+            item = (
+                db.query(MessageQueue)
+                .filter(
+                    MessageQueue.tenant_id == tenant_id,
+                    MessageQueue.agent_id == agent_id,
+                    MessageQueue.status == "pending",
+                )
+                .order_by(MessageQueue.priority.desc(), MessageQueue.id.asc())
+                .first()
+            )
+            if not item:
+                return False
+
+            channel = item.channel
+            # Playground/api channels are in-process — no external CB applies.
+            if channel not in ("whatsapp", "telegram"):
+                return False
+
+            # Resolve the instance_id for the CB key.
+            instance_id: Optional[int] = None
+            payload = item.payload or {}
+            if channel == "whatsapp":
+                instance_id = payload.get("mcp_instance_id")
+                if not instance_id:
+                    # Fall back to the agent's linked MCP instance
+                    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+                    if agent:
+                        linked = (
+                            db.query(WhatsAppMCPInstance)
+                            .filter(WhatsAppMCPInstance.tenant_id == tenant_id)
+                            .first()
+                        )
+                        if linked:
+                            instance_id = linked.id
+            elif channel == "telegram":
+                instance_id = payload.get("instance_id") or payload.get("telegram_instance_id")
+
+            if not instance_id:
+                return False  # Can't identify instance → don't block dispatch
+
+            if chs.is_circuit_open(channel, instance_id):
+                logger.info(
+                    f"[V060-HLT-003] Deferring dispatch: CB OPEN for {channel}/{instance_id} "
+                    f"(tenant={tenant_id}, agent={agent_id}, pending_item={item.id})"
+                )
+                return True
+            return False
+        except Exception as e:
+            logger.debug(f"_should_defer_for_circuit_breaker: lookup failed, not deferring: {e}")
+            return False
 
     async def _process_agent_queue(self, tenant_id: str, agent_id: int):
         """
@@ -284,7 +362,8 @@ class QueueWorker:
         mcp_instance_id = payload.get("mcp_instance_id")
 
         agent_router = AgentRouter(
-            db, config_dict, mcp_reader=None, mcp_instance_id=mcp_instance_id
+            db, config_dict, mcp_reader=None, mcp_instance_id=mcp_instance_id,
+            tenant_id=item.tenant_id,  # V060-CHN-006
         )
         await agent_router.route_message(message, "queue")
 
@@ -321,7 +400,8 @@ class QueueWorker:
         }
 
         agent_router = AgentRouter(
-            db, config_dict, mcp_reader=None, telegram_instance_id=instance_id
+            db, config_dict, mcp_reader=None, telegram_instance_id=instance_id,
+            tenant_id=item.tenant_id,  # V060-CHN-006
         )
         await agent_router.route_message(message, "queue")
 

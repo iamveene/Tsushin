@@ -79,11 +79,17 @@ def _determine_agent_run_status(result: Dict) -> str:
 
 
 class AgentRouter:
-    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None):
+    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None, tenant_id: str = None):
         self.db = db_session
         self.config = config
         self.contact_mappings = config.get("contact_mappings", {})
         self.logger = logging.getLogger(__name__)
+
+        # V060-CHN-006: Track tenant_id so CachedContactService (and any other
+        # tenant-scoped service spun up from the router) can filter by tenant.
+        # Fall back to config['tenant_id'] if caller didn't pass it explicitly,
+        # to preserve back-compat with legacy call sites during rollout.
+        self.tenant_id = tenant_id or config.get("tenant_id")
 
         # Phase 10: Track which MCP instance this router serves for channel-based filtering
         self.mcp_instance_id = mcp_instance_id
@@ -91,7 +97,8 @@ class AgentRouter:
         self.telegram_instance_id = telegram_instance_id
 
         # Phase 6.11.3: Initialize CachedContactService for faster lookups
-        self.contact_service = CachedContactService(db_session)
+        # V060-CHN-006: Pass tenant_id to prevent cross-tenant contact leakage.
+        self.contact_service = CachedContactService(db_session, tenant_id=self.tenant_id)
 
         # Phase 7.2: Initialize TokenTracker for usage analytics
         self.token_tracker = TokenTracker(db_session)
@@ -1142,7 +1149,18 @@ class AgentRouter:
         # Item 38: Circuit breaker queuing — if the channel's CB is OPEN, enqueue
         # the message instead of processing it immediately.  When the circuit
         # recovers the queue worker will pick up the deferred messages.
-        if os.getenv("TSN_CB_QUEUE_ENABLED", "true").lower() == "true":
+        #
+        # V060-HLT-003 FIX: DO NOT re-run the CB-enqueue guard when we're
+        # already processing a message that was drained FROM the queue
+        # (trigger_type == "queue"). Otherwise, a still-OPEN CB would cause the
+        # QueueWorker's dispatch to re-enqueue as a NEW row every 500ms, while
+        # marking the claimed item "completed" — an infinite re-queue loop with
+        # unbounded message_queue growth. The QueueWorker itself defers
+        # dispatch while CB is open (see queue_worker._poll_and_dispatch); here
+        # we just guard against self-reentry.
+        if trigger_type == "queue":
+            pass  # skip CB enqueue guard — item was already drained from queue
+        elif os.getenv("TSN_CB_QUEUE_ENABLED", "true").lower() == "true":
             try:
                 from services.channel_health_service import ChannelHealthService
                 chs = ChannelHealthService.get_instance()
