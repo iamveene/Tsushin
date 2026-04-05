@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { api, type FlowRun, type ConversationThread } from '@/lib/client'
 import { parseUTCTimestamp } from '@/lib/dateUtils'
 import { LightningIcon, MessageIcon } from '@/components/ui/icons'
@@ -27,19 +28,10 @@ export default function FlowsTab() {
   useEffect(() => {
     loadData()
     const interval = setInterval(loadData, 5000) // Poll every 5s
-
-    // Listen for global refresh events
-    const handleRefresh = () => {
-      console.log('[FlowsTab] Refresh event received')
-      loadData()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-
-    return () => {
-      clearInterval(interval)
-      window.removeEventListener('tsushin:refresh', handleRefresh)
-    }
+    return () => clearInterval(interval)
   }, [])
+
+  useGlobalRefresh(() => loadData())
 
   const loadData = async () => {
     try {

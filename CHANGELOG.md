@@ -7,7 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - develop
 
+### Added
+
+#### Flow Creation Wizard — Pre-built Hybrid Automations (2026-04-05)
+New "From Template" button on `/flows` opens a 3-step wizard (pick → configure → preview) for instantiating common hybrid (programmatic + agentic) flows in one click. Showcases the platform's hybrid value prop: deterministic/cheap programmatic fetch steps gate into agentic summarization steps, avoiding LLM spend when there's no data.
+
+- **5 templates shipped**: Daily Email Digest, Weekly Calendar Summary, Summarize on Demand, Proactive Watcher, New-Contact Welcome.
+- **Architecture**: `backend/services/flow_template_seeding.py` defines templates as code (pure `build(params, tenant_id) → FlowCreate` functions); `GET /api/flows/templates` and `POST /api/flows/templates/{id}/instantiate` endpoints in `routes_flows.py`. No new DB primitives — reuses existing FlowDefinition/FlowNode step types and `on_failure="skip"` as the conditional-gate mechanism.
+- **Security hardening**: `_validate_template_params` enforces required/options/min/max from each template's declarative schema, with numeric clamping (e.g. `max_emails` clamped to 1–100 server-side regardless of client input). `_validate_tenant_refs` verifies every `agent_id`, `persona_id`, and sandboxed `tool_name` referenced in the generated flow belongs to the caller's tenant — blocks cross-tenant resource leaks at instantiate time (422 response). Option whitelists enforced on select/channel params.
+- **Scheduling correctness**: `_first_scheduled_at` uses pytz to compute UTC-naive `scheduled_at` from the user's wall-clock HH:MM in their chosen timezone (verified: 08:00 São Paulo → 11:00 UTC).
+- **Frontend**: `CreateFromTemplateModal.tsx` dynamically renders parameter forms from each template's `params_schema`. Matches existing design system (slate-800 shell, teal/cyan accents, rounded-2xl, backdrop-blur).
+
 ### Fixed
+
+#### BUG-275 — Global refresh button did not reliably update lists across pages (2026-04-05)
+The header global refresh button dispatches a `tsushin:refresh` CustomEvent that pages subscribe to in `useEffect`. Audit found 9 pages registered the listener with empty deps `[]`, capturing the FIRST render's `loadData` closure — the listener kept calling that stale closure forever, so loaders executed with initial state values instead of current state.
+
+- **New hook** `frontend/hooks/useGlobalRefresh.ts` uses a ref-of-callback pattern so the listener ALWAYS invokes the latest callback. Eliminates stale-closure bugs once and for all.
+- **Migrated 9 pages/components**: `flows`, `hub`, `agents`, `agents/contacts`, `agents/personas`, `hub/sandboxed-tools`, `settings/organization`, `watcher/ConversationsTab`, `watcher/DashboardTab`, `watcher/FlowsTab`.
+- **Pagination snapback** on Flows: when a delete drops the total below the current page's offset, the page auto-corrects to the last non-empty page without clobbering the list in between.
+- **Validated** via Playwright: clicking refresh on flows/agents/contacts/settings/hub fires a fresh `GET` on every click, zero stale data.
+
+#### BUG-LOG-015 — Memory table now has tenant_id for DB-level isolation (2026-04-05)
+Previously the `Memory` table enforced tenant isolation only via `agent_id` — every query site had to remember to scope by `agent_ids ∈ tenant's agents`. A missed site would be a cross-tenant leak. This change enforces isolation at the row level.
+
+- **Alembic migration 0024** adds `tenant_id VARCHAR(50) NOT NULL` with backfill from `Agent.tenant_id`, deletes orphan rows (28 in dev DB), and adds composite index `(tenant_id, agent_id, sender_key)`.
+- **Write paths** populate tenant_id on every INSERT: `agent_memory_system.save_to_db` (via lazy-caching `_get_tenant_id` helper — deduplicated with the pre-existing MemGuard helper), `playground_message_service.branch_conversation`.
+- **Read paths simplified**: `conversation_knowledge_service._get_thread_messages`, `conversation_search_service._search_like`, and `routes.py` stats now filter Memory directly on `tenant_id`, replacing the Agent-JOIN and tenant-agent-id-IN-list patterns.
+- **Validated**: 422 rows backfilled with correct tenant_id, 0 NULLs; live chat test creates Memory rows with tenant_id populated; backend starts clean with `alembic upgrade head 0023 → 0024`.
+
+#### /flows double-fire on global refresh (BUG-275 follow-up, 2026-04-05)
+Perfection QA caught that `frontend/app/flows/page.tsx` still used the raw `addEventListener('tsushin:refresh')` pattern INSIDE the `useEffect([currentPage, pageSize])` that loaded data. Every pagination change re-attached the listener, and on refresh click the page's three loader GETs (`flows/`, `flows/runs`, `conversations/active`) fired twice. Migrated flows/page.tsx to the `useGlobalRefresh` hook with an empty-deps mount registration — single subscription per mount.
+
+#### BUG-276 — Force-delete of flows with completed runs blocked by conversation_thread FK (2026-04-05)
+Three stress-test flows (IDs 140/139/123) could not be force-deleted. Root cause: conversation_thread rows 596/597/598 had `status='timeout'` referencing FlowNodeRun IDs — the force-delete path only nullified `flow_step_run_id` for threads with `status='active'`, so non-active threads kept the FK reference and blocked the FlowNodeRun cascade, rolling the transaction back under a generic 500.
+
+- **Fix** in `backend/api/routes_flows.py` delete_flow: after the state transition on `status='active'` threads, widen the nullification to `flow_step_run_id = NULL` for ALL statuses referencing the flow's step runs. History preserved on threads, FK cleared, cascade proceeds.
+- **Observability**: included `{e}` in the `logger.exception` format string so future delete failures surface the DB constraint name.
+- **Validated**: all three stuck flows deleted successfully (HTTP 204); threads retained `status='timeout'` with `flow_step_run_id=NULL`; zero dangling FKs. UI round-trip confirmed.
 
 #### BUG-277 — WhatsApp agent silent-drop regression (2026-04-05)
 Two compounding regressions silently broke the WhatsApp agent: the bot would receive DMs into its MCP container but never route them through the agent or respond. Watcher logs showed neither `Found N new messages` nor any Gemini call, leaving the user to believe the bot had hung.

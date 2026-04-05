@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import StudioTabs from '@/components/studio/StudioTabs'
@@ -62,13 +63,7 @@ export default function ContactsPage() {
     loadData()
   }, [])
 
-  useEffect(() => {
-    const handleRefresh = () => {
-      loadData()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-    return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [])
+  useGlobalRefresh(() => loadData())
 
   const loadData = async () => {
     try {

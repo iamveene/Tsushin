@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 import { Input } from '@/components/ui/form-input'
@@ -46,14 +47,7 @@ export default function OrganizationSettingsPage() {
     loadOrganizationData()
   }, [])
 
-  // Listen for global refresh events
-  useEffect(() => {
-    const handleRefresh = () => {
-      loadOrganizationData()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-    return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [])
+  useGlobalRefresh(() => loadOrganizationData())
 
   const loadOrganizationData = async () => {
     setLoading(true)

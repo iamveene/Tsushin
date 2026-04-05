@@ -568,16 +568,11 @@ async def get_memory_stats(
         stats["senders_in_memory"] = db.query(Memory).count()
         agents = db.query(Agent).all()
     else:
-        # Filter Memory and Agents by tenant
-        tenant_agents = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).all()
-        tenant_agent_ids = [a.id for a in tenant_agents]
-
-        if tenant_agent_ids:
-            stats["senders_in_memory"] = db.query(Memory).filter(Memory.agent_id.in_(tenant_agent_ids)).count()
-        else:
-            stats["senders_in_memory"] = 0
-
-        agents = tenant_agents
+        # BUG-LOG-015: Memory now has tenant_id — filter directly at row level.
+        stats["senders_in_memory"] = db.query(Memory).filter(
+            Memory.tenant_id == ctx.tenant_id
+        ).count()
+        agents = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).all()
 
     # If semantic search is enabled, get vector store stats for visible agents
     if stats["semantic_search_enabled"]:
