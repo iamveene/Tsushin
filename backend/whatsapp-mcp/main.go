@@ -1878,6 +1878,9 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 				break
 			}
 		}
+		if err := rows.Err(); err != nil {
+			fmt.Printf("Warning: /api/groups rows iteration error: %v\n", err)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1984,6 +1987,9 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 					existing.Name = name
 					byJID[jid] = existing
 				}
+			}
+			if err := dmRows.Err(); err != nil {
+				fmt.Printf("Warning: /api/contacts DM rows iteration error: %v\n", err)
 			}
 		}
 

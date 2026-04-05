@@ -9,6 +9,8 @@ Includes RBAC protection and tenant isolation.
 import logging
 from datetime import datetime
 from typing import List, Optional
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
@@ -17,6 +19,7 @@ from db import get_db
 from models import WhatsAppMCPInstance, Agent
 from models_rbac import User
 from services.mcp_container_manager import MCPContainerManager
+from services.mcp_auth_service import get_auth_headers
 from auth_dependencies import get_current_user_required, require_permission, get_tenant_context, TenantContext
 
 logger = logging.getLogger(__name__)
@@ -907,9 +910,6 @@ async def list_wa_groups(
     Returns groups filtered by name substring, sorted by recent activity.
     Result shape: {"success": bool, "groups": [{"jid": str, "name": str}], "count": int}
     """
-    import httpx
-    from services.mcp_auth_service import get_auth_headers
-
     instance = db.query(WhatsAppMCPInstance).filter(WhatsAppMCPInstance.id == instance_id).first()
     if not instance:
         raise HTTPException(status_code=404, detail=f"MCP instance {instance_id} not found")
@@ -956,9 +956,6 @@ async def list_wa_contacts(
     Merges the whatsmeow address book with DM chats the user has messaged.
     Result shape: {"success": bool, "contacts": [{"jid": str, "phone": str, "name": str}], "count": int}
     """
-    import httpx
-    from services.mcp_auth_service import get_auth_headers
-
     instance = db.query(WhatsAppMCPInstance).filter(WhatsAppMCPInstance.id == instance_id).first()
     if not instance:
         raise HTTPException(status_code=404, detail=f"MCP instance {instance_id} not found")

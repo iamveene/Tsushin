@@ -63,6 +63,12 @@ export function TypeaheadChipInput({
   const containerRef = useRef<HTMLDivElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const requestIdRef = useRef(0)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -88,17 +94,17 @@ export function TypeaheadChipInput({
       setLoading(true)
       try {
         const results = await onSearch(query.trim())
-        // Ignore stale responses
-        if (myRequestId !== requestIdRef.current) return
+        // Ignore stale responses and unmounted state updates
+        if (!mountedRef.current || myRequestId !== requestIdRef.current) return
         // Filter out suggestions whose value is already a chip
         const existing = new Set(value)
         setSuggestions(results.filter((s) => !existing.has(s.value)))
         setActiveIndex(-1)
       } catch {
-        if (myRequestId !== requestIdRef.current) return
+        if (!mountedRef.current || myRequestId !== requestIdRef.current) return
         setSuggestions([])
       } finally {
-        if (myRequestId === requestIdRef.current) setLoading(false)
+        if (mountedRef.current && myRequestId === requestIdRef.current) setLoading(false)
       }
     }, debounceMs)
     return () => {

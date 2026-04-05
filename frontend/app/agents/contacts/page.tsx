@@ -5,7 +5,7 @@
  * Manages contacts and agent assignments
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import StudioTabs from '@/components/studio/StudioTabs'
@@ -57,8 +57,14 @@ export default function ContactsPage() {
   const [addMappingIdentifier, setAddMappingIdentifier] = useState('')
   const [addMappingLoading, setAddMappingLoading] = useState(false)
 
+  // Tracks deferred loadData() timers so they can be cancelled on unmount.
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     loadData()
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -117,7 +123,8 @@ export default function ContactsPage() {
       // Background WhatsApp ID resolution runs server-side after create;
       // refresh again shortly to surface the auto-resolved WA ID without user action.
       if (created.phone_number) {
-        setTimeout(() => { loadData() }, 2500)
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = setTimeout(() => { loadData() }, 2500)
       }
     } catch (err) {
       console.error('Failed to create contact:', err)
@@ -178,7 +185,8 @@ export default function ContactsPage() {
       resetForm()
       // Refresh after background WhatsApp resolution finishes
       if (formData.phone_number) {
-        setTimeout(() => { loadData() }, 2500)
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = setTimeout(() => { loadData() }, 2500)
       }
     } catch (err) {
       console.error('Failed to update contact:', err)
