@@ -304,14 +304,23 @@ class ProviderBridgeStore:
 
     @staticmethod
     def _records_to_dicts(records) -> List[Dict]:
-        """Convert VectorRecord list to List[Dict] matching CachedVectorStore format."""
+        """Convert VectorRecord list to List[Dict] matching CachedVectorStore format.
+
+        V060-MEM-001 FIX: Also preserve the full metadata dict under a nested
+        ``metadata`` key so callers that expect the OKG record shape
+        (``record.get("metadata", {}).get("is_okg")``) can read it. Previously
+        only the flat ``**r.metadata`` spread was exposed, which meant every
+        OKG recall post-filter saw ``meta == {}`` and skipped every record —
+        making OKG non-functional with external vector stores.
+        """
         return [
             {
                 "message_id": r.message_id,
                 "text": r.text,
                 "distance": r.distance,
                 "sender_key": r.sender_key,
-                **r.metadata,
+                "metadata": dict(r.metadata or {}),  # V060-MEM-001: nested for OKG reader
+                **(r.metadata or {}),                  # legacy flat spread for existing callers
             }
             for r in records
         ]

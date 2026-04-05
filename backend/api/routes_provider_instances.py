@@ -611,14 +611,8 @@ async def test_provider_connection_raw(
             token_tracker=tracker,
             tenant_id=ctx.tenant_id,
             max_tokens=20,
+            api_key=api_key,  # V060-PRV-001: pass raw key so AIClient doesn't require DB key
         )
-
-        # Override API key if provided
-        if api_key:
-            if hasattr(client, 'client') and client.client and hasattr(client.client, 'api_key'):
-                client.client.api_key = api_key
-            if vendor == "ollama" and api_key:
-                client.ollama_api_key = api_key
 
         # Override base_url if provided
         if data.base_url:
@@ -738,9 +732,10 @@ async def test_provider_connection(
             token_tracker=tracker,
             tenant_id=instance.tenant_id,
             max_tokens=20,
+            api_key=api_key,  # V060-PRV-002: exercise instance's own key (falls back to tenant key only when instance has none)
         )
 
-        # Override base_url and API key if instance has custom values
+        # Override base_url if instance has custom values
         if instance.base_url:
             if hasattr(client, 'client') and client.client:
                 client.client.base_url = instance.base_url

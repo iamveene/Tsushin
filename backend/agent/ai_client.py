@@ -26,6 +26,7 @@ class AIClient:
         max_tokens: Optional[int] = None,
         tenant_id: Optional[str] = None,
         provider_instance_id: Optional[int] = None,
+        api_key: Optional[str] = None,
     ):
         """
         Initialize AI client with database session for API key loading.
@@ -157,10 +158,17 @@ class AIClient:
                         "Please activate it or select a different provider."
                     )
 
-        # Get API key from database or environment (skip for Ollama and Vertex AI - Phase 5.2)
-        # Priority: DB tenant key → DB system key → env var fallback (handled by get_api_key)
+        # V060-PRV-001 / V060-PRV-002 FIX: If caller passed an explicit api_key,
+        # use it directly and skip both the DB/env lookup AND the "No API key
+        # found" raise below. This unblocks first-time-setup wizard flows
+        # (raw test-connection before any tenant key exists) and makes
+        # saved-instance test-connection correctly exercise the instance's
+        # own credential instead of silently falling back to the tenant key.
+        _explicit_api_key = api_key
         api_key = None
-        if db and provider not in ('ollama', 'vertex_ai'):
+        if _explicit_api_key:
+            api_key = _explicit_api_key
+        elif db and provider not in ('ollama', 'vertex_ai'):
             api_key = get_api_key(self.provider, db, tenant_id=tenant_id)
 
         # Vertex AI uses its own credential loading (service account, not simple API key)
