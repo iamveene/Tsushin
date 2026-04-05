@@ -821,9 +821,10 @@ export interface Agent {
   default_asana_assignee_gid?: string  // Default Asana user GID
 
   // Phase 10: Channel Configuration
-  enabled_channels?: string[]  // ["playground", "whatsapp", "telegram"]
+  enabled_channels?: string[]  // ["playground", "whatsapp", "telegram", "webhook"]
   whatsapp_integration_id?: number  // Specific MCP instance
   telegram_integration_id?: number  // Future: Telegram bot instance
+  webhook_integration_id?: number | null  // v0.6.0: Webhook integration
 
   // Phase 21: Provider Instance
   provider_instance_id?: number | null  // Link to a specific provider instance
@@ -1611,6 +1612,59 @@ export interface TelegramHealthStatus {
   bot_username: string
   api_reachable: boolean
   error: string | null
+}
+
+// v0.6.0: Webhook-as-a-Channel Integration
+export interface WebhookIntegration {
+  id: number
+  tenant_id: string
+  integration_name: string
+  api_secret_preview: string
+  callback_url: string | null
+  callback_enabled: boolean
+  ip_allowlist: string[] | null
+  rate_limit_rpm: number
+  max_payload_bytes: number
+  is_active: boolean
+  status: 'active' | 'paused' | 'error'
+  health_status: 'unknown' | 'healthy' | 'unhealthy'
+  last_health_check: string | null
+  last_activity_at: string | null
+  circuit_breaker_state: 'closed' | 'open' | 'half_open'
+  created_at: string
+  updated_at: string | null
+  inbound_url: string
+}
+
+export interface WebhookIntegrationCreate {
+  integration_name: string
+  callback_url?: string | null
+  callback_enabled?: boolean
+  ip_allowlist?: string[] | null
+  rate_limit_rpm?: number
+  max_payload_bytes?: number
+}
+
+export interface WebhookIntegrationUpdate {
+  integration_name?: string
+  callback_url?: string | null
+  callback_enabled?: boolean
+  ip_allowlist?: string[] | null
+  rate_limit_rpm?: number
+  max_payload_bytes?: number
+  is_active?: boolean
+}
+
+export interface WebhookIntegrationCreateResponse {
+  integration: WebhookIntegration
+  api_secret: string          // plaintext, shown ONCE
+  warning: string
+}
+
+export interface WebhookSecretRotateResponse {
+  api_secret: string
+  api_secret_preview: string
+  warning: string
 }
 
 // v0.6.0: Slack Integration
@@ -4262,6 +4316,58 @@ export const api = {
   async getTelegramHealth(id: number): Promise<TelegramHealthStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/${id}/health`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch Telegram health')
+    return res.json()
+  },
+
+  // v0.6.0: Webhook-as-a-Channel
+  async listWebhookIntegrations(): Promise<WebhookIntegration[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch webhook integrations')
+    return res.json()
+  },
+
+  async getWebhookIntegration(id: number): Promise<WebhookIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch webhook integration')
+    return res.json()
+  },
+
+  async createWebhookIntegration(data: WebhookIntegrationCreate): Promise<WebhookIntegrationCreateResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to create webhook integration' }))
+      throw new Error(error.detail || 'Failed to create webhook integration')
+    }
+    return res.json()
+  },
+
+  async updateWebhookIntegration(id: number, data: WebhookIntegrationUpdate): Promise<WebhookIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update webhook integration')
+    return res.json()
+  },
+
+  async rotateWebhookSecret(id: number): Promise<WebhookSecretRotateResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}/rotate-secret`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to rotate webhook secret')
+    return res.json()
+  },
+
+  async deleteWebhookIntegration(id: number): Promise<{ status: string; id: number }> {
+    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete webhook integration')
     return res.json()
   },
 
