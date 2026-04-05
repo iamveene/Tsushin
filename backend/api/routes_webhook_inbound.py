@@ -110,6 +110,18 @@ async def receive_webhook(
     if integration is None or not integration.is_active or integration.status == "paused":
         _generic_403()
 
+    # v0.6.0: Honor global emergency stop at the ingress (avoid eating queue/LLM resources)
+    try:
+        from models import Config as ConfigModel
+        _config = db.query(ConfigModel).first()
+        if _config and getattr(_config, 'emergency_stop', False):
+            logger.warning(f"[EMERGENCY STOP] Rejecting webhook {webhook_id} inbound — emergency stop active")
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     # --- Layer 1: IP allowlist (optional, defense-in-depth) ---
     if integration.ip_allowlist_json:
         client_ip = _client_ip(request)

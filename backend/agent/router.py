@@ -1172,6 +1172,8 @@ class AgentRouter:
                         cb_instance_id = self.mcp_instance_id
                     elif cb_channel == "telegram" and self.telegram_instance_id:
                         cb_instance_id = self.telegram_instance_id
+                    elif cb_channel == "webhook" and self.webhook_instance_id:
+                        cb_instance_id = self.webhook_instance_id
 
                     if cb_instance_id is not None and chs.is_circuit_open(cb_channel, cb_instance_id):
                         self.logger.warning(
@@ -1191,6 +1193,11 @@ class AgentRouter:
                                 elif cb_channel == "telegram" and self.telegram_instance_id:
                                     from models import TelegramBotInstance
                                     _inst = self.db.query(TelegramBotInstance).get(self.telegram_instance_id)
+                                    if _inst:
+                                        _tenant_id = _inst.tenant_id
+                                elif cb_channel == "webhook" and self.webhook_instance_id:
+                                    from models import WebhookIntegration
+                                    _inst = self.db.query(WebhookIntegration).get(self.webhook_instance_id)
                                     if _inst:
                                         _tenant_id = _inst.tenant_id
 

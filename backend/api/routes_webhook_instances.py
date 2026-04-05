@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from auth_dependencies import TenantContext, get_tenant_context
+from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from db import get_db
 from models import Agent, WebhookIntegration
 from utils.ssrf_validator import SSRFValidationError, validate_url
@@ -192,6 +192,7 @@ def _validate_callback(url: Optional[str]) -> None:
 @router.post("", response_model=WebhookIntegrationCreateResponse)
 async def create_webhook_integration(
     body: WebhookIntegrationCreate,
+    _: None = Depends(require_permission("integrations.webhook.write")),
     context: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -230,6 +231,7 @@ async def create_webhook_integration(
 
 @router.get("", response_model=List[WebhookIntegrationRead])
 async def list_webhook_integrations(
+    _: None = Depends(require_permission("integrations.webhook.read")),
     context: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -241,6 +243,7 @@ async def list_webhook_integrations(
 @router.get("/{integration_id}", response_model=WebhookIntegrationRead)
 async def get_webhook_integration(
     integration_id: int,
+    _: None = Depends(require_permission("integrations.webhook.read")),
     context: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -254,6 +257,7 @@ async def get_webhook_integration(
 async def update_webhook_integration(
     integration_id: int,
     body: WebhookIntegrationUpdate,
+    _: None = Depends(require_permission("integrations.webhook.write")),
     context: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -289,6 +293,7 @@ async def update_webhook_integration(
 @router.post("/{integration_id}/rotate-secret", response_model=WebhookSecretRotateResponse)
 async def rotate_webhook_secret(
     integration_id: int,
+    _: None = Depends(require_permission("integrations.webhook.write")),
     context: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -308,6 +313,7 @@ async def rotate_webhook_secret(
 @router.delete("/{integration_id}")
 async def delete_webhook_integration(
     integration_id: int,
+    _: None = Depends(require_permission("integrations.webhook.write")),
     context: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):

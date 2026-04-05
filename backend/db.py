@@ -125,6 +125,9 @@ def seed_rbac_defaults(session):
         # Discord Integrations (v0.6.0 Item 34)
         ("integrations.discord.read", "discord_integrations", "read", "View Discord integrations"),
         ("integrations.discord.write", "discord_integrations", "write", "Create and manage Discord integrations"),
+        # Webhook Integrations (v0.6.0)
+        ("integrations.webhook.read", "webhook_integrations", "read", "View webhook integrations"),
+        ("integrations.webhook.write", "webhook_integrations", "write", "Create, rotate and delete webhook integrations"),
         # Hub Integrations
         ("hub.read", "hub", "read", "View hub integrations"),
         ("hub.write", "hub", "write", "Create and update hub integrations"),
@@ -207,6 +210,7 @@ def seed_rbac_defaults(session):
             "telegram.instances.create", "telegram.instances.read", "telegram.instances.manage", "telegram.instances.delete",  # Phase 10.1.1
             "integrations.slack.read", "integrations.slack.write",  # v0.6.0 Item 33
             "integrations.discord.read", "integrations.discord.write",  # v0.6.0 Item 34
+            "integrations.webhook.read", "integrations.webhook.write",  # v0.6.0 Webhook-as-Channel
             "hub.read", "hub.write", "hub.delete",
             "users.read", "users.invite", "users.manage", "users.remove",
             "org.settings.read", "org.settings.write",
@@ -229,6 +233,7 @@ def seed_rbac_defaults(session):
             "telegram.instances.create", "telegram.instances.read", "telegram.instances.manage", "telegram.instances.delete",  # Phase 10.1.1
             "integrations.slack.read", "integrations.slack.write",  # v0.6.0 Item 33
             "integrations.discord.read", "integrations.discord.write",  # v0.6.0 Item 34
+            "integrations.webhook.read", "integrations.webhook.write",  # v0.6.0 Webhook-as-Channel
             "hub.read", "hub.write", "hub.delete",
             "users.read", "users.invite", "users.manage", "users.remove",
             "org.settings.read", "org.settings.write",
@@ -251,6 +256,7 @@ def seed_rbac_defaults(session):
             "telegram.instances.read", "telegram.instances.create", "telegram.instances.manage",  # Phase 10.1.1
             "integrations.slack.read", "integrations.slack.write",  # v0.6.0 Item 33
             "integrations.discord.read", "integrations.discord.write",  # v0.6.0 Item 34
+            "integrations.webhook.read", "integrations.webhook.write",  # v0.6.0 Webhook-as-Channel
             "hub.read", "hub.write",
             "users.read",
             "org.settings.read",
@@ -264,6 +270,7 @@ def seed_rbac_defaults(session):
             "knowledge.read", "mcp.instances.read", "telegram.instances.read",  # Phase 10.1.1
             "integrations.slack.read",  # v0.6.0 Item 33
             "integrations.discord.read",  # v0.6.0 Item 34
+            "integrations.webhook.read",  # v0.6.0 Webhook-as-Channel
             "hub.read",
             "users.read", "org.settings.read", "analytics.read",
             "tools.read",  # Phase 9.3: Read-only can view tools
@@ -706,6 +713,55 @@ def ensure_rbac_permissions(session):
     if discord_perms_added:
         session.commit()
         print("[RBAC] Discord integration permissions ensured successfully")
+
+    # v0.6.0: Ensure Webhook integration permissions exist
+    webhook_permissions_data = [
+        ("integrations.webhook.read", "webhook_integrations", "read", "View webhook integrations"),
+        ("integrations.webhook.write", "webhook_integrations", "write", "Create, rotate and delete webhook integrations"),
+    ]
+    webhook_role_assignments = {
+        "owner": ["integrations.webhook.read", "integrations.webhook.write"],
+        "admin": ["integrations.webhook.read", "integrations.webhook.write"],
+        "member": ["integrations.webhook.read", "integrations.webhook.write"],
+        "readonly": ["integrations.webhook.read"],
+    }
+    webhook_perms_added = False
+    for name, resource, action, description in webhook_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+            for role_name, role_perms in webhook_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_rp = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == perm.id
+                        ).first()
+                        if not existing_rp:
+                            session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            webhook_perms_added = True
+        else:
+            for role_name, role_perms in webhook_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            webhook_perms_added = True
+    if webhook_perms_added:
+        session.commit()
+        print("[RBAC] Webhook integration permissions ensured successfully")
 
     # v0.6.0 Item 25: Ensure MCP server permissions exist
     mcp_server_permissions_data = [

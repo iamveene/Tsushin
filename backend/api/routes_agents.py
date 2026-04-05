@@ -692,6 +692,16 @@ def create_agent(
         if not persona:
             raise HTTPException(status_code=404, detail="Persona not found")
 
+    # v0.6.0: Validate webhook integration belongs to caller's tenant
+    if getattr(agent, "webhook_integration_id", None) is not None:
+        from models import WebhookIntegration
+        _webhook = db.query(WebhookIntegration).filter(
+            WebhookIntegration.id == agent.webhook_integration_id,
+            WebhookIntegration.tenant_id == ctx.tenant_id,
+        ).first()
+        if not _webhook:
+            raise HTTPException(status_code=404, detail="Webhook integration not found")
+
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
         db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).update({"is_default": False})
@@ -793,6 +803,16 @@ def update_agent(
         ).first()
         if not persona:
             raise HTTPException(status_code=404, detail="Persona not found")
+
+    # v0.6.0: Validate webhook integration belongs to caller's tenant
+    if getattr(agent, "webhook_integration_id", None) is not None:
+        from models import WebhookIntegration
+        _webhook = db.query(WebhookIntegration).filter(
+            WebhookIntegration.id == agent.webhook_integration_id,
+            WebhookIntegration.tenant_id == ctx.tenant_id,
+        ).first()
+        if not _webhook:
+            raise HTTPException(status_code=404, detail="Webhook integration not found")
 
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
