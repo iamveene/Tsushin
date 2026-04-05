@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { api, Agent } from '@/lib/client'
 import AgentMemoryManager from '@/components/AgentMemoryManager'
 import AgentSkillsManager from '@/components/AgentSkillsManager'
+import AgentCustomSkillsManager from '@/components/AgentCustomSkillsManager'
 import AgentKnowledgeManager from '@/components/AgentKnowledgeManager'
 // AgentSandboxedToolsManager is now embedded in the Skills > Sandboxed Tools config modal
 import AgentConfigurationManager from '@/components/AgentConfigurationManager'
@@ -12,12 +13,12 @@ import AgentChannelsManager from '@/components/AgentChannelsManager'
 import SharedKnowledgeViewer from '@/components/SharedKnowledgeViewer'
 import {
   SettingsIcon, RadioIcon, BrainIcon, SparklesIcon, BookOpenIcon,
-  LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, MicrophoneIcon
+  LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, MicrophoneIcon, WrenchIcon
 } from '@/components/ui/icons'
 
-type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'knowledge' | 'shared-knowledge'
+type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'custom-skills' | 'knowledge' | 'shared-knowledge'
 
-const VALID_TABS: Tab[] = ['configuration', 'channels', 'memory', 'skills', 'knowledge', 'shared-knowledge']
+const VALID_TABS: Tab[] = ['configuration', 'channels', 'memory', 'skills', 'custom-skills', 'knowledge', 'shared-knowledge']
 
 export default function AgentDetailPage() {
   const params = useParams()
@@ -181,6 +182,15 @@ export default function AgentDetailPage() {
               <SparklesIcon size={16} /> Skills
             </button>
             <button
+              onClick={() => setActiveTab('custom-skills')}
+              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'custom-skills'
+                  ? 'border-teal-500 text-teal-400'
+                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
+                }`}
+            >
+              <WrenchIcon size={16} /> Custom Skills
+            </button>
+            <button
               onClick={() => setActiveTab('knowledge')}
               className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'knowledge'
                   ? 'border-teal-500 text-teal-400'
@@ -217,6 +227,10 @@ export default function AgentDetailPage() {
 
           {activeTab === 'skills' && (
             <AgentSkillsManager agentId={agentId} />
+          )}
+
+          {activeTab === 'custom-skills' && (
+            <AgentCustomSkillsManager agentId={agentId} />
           )}
 
           {activeTab === 'knowledge' && (

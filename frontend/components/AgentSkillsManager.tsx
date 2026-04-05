@@ -1257,7 +1257,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     })
   }, [availableSkills, enabledSkillTypes])
 
-  const totalEnabledCount = enabledProviderSkills.length + (isAudioEnabled ? 1 : 0) + (isShellEnabled ? 1 : 0) + enabledStandardSkills.length + customSkillAssignments.length
+  const totalEnabledCount = enabledProviderSkills.length + (isAudioEnabled ? 1 : 0) + (isShellEnabled ? 1 : 0) + enabledStandardSkills.length
 
   if (loading) {
     return <div className="p-8 text-center">Loading skills...</div>
@@ -1332,79 +1332,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
             </div>
           )}
 
-          {/* Custom Skills */}
-          {customSkillAssignments.length > 0 && (
-            <div>
-              <div className="flex items-center gap-3 mb-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-tsushin-slate whitespace-nowrap">Custom Skills</h3>
-                <div className="flex-1 h-px bg-white/5" />
-              </div>
-              <div className="grid gap-6 md:grid-cols-2">
-                {customSkillAssignments.map((assignment: any) => (
-                  <div
-                    key={assignment.id}
-                    className={`bg-tsushin-surface/50 border rounded-lg p-4 ${
-                      assignment.is_enabled
-                        ? 'border-teal-600/30'
-                        : 'border-white/5'
-                    }`}
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-lg bg-violet-500/15 border border-violet-500/20 flex items-center justify-center">
-                          <WrenchIcon size={14} className="text-violet-400" />
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-semibold text-white">{assignment.skill?.name}</h3>
-                          <p className="text-xs text-tsushin-muted">{assignment.skill?.skill_type_variant} &middot; {assignment.skill?.execution_mode}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <ToggleSwitch
-                          checked={assignment.is_enabled}
-                          onChange={async (checked) => {
-                            try {
-                              await api.updateAgentCustomSkill(agentId, assignment.id, { is_enabled: checked })
-                              loadData()
-                            } catch (err) {
-                              console.error('Failed to toggle custom skill:', err)
-                            }
-                          }}
-                          title={assignment.is_enabled ? 'Disable skill' : 'Enable skill'}
-                        />
-                        <button
-                          onClick={async () => {
-                            if (confirm(`Remove "${assignment.skill?.name}" from this agent?`)) {
-                              try {
-                                await api.removeAgentCustomSkill(agentId, assignment.id)
-                                loadData()
-                              } catch (err) {
-                                console.error('Failed to remove custom skill:', err)
-                              }
-                            }
-                          }}
-                          className="text-red-400 hover:text-red-300 p-1"
-                          title="Remove skill"
-                        >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                    {assignment.skill?.description && (
-                      <p className="text-xs text-tsushin-slate mt-1">{assignment.skill.description}</p>
-                    )}
-                    {assignment.skill?.scan_status && assignment.skill.scan_status !== 'clean' && (
-                      <span className="inline-block mt-2 px-2 py-0.5 text-xs bg-yellow-800/30 text-yellow-300 rounded-full">
-                        Scan: {assignment.skill.scan_status}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
