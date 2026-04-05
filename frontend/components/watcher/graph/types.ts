@@ -76,12 +76,13 @@ export interface ProjectNodeData {
 
 export interface ChannelNodeData {
   type: 'channel'
-  channelType: 'whatsapp' | 'telegram' | 'playground' | 'phone' | 'discord' | 'email' | 'sms'
+  channelType: 'whatsapp' | 'telegram' | 'playground' | 'phone' | 'discord' | 'email' | 'sms' | 'webhook'
   label: string
   // Phase 3: Instance details
   instanceId?: number
   phoneNumber?: string
   botUsername?: string
+  webhookName?: string  // v0.6.0: Webhook integration name (for webhook nodes)
   status?: ChannelStatus
   healthStatus?: string
   // Phase 8: Real-time activity (separate from isActive to avoid dimming node via BaseNode)

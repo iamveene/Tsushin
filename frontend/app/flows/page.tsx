@@ -60,6 +60,7 @@ import {
   TelegramIcon,
   SlackIcon,
   DiscordIcon,
+  WebhookIcon,
   LightbulbIcon,
   FileTextIcon,
   ClipboardIcon,
@@ -92,11 +93,12 @@ const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; d
   { value: 'slash_command', label: 'Slash Command', Icon: CommandIcon, description: 'Execute a slash command (/scheduler, /memory, etc.)' },
 ]
 
-const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram' | 'slack' | 'discord'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
+const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram' | 'slack' | 'discord' | 'webhook'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
   { value: 'whatsapp', label: 'WhatsApp', Icon: WhatsAppIcon, activeColor: 'text-green-400', enabled: true },
   { value: 'telegram', label: 'Telegram', Icon: TelegramIcon, activeColor: 'text-blue-400', enabled: true },
   { value: 'slack', label: 'Slack', Icon: SlackIcon, activeColor: 'text-purple-400', enabled: true },
   { value: 'discord', label: 'Discord', Icon: DiscordIcon, activeColor: 'text-indigo-400', enabled: true },
+  { value: 'webhook', label: 'Webhook', Icon: WebhookIcon, activeColor: 'text-cyan-400', enabled: true },
 ]
 
 // Summarization output format options

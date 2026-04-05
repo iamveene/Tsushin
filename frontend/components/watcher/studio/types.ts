@@ -100,11 +100,12 @@ export interface BuilderPersonaData {
 export interface BuilderChannelData {
   [key: string]: unknown
   type: 'builder-channel'
-  channelType: 'whatsapp' | 'telegram' | 'playground' | 'phone' | 'discord' | 'email' | 'sms'
+  channelType: 'whatsapp' | 'telegram' | 'playground' | 'phone' | 'discord' | 'email' | 'sms' | 'webhook'
   label: string
   instanceId?: number
   phoneNumber?: string
   botUsername?: string
+  webhookName?: string
   status?: string
   onDetach?: () => void
 }

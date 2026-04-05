@@ -88,6 +88,7 @@ function getChannelIcon(channelType: string): string {
     case 'telegram': return '\u2708\uFE0F'
     case 'slack': return '\u{1F4AC}'
     case 'discord': return '\u{1F3AE}'
+    case 'webhook': return '\u{1F517}'  // v0.6.0: link glyph
     default: return '\u{1F310}'
   }
 }
@@ -98,6 +99,7 @@ function getChannelLabel(channelType: string): string {
     case 'telegram': return 'Telegram'
     case 'slack': return 'Slack'
     case 'discord': return 'Discord'
+    case 'webhook': return 'Webhook'  // v0.6.0
     default: return channelType
   }
 }
