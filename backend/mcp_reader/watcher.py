@@ -146,6 +146,14 @@ class MCPWatcher:
                             continue
                     except Exception as e:
                         self.logger.error(f"Error checking message_cache for {msg['id']}: {e}", exc_info=True)
+                        # Recover session only from PendingRollbackError (poisoned by earlier failed flush)
+                        from sqlalchemy.exc import InvalidRequestError
+                        if isinstance(e, InvalidRequestError):
+                            try:
+                                self.db_session.rollback()
+                                self.logger.info(f"[SESSION RECOVERY] Rolled back poisoned session after {msg['id']}")
+                            except Exception:
+                                pass
                         self.logger.warning(f"[SAFETY SKIP] Skipping message {msg['id']} due to cache check error")
                         continue
 
