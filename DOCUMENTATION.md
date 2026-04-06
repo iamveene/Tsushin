@@ -562,6 +562,7 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `audio_transcript` | Audio Communication | special | Process audio messages with conversational AI or transcription-only mode | `audio_transcript.py:46-49` |
 | `audio_tts` | Audio TTS Response | passive | Convert text responses to audio using OpenAI, Kokoro, or ElevenLabs TTS | `audio_tts_skill.py:45-48` |
 | `web_search` | Web Search | tool | Search the web using Brave Search (default provider) | `search_skill.py:50-53` |
+| `image_analysis` | Image Analysis | special | Interpret screenshots/photos, answer questions about attached images, and extract visible text before the normal LLM reply path | `image_analysis_skill.py:25-33` |
 | `image` | Image Generation & Editing | tool | Generate new images from text prompts or edit existing images using AI | `image_skill.py:47-50` |
 | `gmail` | Gmail | tool | Read and search emails from connected Gmail accounts | `gmail_skill.py:47-50` |
 | `automation` | Automation | tool | Multi-step workflow automation and process orchestration | `automation_skill.py:42-45` |
@@ -602,6 +603,8 @@ Source: `backend/agent/skills/base.py:204-227`. Individual skills override to ad
 Bindings are stored in the `agent_skill` table (Source: `backend/models.py:712` — class AgentSkill). Each row associates an `agent_id` + `skill_type` with an `is_enabled` flag, a per-agent `execution_mode` override, and a JSON `config` blob validated against the skill's `get_config_schema()`.
 
 The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-220`, component `AgentSkillsManager`) lists available skills from the `SkillManager` catalog (Source: `backend/agent/skills/skill_manager.py:146-184`) and renders a per-skill config modal using the returned `config_schema`.
+
+`image_analysis` is media-triggered rather than tool-triggered. It activates on inbound image attachments, uses Gemini multimodal models to analyze the image, and returns a direct response with `skip_ai=true`. If the image caption looks like an edit request ("remove background", "change this", etc.), the skill intentionally defers so the existing `image` editing skill can handle the request instead.
 
 ### 9.3 Custom Skills (Instruction / Script / MCP Server)
 

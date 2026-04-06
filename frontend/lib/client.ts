@@ -1159,6 +1159,7 @@ export interface SkillDefinition {
   skill_name: string
   skill_description: string
   config_schema: Record<string, any>
+  default_config?: Record<string, any>
 }
 
 // Phase 5.0: Knowledge Management

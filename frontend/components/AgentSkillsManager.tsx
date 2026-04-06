@@ -142,9 +142,31 @@ export default function AgentSkillsManager({ agentId }: Props) {
     return agentSkills.some(s => s.skill_type === skillType && s.is_enabled)
   }
 
+  const buildDefaultSkillConfig = (skillDef?: SkillDefinition | null): Record<string, any> => {
+    if (!skillDef) return {}
+
+    const schemaDefaults: Record<string, any> = {}
+    const schemaProperties = skillDef.config_schema?.properties || {}
+
+    Object.entries(schemaProperties).forEach(([key, schema]) => {
+      if ((schema as any).default !== undefined) {
+        schemaDefaults[key] = (schema as any).default
+      }
+    })
+
+    return {
+      ...schemaDefaults,
+      ...(skillDef.default_config || {}),
+    }
+  }
+
   const getSkillConfig = (skillType: string): Record<string, any> => {
     const skill = agentSkills.find(s => s.skill_type === skillType)
-    return skill?.config || {}
+    const skillDef = availableSkills.find(s => s.skill_type === skillType)
+    return {
+      ...buildDefaultSkillConfig(skillDef),
+      ...(skill?.config || {}),
+    }
   }
 
   const getSkillIntegration = (skillType: string): SkillIntegration | undefined => {
@@ -155,12 +177,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     try {
       if (enabled) {
         const skillDef = availableSkills.find(s => s.skill_type === skillType)
-        const defaultConfig: Record<string, any> = {}
-        if (skillDef) {
-          Object.entries(skillDef.config_schema || {}).forEach(([key, schema]) => {
-            defaultConfig[key] = (schema as any).default
-          })
-        }
+        const defaultConfig = buildDefaultSkillConfig(skillDef)
         await api.updateAgentSkill(agentId, skillType, { is_enabled: true, config: defaultConfig })
       } else {
         await api.disableAgentSkill(agentId, skillType)
@@ -176,12 +193,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const addBuiltinSkill = async (skillType: string) => {
     try {
       const skillDef = availableSkills.find(s => s.skill_type === skillType)
-      const defaultConfig: Record<string, any> = {}
-      if (skillDef) {
-        Object.entries(skillDef.config_schema || {}).forEach(([key, schema]) => {
-          defaultConfig[key] = (schema as any).default
-        })
-      }
+      const defaultConfig = buildDefaultSkillConfig(skillDef)
       await api.updateAgentSkill(agentId, skillType, { is_enabled: true, config: defaultConfig })
       setShowAddSkillModal(false)
       await loadData()
