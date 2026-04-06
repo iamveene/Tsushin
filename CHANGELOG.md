@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Implementations
 
+#### System AI Configuration Simplification
+
+- **Provider-instance-based System AI config:** The AI Configuration settings page (`/settings/ai-configuration`) now points to an existing Provider Instance from the Hub instead of maintaining its own duplicated provider/model lists. Added `system_ai_provider_instance_id` FK column to Config table (migration 0027). The backend resolves vendor, API key, and base URL from the linked ProviderInstance at runtime, with legacy fallback to the old `system_ai_provider`/`system_ai_model` columns. The frontend was rewritten to show a card selector of active Provider Instances with model picker from the instance's `available_models`, eliminating the hardcoded model catalog that went stale. Manual model entry is supported for instances with no discovered models.
+
 #### Flow Execution UX
 
 - **Async flow execution with live progress modal:** The `POST /api/flows/{flow_id}/execute` endpoint now returns immediately (HTTP 202) with a pending FlowRun, executing steps in a background task. The frontend ViewRunModal opens instantly on click and polls every 2s for live updates — showing a progress bar, per-step status with execution times, a pulsing "Live" header indicator, and a remaining-steps counter. Previously the modal only appeared after the entire flow finished executing, leaving users with no feedback.

@@ -94,8 +94,13 @@ class Config(Base):
     # These settings control which AI provider/model is used for system operations
     # (intent classification, skill routing, AI summaries, flow processing)
     # This allows tenants to switch providers if one has issues (e.g., Gemini down)
-    system_ai_provider = Column(String(20), default="gemini")  # gemini, anthropic, openai, openrouter
+    system_ai_provider = Column(String(20), default="gemini")  # Legacy fallback — used only when provider_instance_id is NULL
     system_ai_model = Column(String(100), default="gemini-2.5-flash")  # Default: fast/cheap model for system ops
+    system_ai_provider_instance_id = Column(
+        Integer,
+        ForeignKey("provider_instance.id", ondelete="SET NULL"),
+        nullable=True
+    )  # Points to a ProviderInstance — preferred over system_ai_provider/model
 
     # v0.6.0: Default Vector Store (tenant-wide)
     default_vector_store_instance_id = Column(

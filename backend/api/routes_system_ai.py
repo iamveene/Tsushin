@@ -1,28 +1,26 @@
 """
 System AI Configuration API Routes
-Phase 17: Tenant-Configurable System AI Provider
+Phase 17 → Phase 27: Provider-Instance-Based System AI
 
-Provides endpoints for managing system-level AI configuration.
+Endpoints for managing system-level AI configuration.
+The system AI now points to an existing ProviderInstance instead of
+maintaining its own duplicated provider/model lists.
 
-Security: HIGH-007 fix - All endpoints require authentication (2026-02-02)
+Security: All endpoints require authentication.
 - GET endpoints require org.settings.read permission
 - PUT/POST endpoints require org.settings.write permission
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, Dict, List
 from db import get_db
 from models_rbac import User
 from auth_dependencies import require_permission
 from services.system_ai_config import (
-    get_system_ai_config,
     get_system_ai_config_dict,
-    get_available_providers,
-    get_models_for_provider,
     test_system_ai_connection,
     update_system_ai_config,
-    PROVIDER_MODELS,
 )
 
 router = APIRouter(prefix="/api/config/system-ai", tags=["System AI Configuration"])
@@ -34,50 +32,23 @@ router = APIRouter(prefix="/api/config/system-ai", tags=["System AI Configuratio
 
 class SystemAIConfigResponse(BaseModel):
     """Current system AI configuration"""
-    provider: str = Field(..., description="AI provider (gemini, anthropic, openai, openrouter)")
+    provider: str = Field(..., description="AI provider vendor")
     model_name: str = Field(..., description="Model name")
+    provider_instance_id: Optional[int] = Field(None, description="Linked ProviderInstance ID")
+    instance_name: Optional[str] = Field(None, description="ProviderInstance display name")
+    vendor: Optional[str] = Field(None, description="ProviderInstance vendor")
 
 
 class SystemAIConfigUpdate(BaseModel):
-    """Request to update system AI configuration"""
-    provider: str = Field(..., description="AI provider (gemini, anthropic, openai, openrouter)")
-    model_name: str = Field(..., description="Model name")
-
-
-class ProviderOption(BaseModel):
-    """Provider option for dropdown"""
-    value: str
-    label: str
-    description: str
-
-
-class ModelOption(BaseModel):
-    """Model option for dropdown"""
-    value: str
-    label: str
-    description: str
-
-
-class ProvidersResponse(BaseModel):
-    """List of available providers"""
-    providers: List[ProviderOption]
-
-
-class ModelsResponse(BaseModel):
-    """List of available models for a provider"""
-    provider: str
-    models: List[ModelOption]
-
-
-class AllModelsResponse(BaseModel):
-    """All models grouped by provider"""
-    models_by_provider: Dict[str, List[ModelOption]]
+    """Request to update system AI configuration — points to a ProviderInstance"""
+    provider_instance_id: int = Field(..., description="ProviderInstance ID to use")
+    model_name: str = Field(..., description="Model name from that instance")
 
 
 class TestConnectionRequest(BaseModel):
-    """Request to test AI connection"""
-    provider: Optional[str] = Field(None, description="Provider to test (uses current config if not specified)")
-    model_name: Optional[str] = Field(None, description="Model to test (uses current config if not specified)")
+    """Request to test AI connection via a ProviderInstance"""
+    provider_instance_id: Optional[int] = Field(None, description="Instance to test (uses current if omitted)")
+    model_name: Optional[str] = Field(None, description="Model to test (uses current if omitted)")
 
 
 class TestConnectionResponse(BaseModel):
@@ -94,7 +65,9 @@ class UpdateResponse(BaseModel):
     """Result of config update"""
     success: bool
     message: str
-    provider: Optional[str] = None
+    provider_instance_id: Optional[int] = None
+    instance_name: Optional[str] = None
+    vendor: Optional[str] = None
     model: Optional[str] = None
 
 
@@ -105,119 +78,44 @@ class UpdateResponse(BaseModel):
 @router.get("", response_model=SystemAIConfigResponse)
 async def get_config(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("org.settings.read"))
+    current_user: User = Depends(require_permission("org.settings.read")),
 ):
     """
     Get current system AI configuration.
-
-    Returns the currently configured AI provider and model used for
-    system operations (intent classification, skill routing, AI summaries).
-
-    Requires: org.settings.read permission
+    Returns the linked ProviderInstance and model used for system operations.
     """
-    provider, model = get_system_ai_config(db)
-    return SystemAIConfigResponse(provider=provider, model_name=model)
+    data = get_system_ai_config_dict(db)
+    return SystemAIConfigResponse(**data)
 
 
 @router.put("", response_model=UpdateResponse)
 async def update_config(
     config: SystemAIConfigUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("org.settings.write"))
+    current_user: User = Depends(require_permission("org.settings.write")),
 ):
     """
-    Update system AI configuration.
-
-    Changes the AI provider and model used for system operations.
-    Recommended to test connection before updating.
-
-    Requires: org.settings.write permission
+    Update system AI configuration to use a specific ProviderInstance + model.
     """
-    result = update_system_ai_config(db, config.provider, config.model_name)
-    return UpdateResponse(
-        success=result.get("success", False),
-        message=result.get("message", ""),
-        provider=result.get("provider"),
-        model=result.get("model")
-    )
-
-
-@router.get("/providers", response_model=ProvidersResponse)
-async def list_providers(
-    current_user: User = Depends(require_permission("org.settings.read"))
-):
-    """
-    Get list of available AI providers.
-
-    Returns all supported providers with their labels and descriptions.
-
-    Requires: org.settings.read permission
-    """
-    providers = get_available_providers()
-    return ProvidersResponse(providers=[ProviderOption(**p) for p in providers])
-
-
-@router.get("/models/{provider}", response_model=ModelsResponse)
-async def list_models_for_provider(
-    provider: str,
-    current_user: User = Depends(require_permission("org.settings.read"))
-):
-    """
-    Get list of available models for a specific provider.
-
-    Returns predefined model options for the given provider.
-
-    Requires: org.settings.read permission
-    """
-    models = get_models_for_provider(provider)
-    if not models:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Provider '{provider}' not found or has no predefined models"
-        )
-    return ModelsResponse(
-        provider=provider,
-        models=[ModelOption(**m) for m in models]
-    )
-
-
-@router.get("/models", response_model=AllModelsResponse)
-async def list_all_models(
-    current_user: User = Depends(require_permission("org.settings.read"))
-):
-    """
-    Get all available models grouped by provider.
-
-    Returns all predefined model options for all providers.
-
-    Requires: org.settings.read permission
-    """
-    models_by_provider = {
-        provider: [ModelOption(**m) for m in models]
-        for provider, models in PROVIDER_MODELS.items()
-    }
-    return AllModelsResponse(models_by_provider=models_by_provider)
+    result = update_system_ai_config(db, config.provider_instance_id, config.model_name)
+    return UpdateResponse(**result)
 
 
 @router.post("/test", response_model=TestConnectionResponse)
 async def test_connection(
     request: TestConnectionRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("org.settings.write"))
+    current_user: User = Depends(require_permission("org.settings.write")),
 ):
     """
-    Test connection to an AI provider.
-
-    Sends a simple test message to verify the API key is configured
-    and the provider is accessible. If provider/model not specified,
-    uses the current configuration.
-
-    Requires: org.settings.write permission
+    Test connection to an AI provider instance.
+    If provider_instance_id/model not specified, uses the current configuration.
     """
     result = await test_system_ai_connection(
         db,
-        provider=request.provider,
-        model=request.model_name
+        provider_instance_id=request.provider_instance_id,
+        model=request.model_name,
+        tenant_id=getattr(current_user, 'tenant_id', None),
     )
     return TestConnectionResponse(**result)
 
@@ -225,14 +123,13 @@ async def test_connection(
 @router.post("/test-current", response_model=TestConnectionResponse)
 async def test_current_config(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("org.settings.write"))
+    current_user: User = Depends(require_permission("org.settings.write")),
 ):
     """
     Test connection using current system AI configuration.
-
-    Shortcut endpoint that tests the currently configured provider/model.
-
-    Requires: org.settings.write permission
     """
-    result = await test_system_ai_connection(db)
+    result = await test_system_ai_connection(
+        db,
+        tenant_id=getattr(current_user, 'tenant_id', None),
+    )
     return TestConnectionResponse(**result)

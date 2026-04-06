@@ -1,18 +1,16 @@
 """
 System AI Configuration Service
-Phase 17: Tenant-Configurable System AI Provider
+Phase 17 → Phase 27: Provider-Instance-Based System AI
 
 Provides centralized access to system-level AI configuration.
 Used by skills, classifiers, and other system components that need to make AI calls.
 
-This replaces all hardcoded "gemini-2.5-flash" defaults throughout the codebase,
-allowing tenants to configure which AI provider is used for system operations.
-
-Default: Gemini (gemini-2.5-flash) - fast and affordable for system operations.
+Phase 27: The system AI config now points to an existing ProviderInstance
+instead of maintaining its own duplicated provider/model lists.
+Legacy fallback (direct provider/model in Config) is preserved for backward compatibility.
 """
 import logging
-from typing import Tuple, Optional, Dict, List
-from functools import lru_cache
+from typing import Tuple, Optional, Dict
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -21,211 +19,132 @@ logger = logging.getLogger(__name__)
 DEFAULT_SYSTEM_AI_PROVIDER = "gemini"
 DEFAULT_SYSTEM_AI_MODEL = "gemini-2.5-flash"
 
-# Predefined model options per provider (for UI dropdown)
-# Updated March 2026 with latest models
-PROVIDER_MODELS: Dict[str, List[Dict[str, str]]] = {
-    "gemini": [
-        {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (Recommended)", "description": "Fast & affordable"},
-        {"value": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite", "description": "Most affordable"},
-        {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "description": "Most capable"},
-        {"value": "gemini-2.0-flash", "label": "Gemini 2.0 Flash", "description": "Previous generation"},
-    ],
-    "anthropic": [
-        {"value": "claude-haiku-4-5-latest", "label": "Claude Haiku 4.5 (Recommended)", "description": "Fast & affordable"},
-        {"value": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "description": "Best overall"},
-        {"value": "claude-opus-4-6", "label": "Claude Opus 4.6", "description": "Most capable"},
-        {"value": "claude-sonnet-4-latest", "label": "Claude Sonnet 4", "description": "Previous generation"},
-        {"value": "claude-opus-4-5-latest", "label": "Claude Opus 4.5", "description": "Previous flagship"},
-        {"value": "claude-3-5-sonnet-latest", "label": "Claude 3.5 Sonnet (Legacy)", "description": "Legacy model"},
-    ],
-    "openai": [
-        {"value": "gpt-4.1-mini", "label": "GPT-4.1 Mini (Recommended)", "description": "Fast & affordable"},
-        {"value": "gpt-4.1-nano", "label": "GPT-4.1 Nano", "description": "Most affordable"},
-        {"value": "gpt-4.1", "label": "GPT-4.1", "description": "1M context, strong coding"},
-        {"value": "gpt-5-mini", "label": "GPT-5 Mini", "description": "Next-gen affordable"},
-        {"value": "gpt-5.4", "label": "GPT-5.4", "description": "Latest flagship"},
-        {"value": "gpt-5.3", "label": "GPT-5.3", "description": "Previous flagship"},
-        {"value": "gpt-5", "label": "GPT-5", "description": "Base GPT-5"},
-        {"value": "o4-mini", "label": "O4 Mini", "description": "Fast reasoning"},
-        {"value": "o3", "label": "O3", "description": "Advanced reasoning"},
-        {"value": "gpt-4o-mini", "label": "GPT-4o Mini (Legacy)", "description": "Previous generation"},
-        {"value": "gpt-4o", "label": "GPT-4o (Legacy)", "description": "Previous flagship"},
-    ],
-    "openrouter": [
-        {"value": "google/gemini-2.5-flash", "label": "Gemini 2.5 Flash via OpenRouter", "description": "Fast & affordable"},
-        {"value": "anthropic/claude-sonnet-4-6", "label": "Claude Sonnet 4.6 via OpenRouter", "description": "Anthropic's best"},
-        {"value": "anthropic/claude-haiku-4-5", "label": "Claude Haiku 4.5 via OpenRouter", "description": "Anthropic's fast model"},
-        {"value": "openai/gpt-4.1-mini", "label": "GPT-4.1 Mini via OpenRouter", "description": "OpenAI's fast model"},
-        {"value": "openai/gpt-5.4", "label": "GPT-5.4 via OpenRouter", "description": "OpenAI's flagship"},
-        {"value": "x-ai/grok-4.1-fast", "label": "Grok 4.1 Fast via OpenRouter", "description": "xAI fast & cheap"},
-        {"value": "deepseek/deepseek-r1:free", "label": "DeepSeek R1 (Free)", "description": "Free reasoning model"},
-        {"value": "meta-llama/llama-3.1-8b-instruct:free", "label": "Llama 3.1 8B (Free)", "description": "Free tier"},
-    ],
-    "groq": [
-        {"value": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B Versatile (Recommended)", "description": "Fast & capable"},
-        {"value": "llama-3.1-8b-instant", "label": "Llama 3.1 8B Instant", "description": "Ultra-fast inference"},
-        {"value": "mixtral-8x7b-32768", "label": "Mixtral 8x7B", "description": "Long context (32K)"},
-        {"value": "gemma2-9b-it", "label": "Gemma 2 9B", "description": "Google model via Groq"},
-    ],
-    "grok": [
-        {"value": "grok-4.1-fast", "label": "Grok 4.1 Fast (Recommended)", "description": "Best agentic model, fast & cheap"},
-        {"value": "grok-4", "label": "Grok 4", "description": "xAI flagship model"},
-        {"value": "grok-4.20-beta", "label": "Grok 4.20 Beta", "description": "Newest flagship beta"},
-        {"value": "grok-4-fast", "label": "Grok 4 Fast", "description": "Budget-friendly"},
-        {"value": "grok-3", "label": "Grok 3", "description": "Previous generation"},
-    ],
-    "deepseek": [
-        {"value": "deepseek-chat", "label": "DeepSeek Chat (Recommended)", "description": "General-purpose, very affordable"},
-        {"value": "deepseek-reasoner", "label": "DeepSeek Reasoner", "description": "Reasoning model (R1)"},
-    ],
-    "vertex_ai": [
-        {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (via Vertex)", "description": "Fast & affordable on GCP"},
-        {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro (via Vertex)", "description": "Most capable on GCP"},
-        {"value": "gemini-2.0-flash", "label": "Gemini 2.0 Flash (via Vertex)", "description": "Previous generation on GCP"},
-        {"value": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (via Vertex)", "description": "Anthropic via GCP"},
-        {"value": "claude-haiku-4-5-latest", "label": "Claude Haiku 4.5 (via Vertex)", "description": "Anthropic fast via GCP"},
-    ],
-    "ollama": [
-        {"value": "llama3.2", "label": "Llama 3.2 (Recommended)", "description": "Meta's latest local model"},
-        {"value": "llama3.1", "label": "Llama 3.1", "description": "Meta's previous generation"},
-        {"value": "qwen2.5", "label": "Qwen 2.5", "description": "Alibaba's multilingual model"},
-        {"value": "mistral", "label": "Mistral", "description": "Mistral AI local model"},
-        {"value": "mixtral", "label": "Mixtral", "description": "Mixture of experts"},
-        {"value": "codellama", "label": "Code Llama", "description": "Optimized for code"},
-        {"value": "deepseek-r1", "label": "DeepSeek R1 (Local)", "description": "Reasoning model (local)"},
-    ],
-}
 
-# Provider display names for UI
-PROVIDERS = [
-    {"value": "gemini", "label": "Google Gemini", "description": "Recommended - Fast and reliable"},
-    {"value": "anthropic", "label": "Anthropic Claude", "description": "High quality reasoning"},
-    {"value": "openai", "label": "OpenAI GPT", "description": "Industry standard"},
-    {"value": "grok", "label": "Grok (xAI)", "description": "xAI's frontier models"},
-    {"value": "deepseek", "label": "DeepSeek", "description": "Affordable reasoning models"},
-    {"value": "openrouter", "label": "OpenRouter", "description": "Multi-provider gateway"},
-    {"value": "groq", "label": "Groq", "description": "Ultra-fast inference for open models"},
-    {"value": "vertex_ai", "label": "Vertex AI (Google Cloud)", "description": "GCP Model Garden — Gemini, Claude, and more"},
-    {"value": "ollama", "label": "Ollama (Local)", "description": "Free local models, no API key needed"},
-]
-
-
-def get_system_ai_config(db: Session) -> Tuple[str, str]:
+def get_system_ai_config(db: Session) -> Tuple[str, str, Optional[int]]:
     """
-    Get system-level AI provider and model from Config table.
+    Get system-level AI provider, model, and optional provider_instance_id.
 
-    This is the single source of truth for system AI configuration.
-    All skills and classifiers should call this instead of hardcoding defaults.
-
-    Args:
-        db: Database session
+    Resolution order:
+      1. If system_ai_provider_instance_id is set → resolve vendor from that instance
+      2. Else fall back to legacy system_ai_provider / system_ai_model columns
 
     Returns:
-        Tuple of (provider, model_name)
-        Example: ("gemini", "gemini-2.5-flash")
-
-    Usage:
-        from services.system_ai_config import get_system_ai_config
-
-        provider, model = get_system_ai_config(db)
-        ai_client = AIClient(provider=provider, model_name=model, db=db)
+        Tuple of (provider, model_name, provider_instance_id)
+        provider_instance_id is None when using legacy direct config.
     """
     try:
-        from models import Config
+        from models import Config, ProviderInstance
 
         config = db.query(Config).first()
-        if config:
-            provider = config.system_ai_provider or DEFAULT_SYSTEM_AI_PROVIDER
-            model = config.system_ai_model or DEFAULT_SYSTEM_AI_MODEL
-            logger.debug(f"System AI config loaded: provider={provider}, model={model}")
-            return (provider, model)
-        else:
+        if not config:
             logger.warning("No Config found in database, using defaults")
-            return (DEFAULT_SYSTEM_AI_PROVIDER, DEFAULT_SYSTEM_AI_MODEL)
+            return (DEFAULT_SYSTEM_AI_PROVIDER, DEFAULT_SYSTEM_AI_MODEL, None)
+
+        # Preferred path: resolve from ProviderInstance
+        if config.system_ai_provider_instance_id:
+            instance = db.query(ProviderInstance).filter(
+                ProviderInstance.id == config.system_ai_provider_instance_id,
+                ProviderInstance.is_active == True,  # noqa: E712
+            ).first()
+            if instance:
+                provider = instance.vendor
+                model = config.system_ai_model or DEFAULT_SYSTEM_AI_MODEL
+                logger.debug(
+                    f"System AI config (instance): provider={provider}, "
+                    f"model={model}, instance_id={instance.id}"
+                )
+                return (provider, model, instance.id)
+            else:
+                logger.warning(
+                    f"System AI provider_instance_id={config.system_ai_provider_instance_id} "
+                    "not found or inactive, falling back to legacy config"
+                )
+
+        # Legacy fallback
+        provider = config.system_ai_provider or DEFAULT_SYSTEM_AI_PROVIDER
+        model = config.system_ai_model or DEFAULT_SYSTEM_AI_MODEL
+        logger.debug(f"System AI config (legacy): provider={provider}, model={model}")
+        return (provider, model, None)
 
     except Exception as e:
         logger.error(f"Error loading system AI config: {e}")
-        return (DEFAULT_SYSTEM_AI_PROVIDER, DEFAULT_SYSTEM_AI_MODEL)
+        return (DEFAULT_SYSTEM_AI_PROVIDER, DEFAULT_SYSTEM_AI_MODEL, None)
 
 
-def get_system_ai_config_dict(db: Session) -> Dict[str, str]:
+def get_system_ai_config_dict(db: Session) -> Dict:
     """
-    Get system AI config as a dictionary.
-    Useful for JSON API responses and config injection.
-
-    Args:
-        db: Database session
-
-    Returns:
-        Dict with provider and model_name keys
+    Get system AI config as a dictionary for API responses.
+    Includes provider instance details when available.
     """
-    provider, model = get_system_ai_config(db)
-    return {
+    provider, model, instance_id = get_system_ai_config(db)
+    result = {
         "provider": provider,
-        "model_name": model
+        "model_name": model,
+        "provider_instance_id": instance_id,
     }
 
+    # Enrich with instance details if available
+    if instance_id:
+        try:
+            from models import ProviderInstance
+            instance = db.query(ProviderInstance).get(instance_id)
+            if instance:
+                result["instance_name"] = instance.instance_name
+                result["vendor"] = instance.vendor
+        except Exception:
+            pass
 
-def get_available_providers() -> List[Dict[str, str]]:
+    return result
+
+
+async def test_system_ai_connection(
+    db: Session,
+    provider_instance_id: Optional[int] = None,
+    model: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> Dict:
     """
-    Get list of available AI providers for UI dropdown.
-
-    Returns:
-        List of provider options with value, label, and description
-    """
-    return PROVIDERS
-
-
-def get_models_for_provider(provider: str) -> List[Dict[str, str]]:
-    """
-    Get list of available models for a specific provider.
-
-    Args:
-        provider: Provider name (gemini, anthropic, openai, openrouter)
-
-    Returns:
-        List of model options with value, label, and description
-    """
-    return PROVIDER_MODELS.get(provider, [])
-
-
-async def test_system_ai_connection(db: Session, provider: Optional[str] = None, model: Optional[str] = None, tenant_id: Optional[str] = None) -> Dict:
-    """
-    Test connection to the system AI provider.
-
-    If provider/model not specified, uses current config values.
+    Test connection to the system AI provider using a ProviderInstance.
 
     Args:
         db: Database session
-        provider: Optional provider to test (uses config if not specified)
-        model: Optional model to test (uses config if not specified)
-
-    Returns:
-        Dict with success, message, and details
+        provider_instance_id: Provider instance to test (uses current config if not specified)
+        model: Model to test (uses current config if not specified)
+        tenant_id: Tenant ID for token tracking
     """
     try:
-        # Get config if not specified
-        if not provider or not model:
-            config_provider, config_model = get_system_ai_config(db)
-            provider = provider or config_provider
-            model = model or config_model
+        # Resolve from current config if not specified
+        if not provider_instance_id or not model:
+            cfg_provider, cfg_model, cfg_instance_id = get_system_ai_config(db)
+            provider_instance_id = provider_instance_id or cfg_instance_id
+            model = model or cfg_model
+            provider = cfg_provider
+        else:
+            # Resolve provider from instance
+            from models import ProviderInstance
+            instance = db.query(ProviderInstance).get(provider_instance_id)
+            provider = instance.vendor if instance else "unknown"
 
-        # Import here to avoid circular imports
         from agent.ai_client import AIClient
 
-        # Create token tracker if tenant_id available
         token_tracker = None
         if tenant_id:
             from analytics.token_tracker import TokenTracker
             token_tracker = TokenTracker(db, tenant_id)
 
-        # Create client and send test message
-        client = AIClient(provider=provider, model_name=model, db=db, token_tracker=token_tracker, tenant_id=tenant_id)
+        client = AIClient(
+            provider=provider,
+            model_name=model,
+            db=db,
+            token_tracker=token_tracker,
+            tenant_id=tenant_id,
+            provider_instance_id=provider_instance_id,
+        )
 
         result = await client.generate(
             system_prompt="You are a test assistant. Respond with exactly: OK",
             user_message="Test connection. Reply with OK.",
-            operation_type="connection_test"
+            operation_type="connection_test",
         )
 
         if result.get("error"):
@@ -233,7 +152,7 @@ async def test_system_ai_connection(db: Session, provider: Optional[str] = None,
                 "success": False,
                 "message": f"API Error: {result['error']}",
                 "provider": provider,
-                "model": model
+                "model": model,
             }
 
         answer = result.get("answer", "")
@@ -243,7 +162,7 @@ async def test_system_ai_connection(db: Session, provider: Optional[str] = None,
                 "message": f"Successfully connected to {provider}/{model}",
                 "provider": provider,
                 "model": model,
-                "token_usage": result.get("token_usage")
+                "token_usage": result.get("token_usage"),
             }
         else:
             return {
@@ -251,72 +170,78 @@ async def test_system_ai_connection(db: Session, provider: Optional[str] = None,
                 "message": f"Unexpected response from {provider}/{model}",
                 "provider": provider,
                 "model": model,
-                "response": answer[:100]
             }
 
     except ValueError as e:
-        # API key not found
         return {
             "success": False,
-            "message": f"API key not configured for {provider}",
-            "provider": provider,
-            "model": model,
-            "error": str(e)
+            "message": f"Configuration error: {e}",
+            "provider": provider if 'provider' in dir() else "unknown",
+            "model": model or "unknown",
+            "error": str(e),
         }
     except Exception as e:
         logger.error(f"Error testing system AI connection: {e}", exc_info=True)
         return {
             "success": False,
             "message": f"Connection failed: {str(e)}",
-            "provider": provider,
-            "model": model,
-            "error": str(e)
+            "provider": provider if 'provider' in dir() else "unknown",
+            "model": model or "unknown",
+            "error": str(e),
         }
 
 
-def update_system_ai_config(db: Session, provider: str, model: str) -> Dict:
+def update_system_ai_config(
+    db: Session,
+    provider_instance_id: int,
+    model: str,
+) -> Dict:
     """
-    Update system AI configuration.
+    Update system AI configuration to point to a ProviderInstance + model.
 
     Args:
         db: Database session
-        provider: New provider (gemini, anthropic, openai, openrouter)
-        model: New model name
-
-    Returns:
-        Dict with success status and message
+        provider_instance_id: FK to provider_instance table
+        model: Model name to use from that instance
     """
     try:
-        from models import Config
+        from models import Config, ProviderInstance
 
-        # Validate provider
-        valid_providers = [p["value"] for p in PROVIDERS]
-        if provider not in valid_providers:
+        # Validate instance exists and is active
+        instance = db.query(ProviderInstance).filter(
+            ProviderInstance.id == provider_instance_id,
+            ProviderInstance.is_active == True,  # noqa: E712
+        ).first()
+        if not instance:
             return {
                 "success": False,
-                "message": f"Invalid provider: {provider}. Must be one of: {valid_providers}"
+                "message": f"Provider instance {provider_instance_id} not found or inactive.",
             }
 
-        # Get or create config
         config = db.query(Config).first()
         if not config:
             return {
                 "success": False,
-                "message": "No Config found in database. Please run initial setup first."
+                "message": "No Config found in database. Please run initial setup first.",
             }
 
-        # Update config
-        config.system_ai_provider = provider
+        config.system_ai_provider_instance_id = provider_instance_id
+        config.system_ai_provider = instance.vendor  # Keep legacy column in sync
         config.system_ai_model = model
         db.commit()
 
-        logger.info(f"System AI config updated: provider={provider}, model={model}")
+        logger.info(
+            f"System AI config updated: instance={instance.instance_name} "
+            f"(id={instance.id}), vendor={instance.vendor}, model={model}"
+        )
 
         return {
             "success": True,
-            "message": f"System AI configuration updated to {provider}/{model}",
-            "provider": provider,
-            "model": model
+            "message": f"System AI set to {instance.instance_name} / {model}",
+            "provider_instance_id": instance.id,
+            "instance_name": instance.instance_name,
+            "vendor": instance.vendor,
+            "model": model,
         }
 
     except Exception as e:
@@ -324,5 +249,5 @@ def update_system_ai_config(db: Session, provider: str, model: str) -> Dict:
         logger.error(f"Error updating system AI config: {e}", exc_info=True)
         return {
             "success": False,
-            "message": f"Failed to update configuration: {str(e)}"
+            "message": f"Failed to update configuration: {str(e)}",
         }
