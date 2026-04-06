@@ -184,6 +184,10 @@ Open the URL printed at the end of install (e.g. `https://localhost` or `http://
 
 1. Create admin account + organization.
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
+3. The wizard automatically creates a **ProviderInstance** for the primary provider and assigns it as the **System AI** — no manual configuration needed.
+4. On first login an **onboarding tour** (9 steps) walks through all platform areas: Watcher, Studio, Hub, Channels, Flows, Playground, Security, and a final setup checklist.
+5. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp/Telegram) via the Hub to enable agent messaging.
+6. The **User Guide** is accessible anytime via the **?** button in the header.
 
 **LLM provider keys are configured per-tenant through the Hub UI — not in environment variables.** This enables multi-tenant isolation. Source: `README.md:398`.
 

@@ -120,21 +120,22 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       case 3: // Studio
         router.push('/agents')
         break
-      case 4: // Hub
+      case 4: // Hub - AI Providers & System AI
         router.push('/hub')
         break
-      case 5: // Flows
+      case 5: // Communication Channels (Required)
+        router.push('/hub')
+        break
+      case 6: // Flows
         router.push('/flows')
         break
-      case 6: // Playground
+      case 7: // Playground
         router.push('/playground')
         break
-      case 7: // Communication Channels (stay on playground)
+      case 8: // Security & API Access
+        // Stay on current page
         break
-      case 8: // Contact Management
-        // Stay on current page, will have button to go to contacts
-        break
-      case 9: // Completion
+      case 9: // Setup Checklist
         // Stay on current page
         break
     }

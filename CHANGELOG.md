@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Improvements
 
+#### Setup Wizard & Onboarding Tour Enhancements (2026-04-06)
+
+- **System AI auto-assigned during initial setup:** The setup wizard now creates a ProviderInstance for the primary AI provider and automatically assigns it as the System AI. Previously, System AI had to be manually configured in the Hub after setup, leaving system operations (intent classification, skill routing, flow processing) without a provider until manually configured.
+- **Onboarding tour updated with mandatory configuration guidance:** Revised all 9 tour steps to cover mandatory setup requirements. The tour now points users to the User Guide (accessible via ? button), explains that System AI is auto-configured, highlights communication channel setup as a required step with actionable buttons, and ends with a setup checklist summarizing completed and pending configuration items.
+- **Communication Channels step made actionable:** The tour's Channels step now navigates to the Hub and includes a "Set Up Channels in Hub" action button, making it clear that connecting WhatsApp/Telegram is required for agents to communicate outside the Playground.
+
 #### Dynamic Ollama Model Discovery (2026-04-06)
 
 - **Ollama models now fetched dynamically from running instance:** Replaced all hardcoded Ollama model lists across 6 files (3 backend, 3 frontend) with dynamic discovery from the configured Ollama instance via `/api/tags`. Agent creation, agent configuration manager, playground config panel, Sentinel LLM providers, token tracker, and model pricing routes now all reflect the actual models available on the user's Ollama instance. Hub already showed dynamic models — now the agent creation and configuration selectors are consistent with it. Ollama models are automatically treated as free ($0) in pricing/cost tracking without needing to be individually listed.

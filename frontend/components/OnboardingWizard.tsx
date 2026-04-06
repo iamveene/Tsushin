@@ -8,7 +8,7 @@
  * Auto-starts for new users, can be minimized, and easily dismissible.
  */
 
-import React, { useEffect } from 'react'
+import React, { useEffect, useCallback } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useOnboarding } from '@/contexts/OnboardingContext'
 import Modal from '@/components/ui/Modal'
@@ -30,11 +30,16 @@ export default function OnboardingWizard() {
   const pathname = usePathname()
   const isAuthPage = pathname?.startsWith('/auth/')
 
+  const openUserGuide = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('tsushin:open-user-guide'))
+    minimize()
+  }, [minimize])
+
   const tourSteps: TourStep[] = [
     {
       title: 'Welcome to Tsushin!',
       targetSelector: null,
-      content: 'Tsushin is a powerful multi-agent platform that helps you build, deploy, and manage AI agents across multiple communication channels.',
+      content: 'Tsushin is a powerful multi-agent platform that helps you build, deploy, and manage AI agents across multiple communication channels. This tour covers the mandatory setup steps to get you operational. For detailed documentation, open the User Guide anytime via the ? button in the header.',
       highlightFeatures: [
         'Multi-agent orchestration',
         'WhatsApp & Telegram integration',
@@ -42,8 +47,8 @@ export default function OnboardingWizard() {
         'Flow automation & scheduling'
       ],
       actionButton: {
-        label: 'Configure Google OAuth',
-        action: () => router.push('/settings/integrations')
+        label: 'Open User Guide',
+        action: openUserGuide
       }
     },
     {
@@ -73,17 +78,32 @@ export default function OnboardingWizard() {
       }
     },
     {
-      title: 'Hub - Integrations & API Keys',
+      title: 'Hub - AI Providers & System AI',
       targetSelector: 'a[href="/hub"]',
-      content: 'The Hub centralizes all your external service integrations. Connect AI providers (Gemini, OpenAI, Anthropic, Groq, Vertex AI), set up Google OAuth for Gmail and Calendar, and manage encrypted API key storage.',
+      content: 'The Hub centralizes all your external integrations. Your primary AI provider was automatically set as the System AI during setup — this powers intent classification, skill routing, and other system operations. You can add more providers or change the System AI here at any time.',
       highlightFeatures: [
-        'AI Provider API keys (Gemini, OpenAI, Anthropic, Groq, Vertex AI)',
-        'Google OAuth (Gmail, Calendar)',
-        'Encrypted API key storage',
-        'System AI configuration'
+        'System AI auto-configured from your setup provider',
+        'Add multiple AI providers for failover',
+        'Google OAuth for Gmail & Calendar (optional)',
+        'Encrypted API key storage'
       ],
       actionButton: {
         label: 'Open Hub',
+        action: () => router.push('/hub')
+      }
+    },
+    {
+      title: 'Communication Channels (Required)',
+      targetSelector: 'a[href="/hub"]',
+      content: 'To receive and respond to messages, you must connect at least one communication channel. Set up WhatsApp via QR code scanning in the Hub, connect Telegram with a bot token, or configure webhooks for other services. Without a channel, your agents can only be tested in the Playground.',
+      highlightFeatures: [
+        'WhatsApp: scan QR code to connect your phone',
+        'Telegram: add your bot token',
+        'Webhooks: connect Slack, Discord, or custom services',
+        'Each channel can be independently routed to agents'
+      ],
+      actionButton: {
+        label: 'Set Up Channels in Hub',
         action: () => router.push('/hub')
       }
     },
@@ -105,7 +125,7 @@ export default function OnboardingWizard() {
     {
       title: 'Playground - Safe Testing Environment',
       targetSelector: 'a[href="/playground"]',
-      content: 'The Playground is your safe space to test agents, experiment with prompts, and validate configurations without consuming production message credits or affecting real users.',
+      content: 'The Playground is your safe space to test agents, experiment with prompts, and validate configurations before connecting real channels.',
       highlightFeatures: [
         'Test agents in isolation',
         'Switch between agents',
@@ -118,39 +138,33 @@ export default function OnboardingWizard() {
       }
     },
     {
-      title: 'Communication Channels',
-      targetSelector: null,
-      content: 'Tsushin supports multiple communication channels. Connect WhatsApp via MCP instances with QR code scanning, Telegram via bot tokens, and use automatic agent routing to direct messages to the right agent.',
-      highlightFeatures: [
-        'WhatsApp MCP instances with QR code scanning',
-        'Telegram bot tokens',
-        'Automatic agent routing',
-        'Each channel can be independently enabled per agent'
-      ]
-    },
-    {
       title: 'Security & API Access',
       targetSelector: null,
-      content: 'Tsushin includes built-in AI security controls and a public API for programmatic access. Protect your agents with security profiles and connect external systems via OAuth2.',
+      content: 'Tsushin includes built-in AI security controls and a public API for programmatic access. Sentinel and MemGuard protect your agents from prompt injection and data leaks. The API v1 lets external systems interact with your agents.',
       highlightFeatures: [
         'Sentinel AI security and MemGuard protection',
         'Security profiles with SSRF protection',
         'API v1 for programmatic access',
         'OAuth2 client credentials for integrations'
-      ]
-    },
-    {
-      title: "You're All Set!",
-      targetSelector: null,
-      content: 'You now have a comprehensive understanding of the Tsushin platform. Start by creating your first agent in the Studio, or test the default agents in the Playground.',
-      highlightFeatures: [
-        'Default agents are already configured',
-        'Google OAuth setup is optional',
-        'All features are ready to use',
-        'Access this tour anytime via the ? button'
       ],
       actionButton: {
-        label: 'Go to Playground',
+        label: 'Go to Settings',
+        action: () => router.push('/settings')
+      }
+    },
+    {
+      title: 'Setup Checklist',
+      targetSelector: null,
+      content: 'Here is a summary of the mandatory and recommended steps to get Tsushin fully operational. Complete these to ensure your agents can communicate across all channels.',
+      highlightFeatures: [
+        'AI Provider configured (done during setup)',
+        'System AI auto-assigned (done during setup)',
+        'Connect a channel: WhatsApp or Telegram (Hub)',
+        'Test your agents in the Playground',
+        'Review the User Guide for advanced features (?)'
+      ],
+      actionButton: {
+        label: 'Finish & Go to Playground',
         action: () => {
           router.push('/playground')
           completeTour()

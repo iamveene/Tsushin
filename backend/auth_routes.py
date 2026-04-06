@@ -515,21 +515,82 @@ async def setup_wizard(
             api_keys_stored.append("openrouter")
             logger.info(f"Setup wizard: Stored OpenRouter API key for tenant {tenant.id}")
 
+        # Default model per provider (shared by Steps 3b and 4)
+        provider_defaults = {
+            "gemini": "gemini-2.5-flash",
+            "openai": "gpt-4o-mini",
+            "anthropic": "claude-haiku-4-5",
+            "groq": "llama-3.3-70b-versatile",
+            "grok": "grok-3-mini",
+            "deepseek": "deepseek-chat",
+            "openrouter": "google/gemini-2.5-flash",
+        }
+        model_provider = next((p for p in provider_defaults if p in api_keys_stored), "gemini")
+
+        # Step 3b: Create ProviderInstance for primary provider and auto-assign System AI
+        first_provider_instance = None
+        if api_keys_stored:
+            from services.provider_instance_service import ProviderInstanceService
+            from models import Config as ConfigModel
+
+            primary_vendor = api_keys_stored[0]  # First added = primary
+            # Retrieve the raw API key for the primary provider
+            provider_key_map = {
+                "gemini": setup_request.gemini_api_key,
+                "openai": setup_request.openai_api_key,
+                "anthropic": setup_request.anthropic_api_key,
+                "groq": setup_request.groq_api_key,
+                "grok": setup_request.grok_api_key,
+                "deepseek": setup_request.deepseek_api_key,
+                "openrouter": setup_request.openrouter_api_key,
+            }
+            primary_key = provider_key_map.get(primary_vendor)
+
+            vendor_labels = {
+                "gemini": "Google Gemini",
+                "openai": "OpenAI",
+                "anthropic": "Anthropic",
+                "groq": "Groq",
+                "grok": "Grok (xAI)",
+                "deepseek": "DeepSeek",
+                "openrouter": "OpenRouter",
+            }
+            instance_name = f"{vendor_labels.get(primary_vendor, primary_vendor)} (Default)"
+
+            try:
+                first_provider_instance = ProviderInstanceService.create_instance(
+                    tenant_id=tenant.id,
+                    vendor=primary_vendor,
+                    instance_name=instance_name,
+                    db=db,
+                    api_key=primary_key,
+                    is_default=True,
+                )
+                logger.info(
+                    f"Setup wizard: Created ProviderInstance '{instance_name}' "
+                    f"(id={first_provider_instance.id}) for tenant {tenant.id}"
+                )
+
+                # Auto-assign as System AI
+                primary_model = setup_request.default_model or provider_defaults.get(primary_vendor, "gemini-2.5-flash")
+                config_row = db.query(ConfigModel).first()
+                if config_row:
+                    config_row.system_ai_provider_instance_id = first_provider_instance.id
+                    config_row.system_ai_provider = primary_vendor
+                    config_row.system_ai_model = primary_model
+                    db.commit()
+                    logger.info(
+                        f"Setup wizard: Auto-assigned System AI → instance={first_provider_instance.id}, "
+                        f"vendor={primary_vendor}, model={primary_model}"
+                    )
+            except Exception as e:
+                logger.warning(f"Setup wizard: Failed to create ProviderInstance or assign System AI: {e}")
+
         # Step 4: Create default agents if requested
         agents_created = []
         if setup_request.create_default_agents:
             from services.agent_seeding import seed_default_agents
 
-            # Determine model provider based on available API keys (first key = primary)
-            provider_defaults = {
-                "gemini": "gemini-2.5-flash",
-                "openai": "gpt-4o-mini",
-                "anthropic": "claude-haiku-4-5",
-                "groq": "llama-3.3-70b-versatile",
-                "grok": "grok-3-mini",
-                "deepseek": "deepseek-chat",
-                "openrouter": "google/gemini-2.5-flash",
-            }
             model_provider = next((p for p in provider_defaults if p in api_keys_stored), "gemini")
             model_name = setup_request.default_model or provider_defaults.get(model_provider, "gemini-2.5-flash")
 
@@ -615,6 +676,8 @@ async def setup_wizard(
             "api_keys_stored": api_keys_stored,
             "agents_created": agents_created,
             "tools_created": tools_created,
+            "system_ai_configured": first_provider_instance is not None,
+            "provider_instance_created": first_provider_instance.id if first_provider_instance else None,
             "message": f"Setup complete! Tenant '{tenant.name}' created with {len(agents_created)} agents and {len(tools_created)} sandboxed tools."
         })
         _set_session_cookie(response, tenant_owner_token)

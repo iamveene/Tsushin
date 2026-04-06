@@ -65,6 +65,13 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
     }
   }, [isHelpMenuOpen])
 
+  // Listen for custom event to open User Guide (e.g. from onboarding tour)
+  useEffect(() => {
+    const handleOpenGuide = () => setIsUserGuideOpen(true)
+    window.addEventListener('tsushin:open-user-guide', handleOpenGuide)
+    return () => window.removeEventListener('tsushin:open-user-guide', handleOpenGuide)
+  }, [])
+
   // Emergency Stop state
   const toast = useToast()
   const [emergencyStop, setEmergencyStop] = useState(false)
