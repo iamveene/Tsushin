@@ -22,13 +22,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **DOC-011:** Add §16.4 contact usage examples (multi-channel mapping, system user linking, per-contact agent assignment)
 - **DOC-012:** Update README.md feature highlights and documentation map to reflect new content
 
+### Added
+
+- **Gate Node Step Type** — New conditional flow control node with two modes:
+  - *Programmatic* (zero LLM cost): 15+ operators for numeric, string, regex, existence, and count conditions with AND/OR logic
+  - *Agentic* (AI-driven): LLM evaluates pass/fail using natural language criteria
+  - Configurable on-fail actions: silent skip or send notification
+  - Full UI in flow builder: mode toggle, dynamic condition builder, operator dropdowns
+  - Step output variables: `gate_result`, `gate_mode`, `conditions_evaluated`, `reasoning`
+- **Zero-Cost Inbox Monitor Template** — Fully programmatic email monitoring (Gmail poll → gate → WhatsApp delivery) with zero AI token cost. "Zero AI Cost" badge in template wizard
+- **Smart Email Filter Template** — AI-powered email filtering (Gmail poll → agentic gate → summarization → delivery). Gate criteria configurable (financial, project-specific, etc.)
+
 ### Security
 
-- **BUG-278:** Bump Next.js 14.1.0 → 14.2.33 — patches CVE-2025-29927, CVE-2024-34351, CVE-2024-46982, CVE-2024-51479 (4 High-severity Retire.JS findings)
+- **BUG-SEC-008 (CRITICAL):** Block privilege escalation in `update_client` — non-`api_owner` callers can no longer elevate to `api_owner` role
+- **BUG-LOG-020 (CRITICAL):** Sentinel fail-closed on exceptions — security analysis now blocks content when Sentinel crashes instead of silently bypassing
+- **BUG-SEC-010:** Revoke existing JWT tokens on API client secret rotation
+- **BUG-SEC-016:** Pass `tenant_id` to `check_commands` in shell skill — per-tenant command policies now enforced
+- **BUG-SEC-019:** Add magic bytes file type validation for uploads (PDF, DOCX, XLSX, images) — no longer extension-only
+- **BUG-278:** Bump Next.js 14.1.0 → 14.2.33 — patches CVE-2025-29927, CVE-2024-34351, CVE-2024-46982, CVE-2024-51479
 
 ### Fixed
 
-- **BUG-298:** Pass `tenant_id` to `AgentService` in `AgentRouter.__init__` — watcher instances crashed with "No API key found" for tenant-scoped providers
+- **BUG-298:** Pass `tenant_id` to `AgentService` in `AgentRouter.__init__`
+- **BUG-293:** Circuit breaker state now persisted to DB on transitions — survives backend restarts
+- **BUG-LOG-004:** Tenant-scoped project knowledge chunk queries (defense-in-depth)
+- **BUG-LOG-006:** A2A `comm_depth` now injected into skill config — depth limit functional
+- **BUG-LOG-007:** Stale flow runs cleaned up on engine startup — no more stuck "running" state
+- **BUG-LOG-010:** DB-level unique constraint on `flow_node_run.idempotency_key` (migration 0026)
+- **BUG-LOG-011:** `cancel_run` now interrupts in-flight steps via 5s polling loop
+- **BUG-LOG-012:** `ContactAgentMapping` now has `tenant_id` column (migration 0025) — prevents cross-tenant agent assignment
+- **BUG-LOG-018:** Anonymous contact creation uses SHA-256 instead of Python `hash()` — deterministic IDs across restarts
 
 #### v0.6.0 Comprehensive Audit Remediation (2026-04-06)
 99-finding security and quality audit across 11 teams, 51 fixes applied in 41 files.

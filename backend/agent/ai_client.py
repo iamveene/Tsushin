@@ -93,11 +93,13 @@ class AIClient:
                         self.ollama_api_key = api_key
                 elif instance.vendor == "vertex_ai":
                     # Vertex AI instance: api_key stores the PEM private key
-                    # Project ID, region, SA email loaded from api_key_service (DB only)
+                    # Project ID, region, SA email read from instance.extra_config first,
+                    # then fall back to tenant-level api_key_service (DB only)
+                    inst_extra = instance.extra_config or {}
                     vertex_private_key = api_key or get_api_key('vertex_ai', db, tenant_id=tenant_id) or ""
-                    vertex_project_id = get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
-                    vertex_region = get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
-                    vertex_sa_email = get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
+                    vertex_project_id = inst_extra.get('project_id') or get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
+                    vertex_region = inst_extra.get('region') or get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
+                    vertex_sa_email = inst_extra.get('sa_email') or get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
 
                     if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
                         raise ValueError("Vertex AI instance requires project_id, service_account_email, and private_key.")

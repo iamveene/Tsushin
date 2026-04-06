@@ -37,6 +37,7 @@ class MCPInstanceCreate(BaseModel):
     """Request schema for creating MCP instance"""
     phone_number: str = Field(..., description="WhatsApp phone number (e.g., +5500000000001)")
     instance_type: str = Field(default="agent", pattern="^(agent|tester)$", description="Instance type: 'agent' (bot) or 'tester' (QA)")
+    display_name: Optional[str] = Field(None, max_length=100, description="Optional human-readable label for this instance")
 
     class Config:
         json_schema_extra = {
@@ -66,7 +67,8 @@ class MCPInstanceResponse(BaseModel):
     group_filters: Optional[List[str]] = None  # WhatsApp group names to monitor
     number_filters: Optional[List[str]] = None  # Phone numbers for DM allowlist
     group_keywords: Optional[List[str]] = None  # Keywords that trigger responses
-    dm_auto_mode: bool = False  # Auto-reply to unknown DMs
+    display_name: Optional[str] = None  # Optional human-readable label
+    dm_auto_mode: bool = True  # Auto-reply to unknown DMs (matches model default)
     created_at: datetime
     last_started_at: Optional[datetime]
     last_stopped_at: Optional[datetime]
@@ -149,6 +151,11 @@ async def create_mcp_instance(
             created_by=current_user.id,
             instance_type=data.instance_type
         )
+
+        # Set display_name if provided
+        if data.display_name:
+            instance.display_name = data.display_name.strip()
+            db.commit()
 
         logger.info(f"MCP instance {instance.id} ({data.instance_type}) created for tenant {current_user.tenant_id}")
 

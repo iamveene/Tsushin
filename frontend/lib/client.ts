@@ -1590,6 +1590,7 @@ export interface WhatsAppMCPInstance {
   status: string
   health_status: string
   container_id: string | null
+  display_name: string | null  // Optional human-readable label
   is_group_handler: boolean  // Phase 10: Group message deduplication
   // Phase 17: Instance-Level Message Filtering
   group_filters: string[] | null
@@ -2450,6 +2451,7 @@ export interface ProviderInstance {
   base_url: string | null
   api_key_configured: boolean
   api_key_preview: string
+  extra_config: Record<string, string> | null
   available_models: string[]
   is_default: boolean
   is_active: boolean
@@ -2463,6 +2465,7 @@ export interface ProviderInstanceCreate {
   instance_name: string
   base_url?: string
   api_key?: string
+  extra_config?: Record<string, string>
   available_models?: string[]
   is_default?: boolean
 }
@@ -4233,11 +4236,13 @@ export const api = {
     return res.json()
   },
 
-  async createMCPInstance(phone_number: string, instance_type: 'agent' | 'tester' = 'agent'): Promise<WhatsAppMCPInstance> {
+  async createMCPInstance(phone_number: string, instance_type: 'agent' | 'tester' = 'agent', display_name?: string): Promise<WhatsAppMCPInstance> {
+    const payload: any = { phone_number, instance_type }
+    if (display_name) payload.display_name = display_name
     const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone_number, instance_type }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) await handleApiError(res, 'Failed to create MCP instance')
     return res.json()

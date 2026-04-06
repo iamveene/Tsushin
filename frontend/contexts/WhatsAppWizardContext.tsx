@@ -10,6 +10,9 @@ interface WizardState {
   // Accumulated data from completed steps
   createdInstanceId: number | null
   createdInstance: WhatsAppMCPInstance | null
+  instanceDisplayName: string | null
+  botContact: Contact | null
+  userContact: Contact | null
   configuredFilters: {
     group_filters?: string[]
     number_filters?: string[]
@@ -30,6 +33,9 @@ interface WhatsAppWizardContextType {
   previousStep: () => void
   goToStep: (step: number) => void
   setInstanceData: (instance: WhatsAppMCPInstance) => void
+  setInstanceDisplayName: (name: string) => void
+  setBotContact: (contact: Contact) => void
+  setUserContact: (contact: Contact) => void
   setFiltersData: (filters: WizardState['configuredFilters']) => void
   addContact: (contact: Contact) => void
   setBoundAgent: (agentId: number, agentName: string) => void
@@ -38,7 +44,7 @@ interface WhatsAppWizardContextType {
 
 const WhatsAppWizardContext = createContext<WhatsAppWizardContextType | undefined>(undefined)
 
-const TOTAL_STEPS = 7
+const TOTAL_STEPS = 8
 const DISMISSED_KEY = 'tsushin_whatsapp_wizard_dismissed'
 
 const initialState: WizardState = {
@@ -47,6 +53,9 @@ const initialState: WizardState = {
   totalSteps: TOTAL_STEPS,
   createdInstanceId: null,
   createdInstance: null,
+  instanceDisplayName: null,
+  botContact: null,
+  userContact: null,
   configuredFilters: null,
   createdContacts: [],
   boundAgentId: null,
@@ -117,6 +126,18 @@ export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
     }))
   }, [])
 
+  const setInstanceDisplayName = useCallback((name: string) => {
+    setState(prev => ({ ...prev, instanceDisplayName: name }))
+  }, [])
+
+  const setBotContact = useCallback((contact: Contact) => {
+    setState(prev => ({ ...prev, botContact: contact }))
+  }, [])
+
+  const setUserContact = useCallback((contact: Contact) => {
+    setState(prev => ({ ...prev, userContact: contact }))
+  }, [])
+
   const setFiltersData = useCallback((filters: WizardState['configuredFilters']) => {
     setState(prev => ({
       ...prev,
@@ -136,7 +157,7 @@ export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
       ...prev,
       boundAgentId: agentId,
       boundAgentName: agentName,
-      stepsCompleted: { ...prev.stepsCompleted, 6: true },
+      stepsCompleted: { ...prev.stepsCompleted, 7: true },
     }))
   }, [])
 
@@ -157,6 +178,9 @@ export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
         previousStep,
         goToStep,
         setInstanceData,
+        setInstanceDisplayName,
+        setBotContact,
+        setUserContact,
         setFiltersData,
         addContact,
         setBoundAgent,

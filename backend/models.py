@@ -452,10 +452,11 @@ class ProviderInstance(Base):
 
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(50), nullable=False, index=True)
-    vendor = Column(String(30), nullable=False)  # 'openai'|'anthropic'|'gemini'|'groq'|'grok'|'openrouter'|'ollama'|'custom'
+    vendor = Column(String(30), nullable=False)  # 'openai'|'anthropic'|'gemini'|'groq'|'grok'|'openrouter'|'vertex_ai'|'ollama'|'custom'
     instance_name = Column(String(100), nullable=False)
     base_url = Column(String(500), nullable=True)  # NULL = vendor default
     api_key_encrypted = Column(Text, nullable=True)  # Fernet-encrypted
+    extra_config = Column(JSON, default=dict)  # Vendor-specific: vertex_ai stores project_id, region, sa_email
     available_models = Column(JSON, default=list)
     is_default = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
@@ -2722,6 +2723,7 @@ class WhatsAppMCPInstance(Base):
     # Container identification
     container_name = Column(String(100), unique=True, nullable=False)  # e.g., "mcp-tenant123-1699999999"
     phone_number = Column(String(20), nullable=False)  # WhatsApp phone number
+    display_name = Column(String(100), nullable=True)  # Optional human-readable label (e.g., "Support Bot")
     instance_type = Column(String(20), default="agent", nullable=False)  # "agent" or "tester"
 
     # Networking

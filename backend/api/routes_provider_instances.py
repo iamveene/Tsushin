@@ -54,6 +54,7 @@ class ProviderInstanceCreate(BaseModel):
     instance_name: str
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    extra_config: Optional[dict] = None  # Vendor-specific: vertex_ai uses project_id, region, sa_email
     available_models: List[str] = []
     is_default: bool = False
 
@@ -62,6 +63,7 @@ class ProviderInstanceUpdate(BaseModel):
     instance_name: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    extra_config: Optional[dict] = None
     available_models: Optional[List[str]] = None
     is_default: Optional[bool] = None
     is_active: Optional[bool] = None
@@ -75,6 +77,7 @@ class ProviderInstanceResponse(BaseModel):
     base_url: Optional[str] = None
     api_key_configured: bool
     api_key_preview: str
+    extra_config: Optional[dict] = None
     available_models: List[str]
     is_default: bool
     is_active: bool
@@ -201,6 +204,10 @@ def _mask_api_key(encrypted_value: str, tenant_id: str, instance: ProviderInstan
 
 def _to_response(instance: ProviderInstance, db: Session) -> ProviderInstanceResponse:
     """Convert a ProviderInstance model to a ProviderInstanceResponse."""
+    # For Vertex AI, redact private_key from extra_config in response
+    extra = instance.extra_config or {}
+    if instance.vendor == "vertex_ai" and extra:
+        extra = {k: v for k, v in extra.items() if k != "private_key"}
     return ProviderInstanceResponse(
         id=instance.id,
         tenant_id=instance.tenant_id,
@@ -211,6 +218,7 @@ def _to_response(instance: ProviderInstance, db: Session) -> ProviderInstanceRes
         api_key_preview=_mask_api_key(
             instance.api_key_encrypted, instance.tenant_id, instance, db
         ) if instance.api_key_encrypted else "",
+        extra_config=extra if extra else None,
         available_models=instance.available_models or [],
         is_default=instance.is_default,
         is_active=instance.is_active,
@@ -381,12 +389,21 @@ def create_provider_instance(
         except SSRFValidationError as e:
             raise HTTPException(status_code=400, detail=f"Invalid base URL: {e}")
 
+    # For Vertex AI, extract private_key from extra_config for encrypted storage
+    api_key_to_store = data.api_key
+    extra_config = data.extra_config or {}
+    if vendor == "vertex_ai" and extra_config:
+        # Private key goes into api_key_encrypted, not extra_config JSON
+        if "private_key" in extra_config:
+            api_key_to_store = extra_config.pop("private_key") or api_key_to_store
+
     # Create instance
     instance = ProviderInstance(
         tenant_id=ctx.tenant_id,
         vendor=vendor,
         instance_name=data.instance_name,
         base_url=data.base_url,
+        extra_config=extra_config if extra_config else {},
         available_models=data.available_models,
         is_default=data.is_default,
         is_active=True,
@@ -396,8 +413,8 @@ def create_provider_instance(
     db.flush()  # Get the ID for encryption identifier
 
     # Encrypt and store API key if provided
-    if data.api_key:
-        encrypted = _encrypt_provider_key(data.api_key, ctx.tenant_id, instance.id, db)
+    if api_key_to_store:
+        encrypted = _encrypt_provider_key(api_key_to_store, ctx.tenant_id, instance.id, db)
         if not encrypted:
             raise HTTPException(status_code=500, detail="Failed to encrypt API key")
         instance.api_key_encrypted = encrypted
@@ -490,6 +507,21 @@ def update_provider_instance(
             except SSRFValidationError as e:
                 raise HTTPException(status_code=400, detail=f"Invalid base URL: {e}")
         instance.base_url = data.base_url or None
+
+    # Handle extra_config update (merge, don't replace)
+    if data.extra_config is not None:
+        current_extra = instance.extra_config or {}
+        # For Vertex AI, extract private_key for encrypted storage
+        new_extra = dict(data.extra_config)
+        if instance.vendor == "vertex_ai" and "private_key" in new_extra:
+            pk = new_extra.pop("private_key")
+            if pk:
+                encrypted = _encrypt_provider_key(pk, instance.tenant_id, instance.id, db)
+                if not encrypted:
+                    raise HTTPException(status_code=500, detail="Failed to encrypt private key")
+                instance.api_key_encrypted = encrypted
+        current_extra.update(new_extra)
+        instance.extra_config = current_extra
 
     if data.api_key is not None:
         if data.api_key:
