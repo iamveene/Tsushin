@@ -298,6 +298,11 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
                             <div className="flex items-center gap-2 flex-wrap">
                               <h3 className="text-base font-semibold text-white group-hover:text-teal-300 transition-colors">{t.name}</h3>
                               <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border font-medium ${badge.className}`}>{badge.label}</span>
+                              {t.highlights && t.highlights.some((h: string) => h.toLowerCase().includes('zero ai cost')) && (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                  Zero AI Cost
+                                </span>
+                              )}
                             </div>
                             <p className="text-sm text-slate-400 mt-1 leading-relaxed">{t.description}</p>
                             {t.highlights && t.highlights.length > 0 && (

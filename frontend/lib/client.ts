@@ -1336,7 +1336,7 @@ export interface ConversationThread {
 // Phase 8.0: Flow creation types
 export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring'
 export type FlowType = 'notification' | 'conversation' | 'workflow' | 'task'
-export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command'
+export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate'
 
 // Summarization output format options
 export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'minimal'
@@ -1361,6 +1361,14 @@ export interface FlowStepConfig {
   model?: string
   // Slash command step config
   command?: string
+  // Gate step config
+  gate_mode?: 'programmatic' | 'agentic'
+  gate_conditions?: Array<{field: string; operator: string; value: any; type: 'number' | 'string' | 'boolean' | 'regex' | 'count'}>
+  gate_logic?: 'all' | 'any'
+  gate_prompt?: string
+  gate_source_step?: string
+  gate_on_fail?: 'skip' | 'notify' | 'alternative'
+  gate_fail_notification?: {channel?: string; recipient?: string; message_template?: string}
 }
 
 export interface CreateFlowStepData {
