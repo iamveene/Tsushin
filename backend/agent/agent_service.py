@@ -360,6 +360,60 @@ class AgentService:
 
         return text
 
+    def _sanitize_unexecuted_tool_output(self, text: str) -> str:
+        """
+        Remove or normalize leaked tool-call markup before sending it to end users.
+
+        Some lighter/local models, especially via Ollama, may emit pseudo tool-call
+        blocks like:
+
+        [TOOL_CALL]
+        action: respond
+        message: Hello
+        [/TOOL_CALL]
+
+        If the block wasn't executed by our tool pipeline, we should never expose the
+        raw markup to WhatsApp/Slack/etc. In the special "action: respond" case, we can
+        safely extract the intended user-facing message.
+        """
+        if not text:
+            return text
+
+        cleaned = text
+
+        def _replace_tool_call_block(match: re.Match) -> str:
+            block = match.group(1).strip()
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            parsed = {}
+            for line in lines:
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                parsed[key.strip().lower()] = value.strip()
+
+            # Graceful fallback for local models that emit pseudo-actions instead of
+            # proper tool_name/command_name fields.
+            if parsed.get("action", "").lower() == "respond" and parsed.get("message"):
+                return parsed["message"]
+
+            self.logger.warning("Stripped unexecuted [TOOL_CALL] block from AI response")
+            return ""
+
+        cleaned = re.sub(
+            r"\[TOOL_CALL\](.*?)\[/TOOL_CALL\]",
+            _replace_tool_call_block,
+            cleaned,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
+        # Safety net for unresolved fenced tool blocks that also should not leak.
+        if "```tool:" in cleaned:
+            self.logger.warning("Stripped unresolved fenced tool block from AI response")
+            cleaned = re.sub(r"```tool:.*?```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+
+        cleaned = re.sub(r"\n\n\n+", "\n\n", cleaned).strip()
+        return cleaned
+
     async def process_message(
         self,
         sender_key: str,
@@ -1016,6 +1070,11 @@ IMPORTANT: When the user asks for system information, server status, file listin
 
                             tool_used = f"custom:{tool_call['tool_name']}"
                             tool_result = tool_execution_result
+
+            # UX FIX: Never leak raw tool-call markup to end users if the tool
+            # wasn't executed or the model produced pseudo tool syntax.
+            if ai_response:
+                ai_response = self._sanitize_unexecuted_tool_output(ai_response)
 
             # Phase 4.8: Memory management moved to Multi-Agent Memory Manager in router
             # Ring buffer deprecated
