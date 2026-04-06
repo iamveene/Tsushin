@@ -6721,11 +6721,11 @@ export const api = {
     return data.models || []
   },
 
-  async validateProviderUrl(url: string): Promise<{ valid: boolean; error?: string }> {
+  async validateProviderUrl(url: string, vendor?: string): Promise<{ valid: boolean; error?: string }> {
     const res = await authenticatedFetch(`${API_URL}/api/provider-instances/validate-url`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, vendor }),
     })
     if (!res.ok) await handleApiError(res, 'Failed to validate URL')
     return res.json()

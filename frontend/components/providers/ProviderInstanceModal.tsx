@@ -193,7 +193,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
     setUrlValidating(true)
     urlDebounceRef.current = setTimeout(async () => {
       try {
-        const result = await api.validateProviderUrl(url)
+        const result = await api.validateProviderUrl(url, vendor)
         setUrlValidation(result)
       } catch {
         setUrlValidation({ valid: false, error: 'Failed to validate URL' })
@@ -201,7 +201,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
         setUrlValidating(false)
       }
     }, 600)
-  }, [])
+  }, [vendor])
 
   // Handle JSON paste for Vertex AI service account key
   const handleVertexJsonPaste = (value: string) => {

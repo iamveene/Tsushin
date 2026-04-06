@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug fixes
 
+#### Provider Instance Test Connection — Deprecated Model Fix (2026-04-06)
+
+- **BUG-308 — Test connection uses deprecated/wrong model (HIGH):** The "Test Connection" button on provider instances ignored the user-selected model and fell back to hardcoded model IDs. For Anthropic, the fallback was `claude-3-5-haiku-20241022` (deprecated), causing a 404 error. Fixed by: passing the user's selected model from the frontend to both test connection endpoints (raw and saved), adding model priority chain (request > saved > fallback), and updating all hardcoded fallbacks to current models. Also updated all model selector lists, pricing tables, and discovery fallbacks across the platform to include Claude 4.6 series (Opus, Sonnet, Haiku) and removed deprecated Claude 3 Haiku / 3.5 Haiku entries.
+
 #### Provider Instance Validation (2026-04-06)
 
 - **BUG-305 — Provider instance model required validation:** Provider instances could be created without any models, making them unusable. Added frontend validation (disabled save button, red required asterisk, auto-add of typed model text on save) and backend validation (HTTP 400 if `available_models` is empty).
