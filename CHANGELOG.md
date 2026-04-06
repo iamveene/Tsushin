@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - develop
 
+### Fixed
+
+#### v0.6.0 Comprehensive Audit Remediation (2026-04-06)
+99-finding security and quality audit across 11 teams, 51 fixes applied in 41 files.
+
+**Security & Auth (Group A):**
+- Add authentication to 3 public Sentinel endpoints (LLM providers, models, detection-types)
+- Add RBAC guards to Sentinel exception, prompts, and channel health endpoints
+- Seed 6 missing RBAC permissions (channel_health, agent_communication, vector_stores)
+- SSRF-validate browser proxy URL and alert webhook URL
+- Fix X-Forwarded-For header bypass on webhook IP allowlist
+- Validate global admin password minimum length in setup wizard
+
+**Tenant Isolation (Group B):**
+- SharedMemoryPool update/delete/share now enforce tenant_id filters
+- VectorStoreRegistry cache keyed by (instance_id, tenant_id) — prevents cross-tenant access
+- SkillContextService cache keyed by tenant_id:agent_id — prevents cross-tenant pollution
+- SentinelEffectiveConfig returns deep copy from cache — prevents exemption bleed
+
+**Sentinel & Detection (Group C):**
+- Replace stale hardcoded valid_types with dynamic DETECTION_REGISTRY derivation — restores vector_store_poisoning, agent_escalation, browser_ssrf detection
+- Fix BUG-279: cleanup_poisoned_memory now logs error (Memory model has no message_id column)
+
+**Channels & Circuit Breaker (Group D):**
+- Circuit breaker: implement half_open_max_failures, extract try_recover() from should_probe()
+- Prevent duplicate Slack/Discord workspace registration (HTTP 409)
+- SSRF-validate channel alert dispatcher webhook URLs
+- Fix Slack adapter deprecated asyncio.get_event_loop() → get_running_loop()
+- Bump aiohttp floor to >=3.10.11 (CVE-2024-52304, CVE-2024-23334)
+- Fix pinecone-client → pinecone package name
+
+**Memory, OKG & A2A (Group E):**
+- Clamp decay_lambda, apply_decay_to_score, and mmr_lambda to valid ranges
+- Add user_id check to OKG forget ownership validation
+- Fix missing await on A2A vector store search
+- Align OKG _compute_decay unknown-timestamp fallback with temporal_decay.py
+
+**Browser Automation (Group F):**
+- Per-tenant browser session cap (prevents cross-tenant DoS)
+- Thread-safe singleton creation with double-checked locking
+- Fix open_tab TOCTOU race and page leak on navigation failure
+- extract()/screenshot() return BrowserResult instead of raising exceptions
+- go_back()/go_forward() handle None response (no history)
+- Cleanup loop releases lock before provider.cleanup()
+
+**Skills, Flows & Build (Group G):**
+- Fix critical NameError: router.py tenant_id → self.tenant_id on DM messages
+- Scope flow stale cleanup to flow_definition_id (prevents cross-tenant damage)
+- Remove nuclei from Dockerfile (BUG-278 — runs in toolbox container)
+- Replace hardcoded agent ID 7 with config flag in scheduler_skill
+- Fix VectorStoreInstance nullable mismatches vs migration definitions
+
 ### Added
 
 #### Flow Creation Wizard — Pre-built Hybrid Automations (2026-04-05)
