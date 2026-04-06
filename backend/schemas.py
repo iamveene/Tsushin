@@ -160,6 +160,7 @@ class StepType(str, Enum):
     SKILL = "skill"  # Phase 16: Agentic skill execution in flows
     SLASH_COMMAND = "slash_command"  # Phase 8: Slash command execution
     SUMMARIZATION = "summarization"  # Phase 17: AI-powered summarization
+    GATE = "gate"  # Conditional gate node (programmatic or agentic)
 
 
 class FlowStatus(str, Enum):
@@ -230,6 +231,21 @@ class FlowStepConfig(BaseModel):
     # Slash command-specific
     command: Optional[str] = None  # e.g. "/scheduler list week"
     command_id: Optional[Union[str, int]] = None  # For tool commands
+
+    # Gate-specific (conditional flow control)
+    gate_mode: Optional[str] = Field(default=None, description="'programmatic' (zero LLM cost) or 'agentic' (AI-driven)")
+    gate_conditions: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Programmatic conditions: [{field, operator, value, type}]"
+    )
+    gate_logic: Optional[str] = Field(default="all", description="'all' (AND) or 'any' (OR)")
+    gate_prompt: Optional[str] = Field(default=None, description="Agentic mode: natural language evaluation prompt")
+    gate_source_step: Optional[str] = Field(default=None, description="Step output to evaluate (e.g. 'inbox', 'step_1')")
+    gate_on_fail: Optional[str] = Field(default="skip", description="'skip', 'notify', or 'alternative'")
+    gate_fail_notification: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Notification config on gate fail: {channel, recipient, message_template}"
+    )
 
     # Agent settings (can override flow-level defaults)
     agent_id: Optional[int] = None

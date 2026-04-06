@@ -586,6 +586,58 @@ class ChannelHealthService:
                 except Exception:
                     pass
 
+        # 2.5 BUG-293: Persist circuit breaker state to the instance DB columns
+        #     so state survives backend restarts.
+        persist_db = None
+        try:
+            persist_db = self.get_db_session()
+            _MODEL_MAP = {
+                "whatsapp": WhatsAppMCPInstance,
+                "telegram": TelegramBotInstance,
+            }
+            # Lazy-import optional channel models
+            try:
+                from models import SlackIntegration
+                _MODEL_MAP["slack"] = SlackIntegration
+            except ImportError:
+                pass
+            try:
+                from models import DiscordIntegration
+                _MODEL_MAP["discord"] = DiscordIntegration
+            except ImportError:
+                pass
+            try:
+                from models import WebhookIntegration
+                _MODEL_MAP["webhook"] = WebhookIntegration
+            except ImportError:
+                pass
+
+            model_cls = _MODEL_MAP.get(channel_type)
+            if model_cls:
+                inst = persist_db.query(model_cls).filter(model_cls.id == instance_id).first()
+                if inst:
+                    inst.circuit_breaker_state = new_state.value
+                    inst.circuit_breaker_failure_count = cb.failure_count
+                    inst.circuit_breaker_opened_at = cb.opened_at
+                    persist_db.commit()
+                    logger.debug(
+                        f"Persisted CB state for {channel_type}/{instance_id}: "
+                        f"{new_state.value} (failures={cb.failure_count})"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to persist circuit breaker state: {e}")
+            if persist_db:
+                try:
+                    persist_db.rollback()
+                except Exception:
+                    pass
+        finally:
+            if persist_db:
+                try:
+                    persist_db.close()
+                except Exception:
+                    pass
+
         # 3. Emit via WatcherActivityService (if available)
         if self.watcher_activity_service:
             try:

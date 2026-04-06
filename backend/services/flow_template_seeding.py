@@ -439,6 +439,145 @@ def build_new_contact_welcome(params: Dict[str, Any], tenant_id: str) -> FlowCre
 
 
 # ============================================================================
+# Template 6 — Zero-Cost Email Inbox Monitor (fully programmatic, no LLM)
+# ============================================================================
+
+def build_zero_cost_inbox_monitor(params: Dict[str, Any], tenant_id: str) -> FlowCreate:
+    """Fully programmatic email monitoring — zero LLM tokens.
+
+    1. Gmail skill fetches unread emails (programmatic)
+    2. Gate node checks if unread count meets threshold (programmatic)
+    3. Notification delivers email list via WhatsApp/Telegram (programmatic)
+
+    Total AI cost: $0.00
+    """
+    agent_id = int(params["agent_id"])
+    channel = params.get("channel", "whatsapp")
+    recipient = params["recipient"]
+    time_of_day = params.get("time_of_day", "08:00")
+    timezone = params.get("timezone", "America/Sao_Paulo")
+    min_emails = int(params.get("min_emails", 1))
+    max_emails = int(params.get("max_emails", 20))
+    keyword_filter = params.get("keyword_filter", "")
+    persona_id = params.get("persona_id")
+
+    steps: List[FlowStepCreate] = [
+        _step(1, StepType.SKILL, "fetch_emails", FlowStepConfig(
+            skill_type="gmail",
+            prompt=f"List the {max_emails} most recent unread emails. Include sender, subject, date, and a short preview of each.",
+            output_alias="inbox",
+        ), on_failure="skip", agent_id=agent_id, timeout_seconds=90,
+           description="Programmatic Gmail poll — fetches unread emails."),
+    ]
+
+    # Build gate conditions
+    gate_conditions = [
+        {"field": "count", "operator": ">=", "value": min_emails, "type": "number"},
+    ]
+    # Optional keyword filter
+    if keyword_filter and keyword_filter.strip():
+        gate_conditions.append(
+            {"field": "raw_output", "operator": "matches", "value": keyword_filter.strip(), "type": "regex"}
+        )
+
+    steps.append(
+        _step(2, StepType.GATE, "inbox_gate", FlowStepConfig(
+            gate_mode="programmatic",
+            gate_source_step="inbox",
+            gate_conditions=gate_conditions,
+            gate_logic="all",
+            gate_on_fail="skip",
+        ), on_failure="skip", timeout_seconds=10,
+           description="Programmatic gate — passes only when inbox meets threshold."),
+    )
+
+    steps.append(
+        _step(3, StepType.NOTIFICATION, "send_inbox", FlowStepConfig(
+            channel=channel, recipient=recipient,
+            message_template=(
+                "📬 *Inbox Alert* — {{inbox.count}} unread email(s)\n\n"
+                "{{inbox.raw_output}}"
+            ),
+        ), timeout_seconds=30,
+           description="Deliver email list to your channel — no AI summarization."),
+    )
+
+    return FlowCreate(
+        name=params.get("name") or "Zero-Cost Inbox Monitor",
+        description="Fully programmatic: Gmail poll → gate (unread threshold) → WhatsApp delivery. Zero AI token cost.",
+        execution_method=ExecutionMethod.RECURRING,
+        scheduled_at=_first_scheduled_at(time_of_day, timezone),
+        recurrence_rule=RecurrenceRule(frequency="daily", interval=1, timezone=timezone),
+        flow_type=FlowType.WORKFLOW,
+        default_agent_id=agent_id,
+        steps=steps,
+    )
+
+
+# ============================================================================
+# Template 7 — Agentic Email Gate (AI-driven condition)
+# ============================================================================
+
+def build_agentic_email_gate(params: Dict[str, Any], tenant_id: str) -> FlowCreate:
+    """Email monitoring with AI-driven gate — agent decides if emails are relevant.
+
+    1. Gmail skill fetches recent emails (programmatic)
+    2. Gate node: agentic — agent evaluates if emails match criteria (e.g. financial)
+    3. Summarization: agent generates digest of matching emails
+    4. Notification: deliver digest
+
+    Use case: "Only notify me if financial-related emails arrive"
+    """
+    agent_id = int(params["agent_id"])
+    channel = params.get("channel", "whatsapp")
+    recipient = params["recipient"]
+    time_of_day = params.get("time_of_day", "08:00")
+    timezone = params.get("timezone", "America/Sao_Paulo")
+    max_emails = int(params.get("max_emails", 20))
+    gate_criteria = params.get("gate_criteria") or "Emails contain financial, billing, invoice, or payment-related content"
+    persona_id = params.get("persona_id")
+
+    steps: List[FlowStepCreate] = [
+        _step(1, StepType.SKILL, "fetch_emails", FlowStepConfig(
+            skill_type="gmail",
+            prompt=f"List the {max_emails} most recent emails with sender, subject, and preview.",
+            output_alias="inbox",
+        ), on_failure="skip", agent_id=agent_id, timeout_seconds=90,
+           description="Programmatic Gmail poll."),
+        _step(2, StepType.GATE, "relevance_gate", FlowStepConfig(
+            gate_mode="agentic",
+            gate_source_step="inbox",
+            gate_prompt=gate_criteria,
+            gate_on_fail="skip",
+        ), on_failure="skip", agent_id=agent_id, timeout_seconds=60,
+           description="Agentic gate — AI evaluates if emails match your criteria."),
+        _step(3, StepType.SUMMARIZATION, "digest", FlowStepConfig(
+            source_step="inbox",
+            output_format="structured",
+            summary_prompt="Summarize only the emails that match the gate criteria. Group by sender, highlight action items.",
+            prompt_mode="append",
+        ), on_failure="skip", agent_id=agent_id, persona_id=persona_id, timeout_seconds=180,
+           description="Agentic summarization of relevant emails."),
+        _step(4, StepType.NOTIFICATION, "send_digest", FlowStepConfig(
+            channel=channel, recipient=recipient,
+            message_template="🎯 *Filtered Email Digest*\n\n{{step_3.summary}}",
+        ), timeout_seconds=30,
+           description="Deliver filtered digest."),
+    ]
+
+    return FlowCreate(
+        name=params.get("name") or "Smart Email Filter",
+        description="Hybrid: Gmail poll → AI gate (relevance check) → summarization → delivery.",
+        execution_method=ExecutionMethod.RECURRING,
+        scheduled_at=_first_scheduled_at(time_of_day, timezone),
+        recurrence_rule=RecurrenceRule(frequency="daily", interval=1, timezone=timezone),
+        flow_type=FlowType.WORKFLOW,
+        default_agent_id=agent_id,
+        steps=steps,
+    )
+
+
+# ============================================================================
 # Registry
 # ============================================================================
 
@@ -589,6 +728,69 @@ FLOW_TEMPLATES: List[FlowTemplate] = [
             PERSONA_PARAM,
         ],
         build=build_new_contact_welcome,
+    ),
+    FlowTemplate(
+        id="zero_cost_inbox_monitor",
+        name="Zero-Cost Inbox Monitor",
+        description="Fully programmatic email monitoring — no AI tokens used. Get notified when your inbox meets conditions.",
+        category="monitoring",
+        icon="gate",
+        required_credentials=["gmail"],
+        highlights=[
+            "Zero AI cost — no LLM tokens consumed",
+            "Programmatic gate: triggers when unread >= N",
+            "Optional keyword/regex filter",
+            "Direct email list delivery to WhatsApp/Telegram",
+        ],
+        params_schema=[
+            NAME_PARAM, AGENT_PARAM, CHANNEL_PARAM, RECIPIENT_PARAM,
+            TIME_OF_DAY_PARAM, TIMEZONE_PARAM,
+            TemplateParamSpec(
+                key="min_emails", label="Minimum unread emails", type="number",
+                required=False, default=1, min=1, max=100,
+                help="Gate passes when unread count is >= this value.",
+            ),
+            TemplateParamSpec(
+                key="max_emails", label="Max emails to fetch", type="number",
+                required=False, default=20, min=1, max=100,
+            ),
+            TemplateParamSpec(
+                key="keyword_filter", label="Keyword filter (optional regex)", type="text",
+                required=False, default="",
+                help="Only pass gate if emails match this pattern. E.g. 'urgent|critical' or 'invoice'.",
+            ),
+        ],
+        build=build_zero_cost_inbox_monitor,
+    ),
+    FlowTemplate(
+        id="agentic_email_gate",
+        name="Smart Email Filter",
+        description="AI-powered email filtering — agent decides which emails are relevant before summarizing and delivering.",
+        category="productivity",
+        icon="brain",
+        required_credentials=["gmail"],
+        highlights=[
+            "AI gate: agent evaluates email relevance",
+            "Only summarizes matching emails",
+            "Custom criteria (financial, project-specific, etc.)",
+            "Delivered via WhatsApp/Telegram",
+        ],
+        params_schema=[
+            NAME_PARAM, AGENT_PARAM, CHANNEL_PARAM, RECIPIENT_PARAM,
+            TIME_OF_DAY_PARAM, TIMEZONE_PARAM,
+            TemplateParamSpec(
+                key="max_emails", label="Max emails to scan", type="number",
+                required=False, default=20, min=1, max=100,
+            ),
+            TemplateParamSpec(
+                key="gate_criteria", label="Gate criteria", type="textarea",
+                required=True,
+                default="Emails contain financial, billing, invoice, or payment-related content",
+                help="Describe when the gate should PASS. The AI evaluates this against the emails.",
+            ),
+            PERSONA_PARAM,
+        ],
+        build=build_agentic_email_gate,
     ),
 ]
 
