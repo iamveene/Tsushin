@@ -56,7 +56,7 @@ def upgrade():
     )).scalar() or 0
 
     if dup_count > 0:
-        print(f"[0025] Cleaning {dup_count} duplicate idempotency_key group(s) — keeping latest row per key")
+        print(f"[0026] Cleaning {dup_count} duplicate idempotency_key group(s) — keeping latest row per key")
         # Keep only the row with the highest id for each duplicate key
         op.execute(
             """

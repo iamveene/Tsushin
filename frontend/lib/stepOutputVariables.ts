@@ -90,9 +90,9 @@ const STEP_OUTPUT_FIELDS: Record<string, StepVariable[]> = {
     { field: 'output_format', label: 'Output Format', description: 'Format used (brief, detailed, structured, minimal)', type: 'string' },
   ],
   gate: [
-    { field: 'gate_result', label: 'Gate Result', description: 'Whether the gate passed or blocked (pass/block)', type: 'string' },
+    { field: 'gate_result', label: 'Gate Result', description: 'Gate outcome: "pass" or "fail"', type: 'string' },
     { field: 'gate_mode', label: 'Gate Mode', description: 'Evaluation mode used (programmatic or agentic)', type: 'string' },
-    { field: 'conditions_evaluated', label: 'Conditions Evaluated', description: 'Number of conditions that were checked', type: 'number' },
+    { field: 'conditions_evaluated', label: 'Conditions Evaluated', description: 'Array of evaluated conditions with pass/fail per condition', type: 'array' },
     { field: 'reasoning', label: 'Reasoning', description: 'Explanation of why the gate passed or blocked', type: 'string' },
     { field: 'status', label: 'Status', description: 'Execution status (completed or failed)', type: 'string' },
     { field: 'fail_action_taken', label: 'Fail Action Taken', description: 'Action taken on gate failure (skip, notify, alternative)', type: 'string' },

@@ -2208,7 +2208,7 @@ class GateStepHandler(FlowStepHandler):
         mcp_url, mcp_secret = self._resolve_mcp_url_and_secret(resolved, flow_run, step)
         if mcp_url:
             try:
-                await self._send_mcp_message(mcp_url, mcp_secret, resolved, message)
+                await self.mcp_sender.send_message(resolved, message, api_url=mcp_url, api_secret=mcp_secret)
                 logger.info(f"Gate fail notification sent to {resolved}")
             except Exception as e:
                 logger.warning(f"Gate fail notification send error: {e}")
