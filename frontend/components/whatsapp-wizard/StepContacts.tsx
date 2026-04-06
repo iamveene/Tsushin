@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { api, Agent } from '@/lib/client'
+import { api } from '@/lib/client'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 
 export default function StepContacts() {
