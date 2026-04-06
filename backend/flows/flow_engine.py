@@ -2134,6 +2134,9 @@ class GateStepHandler(FlowStepHandler):
             else:
                 model_provider = "gemini"
 
+        # Resolve tenant_id for API key lookup
+        tenant_id = getattr(flow_run, 'tenant_id', None)
+
         try:
             from agent.ai_client import AIClient
             ai_client = AIClient(
@@ -2141,6 +2144,7 @@ class GateStepHandler(FlowStepHandler):
                 model_name=model,
                 db=self.db,
                 token_tracker=self.token_tracker,
+                tenant_id=tenant_id,
             )
             response = await ai_client.generate(
                 system_prompt=system_prompt,
