@@ -2,9 +2,11 @@ import './globals.css'
 import { DM_Sans, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google'
 import { AuthProvider } from '@/contexts/AuthContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
+import { WhatsAppWizardProvider } from '@/contexts/WhatsAppWizardContext'
 import { ToastProvider } from '@/contexts/ToastContext'
 import LayoutContent from '@/components/LayoutContent'
 import OnboardingWizard from '@/components/OnboardingWizard'
+import WhatsAppSetupWizard from '@/components/whatsapp-wizard/WhatsAppSetupWizard'
 import ToastContainer from '@/components/ui/ToastContainer'
 
 // Primary body font - clean and modern
@@ -43,11 +45,14 @@ export default function RootLayout({
       <body className={`${dmSans.variable} ${plusJakartaSans.variable} ${jetbrainsMono.variable} font-sans bg-tsushin-ink text-gray-100 antialiased`}>
         <AuthProvider>
           <OnboardingProvider>
-            <ToastProvider>
-              <LayoutContent>{children}</LayoutContent>
-              <OnboardingWizard />
-              <ToastContainer />
-            </ToastProvider>
+            <WhatsAppWizardProvider>
+              <ToastProvider>
+                <LayoutContent>{children}</LayoutContent>
+                <OnboardingWizard />
+                <WhatsAppSetupWizard />
+                <ToastContainer />
+              </ToastProvider>
+            </WhatsAppWizardProvider>
           </OnboardingProvider>
         </AuthProvider>
       </body>

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import React from 'react'
 import { api, Agent, WhatsAppMCPInstance, TelegramBotInstance, WebhookIntegration } from '@/lib/client'
 import { GamepadIcon, WhatsAppIcon, TelegramIcon, WebhookIcon, CheckCircleIcon, CircleIcon, IconProps } from '@/components/ui/icons'
+import InfoTooltip from '@/components/ui/InfoTooltip'
 
 interface Props {
   agentId: number
@@ -188,8 +189,13 @@ export default function AgentChannelsManager({ agentId }: Props) {
       {/* WhatsApp Integration Selection */}
       {enabledChannels.includes('whatsapp') && (
         <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
-          <h2 className="text-lg font-semibold text-white mb-4">
+          <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
             WhatsApp Integration
+            <InfoTooltip
+              title="Instance Binding"
+              text="Choose which WhatsApp phone number this agent uses. The phone number must first be set up in the Hub page. Messages to that number will be routed to this agent."
+              position="right"
+            />
           </h2>
           <p className="text-sm text-tsushin-slate mb-4">
             Select which WhatsApp phone number this agent should use to send and receive messages.

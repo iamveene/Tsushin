@@ -157,8 +157,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       currentStep: 1
     }))
 
-    // Optionally sync to backend (if user preferences API exists)
-    // syncPreferencesToBackend({ onboarding_completed: true })
+    // Signal to WhatsApp wizard that onboarding is complete
+    window.dispatchEvent(new CustomEvent('tsushin:onboarding-complete'))
   }
 
   const skipTour = () => {
