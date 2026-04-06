@@ -1761,6 +1761,7 @@ export interface PlaygroundAgentInfo {
   name: string
   description: string | null
   is_active: boolean
+  is_default?: boolean
 }
 
 export interface PlaygroundChatRequest {

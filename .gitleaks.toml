@@ -172,6 +172,7 @@ regexes = [
     # Vertex AI / GCP placeholder patterns (infrastructure templates)
     '''@PROJECT\.iam\.gserviceaccount\.com''',
     '''\$\{\{.*secrets\.GCP_PROJECT''',
+    '''name@project-id\.iam\.gserviceaccount\.com''',
 ]
 
 # Specific commits to allow (add commit hashes here if needed)

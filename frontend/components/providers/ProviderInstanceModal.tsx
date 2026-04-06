@@ -46,6 +46,17 @@ const VENDOR_DEFAULT_URLS: Record<string, string> = {
   custom: '',
 }
 
+const VERTEX_REGIONS = [
+  { value: 'us-east5', label: 'us-east5 (Columbus)' },
+  { value: 'us-central1', label: 'us-central1 (Iowa)' },
+  { value: 'us-east4', label: 'us-east4 (Virginia)' },
+  { value: 'us-west1', label: 'us-west1 (Oregon)' },
+  { value: 'europe-west1', label: 'europe-west1 (Belgium)' },
+  { value: 'europe-west4', label: 'europe-west4 (Netherlands)' },
+  { value: 'asia-northeast1', label: 'asia-northeast1 (Tokyo)' },
+  { value: 'asia-southeast1', label: 'asia-southeast1 (Singapore)' },
+]
+
 export default function ProviderInstanceModal({ isOpen, onClose, onSave, instance, defaultVendor }: Props) {
   const isEditing = !!instance
 
@@ -57,6 +68,13 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
   const [models, setModels] = useState<string[]>([])
   const [modelInput, setModelInput] = useState('')
   const [isDefault, setIsDefault] = useState(false)
+
+  // Vertex AI-specific fields
+  const [vertexProjectId, setVertexProjectId] = useState('')
+  const [vertexRegion, setVertexRegion] = useState('us-east5')
+  const [vertexSaEmail, setVertexSaEmail] = useState('')
+  const [vertexPrivateKey, setVertexPrivateKey] = useState('')
+  const [vertexJsonPaste, setVertexJsonPaste] = useState('')
 
   // Validation states
   const [urlValidation, setUrlValidation] = useState<{ valid: boolean; error?: string } | null>(null)
@@ -81,6 +99,8 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
   // Saving state
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const isVertexAi = vendor === 'vertex_ai'
 
   // Fetch curated model suggestions once per mount (public endpoint).
   useEffect(() => {
@@ -124,6 +144,19 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
       setShowApiKey(false)
       setModels(instance.available_models || [])
       setIsDefault(instance.is_default)
+
+      // Load Vertex AI fields from extra_config
+      if (instance.vendor === 'vertex_ai' && instance.extra_config) {
+        setVertexProjectId(instance.extra_config.project_id || '')
+        setVertexRegion(instance.extra_config.region || 'us-east5')
+        setVertexSaEmail(instance.extra_config.sa_email || '')
+      } else {
+        setVertexProjectId('')
+        setVertexRegion('us-east5')
+        setVertexSaEmail('')
+      }
+      setVertexPrivateKey('')
+      setVertexJsonPaste('')
     } else {
       setVendor(defaultVendor || 'openai')
       setInstanceName('')
@@ -133,6 +166,11 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
       setModels([])
       setModelInput('')
       setIsDefault(false)
+      setVertexProjectId('')
+      setVertexRegion('us-east5')
+      setVertexSaEmail('')
+      setVertexPrivateKey('')
+      setVertexJsonPaste('')
     }
 
     setUrlValidation(null)
@@ -164,6 +202,20 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
       }
     }, 600)
   }, [])
+
+  // Handle JSON paste for Vertex AI service account key
+  const handleVertexJsonPaste = (value: string) => {
+    setVertexJsonPaste(value)
+    if (!value.trim()) return
+    try {
+      const parsed = JSON.parse(value)
+      if (parsed.project_id) setVertexProjectId(parsed.project_id)
+      if (parsed.client_email) setVertexSaEmail(parsed.client_email)
+      if (parsed.private_key) setVertexPrivateKey(parsed.private_key)
+    } catch {
+      // Not valid JSON yet, ignore
+    }
+  }
 
   const handleBaseUrlChange = (value: string) => {
     setBaseUrl(value)
@@ -206,7 +258,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
         result = await api.testProviderConnectionRaw({
           vendor,
           base_url: baseUrl || undefined,
-          api_key: apiKey || undefined,
+          api_key: isVertexAi ? (vertexPrivateKey || undefined) : (apiKey || undefined),
         })
       }
       setTestResult(result)
@@ -223,6 +275,22 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
       return
     }
 
+    // Vertex AI validation
+    if (isVertexAi && !isEditing) {
+      if (!vertexProjectId.trim()) {
+        setError('GCP Project ID is required for Vertex AI')
+        return
+      }
+      if (!vertexSaEmail.trim()) {
+        setError('Service Account Email is required for Vertex AI')
+        return
+      }
+      if (!vertexPrivateKey.trim()) {
+        setError('Private Key is required for Vertex AI')
+        return
+      }
+    }
+
     setSaving(true)
     setError(null)
     try {
@@ -233,7 +301,14 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
           available_models: models,
           is_default: isDefault,
         }
-        if (apiKey) {
+        if (isVertexAi) {
+          const extraConfig: Record<string, string> = {}
+          if (vertexProjectId) extraConfig.project_id = vertexProjectId
+          if (vertexRegion) extraConfig.region = vertexRegion
+          if (vertexSaEmail) extraConfig.sa_email = vertexSaEmail
+          if (vertexPrivateKey) extraConfig.private_key = vertexPrivateKey
+          updateData.extra_config = extraConfig
+        } else if (apiKey) {
           updateData.api_key = apiKey
         }
         await api.updateProviderInstance(instance.id, updateData)
@@ -242,9 +317,18 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
           vendor,
           instance_name: instanceName,
           base_url: baseUrl || undefined,
-          api_key: apiKey || undefined,
           available_models: models,
           is_default: isDefault,
+        }
+        if (isVertexAi) {
+          createData.extra_config = {
+            project_id: vertexProjectId,
+            region: vertexRegion,
+            sa_email: vertexSaEmail,
+            private_key: vertexPrivateKey,
+          }
+        } else {
+          createData.api_key = apiKey || undefined
         }
         await api.createProviderInstance(createData)
       }
@@ -257,12 +341,16 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
     }
   }
 
+  const canTest = isVertexAi
+    ? (vertexPrivateKey.trim().length > 0 || isEditing)
+    : (apiKey.length > 0 || vendor === 'ollama' || isEditing)
+
   const footer = (
     <div className="flex items-center justify-between">
       <div className="flex items-center gap-3">
         <button
           onClick={handleTestConnection}
-          disabled={testing || (!apiKey && vendor !== 'ollama' && !isEditing)}
+          disabled={testing || !canTest}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-tsushin-accent/30 text-tsushin-accent bg-tsushin-accent/5 hover:bg-tsushin-accent/10 transition-colors disabled:opacity-50"
         >
           <LightningIcon size={14} />
@@ -346,81 +434,160 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
           />
         </div>
 
-        {/* Base URL */}
-        <div>
-          <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Base URL <span className="text-tsushin-slate text-xs font-normal">(Optional)</span></label>
-          <div className="relative">
-            <input
-              type="text"
-              value={baseUrl}
-              onChange={(e) => handleBaseUrlChange(e.target.value)}
-              placeholder={VENDOR_DEFAULT_URLS[vendor] || 'https://...'}
-              className={`w-full px-3 py-2 border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50 pr-10 ${
-                urlValidation
-                  ? urlValidation.valid
-                    ? 'border-tsushin-success/50'
-                    : 'border-tsushin-vermilion/50'
-                  : 'border-tsushin-border'
-              }`}
-            />
-            {urlValidating && (
-              <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                <div className="w-4 h-4 rounded-full border-2 border-tsushin-accent/30 border-t-tsushin-accent animate-spin" />
-              </div>
-            )}
-            {!urlValidating && urlValidation && (
-              <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                {urlValidation.valid
-                  ? <CheckCircleIcon size={16} className="text-tsushin-success" />
-                  : <AlertTriangleIcon size={16} className="text-tsushin-vermilion" />
-                }
-              </div>
-            )}
-          </div>
-          {urlValidation && !urlValidation.valid && urlValidation.error && (
-            <p className="text-xs text-tsushin-vermilion mt-1">{urlValidation.error}</p>
-          )}
-          {!baseUrl && (
-            <p className="text-xs text-tsushin-slate mt-1">Leave empty to use vendor default: {VENDOR_DEFAULT_URLS[vendor] || 'N/A'}</p>
-          )}
-        </div>
+        {/* Vertex AI-specific fields */}
+        {isVertexAi ? (
+          <>
+            {/* JSON Key Paste */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">
+                Paste Service Account JSON Key <span className="text-tsushin-slate text-xs font-normal">(auto-fills fields below)</span>
+              </label>
+              <textarea
+                value={vertexJsonPaste}
+                onChange={(e) => handleVertexJsonPaste(e.target.value)}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50 h-24 font-mono text-xs resize-y"
+                placeholder="Paste your GCP service account JSON key here..."
+              />
+            </div>
 
-        {/* API Key */}
-        <div>
-          <label className="block text-sm font-medium text-tsushin-fog mb-1.5">API Key</label>
-          {isEditing && instance?.api_key_configured && !apiKey && (
-            <p className="text-xs text-tsushin-slate mb-1.5">
-              Current key: <span className="font-mono text-tsushin-accent">{instance.api_key_preview}</span> -- Enter a new key below to replace it
-            </p>
-          )}
-          <div className="relative">
-            <input
-              type={showApiKey ? 'text' : 'password'}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={isEditing ? 'Enter new key to replace...' : 'sk-...'}
-              className="w-full px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50 pr-10 font-mono text-sm"
-            />
-            <button
-              type="button"
-              onClick={() => setShowApiKey(!showApiKey)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-tsushin-slate hover:text-white transition-colors"
-              title={showApiKey ? 'Hide' : 'Reveal'}
-            >
-              {showApiKey ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                  <line x1="1" y1="1" x2="23" y2="23" />
-                </svg>
-              ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
+            <div className="border-t border-tsushin-border/30 pt-4">
+              <p className="text-xs text-tsushin-slate mb-4">Or fill in the fields manually:</p>
+            </div>
+
+            {/* GCP Project ID */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">GCP Project ID <span className="text-tsushin-vermilion">*</span></label>
+              <input
+                type="text"
+                value={vertexProjectId}
+                onChange={(e) => setVertexProjectId(e.target.value)}
+                placeholder="my-project-123"
+                className="w-full px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50"
+              />
+            </div>
+
+            {/* Region */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Region <span className="text-tsushin-vermilion">*</span></label>
+              <select
+                value={vertexRegion}
+                onChange={(e) => setVertexRegion(e.target.value)}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface"
+              >
+                {VERTEX_REGIONS.map(r => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-tsushin-slate mt-1">Claude models: us-east5, us-central1, europe-west1, europe-west4</p>
+            </div>
+
+            {/* Service Account Email */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Service Account Email <span className="text-tsushin-vermilion">*</span></label>
+              <input
+                type="text"
+                value={vertexSaEmail}
+                onChange={(e) => setVertexSaEmail(e.target.value)}
+                placeholder="name@project-id.iam.gserviceaccount.com"
+                className="w-full px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50"
+              />
+            </div>
+
+            {/* Private Key */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Private Key (PEM) <span className="text-tsushin-vermilion">*</span></label>
+              {isEditing && instance?.api_key_configured && !vertexPrivateKey && (
+                <p className="text-xs text-tsushin-slate mb-1.5">
+                  Current key: <span className="font-mono text-tsushin-accent">{instance.api_key_preview}</span> -- Enter a new key below to replace it
+                </p>
               )}
-            </button>
-          </div>
-        </div>
+              <textarea
+                value={vertexPrivateKey}
+                onChange={(e) => setVertexPrivateKey(e.target.value)}
+                placeholder={isEditing ? 'Enter new private key to replace...' : 'Paste your PEM private key here...'}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50 h-32 font-mono text-xs resize-y"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Base URL (non-Vertex) */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Base URL <span className="text-tsushin-slate text-xs font-normal">(Optional)</span></label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={baseUrl}
+                  onChange={(e) => handleBaseUrlChange(e.target.value)}
+                  placeholder={VENDOR_DEFAULT_URLS[vendor] || 'https://...'}
+                  className={`w-full px-3 py-2 border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50 pr-10 ${
+                    urlValidation
+                      ? urlValidation.valid
+                        ? 'border-tsushin-success/50'
+                        : 'border-tsushin-vermilion/50'
+                      : 'border-tsushin-border'
+                  }`}
+                />
+                {urlValidating && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    <div className="w-4 h-4 rounded-full border-2 border-tsushin-accent/30 border-t-tsushin-accent animate-spin" />
+                  </div>
+                )}
+                {!urlValidating && urlValidation && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    {urlValidation.valid
+                      ? <CheckCircleIcon size={16} className="text-tsushin-success" />
+                      : <AlertTriangleIcon size={16} className="text-tsushin-vermilion" />
+                    }
+                  </div>
+                )}
+              </div>
+              {urlValidation && !urlValidation.valid && urlValidation.error && (
+                <p className="text-xs text-tsushin-vermilion mt-1">{urlValidation.error}</p>
+              )}
+              {!baseUrl && (
+                <p className="text-xs text-tsushin-slate mt-1">Leave empty to use vendor default: {VENDOR_DEFAULT_URLS[vendor] || 'N/A'}</p>
+              )}
+            </div>
+
+            {/* API Key (non-Vertex) */}
+            <div>
+              <label className="block text-sm font-medium text-tsushin-fog mb-1.5">API Key</label>
+              {isEditing && instance?.api_key_configured && !apiKey && (
+                <p className="text-xs text-tsushin-slate mb-1.5">
+                  Current key: <span className="font-mono text-tsushin-accent">{instance.api_key_preview}</span> -- Enter a new key below to replace it
+                </p>
+              )}
+              <div className="relative">
+                <input
+                  type={showApiKey ? 'text' : 'password'}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={isEditing ? 'Enter new key to replace...' : 'sk-...'}
+                  className="w-full px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50 pr-10 font-mono text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-tsushin-slate hover:text-white transition-colors"
+                  title={showApiKey ? 'Hide' : 'Reveal'}
+                >
+                  {showApiKey ? (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                      <line x1="1" y1="1" x2="23" y2="23" />
+                    </svg>
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Models */}
         <div>
