@@ -2539,7 +2539,7 @@ export default function HubPage() {
                         const ollamaInst = providerInstances.find(i => i.vendor === 'ollama')
                         return ollamaInst ? (
                           <button
-                            onClick={() => setEditingInstance(ollamaInst)}
+                            onClick={() => { setEditingInstance(ollamaInst); setInstanceModalOpen(true) }}
                             className="w-full mt-2 text-xs text-tsushin-slate hover:text-white transition-colors text-center py-1"
                           >
                             Manage Instance
