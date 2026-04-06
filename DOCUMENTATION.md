@@ -1950,12 +1950,17 @@ See §19.4.
 
 **Note:** `frontend/app/settings/system-ai/page.tsx` is a 5-line stub; the actual system AI configuration lives at `frontend/app/settings/ai-configuration/page.tsx`.
 
-**Purpose:** Select the AI provider and model used by system-level features (Sentinel, memory extraction, etc.).
+**Purpose:** Select the AI provider instance and model used by system-level features (Sentinel, memory extraction, skill classification, etc.).
 
-UI flow (`ai-configuration/page.tsx:367-430`):
-- "Select AI Provider" — grid of provider cards (`:369`), selecting one enables model selection.
-- "Select Model" — grid of model cards for the selected provider (`:408`). First model is auto-selected on provider change (`:179`).
-- Saves `{provider, model_name}` to system config.
+The System AI config now points to an existing **Provider Instance** (managed in the Hub) instead of maintaining its own duplicated provider/model lists. The `Config` table stores `system_ai_provider_instance_id` (FK to `provider_instance`) alongside the model name.
+
+UI flow:
+- "Select Provider Instance" — card grid of active Provider Instances showing vendor icon, instance name, health dot, model count, and default badge. Managed via the Hub link.
+- "Select Model" — list of models from the selected instance's `available_models`. If the instance has no discovered models, a manual text input is shown.
+- "Test Connection" — sends a test message via the selected instance + model.
+- Saves `{provider_instance_id, model_name}` to system config.
+
+Backend resolution (`services/system_ai_config.py`): When `system_ai_provider_instance_id` is set, the vendor is resolved from the ProviderInstance and the AIClient receives the `provider_instance_id` for proper API key/base URL resolution. Falls back to legacy `system_ai_provider`/`system_ai_model` columns when no instance is linked.
 
 ### 21.10 Vector Stores (`frontend/app/settings/vector-stores/page.tsx`)
 

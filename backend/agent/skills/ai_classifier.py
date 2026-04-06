@@ -66,10 +66,11 @@ class AISkillClassifier:
             # is_match = True
         """
         try:
-            # Phase 17: Use system AI config if model not explicitly specified
+            # Phase 27: Resolve system AI config (provider_instance_id preferred)
+            _pi_id = None
             if model is None and db is not None:
-                provider, model = get_system_ai_config(db)
-                logger.debug(f"Using system AI config: provider={provider}, model={model}")
+                provider, model, _pi_id = get_system_ai_config(db)
+                logger.debug(f"Using system AI config: provider={provider}, model={model}, instance_id={_pi_id}")
             elif model is None:
                 model = DEFAULT_SYSTEM_AI_MODEL
                 logger.debug(f"No db provided, using default model: {model}")
@@ -142,10 +143,12 @@ Question: Is this message requesting what this skill does?
 Answer (YES or NO):"""
 
             # Call AI with small, fast model
-            provider, model_name = self._parse_model(model)
-
-            # Create AIClient instance for this request (Phase 7.4: pass db for API key loading)
-            ai_client = AIClient(provider=provider, model_name=model_name, db=db, token_tracker=token_tracker, tenant_id=tenant_id)
+            if _pi_id:
+                # Provider instance handles provider resolution
+                ai_client = AIClient(provider=provider, model_name=model, db=db, token_tracker=token_tracker, tenant_id=tenant_id, provider_instance_id=_pi_id)
+            else:
+                provider, model_name = self._parse_model(model)
+                ai_client = AIClient(provider=provider, model_name=model_name, db=db, token_tracker=token_tracker, tenant_id=tenant_id)
 
             # Log the prompts for debugging
             logger.debug(f"AI Classification - System: {system_prompt[:100]}...")
@@ -219,10 +222,11 @@ Answer (YES or NO):"""
             # entity = "Assistant"
         """
         try:
-            # Phase 17: Use system AI config if model not explicitly specified
+            # Phase 27: Resolve system AI config (provider_instance_id preferred)
+            _pi_id = None
             if model is None and db is not None:
-                provider, model = get_system_ai_config(db)
-                logger.debug(f"Entity extraction using system AI config: provider={provider}, model={model}")
+                provider, model, _pi_id = get_system_ai_config(db)
+                logger.debug(f"Entity extraction using system AI config: provider={provider}, model={model}, instance_id={_pi_id}")
             elif model is None:
                 model = DEFAULT_SYSTEM_AI_MODEL
                 logger.debug(f"No db provided, using default model: {model}")
@@ -244,10 +248,11 @@ Your task: Extract the {entity_type} from user messages.
 Extract the {entity_type}:"""
 
             # Call AI
-            provider, model_name = self._parse_model(model)
-
-            # Create AIClient instance for this request (Phase 7.4: pass db for API key loading)
-            ai_client = AIClient(provider=provider, model_name=model_name, db=db, token_tracker=token_tracker, tenant_id=tenant_id)
+            if _pi_id:
+                ai_client = AIClient(provider=provider, model_name=model, db=db, token_tracker=token_tracker, tenant_id=tenant_id, provider_instance_id=_pi_id)
+            else:
+                provider, model_name = self._parse_model(model)
+                ai_client = AIClient(provider=provider, model_name=model_name, db=db, token_tracker=token_tracker, tenant_id=tenant_id)
 
             response_dict = await ai_client.generate(
                 system_prompt=system_prompt,

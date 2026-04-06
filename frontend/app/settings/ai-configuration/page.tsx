@@ -2,33 +2,79 @@
 
 /**
  * System AI Configuration Settings Page
- * Phase 17: Tenant-Configurable System AI Provider
- *
- * Allows users to configure which AI provider and model is used for
- * system-level operations like intent classification, skill routing,
- * and AI summaries.
+ * Phase 27: Points to an existing Provider Instance instead of
+ * duplicating provider/model configuration.
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { authenticatedFetch } from '@/lib/client'
+import { authenticatedFetch, ProviderInstance } from '@/lib/client'
+import {
+  GeminiIcon,
+  OpenAIIcon,
+  AnthropicIcon,
+  GlobeIcon,
+  LightningIcon,
+  BrainIcon,
+  BeakerIcon,
+  CloudIcon,
+  BotIcon as BotIconSvg,
+  type IconProps,
+} from '@/components/ui/icons'
 
-interface ProviderOption {
-  value: string
-  label: string
-  description: string
+// Grok (xAI) icon
+const GrokIcon = ({ size, className }: IconProps) => (
+  <svg className={className} width={size || 20} height={size || 20} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M4.5 2l7.5 10L4.5 22h2.1l6.45-8.55L19.5 22h2.1L12 12 21.6 2h-2.1l-6.45 8.55L6.6 2z" />
+  </svg>
+)
+
+const VENDOR_ICONS: Record<string, React.FC<{ size?: number; className?: string }>> = {
+  openai: OpenAIIcon,
+  anthropic: AnthropicIcon,
+  gemini: GeminiIcon,
+  groq: LightningIcon,
+  grok: GrokIcon,
+  deepseek: BrainIcon,
+  openrouter: GlobeIcon,
+  vertex_ai: CloudIcon,
+  ollama: BotIconSvg,
+  custom: BeakerIcon,
 }
 
-interface ModelOption {
-  value: string
-  label: string
-  description: string
+const VENDOR_COLORS: Record<string, { text: string; bg: string; border: string }> = {
+  openai: { text: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30' },
+  anthropic: { text: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/30' },
+  gemini: { text: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30' },
+  groq: { text: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/30' },
+  grok: { text: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/30' },
+  deepseek: { text: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/30' },
+  openrouter: { text: 'text-teal-400', bg: 'bg-teal-500/10', border: 'border-teal-500/30' },
+  vertex_ai: { text: 'text-sky-400', bg: 'bg-sky-500/10', border: 'border-sky-500/30' },
+  ollama: { text: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/30' },
+  custom: { text: 'text-rose-400', bg: 'bg-rose-500/10', border: 'border-rose-500/30' },
+}
+
+const VENDOR_LABELS: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  gemini: 'Google Gemini',
+  groq: 'Groq',
+  grok: 'Grok (xAI)',
+  deepseek: 'DeepSeek',
+  openrouter: 'OpenRouter',
+  vertex_ai: 'Vertex AI',
+  ollama: 'Ollama',
+  custom: 'Custom',
 }
 
 interface SystemAIConfig {
   provider: string
   model_name: string
+  provider_instance_id: number | null
+  instance_name?: string
+  vendor?: string
 }
 
 interface TestResult {
@@ -38,68 +84,6 @@ interface TestResult {
   model: string
   token_usage?: Record<string, number>
   error?: string
-}
-
-// Provider icons for display
-const PROVIDER_ICONS: Record<string, React.ReactNode> = {
-  gemini: (
-    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
-    </svg>
-  ),
-  anthropic: (
-    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-    </svg>
-  ),
-  openai: (
-    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z"/>
-    </svg>
-  ),
-  openrouter: (
-    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M13 3v6h8V3h-8zM3 21h8v-6H3v6zm0-8h8V3H3v10zm10 8h8v-6h-8v6z"/>
-    </svg>
-  ),
-  grok: (
-    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M4.5 2l7.5 10L4.5 22h2.1l6.45-8.55L19.5 22h2.1L12 12 21.6 2h-2.1l-6.45 8.55L6.6 2z"/>
-    </svg>
-  ),
-  groq: (
-    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M13 3L4 14h7l-2 7 9-11h-7l2-7z"/>
-    </svg>
-  ),
-  deepseek: (
-    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
-    </svg>
-  ),
-  ollama: (
-    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7zm2 15h-4v-1h4v1zm1.5-4.37l-.5.34V15h-6v-2.03l-.5-.34A5 5 0 0 1 7 9a5 5 0 0 1 10 0 5 5 0 0 1-1.5 3.63z"/>
-    </svg>
-  ),
-  vertex_ai: (
-    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
-    </svg>
-  ),
-}
-
-// Provider colors for styling
-const PROVIDER_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  gemini: { bg: 'bg-blue-500/10', text: 'text-blue-400', border: 'border-blue-500/30' },
-  anthropic: { bg: 'bg-orange-500/10', text: 'text-orange-400', border: 'border-orange-500/30' },
-  openai: { bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/30' },
-  grok: { bg: 'bg-red-500/10', text: 'text-red-400', border: 'border-red-500/30' },
-  deepseek: { bg: 'bg-indigo-500/10', text: 'text-indigo-400', border: 'border-indigo-500/30' },
-  openrouter: { bg: 'bg-purple-500/10', text: 'text-purple-400', border: 'border-purple-500/30' },
-  groq: { bg: 'bg-yellow-500/10', text: 'text-yellow-400', border: 'border-yellow-500/30' },
-  ollama: { bg: 'bg-violet-500/10', text: 'text-violet-400', border: 'border-violet-500/30' },
-  vertex_ai: { bg: 'bg-cyan-500/10', text: 'text-cyan-400', border: 'border-cyan-500/30' },
 }
 
 export default function AIConfigurationPage() {
@@ -113,49 +97,38 @@ export default function AIConfigurationPage() {
   const [success, setSuccess] = useState<string | null>(null)
 
   const [config, setConfig] = useState<SystemAIConfig | null>(null)
-  const [providers, setProviders] = useState<ProviderOption[]>([])
-  const [modelsByProvider, setModelsByProvider] = useState<Record<string, ModelOption[]>>({})
+  const [instances, setInstances] = useState<ProviderInstance[]>([])
 
-  const [selectedProvider, setSelectedProvider] = useState<string>('')
+  const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(null)
   const [selectedModel, setSelectedModel] = useState<string>('')
   const [testResult, setTestResult] = useState<TestResult | null>(null)
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
 
-  // Fetch current config, providers, and models
   const fetchData = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
 
-      // Fetch current config
-      const configRes = await authenticatedFetch(`${apiUrl}/api/config/system-ai`)
+      const [configRes, instancesRes] = await Promise.all([
+        authenticatedFetch(`${apiUrl}/api/config/system-ai`),
+        authenticatedFetch(`${apiUrl}/api/provider-instances`),
+      ])
 
       if (configRes.ok) {
-        const configData = await configRes.json()
+        const configData: SystemAIConfig = await configRes.json()
         setConfig(configData)
-        setSelectedProvider(configData.provider)
+        setSelectedInstanceId(configData.provider_instance_id)
         setSelectedModel(configData.model_name)
       } else {
         throw new Error('Failed to load configuration')
       }
 
-      // Fetch available providers
-      const providersRes = await authenticatedFetch(`${apiUrl}/api/config/system-ai/providers`)
-
-      if (providersRes.ok) {
-        const providersData = await providersRes.json()
-        setProviders(providersData.providers)
+      if (instancesRes.ok) {
+        const instancesData: ProviderInstance[] = await instancesRes.json()
+        // Only show active instances
+        setInstances(instancesData.filter(i => i.is_active))
       }
-
-      // Fetch all models by provider
-      const modelsRes = await authenticatedFetch(`${apiUrl}/api/config/system-ai/models`)
-
-      if (modelsRes.ok) {
-        const modelsData = await modelsRes.json()
-        setModelsByProvider(modelsData.models_by_provider)
-      }
-
     } catch (err) {
       console.error('Error fetching AI config:', err)
       setError('Failed to load configuration')
@@ -170,26 +143,30 @@ export default function AIConfigurationPage() {
     }
   }, [authLoading, user, fetchData])
 
-  // Handle provider change
-  const handleProviderChange = (provider: string) => {
-    setSelectedProvider(provider)
-    // Select first model from the new provider
-    const models = modelsByProvider[provider] || []
-    if (models.length > 0) {
-      setSelectedModel(models[0].value)
+  const selectedInstance = instances.find(i => i.id === selectedInstanceId) || null
+
+  const handleInstanceSelect = (instance: ProviderInstance) => {
+    setSelectedInstanceId(instance.id)
+    // Auto-select first model from instance, or keep current if it belongs to this instance
+    if (instance.available_models.length > 0) {
+      if (instance.available_models.includes(selectedModel)) {
+        // Keep current selection
+      } else {
+        setSelectedModel(instance.available_models[0])
+      }
     } else {
       setSelectedModel('')
     }
     setTestResult(null)
+    setSuccess(null)
   }
 
-  // Handle model change
   const handleModelChange = (model: string) => {
     setSelectedModel(model)
     setTestResult(null)
+    setSuccess(null)
   }
 
-  // Test connection
   const handleTestConnection = async () => {
     setTesting(true)
     setTestResult(null)
@@ -199,9 +176,9 @@ export default function AIConfigurationPage() {
       const response = await authenticatedFetch(`${apiUrl}/api/config/system-ai/test`, {
         method: 'POST',
         body: JSON.stringify({
-          provider: selectedProvider,
-          model_name: selectedModel
-        })
+          provider_instance_id: selectedInstanceId,
+          model_name: selectedModel,
+        }),
       })
 
       const result = await response.json()
@@ -216,16 +193,16 @@ export default function AIConfigurationPage() {
       setTestResult({
         success: false,
         message: 'Failed to test connection',
-        provider: selectedProvider,
-        model: selectedModel
+        provider: selectedInstance?.vendor || 'unknown',
+        model: selectedModel,
       })
     } finally {
       setTesting(false)
     }
   }
 
-  // Save configuration
   const handleSave = async () => {
+    if (!selectedInstanceId || !selectedModel) return
     setSaving(true)
     setError(null)
     setSuccess(null)
@@ -234,16 +211,22 @@ export default function AIConfigurationPage() {
       const response = await authenticatedFetch(`${apiUrl}/api/config/system-ai`, {
         method: 'PUT',
         body: JSON.stringify({
-          provider: selectedProvider,
-          model_name: selectedModel
-        })
+          provider_instance_id: selectedInstanceId,
+          model_name: selectedModel,
+        }),
       })
 
       const result = await response.json()
 
       if (result.success) {
         setSuccess(result.message)
-        setConfig({ provider: selectedProvider, model_name: selectedModel })
+        setConfig({
+          provider: result.vendor || selectedInstance?.vendor || '',
+          model_name: selectedModel,
+          provider_instance_id: selectedInstanceId,
+          instance_name: result.instance_name || selectedInstance?.instance_name,
+          vendor: result.vendor || selectedInstance?.vendor,
+        })
       } else {
         setError(result.message || 'Failed to save configuration')
       }
@@ -255,14 +238,22 @@ export default function AIConfigurationPage() {
     }
   }
 
-  // Check if there are unsaved changes
-  const hasChanges = config && (selectedProvider !== config.provider || selectedModel !== config.model_name)
+  const hasChanges =
+    config &&
+    (selectedInstanceId !== config.provider_instance_id || selectedModel !== config.model_name)
 
-  // Get current provider's models
-  const currentModels = modelsByProvider[selectedProvider] || []
-
-  // Get selected model details
-  const selectedModelDetails = currentModels.find(m => m.value === selectedModel)
+  const healthDot = (status: string) => {
+    switch (status) {
+      case 'healthy':
+        return 'bg-green-400'
+      case 'degraded':
+        return 'bg-yellow-400'
+      case 'unavailable':
+        return 'bg-red-400'
+      default:
+        return 'bg-gray-400'
+    }
+  }
 
   if (authLoading || loading) {
     return (
@@ -301,7 +292,7 @@ export default function AIConfigurationPage() {
         <div className="mb-8">
           <h1 className="text-3xl font-display font-bold text-white">System AI Configuration</h1>
           <p className="text-tsushin-slate mt-2">
-            Configure which AI provider and model is used for system-level operations
+            Select which AI provider instance and model to use for system-level operations
           </p>
         </div>
 
@@ -342,194 +333,243 @@ export default function AIConfigurationPage() {
           </div>
         </div>
 
-        {/* Current Configuration */}
-        {config && (
-          <div className="glass-card rounded-xl p-6 mb-8">
-            <h3 className="text-lg font-semibold text-white mb-4">Current Configuration</h3>
-            <div className="flex items-center gap-4">
-              <div className={`w-12 h-12 rounded-lg ${PROVIDER_COLORS[config.provider]?.bg || 'bg-gray-500/10'} flex items-center justify-center ${PROVIDER_COLORS[config.provider]?.text || 'text-gray-400'}`}>
-                {PROVIDER_ICONS[config.provider] || (
-                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                  </svg>
-                )}
-              </div>
-              <div>
-                <p className="text-white font-medium">
-                  {providers.find(p => p.value === config.provider)?.label || config.provider}
-                </p>
-                <p className="text-sm text-tsushin-slate">{config.model_name}</p>
-              </div>
+        {/* No Instances Warning */}
+        {instances.length === 0 && (
+          <div className="glass-card rounded-xl p-8 mb-8 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-yellow-500/10 flex items-center justify-center">
+              <svg className="w-8 h-8 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
             </div>
-          </div>
-        )}
-
-        {/* Provider Selection */}
-        <div className="glass-card rounded-xl p-6 mb-6">
-          <h3 className="text-lg font-semibold text-white mb-4">Select AI Provider</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {providers.map((provider) => {
-              const colors = PROVIDER_COLORS[provider.value] || { bg: 'bg-gray-500/10', text: 'text-gray-400', border: 'border-gray-500/30' }
-              const isSelected = selectedProvider === provider.value
-
-              return (
-                <button
-                  key={provider.value}
-                  onClick={() => canEdit && handleProviderChange(provider.value)}
-                  disabled={!canEdit}
-                  className={`p-4 rounded-xl border transition-all text-left ${
-                    isSelected
-                      ? `${colors.bg} ${colors.border} ring-2 ring-offset-2 ring-offset-tsushin-darker ring-current`
-                      : 'border-white/10 hover:border-white/20'
-                  } ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-lg ${colors.bg} flex items-center justify-center ${colors.text}`}>
-                      {PROVIDER_ICONS[provider.value] || (
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                        </svg>
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-white font-medium">{provider.label}</p>
-                      <p className="text-xs text-tsushin-slate">{provider.description}</p>
-                    </div>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Model Selection */}
-        {selectedProvider && currentModels.length > 0 && (
-          <div className="glass-card rounded-xl p-6 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Select Model</h3>
-            <div className="space-y-3">
-              {currentModels.map((model) => {
-                const isSelected = selectedModel === model.value
-                const colors = PROVIDER_COLORS[selectedProvider] || { bg: 'bg-gray-500/10', text: 'text-gray-400', border: 'border-gray-500/30' }
-
-                return (
-                  <button
-                    key={model.value}
-                    onClick={() => canEdit && handleModelChange(model.value)}
-                    disabled={!canEdit}
-                    className={`w-full p-4 rounded-xl border transition-all text-left flex items-center justify-between ${
-                      isSelected
-                        ? `${colors.bg} ${colors.border}`
-                        : 'border-white/10 hover:border-white/20'
-                    } ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
-                  >
-                    <div>
-                      <p className="text-white font-medium">{model.label}</p>
-                      <p className="text-xs text-tsushin-slate mt-0.5">{model.description}</p>
-                    </div>
-                    {isSelected && (
-                      <svg className={`w-5 h-5 ${colors.text}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Test Connection */}
-        {canEdit && selectedProvider && selectedModel && (
-          <div className="glass-card rounded-xl p-6 mb-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-white">Test Connection</h3>
-              <button
-                onClick={handleTestConnection}
-                disabled={testing}
-                className="px-4 py-2 text-sm bg-white/5 hover:bg-white/10 text-white border border-white/20 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
-              >
-                {testing ? (
-                  <>
-                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    Testing...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    Test Connection
-                  </>
-                )}
-              </button>
-            </div>
-
+            <h3 className="text-lg font-semibold text-white mb-2">No Provider Instances Configured</h3>
             <p className="text-sm text-tsushin-slate mb-4">
-              Send a test message to verify the API key is configured and the provider is accessible.
+              You need at least one AI provider instance to configure System AI.
+              Create one in the Hub first.
             </p>
+            <Link
+              href="/hub"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-teal-500 hover:bg-teal-400 text-white rounded-lg transition-colors text-sm font-medium"
+            >
+              Go to Hub
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
+          </div>
+        )}
 
-            {testResult && (
-              <div className={`p-4 rounded-lg ${testResult.success ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+        {/* Provider Instance Selection */}
+        {instances.length > 0 && (
+          <>
+            <div className="glass-card rounded-xl p-6 mb-6">
+              <h3 className="text-lg font-semibold text-white mb-4">Select Provider Instance</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {instances.map((instance) => {
+                  const colors = VENDOR_COLORS[instance.vendor] || VENDOR_COLORS.custom
+                  const VendorIcon = VENDOR_ICONS[instance.vendor] || BeakerIcon
+                  const isSelected = selectedInstanceId === instance.id
+
+                  return (
+                    <button
+                      key={instance.id}
+                      onClick={() => canEdit && handleInstanceSelect(instance)}
+                      disabled={!canEdit}
+                      className={`p-4 rounded-xl border transition-all text-left ${
+                        isSelected
+                          ? `${colors.bg} ${colors.border} ring-2 ring-offset-2 ring-offset-tsushin-darker ring-current`
+                          : 'border-white/10 hover:border-white/20'
+                      } ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-lg ${colors.bg} flex items-center justify-center ${colors.text}`}>
+                          <VendorIcon size={20} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="text-white font-medium truncate">{instance.instance_name}</p>
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${healthDot(instance.health_status)}`} />
+                          </div>
+                          <p className="text-xs text-tsushin-slate">
+                            {VENDOR_LABELS[instance.vendor] || instance.vendor}
+                            {instance.available_models.length > 0 && (
+                              <> &middot; {instance.available_models.length} model{instance.available_models.length !== 1 ? 's' : ''}</>
+                            )}
+                          </p>
+                        </div>
+                        {instance.is_default && (
+                          <span className="text-[10px] uppercase tracking-wider text-tsushin-slate bg-white/5 px-1.5 py-0.5 rounded">
+                            default
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-tsushin-slate mt-4">
+                Manage instances in the{' '}
+                <Link href="/hub" className="text-teal-400 hover:text-teal-300 underline">Hub</Link>.
+              </p>
+            </div>
+
+            {/* Model Selection */}
+            {selectedInstance && selectedInstance.available_models.length > 0 && (
+              <div className="glass-card rounded-xl p-6 mb-6">
+                <h3 className="text-lg font-semibold text-white mb-4">Select Model</h3>
+                <div className="space-y-2">
+                  {selectedInstance.available_models.map((model) => {
+                    const isSelected = selectedModel === model
+                    const colors = VENDOR_COLORS[selectedInstance.vendor] || VENDOR_COLORS.custom
+
+                    return (
+                      <button
+                        key={model}
+                        onClick={() => canEdit && handleModelChange(model)}
+                        disabled={!canEdit}
+                        className={`w-full p-3 rounded-lg border transition-all text-left flex items-center justify-between ${
+                          isSelected
+                            ? `${colors.bg} ${colors.border}`
+                            : 'border-white/10 hover:border-white/20'
+                        } ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      >
+                        <span className="text-sm text-white font-mono">{model}</span>
+                        {isSelected && (
+                          <svg className={`w-5 h-5 ${colors.text}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* No models warning */}
+            {selectedInstance && selectedInstance.available_models.length === 0 && (
+              <div className="glass-card rounded-xl p-6 mb-6">
                 <div className="flex items-start gap-3">
-                  {testResult.success ? (
-                    <svg className="w-5 h-5 text-green-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  )}
+                  <svg className="w-5 h-5 text-yellow-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
                   <div>
-                    <p className={testResult.success ? 'text-green-400' : 'text-red-400'}>
-                      {testResult.message}
+                    <p className="text-yellow-400 font-medium">No models available</p>
+                    <p className="text-sm text-tsushin-slate mt-1">
+                      This instance has no models configured. Edit it in the{' '}
+                      <Link href="/hub" className="text-teal-400 hover:text-teal-300 underline">Hub</Link>{' '}
+                      to discover or add models.
                     </p>
-                    {testResult.token_usage && (
-                      <p className="text-xs text-tsushin-slate mt-1">
-                        Tokens used: {testResult.token_usage.total_tokens || 'N/A'}
-                      </p>
-                    )}
+                    {/* Allow manual model entry */}
+                    <div className="mt-3">
+                      <label className="text-xs text-tsushin-slate mb-1 block">Or enter a model name manually:</label>
+                      <input
+                        type="text"
+                        value={selectedModel}
+                        onChange={(e) => handleModelChange(e.target.value)}
+                        placeholder="e.g. gemini-2.5-flash"
+                        disabled={!canEdit}
+                        className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-tsushin-slate/50 focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
             )}
-          </div>
-        )}
 
-        {/* Save Button */}
-        {canEdit && (
-          <div className="flex items-center justify-between glass-card rounded-xl p-6">
-            <div>
-              {hasChanges && (
-                <p className="text-sm text-yellow-400 flex items-center gap-2">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  You have unsaved changes
+            {/* Test Connection */}
+            {canEdit && selectedInstanceId && selectedModel && (
+              <div className="glass-card rounded-xl p-6 mb-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-white">Test Connection</h3>
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={testing}
+                    className="px-4 py-2 text-sm bg-white/5 hover:bg-white/10 text-white border border-white/20 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {testing ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Testing...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Test Connection
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <p className="text-sm text-tsushin-slate mb-4">
+                  Send a test message to verify the provider instance is accessible with the selected model.
                 </p>
-              )}
-            </div>
-            <button
-              onClick={handleSave}
-              disabled={saving || !hasChanges}
-              className="px-6 py-2.5 bg-teal-500 hover:bg-teal-400 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {saving ? (
-                <>
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  Saving...
-                </>
-              ) : (
-                'Save Configuration'
-              )}
-            </button>
-          </div>
+
+                {testResult && (
+                  <div className={`p-4 rounded-lg ${testResult.success ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+                    <div className="flex items-start gap-3">
+                      {testResult.success ? (
+                        <svg className="w-5 h-5 text-green-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      ) : (
+                        <svg className="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      )}
+                      <div>
+                        <p className={testResult.success ? 'text-green-400' : 'text-red-400'}>
+                          {testResult.message}
+                        </p>
+                        {testResult.token_usage && (
+                          <p className="text-xs text-tsushin-slate mt-1">
+                            Tokens used: {testResult.token_usage.total_tokens || 'N/A'}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Save Button */}
+            {canEdit && (
+              <div className="flex items-center justify-between glass-card rounded-xl p-6">
+                <div>
+                  {hasChanges && (
+                    <p className="text-sm text-yellow-400 flex items-center gap-2">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      You have unsaved changes
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={handleSave}
+                  disabled={saving || !hasChanges || !selectedInstanceId || !selectedModel}
+                  className="px-6 py-2.5 bg-teal-500 hover:bg-teal-400 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {saving ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Saving...
+                    </>
+                  ) : (
+                    'Save Configuration'
+                  )}
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         {/* Read-only notice */}
