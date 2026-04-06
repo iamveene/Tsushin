@@ -21,7 +21,7 @@ const stepTitles = [
 ]
 
 export default function WhatsAppSetupWizard() {
-  const { state, closeWizard, previousStep, nextStep } = useWhatsAppWizard()
+  const { state, closeWizard, previousStep, nextStep, goToStep } = useWhatsAppWizard()
 
   if (!state.isOpen) return null
 
@@ -74,7 +74,11 @@ export default function WhatsAppSetupWizard() {
               {stepTitles.map((_, idx) => (
                 <button
                   key={idx}
-                  onClick={() => canAccessStep(idx + 1) && state.currentStep !== idx + 1 ? undefined : undefined}
+                  onClick={() => {
+                    if (canAccessStep(idx + 1) && state.currentStep !== idx + 1) {
+                      goToStep(idx + 1)
+                    }
+                  }}
                   className={`w-2 h-2 rounded-full transition-colors ${
                     idx + 1 === state.currentStep
                       ? 'bg-teal-500'
