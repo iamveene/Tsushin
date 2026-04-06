@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### WhatsApp Post-Install Setup Wizard + Inline Helpers (2026-04-05)
+Guided 7-step wizard that walks non-technical users through the full WhatsApp onboarding flow end-to-end, replacing the previous "figure it out across 3 pages" experience.
+
+- **Setup Wizard** (`frontend/components/whatsapp-wizard/`): Step 1 Welcome → Step 2 Create instance + inline QR scan with live polling → Step 3 DM Auto Mode + number allowlist → Step 4 Group filters + trigger keywords → Step 5 Contact creation with DM Trigger toggle → Step 6 Agent-to-channel binding → Step 7 Summary with next-steps guidance.
+- **Auto-launch**: Fires after the main onboarding tour completes if no WhatsApp instances exist. Uses `tsushin:onboarding-complete` CustomEvent from `OnboardingContext` — no coupling between contexts.
+- **Manual triggers**: "Setup Wizard" button in Hub WhatsApp section header (always visible), plus "Guided Setup" / "Manual Setup" split CTA in the empty state.
+- **Reusable `InfoTooltip` component** (`frontend/components/ui/InfoTooltip.tsx`): Click-to-toggle popover with title + body text, click-outside/Escape dismiss, dark-mode aware.
+- **6 inline helpers placed**: Hub filters modal (Group Filters, Number Filters, Group Keywords, DM Auto Mode), Contacts page (DM Trigger checkbox), Agent Channels (WhatsApp Integration heading).
+- **Self-contained state**: `WhatsAppWizardContext` manages wizard lifecycle and accumulated data independently from `OnboardingContext`. Each step calls real APIs immediately — partial setup is usable if the user exits mid-flow.
+
 #### Flow Creation Wizard — Pre-built Hybrid Automations (2026-04-05)
 New "From Template" button on `/flows` opens a 3-step wizard (pick → configure → preview) for instantiating common hybrid (programmatic + agentic) flows in one click. Showcases the platform's hybrid value prop: deterministic/cheap programmatic fetch steps gate into agentic summarization steps, avoiding LLM spend when there's no data.
 
