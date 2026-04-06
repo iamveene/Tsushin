@@ -15,6 +15,9 @@ export default function AgentCustomSkillsManager({ agentId }: Props) {
   const [assignments, setAssignments] = useState<any[]>([])
   const [availableCustomSkills, setAvailableCustomSkills] = useState<CustomSkill[]>([])
   const [showPicker, setShowPicker] = useState(false)
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [createForm, setCreateForm] = useState({ name: '', description: '', instructions_md: '' })
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -78,6 +81,31 @@ export default function AgentCustomSkillsManager({ agentId }: Props) {
     }
   }
 
+  const handleCreateAndAssign = async () => {
+    if (!createForm.name.trim() || !createForm.instructions_md.trim()) return
+    setCreating(true)
+    try {
+      const skill = await api.createCustomSkill({
+        name: createForm.name.trim(),
+        description: createForm.description.trim() || undefined,
+        skill_type_variant: 'instruction',
+        execution_mode: 'tool',
+        trigger_mode: 'llm_decided',
+        instructions_md: createForm.instructions_md.trim(),
+        timeout_seconds: 30,
+      })
+      await api.assignCustomSkillToAgent(agentId, skill.id)
+      setShowCreateForm(false)
+      setCreateForm({ name: '', description: '', instructions_md: '' })
+      loadData()
+    } catch (err) {
+      console.error('Failed to create custom skill:', err)
+      alert('Failed to create custom skill')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   if (loading) {
     return <div className="p-8 text-center">Loading custom skills...</div>
   }
@@ -99,34 +127,59 @@ export default function AgentCustomSkillsManager({ agentId }: Props) {
             Assign tenant custom skills to this agent and toggle them on/off.
           </p>
         </div>
-        <button
-          onClick={() => setShowPicker(true)}
-          disabled={availableCustomSkills.length === 0}
-          className="px-4 py-2 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700 transition-colors inline-flex items-center gap-1.5 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Assign Custom Skill
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowCreateForm(true)}
+            className="px-4 py-2 bg-tsushin-ink text-white text-sm rounded-lg hover:bg-tsushin-surface transition-colors inline-flex items-center gap-1.5 font-medium border border-white/10"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            New Skill
+          </button>
+          <button
+            onClick={() => setShowPicker(true)}
+            disabled={unassignedAvailable.length === 0}
+            className="px-4 py-2 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700 transition-colors inline-flex items-center gap-1.5 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Assign Skill
+          </button>
+        </div>
       </div>
 
       {/* Empty state */}
-      {assignments.length === 0 ? (
+      {assignments.length === 0 && (
         <div className="text-center py-16 bg-tsushin-ink rounded-lg border border-white/5">
           <WrenchIcon size={48} className="mx-auto text-tsushin-muted mb-4" />
           <h3 className="text-lg font-medium text-white mb-2">No custom skills assigned</h3>
           {availableCustomSkills.length === 0 ? (
             <>
               <p className="text-sm text-tsushin-muted mb-6 max-w-md mx-auto">
-                Your tenant has no custom skills yet. Create one in the Custom Skills studio page to get started.
+                Your tenant has no custom skills yet. Create one here or use the Custom Skills studio for advanced options.
               </p>
-              <Link
-                href="/agents/custom-skills"
-                className="px-6 py-2.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors inline-flex items-center gap-2 font-medium"
-              >
-                Manage Custom Skills
-              </Link>
+              <div className="flex items-center justify-center gap-3">
+                <button
+                  onClick={() => setShowCreateForm(true)}
+                  className="px-6 py-2.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors inline-flex items-center gap-2 font-medium"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Create Custom Skill
+                </button>
+                <Link
+                  href="/agents/custom-skills"
+                  className="px-6 py-2.5 text-violet-400 hover:text-violet-300 transition-colors inline-flex items-center gap-2 font-medium text-sm"
+                >
+                  Custom Skills Studio
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                </Link>
+              </div>
             </>
           ) : (
             <>
@@ -142,7 +195,10 @@ export default function AgentCustomSkillsManager({ agentId }: Props) {
             </>
           )}
         </div>
-      ) : (
+      )}
+
+      {/* Assigned Skills Grid */}
+      {assignments.length > 0 && (
         <div className="grid gap-6 md:grid-cols-2">
           {assignments.map((assignment: any) => (
             <div
@@ -195,6 +251,74 @@ export default function AgentCustomSkillsManager({ agentId }: Props) {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Inline Create Skill Modal */}
+      {showCreateForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-tsushin-surface rounded-xl max-w-lg w-full max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border border-tsushin-border">
+            <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-4 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-white">Create & Assign Custom Skill</h3>
+              <button onClick={() => setShowCreateForm(false)} className="text-white/80 hover:text-white">
+                ✕
+              </button>
+            </div>
+            <div className="overflow-y-auto p-6 flex-1 space-y-4">
+              <p className="text-xs text-tsushin-muted">
+                Create an instruction-based custom skill and assign it to this agent. For script or MCP server skills, use the{' '}
+                <Link href="/agents/custom-skills" className="text-violet-400 hover:underline">
+                  Custom Skills Studio
+                </Link>.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-tsushin-slate mb-1">Name *</label>
+                <input
+                  type="text"
+                  value={createForm.name}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g., Policy Lookup"
+                  className="w-full px-3 py-2 bg-tsushin-ink border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-violet-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-tsushin-slate mb-1">Description</label>
+                <input
+                  type="text"
+                  value={createForm.description}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="Short description of what this skill does"
+                  className="w-full px-3 py-2 bg-tsushin-ink border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-violet-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-tsushin-slate mb-1">Instructions *</label>
+                <textarea
+                  value={createForm.instructions_md}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, instructions_md: e.target.value }))}
+                  placeholder="Natural language instructions for the LLM when this skill is invoked..."
+                  rows={6}
+                  className="w-full px-3 py-2 bg-tsushin-ink border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-violet-500 resize-y"
+                />
+                <p className="text-xs text-tsushin-muted mt-1">Markdown supported. Max 8,000 characters.</p>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-white/5 flex justify-end gap-3">
+              <button
+                onClick={() => setShowCreateForm(false)}
+                className="px-4 py-2 text-sm text-tsushin-slate hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateAndAssign}
+                disabled={creating || !createForm.name.trim() || !createForm.instructions_md.trim()}
+                className="px-6 py-2 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {creating ? 'Creating...' : 'Create & Assign'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
