@@ -88,6 +88,10 @@ MODEL_PRICING = {
     "claude-opus-4-5-20251101": {"prompt": 5.0, "completion": 25.0},
     "claude-opus-4-5-latest": {"prompt": 5.0, "completion": 25.0},
 
+    # Anthropic - Claude 4.6 series
+    "claude-opus-4-6": {"prompt": 15.0, "completion": 75.0},
+    "claude-sonnet-4-6": {"prompt": 3.0, "completion": 15.0},
+
     # Anthropic - Claude Sonnet 4 series
     "claude-sonnet-4-20250514": {"prompt": 3.0, "completion": 15.0},
     "claude-sonnet-4-latest": {"prompt": 3.0, "completion": 15.0},
@@ -98,6 +102,7 @@ MODEL_PRICING = {
     "claude-3-5-haiku-20241022": {"prompt": 0.80, "completion": 4.0},
 
     # Anthropic - Claude Haiku 4.5
+    "claude-haiku-4-5": {"prompt": 0.80, "completion": 4.0},
     "claude-haiku-4-5-20251022": {"prompt": 1.0, "completion": 5.0},
     "claude-haiku-4-5-latest": {"prompt": 1.0, "completion": 5.0},
 
@@ -222,15 +227,9 @@ MODEL_PRICING = {
     "deepseek-chat": {"prompt": 0.14, "completion": 0.28},
     "deepseek-reasoner": {"prompt": 0.55, "completion": 2.19},
 
-    # Ollama (local, free - no API costs)
-    "llama3.2": {"prompt": 0.0, "completion": 0.0},
-    "llama3.1": {"prompt": 0.0, "completion": 0.0},
-    "llama3": {"prompt": 0.0, "completion": 0.0},
-    "mistral": {"prompt": 0.0, "completion": 0.0},
-    "mixtral": {"prompt": 0.0, "completion": 0.0},
-    "qwen2.5": {"prompt": 0.0, "completion": 0.0},
-    "codellama": {"prompt": 0.0, "completion": 0.0},
-    "deepseek-r1": {"prompt": 0.0, "completion": 0.0},  # Local reasoning model
+    # Ollama (local, free) — no hardcoded models needed.
+    # Any model with provider="ollama" is automatically treated as free ($0)
+    # via the provider-level check in _get_pricing().
 
     # Embeddings (using free local model by default)
     # If using OpenAI embeddings in the future:
@@ -376,6 +375,13 @@ class TokenTracker:
                 self._pricing_cache[cache_key] = pricing
                 logger.debug(f"Version fallback pricing for {model_name} -> {base_name_match}")
                 return pricing
+
+        # Strategy 5: Ollama models are always free (local inference)
+        if model_provider and model_provider.lower() == "ollama":
+            free_pricing = {"prompt": 0.0, "completion": 0.0}
+            self._pricing_cache[cache_key] = free_pricing
+            logger.debug(f"Ollama model (free): {model_name}")
+            return free_pricing
 
         # No pricing found
         logger.debug(f"No pricing data for model: {model_name} (provider: {model_provider})")

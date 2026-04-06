@@ -15,11 +15,11 @@ interface Props {
 // Now handled by Skills system: web_search, web_scraping skills
 
 const MODEL_PROVIDERS = [
-  { value: 'anthropic', label: 'Anthropic', models: ['claude-sonnet-4.5', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'] },
-  { value: 'openai', label: 'OpenAI', models: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo'] },
+  { value: 'anthropic', label: 'Anthropic', models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'] },
+  { value: 'openai', label: 'OpenAI', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'o4-mini', 'o3-mini'] },
   { value: 'gemini', label: 'Google Gemini', models: ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'] },
   { value: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { value: 'ollama', label: 'Ollama (Local)', models: ['Gemma3:4b', 'llama3.1:8b', 'deepseek-r1:8b', 'MFDoom/deepseek-r1-tool-calling:8b'] },
+  { value: 'ollama', label: 'Ollama (Local)', models: [] as string[] },  // Populated dynamically from running Ollama instance
   {
     value: 'openrouter',
     label: 'OpenRouter (100+ models)',
@@ -88,9 +88,11 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   // Input helpers for triggers
   const [groupFilterInput, setGroupFilterInput] = useState('')
   const [numberFilterInput, setNumberFilterInput] = useState('')
+  const [ollamaModels, setOllamaModels] = useState<string[]>([])
 
   useEffect(() => {
     loadData()
+    fetchOllamaModels()
   }, [agentId])
 
   const loadData = async () => {
@@ -228,6 +230,20 @@ export default function AgentConfigurationManager({ agentId }: Props) {
     setTriggerNumberFilters(triggerNumberFilters.filter(f => f !== filter))
   }
 
+  const fetchOllamaModels = async () => {
+    try {
+      const response = await fetch('/api/ollama/health')
+      if (response.ok) {
+        const data = await response.json()
+        if (data.available && data.models) {
+          setOllamaModels(data.models.map((m: { name: string }) => m.name))
+        }
+      }
+    } catch {
+      // Ollama not available
+    }
+  }
+
   const getAvailableModels = () => {
     // If an instance is selected and it has models, use those
     if (providerInstanceId) {
@@ -235,6 +251,10 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       if (instance && instance.available_models.length > 0) {
         return instance.available_models
       }
+    }
+    // For Ollama, use dynamically fetched models
+    if (modelProvider === 'ollama') {
+      return ollamaModels
     }
     // Fall back to static MODEL_PROVIDERS list
     const provider = MODEL_PROVIDERS.find(p => p.value === modelProvider)
@@ -359,9 +379,13 @@ export default function AgentConfigurationManager({ agentId }: Props) {
                   const newVendor = e.target.value
                   setModelProvider(newVendor)
                   setProviderInstanceId(null)
-                  const provider = MODEL_PROVIDERS.find(p => p.value === newVendor)
-                  if (provider && provider.models.length > 0) {
-                    setModelName(provider.models[0])
+                  if (newVendor === 'ollama') {
+                    setModelName(ollamaModels[0] || '')
+                  } else {
+                    const provider = MODEL_PROVIDERS.find(p => p.value === newVendor)
+                    if (provider && provider.models.length > 0) {
+                      setModelName(provider.models[0])
+                    }
                   }
                   // Fetch instances for the new vendor
                   try {

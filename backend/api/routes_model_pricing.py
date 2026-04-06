@@ -335,8 +335,6 @@ def _get_provider_from_model(model_name: str) -> str:
         return "kokoro"
     elif model_lower in ["elevenlabs"]:
         return "elevenlabs"
-    elif model_lower in ["llama3.2", "llama3.1", "llama3", "mistral", "mixtral", "qwen2.5", "codellama", "deepseek-r1"]:
-        return "ollama"
     else:
         return "unknown"
 
@@ -379,11 +377,15 @@ def _format_display_name(model_name: str) -> str:
         "claude-opus-4-6-latest": "Claude Opus 4.6 (Latest)",
         "claude-sonnet-4-6": "Claude Sonnet 4.6",
         "claude-sonnet-4-6-latest": "Claude Sonnet 4.6 (Latest)",
+        # Anthropic - Claude 4.6
+        "claude-opus-4-6": "Claude Opus 4.6",
+        "claude-sonnet-4-6": "Claude Sonnet 4.6",
         # Anthropic - Claude 4.5 / 4
         "claude-opus-4-5-20251101": "Claude Opus 4.5",
         "claude-opus-4-5-latest": "Claude Opus 4.5 (Latest)",
         "claude-sonnet-4-20250514": "Claude Sonnet 4",
         "claude-sonnet-4-latest": "Claude Sonnet 4 (Latest)",
+        "claude-haiku-4-5": "Claude Haiku 4.5",
         "claude-haiku-4-5-20251022": "Claude Haiku 4.5",
         "claude-haiku-4-5-latest": "Claude Haiku 4.5 (Latest)",
         # Anthropic - Claude 3.5 / 3 (legacy)
@@ -414,14 +416,6 @@ def _format_display_name(model_name: str) -> str:
         # TTS Providers
         "kokoro": "Kokoro TTS (Free)",
         "elevenlabs": "ElevenLabs TTS",
-        # Local Models (Ollama)
-        "llama3.2": "Llama 3.2 (Local)",
-        "llama3.1": "Llama 3.1 (Local)",
-        "llama3": "Llama 3 (Local)",
-        "mistral": "Mistral (Local)",
-        "mixtral": "Mixtral (Local)",
-        "qwen2.5": "Qwen 2.5 (Local)",
-        "codellama": "Code Llama (Local)",
     }
 
     return display_map.get(model_name, name.title())

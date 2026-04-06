@@ -41,10 +41,10 @@ interface AgentFormData {
 // AVAILABLE_TOOLS removed - legacy tools migrated to Skills system
 // Use AgentSkill table for web_search, web_scraping skills
 const MODEL_PROVIDERS = [
-  { value: 'anthropic', label: 'Anthropic', models: ['claude-sonnet-4.5', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'] },
-  { value: 'openai', label: 'OpenAI', models: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo'] },
+  { value: 'anthropic', label: 'Anthropic', models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'] },
+  { value: 'openai', label: 'OpenAI', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'o4-mini', 'o3-mini'] },
   { value: 'gemini', label: 'Google Gemini', models: ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'] },
-  { value: 'ollama', label: 'Ollama (Local)', models: ['Gemma3:4b', 'llama3.1:8b', 'deepseek-r1:8b', 'MFDoom/deepseek-r1-tool-calling:8b'] },
+  { value: 'ollama', label: 'Ollama (Local)', models: [] as string[] },  // Populated dynamically from running Ollama instance
   {
     value: 'openrouter',
     label: 'OpenRouter (100+ models)',
@@ -86,6 +86,7 @@ export default function AgentsPage() {
   const [agentSkillsCounts, setAgentSkillsCounts] = useState<Record<number, number>>({})
   const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean>(false)
+  const [ollamaModels, setOllamaModels] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [expandedAgent, setExpandedAgent] = useState<number | null>(null)
@@ -104,7 +105,7 @@ export default function AgentsPage() {
     keywords: [],
     // enabled_tools removed - use Skills system
     model_provider: 'anthropic',
-    model_name: 'claude-sonnet-4.5',
+    model_name: 'claude-sonnet-4-6',
     is_active: true,
     is_default: false
   })
@@ -143,13 +144,16 @@ export default function AgentsPage() {
       const firstVendor = providerInstances[0].vendor?.toLowerCase() || ''
       const mappedProvider = vendorMap[firstVendor]
       if (mappedProvider) {
+        if (mappedProvider === 'ollama') {
+          return { model_provider: 'ollama', model_name: ollamaModels[0] || '' }
+        }
         const provider = MODEL_PROVIDERS.find(p => p.value === mappedProvider)
         if (provider) {
           return { model_provider: mappedProvider, model_name: provider.models[0] || '' }
         }
       }
     }
-    return { model_provider: 'anthropic', model_name: 'claude-sonnet-4.5' }
+    return { model_provider: 'anthropic', model_name: 'claude-sonnet-4-6' }
   }
 
   const resetForm = () => {
@@ -176,6 +180,9 @@ export default function AgentsPage() {
   }
 
   const getAvailableModels = () => {
+    if (formData.model_provider === 'ollama') {
+      return ollamaModels
+    }
     const provider = MODEL_PROVIDERS.find(p => p.value === formData.model_provider)
     return provider?.models || []
   }
@@ -282,11 +289,19 @@ export default function AgentsPage() {
       if (response.ok) {
         const data = await response.json()
         setOllamaAvailable(data.available === true)
+        if (data.available && data.models) {
+          const modelNames = data.models.map((m: { name: string }) => m.name)
+          setOllamaModels(modelNames)
+        } else {
+          setOllamaModels([])
+        }
       } else {
         setOllamaAvailable(false)
+        setOllamaModels([])
       }
     } catch (error) {
       setOllamaAvailable(false)
+      setOllamaModels([])
     }
   }
 
@@ -898,11 +913,13 @@ export default function AgentsPage() {
                     value={formData.model_provider}
                     onChange={(e) => {
                       const newProvider = e.target.value
-                      const provider = MODEL_PROVIDERS.find(p => p.value === newProvider)
+                      const defaultModel = newProvider === 'ollama'
+                        ? (ollamaModels[0] || '')
+                        : (MODEL_PROVIDERS.find(p => p.value === newProvider)?.models[0] || '')
                       setFormData({
                         ...formData,
                         model_provider: newProvider,
-                        model_name: provider?.models[0] || ''
+                        model_name: defaultModel
                       })
                     }}
                     className="select"
@@ -972,7 +989,7 @@ export default function AgentsPage() {
                               setFormData({ ...formData, model_name: e.target.value })
                             }}
                             className="input font-mono"
-                            placeholder="e.g., anthropic/claude-sonnet-4-5"
+                            placeholder="e.g., anthropic/claude-sonnet-4-6"
                             required
                           />
                           <p className="text-xs text-tsushin-slate">
@@ -988,6 +1005,9 @@ export default function AgentsPage() {
                       className="select font-mono"
                       required
                     >
+                      {getAvailableModels().length === 0 && formData.model_provider === 'ollama' && (
+                        <option value="" disabled>No models found — is Ollama running?</option>
+                      )}
                       {getAvailableModels().map((model) => (
                         <option key={model} value={model}>
                           {model}

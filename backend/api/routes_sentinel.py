@@ -9,9 +9,11 @@ Provides REST API endpoints for:
 """
 
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy.orm import Session
@@ -849,10 +851,12 @@ LLM_MODELS = {
         "gemini-2.0-flash-lite",
     ],
     "anthropic": [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
         "claude-sonnet-4-20250514",
         "claude-3-5-sonnet-20241022",
         "claude-3-opus-20240229",
-        "claude-3-haiku-20240307",
     ],
     "openai": [
         "gpt-4o",
@@ -872,13 +876,42 @@ LLM_MODELS = {
         "meta-llama/llama-3.1-8b-instruct",
         "mistralai/mistral-7b-instruct",
     ],
-    "ollama": [
-        "llama3.2:latest",
-        "llama3.1",
-        "mistral",
-        "phi3",
-    ],
+    "ollama": [],  # Populated dynamically from running Ollama instance
 }
+
+
+async def _get_ollama_models() -> List[str]:
+    """Fetch available models from the configured Ollama instance."""
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+    try:
+        from models import Config
+        from db import get_global_engine
+        from sqlalchemy.orm import sessionmaker
+        engine = get_global_engine()
+        if engine:
+            _Session = sessionmaker(bind=engine)
+            db = _Session()
+            try:
+                config = db.query(Config).first()
+                if config and config.ollama_base_url:
+                    ollama_base_url = config.ollama_base_url
+            finally:
+                db.close()
+    except Exception:
+        pass
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{ollama_base_url.rstrip('/')}/api/tags")
+            if resp.status_code == 200:
+                data = resp.json()
+                return sorted(
+                    m["name"] for m in data.get("models", [])
+                    if isinstance(m, dict) and "name" in m
+                )
+    except Exception:
+        pass
+    return []
 
 
 @router.get("/llm/providers", response_model=List[LLMProviderResponse])
@@ -886,6 +919,8 @@ async def get_llm_providers(
     current_user: User = Depends(get_current_user_required),
 ):
     """Get available LLM providers for Sentinel analysis."""
+    ollama_models = await _get_ollama_models()
+
     return [
         LLMProviderResponse(
             name="gemini",
@@ -910,7 +945,7 @@ async def get_llm_providers(
         LLMProviderResponse(
             name="ollama",
             display_name="Ollama (Local)",
-            models=LLM_MODELS["ollama"],
+            models=ollama_models,
         ),
     ]
 
@@ -923,6 +958,9 @@ async def get_llm_models(
     """Get available models for a specific LLM provider."""
     if provider not in LLM_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    if provider == "ollama":
+        return {"provider": provider, "models": await _get_ollama_models()}
 
     return {"provider": provider, "models": LLM_MODELS[provider]}
 

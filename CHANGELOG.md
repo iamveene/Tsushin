@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sanitize leaked tool-call markup (PR [#9](https://github.com/iamveene/Tsushin/pull/9) by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Local/Ollama models sometimes emit pseudo `[TOOL_CALL]` markup instead of plain replies. Added `_sanitize_unexecuted_tool_output()` to `AgentService` that extracts the user-facing message from `action: respond` blocks and strips unresolved fenced tool blocks before delivery.
 - **AgentSwitcher contact resolution for WhatsApp aliases (PR [#10](https://github.com/iamveene/Tsushin/pull/10) by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** `AgentSwitcherSkill._identify_sender()` now uses `ContactService` with `sender_key` and `chat_name` parameters for consistent contact resolution. Falls back through channel mappings, fuzzy name matching, and WhatsApp auto-discovery — matching the main router's resolution strategy.
 
+### Improvements
+
+#### Dynamic Ollama Model Discovery (2026-04-06)
+
+- **Ollama models now fetched dynamically from running instance:** Replaced all hardcoded Ollama model lists across 6 files (3 backend, 3 frontend) with dynamic discovery from the configured Ollama instance via `/api/tags`. Agent creation, agent configuration manager, playground config panel, Sentinel LLM providers, token tracker, and model pricing routes now all reflect the actual models available on the user's Ollama instance. Hub already showed dynamic models — now the agent creation and configuration selectors are consistent with it. Ollama models are automatically treated as free ($0) in pricing/cost tracking without needing to be individually listed.
+
 ### Bug fixes
 
 #### Provider Instance Validation (2026-04-06)
