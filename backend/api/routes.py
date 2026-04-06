@@ -139,6 +139,18 @@ def readiness_check():
     return JSONResponse(content=payload, status_code=status_code)
 
 
+@router.get("/api/user-guide")
+def get_user_guide():
+    """Serve USER_GUIDE.md content for the in-app help panel."""
+    from fastapi.responses import PlainTextResponse
+    from pathlib import Path
+
+    guide_path = Path("/app/USER_GUIDE.md")
+    if not guide_path.exists():
+        raise HTTPException(status_code=404, detail="User guide not found")
+    return PlainTextResponse(guide_path.read_text(encoding="utf-8"), media_type="text/markdown")
+
+
 @router.get("/api/config", response_model=ConfigResponse)
 def get_config(
     db: Session = Depends(get_db),
