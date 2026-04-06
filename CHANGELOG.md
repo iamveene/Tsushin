@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Dynamic Ollama Model Discovery (2026-04-06)
 
 - **Ollama models now fetched dynamically from running instance:** Replaced all hardcoded Ollama model lists across 6 files (3 backend, 3 frontend) with dynamic discovery from the configured Ollama instance via `/api/tags`. Agent creation, agent configuration manager, playground config panel, Sentinel LLM providers, token tracker, and model pricing routes now all reflect the actual models available on the user's Ollama instance. Hub already showed dynamic models — now the agent creation and configuration selectors are consistent with it. Ollama models are automatically treated as free ($0) in pricing/cost tracking without needing to be individually listed.
+- **SSRF validation now sends vendor context for Ollama URL validation:** The provider instance creation modal was blocking `host.docker.internal` URLs for Ollama because the frontend URL validation didn't pass the `vendor` parameter to the backend. Fixed `validateProviderUrl()` to pass the current vendor so Ollama/custom providers correctly allow Docker internal hostnames.
+- **Ollama "Manage Instance" button on Hub Local Services card:** Added a "Manage Instance" link to the Ollama card in the Hub's Local Services section, allowing users to open the full provider instance edit modal to modify URL, API key, models, and other settings directly from the card.
 
 ### Bug fixes
 
