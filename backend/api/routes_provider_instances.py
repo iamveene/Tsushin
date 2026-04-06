@@ -124,6 +124,42 @@ class UrlValidationResponse(BaseModel):
 
 VALID_VENDORS = {"openai", "anthropic", "gemini", "groq", "grok", "deepseek", "openrouter", "ollama", "vertex_ai", "custom"}
 
+
+def _disable_sdk_retries(ai_client) -> None:
+    """Disable automatic retries on the underlying SDK client for connection tests.
+
+    SDK default retries (e.g. Anthropic retries 529/overloaded 2x with backoff)
+    cause the "Test Connection" button to hang for 30+ seconds. Connection tests
+    should fail fast so the user gets immediate feedback.
+    """
+    inner = getattr(ai_client, 'client', None)
+    if inner is None:
+        return
+    # Anthropic SDK (AsyncAnthropic) and OpenAI SDK (AsyncOpenAI) both expose _max_retries
+    if hasattr(inner, '_max_retries'):
+        inner._max_retries = 0
+    # Also set the public attribute if it exists
+    if hasattr(inner, 'max_retries'):
+        inner.max_retries = 0
+
+
+def _sanitize_test_error(err_str: str, test_model: str) -> str:
+    """Return a user-friendly error message for connection test failures."""
+    lower = err_str.lower()
+    if "api_key" in lower or "unauthorized" in lower or "401" in err_str:
+        return "Authentication failed — check your API key"
+    if "timeout" in lower or "connect" in lower:
+        return "Connection timed out — check the base URL"
+    if "not found" in lower or "404" in err_str:
+        return f"Model '{test_model}' not found on this provider"
+    if "overloaded" in lower or "529" in err_str:
+        return f"Provider is temporarily overloaded (529) — try again in a few seconds"
+    if "rate" in lower or "429" in err_str:
+        return "Rate limited by provider — wait a moment and retry"
+    if "permission" in lower or "403" in err_str:
+        return "Access denied — check API key permissions for this model"
+    return f"Connection test failed: {err_str[:200]}"
+
 # Curated suggestions shown in the UI as model-name autocomplete.
 # Providers with a live /models endpoint (openai/groq/grok/deepseek/openrouter via
 # Auto-detect, gemini via live discovery below) will replace this list after
@@ -658,6 +694,9 @@ async def test_provider_connection_raw(
             api_key=api_key,  # V060-PRV-001: pass raw key so AIClient doesn't require DB key
         )
 
+        # Disable SDK retries for connection tests — fail fast instead of hanging
+        _disable_sdk_retries(client)
+
         # Override base_url if provided
         if data.base_url:
             if hasattr(client, 'client') and client.client:
@@ -678,16 +717,7 @@ async def test_provider_connection_raw(
 
     except Exception as e:
         logger.exception(f"Raw test connection failed for vendor {vendor}")
-        # Sanitize error message — only show provider-level info, not internals
-        err_str = str(e)
-        if "api_key" in err_str.lower() or "unauthorized" in err_str.lower() or "401" in err_str:
-            error_message = "Authentication failed — check your API key"
-        elif "timeout" in err_str.lower() or "connect" in err_str.lower():
-            error_message = "Connection timed out — check the base URL"
-        elif "not found" in err_str.lower() or "404" in err_str:
-            error_message = f"Model '{test_model}' not found on this provider"
-        else:
-            error_message = "Connection test failed — check provider and credentials"
+        error_message = _sanitize_test_error(str(e), test_model)
 
     latency_ms = int((time.time() - start_time) * 1000)
 
@@ -780,6 +810,9 @@ async def test_provider_connection(
             api_key=api_key,  # V060-PRV-002: exercise instance's own key (falls back to tenant key only when instance has none)
         )
 
+        # Disable SDK retries for connection tests — fail fast instead of hanging
+        _disable_sdk_retries(client)
+
         # Override base_url if instance has custom values
         if instance.base_url:
             if hasattr(client, 'client') and client.client:
@@ -810,7 +843,7 @@ async def test_provider_connection(
                 pass
 
     except Exception as e:
-        error_message = str(e)
+        error_message = _sanitize_test_error(str(e), test_model)
         logger.error(f"Test connection failed for instance {instance_id}: {e}")
 
     latency_ms = int((time.time() - start_time) * 1000)
