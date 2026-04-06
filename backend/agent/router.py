@@ -207,6 +207,60 @@ class AgentRouter:
         # Phase 4.8: Ring buffer memory loading deprecated
         # Memory persistence now handled by Multi-Agent Memory Manager (ChromaDB)
 
+    def _resolve_direct_message_contact(self, message: Dict, sender: str) -> Optional[Contact]:
+        """Resolve a DM sender using raw IDs, chat metadata, and WhatsApp auto-linking."""
+        sender_normalized = sender.split("@")[0].lstrip("+")
+
+        if self.contact_service:
+            contact = self.contact_service.identify_sender(sender)
+            if contact:
+                return contact
+
+            chat_id = message.get("chat_id", "")
+            if chat_id and chat_id != sender:
+                contact = self.contact_service.identify_sender(chat_id)
+                if contact:
+                    return contact
+
+        names_to_try = []
+        for candidate in [message.get("chat_name"), message.get("sender_name")]:
+            candidate = (candidate or "").strip()
+            if candidate and candidate not in names_to_try and not candidate.isdigit():
+                names_to_try.append(candidate)
+
+        tenant_id = self.tenant_id
+        for candidate in names_to_try:
+            base_query = self.db.query(Contact).filter(Contact.is_active == True)
+            if tenant_id:
+                base_query = base_query.filter(Contact.tenant_id == tenant_id)
+
+            exact_matches = base_query.filter(Contact.friendly_name.ilike(candidate)).all()
+            if len(exact_matches) == 1:
+                self.logger.info(
+                    f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
+                    f"to contact '{exact_matches[0].friendly_name}' via exact chat metadata '{candidate}'"
+                )
+                return exact_matches[0]
+
+            candidate_lower = candidate.lower()
+            partial_matches = [
+                contact for contact in base_query.all()
+                if contact.friendly_name and contact.friendly_name.lower() in candidate_lower
+            ]
+            if len(partial_matches) == 1:
+                self.logger.info(
+                    f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
+                    f"to contact '{partial_matches[0].friendly_name}' via partial chat metadata '{candidate}'"
+                )
+                return partial_matches[0]
+
+        try:
+            from services.whatsapp_id_discovery import WhatsAppIDDiscovery
+            discovery = WhatsAppIDDiscovery(time_window_minutes=60)
+            return discovery.auto_link_contact(self.db, sender_normalized, self.logger)
+        except Exception:
+            return None
+
     def get_agent_config(self, agent: Agent) -> Dict:
         """
         Resolve agent-specific configuration with system-level fallback.
@@ -728,31 +782,7 @@ class AgentRouter:
                 except Exception:
                     pass
 
-            # Try to find contact by phone number OR WhatsApp ID
-            # Normalize sender to handle WhatsApp IDs (e.g., "193853382488108")
-            sender_normalized = sender.split('@')[0].lstrip('+')
-
-            # Method 1: Search by phone number (traditional)
-            # BUG-LOG-012 FIX: Scope contact lookup by tenant when possible
-            contact_q = self.db.query(Contact).filter(
-                or_(
-                    Contact.phone_number == sender,
-                    Contact.phone_number == sender_normalized,
-                    Contact.phone_number == f"+{sender_normalized}"
-                )
-            )
-            if _routing_tenant_id:
-                contact_q = contact_q.filter(Contact.tenant_id == _routing_tenant_id)
-            contact = contact_q.first()
-
-            # Method 2: If not found, search by WhatsApp ID
-            if not contact:
-                whatsapp_q = self.db.query(Contact).filter(Contact.whatsapp_id == sender_normalized)
-                if _routing_tenant_id:
-                    whatsapp_q = whatsapp_q.filter(Contact.tenant_id == _routing_tenant_id)
-                contact = whatsapp_q.first()
-                if contact:
-                    self.logger.info(f"Contact found by WhatsApp ID: {contact.friendly_name} (ID: {sender_normalized})")
+            contact = self._resolve_direct_message_contact(message, sender)
 
             # If contact found (by either method), check for agent mapping
             # BUG-LOG-012 FIX: Scope mapping lookup by tenant_id to prevent cross-tenant agent assignment

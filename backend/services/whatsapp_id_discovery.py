@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from models import Contact, ConversationThread
+from services.contact_channel_mapping_service import ContactChannelMappingService
 
 logger = logging.getLogger(__name__)
 
@@ -152,13 +153,33 @@ class WhatsAppIDDiscovery:
                 )
                 return None
 
-            # Check if contact already has a WhatsApp ID
+            # If contact already has a WhatsApp ID, keep backward compatibility
+            # but add the newly observed LID as a channel mapping so router/filter
+            # paths can resolve both identifiers to the same contact.
             if contact.whatsapp_id:
-                logger_instance.debug(
-                    f"[AUTO-DISCOVERY] Contact {contact.friendly_name} already has "
-                    f"WhatsApp ID: {contact.whatsapp_id}"
+                if contact.whatsapp_id == sender_whatsapp_id:
+                    logger_instance.debug(
+                        f"[AUTO-DISCOVERY] Contact {contact.friendly_name} already linked "
+                        f"to WhatsApp ID {sender_whatsapp_id}"
+                    )
+                    return contact
+
+                mapping_service = ContactChannelMappingService(db)
+                mapping_service.add_channel_mapping(
+                    contact_id=contact.id,
+                    channel_type="whatsapp",
+                    channel_identifier=sender_whatsapp_id,
+                    channel_metadata={
+                        "discovered_from": "whatsapp_id_discovery",
+                        "legacy_whatsapp_id": contact.whatsapp_id,
+                    },
+                    tenant_id=contact.tenant_id or "default",
                 )
-                return None
+                logger_instance.debug(
+                    f"[AUTO-DISCOVERY] Added WhatsApp alias {sender_whatsapp_id} "
+                    f"for contact {contact.friendly_name} (legacy ID: {contact.whatsapp_id})"
+                )
+                return contact
 
             # SUCCESS! Link the WhatsApp ID to this contact
             logger_instance.info(
