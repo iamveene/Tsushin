@@ -17,7 +17,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
 import SlackSetupModal from '@/components/SlackSetupModal'
@@ -279,6 +279,7 @@ export default function HubPage() {
   // MCP Instances state
   const [mcpInstances, setMcpInstances] = useState<WhatsAppMCPInstance[]>([])
   const [healthStatuses, setHealthStatuses] = useState<Record<number, MCPHealthStatus>>({})
+  const [testerStatus, setTesterStatus] = useState<TesterMCPStatus | null>(null)
 
   // Phase 10.1.1: Telegram Bot Integration
   const [telegramInstances, setTelegramInstances] = useState<TelegramBotInstance[]>([])
@@ -368,11 +369,14 @@ export default function HubPage() {
   const [showFiltersModal, setShowFiltersModal] = useState(false)  // Phase 17: Instance filters modal
   const [editingKey, setEditingKey] = useState<APIKey | null>(null)
   const [selectedMcpInstance, setSelectedMcpInstance] = useState<WhatsAppMCPInstance | null>(null)
+  const [selectedQrResource, setSelectedQrResource] = useState<'instance' | 'tester' | null>(null)
   const [qrCode, setQRCode] = useState<string | null>(null)
   // QR Modal polling state for auto-refresh and auto-close
   const [qrPollingActive, setQrPollingActive] = useState(false)
   const [qrLastRefresh, setQrLastRefresh] = useState<Date | null>(null)
   const [qrAuthSuccess, setQrAuthSuccess] = useState(false)
+  const [qrStatus, setQrStatus] = useState<'loading' | 'ready' | 'degraded'>('loading')
+  const [qrStatusMessage, setQrStatusMessage] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
@@ -405,6 +409,46 @@ export default function HubPage() {
 
   const canEditSettings = hasPermission('org.settings.write')
   const canReadSettings = hasPermission('org.settings.read')
+
+  const loadMcpInstances = useCallback(async () => {
+    try {
+      const data = await api.getMCPInstances()
+      setMcpInstances(data.filter(instance => instance.instance_type === 'agent'))
+
+      // Load health status for each instance
+      const healthPromises = data.map(async (instance) => {
+        try {
+          const health = await api.getMCPHealth(instance.id)
+          return { instanceId: instance.id, health }
+        } catch (err) {
+          return { instanceId: instance.id, health: null }
+        }
+      })
+
+      const healthResults = await Promise.all(healthPromises)
+      setHealthStatuses(prev => {
+        const updated = { ...prev }
+        healthResults.forEach(({ instanceId, health }) => {
+          if (health) {
+            updated[instanceId] = health
+          }
+        })
+        return updated
+      })
+    } catch (err) {
+      console.error('Failed to load MCP instances:', err)
+    }
+  }, [])
+
+  const loadTesterStatus = useCallback(async () => {
+    try {
+      const status = await api.getTesterStatus()
+      setTesterStatus(status)
+    } catch (err) {
+      console.error('Failed to load tester status:', err)
+      setTesterStatus(null)
+    }
+  }, [])
 
   useEffect(() => {
     loadAllData()
@@ -440,13 +484,14 @@ export default function HubPage() {
 
   // QR Code Modal polling - auto-refresh QR and auto-close on authentication
   useEffect(() => {
-    // Only poll when QR modal is open and we have a selected instance
-    if (!showQRModal || !selectedMcpInstance) {
+    if (!showQRModal || !selectedQrResource || (selectedQrResource === 'instance' && !selectedMcpInstance)) {
       setQrPollingActive(false)
       return
     }
 
     setQrPollingActive(true)
+    let consecutiveFailures = 0
+    let emptyQrPolls = 0
     let isCancelled = false
 
     const handleAuthSuccess = () => {
@@ -459,42 +504,56 @@ export default function HubPage() {
         setShowQRModal(false)
         setQRCode(null)
         setSelectedMcpInstance(null)
+        setSelectedQrResource(null)
         setQrAuthSuccess(false)
         setQrLastRefresh(null)
+        setQrStatus('loading')
+        setQrStatusMessage(null)
 
         // Refresh instances list to update status badges
         loadMcpInstances()
+        loadTesterStatus()
 
-        setSuccessMessage('WhatsApp connected successfully!')
+        setSuccessMessage(selectedQrResource === 'tester' ? 'Tester WhatsApp connected successfully!' : 'WhatsApp connected successfully!')
         setTimeout(() => setSuccessMessage(null), 3000)
       }, 1500) // 1.5s to show success state
     }
 
     const checkAuthStatus = async () => {
-      if (isCancelled || !selectedMcpInstance) return
+      if (isCancelled) return
 
       try {
-        const health = await api.getMCPHealth(selectedMcpInstance.id)
+        const health = selectedQrResource === 'tester'
+          ? await api.getTesterStatus()
+          : await api.getMCPHealth(selectedMcpInstance!.id)
+
         // Only consider authenticated if ALL conditions are true:
         // 1. authenticated=true (device session exists in DB)
         // 2. connected=true (WebSocket is connected to WhatsApp)
         // 3. needs_reauth=false (session is valid, user didn't logout from phone)
-        const isFullyAuthenticated = health.authenticated &&
-                                      health.connected &&
+        const isFullyAuthenticated = Boolean(health.authenticated) &&
+                                      Boolean(health.connected) &&
                                       !health.needs_reauth
         if (isFullyAuthenticated) {
           handleAuthSuccess()
           return true
         }
+        if (health.error) {
+          setQrStatusMessage(health.error)
+        }
       } catch (err) {
-        // Ignore auth check errors - transient failures during container startup
+        consecutiveFailures += 1
         console.debug('QR auth check error (will retry):', err)
+        if (consecutiveFailures >= 2) {
+          setQrStatus('degraded')
+          setQrStatusMessage(err instanceof Error ? err.message : 'Failed to check WhatsApp health')
+        }
       }
       return false
     }
 
     const refreshQRCode = async () => {
-      if (isCancelled || !selectedMcpInstance) return
+      if (isCancelled) return
 
       try {
         // First check if authenticated
@@ -502,21 +561,36 @@ export default function HubPage() {
         if (isAuth) return // Already handled auth success
 
         // Refresh QR code
-        const qrResponse = await api.getMCPQRCode(selectedMcpInstance.id)
+        const qrResponse = selectedQrResource === 'tester'
+          ? await api.getTesterQRCode()
+          : await api.getMCPQRCode(selectedMcpInstance!.id)
 
         if (isCancelled) return
 
         if (qrResponse.qr_code) {
           setQRCode(qrResponse.qr_code)
           setQrLastRefresh(new Date())
+          setQrStatus('ready')
+          setQrStatusMessage(qrResponse.message || 'Scan QR code with WhatsApp')
+          consecutiveFailures = 0
+          emptyQrPolls = 0
+        } else {
+          emptyQrPolls += 1
+          if (emptyQrPolls >= 3) {
+            setQrStatus('degraded')
+            setQrStatusMessage(qrResponse.message || 'QR code is not becoming available. Restart or reset authentication.')
+          } else {
+            setQrStatus('loading')
+            setQrStatusMessage(qrResponse.message || 'Waiting for QR code...')
+          }
         }
-        // REMOVED: Don't trigger auth success based on QR endpoint message
-        // The health check polling (checkAuthStatus) is the authoritative source
-        // This prevents false positives when QR endpoint says "authenticated"
-        // but needs_reauth is actually true
       } catch (err) {
-        // Log but don't show error - transient failures are expected during container startup
         console.warn('QR refresh error (will retry):', err)
+        consecutiveFailures += 1
+        if (consecutiveFailures >= 2) {
+          setQrStatus('degraded')
+          setQrStatusMessage(err instanceof Error ? err.message : 'Failed to refresh QR code')
+        }
       }
     }
 
@@ -537,7 +611,7 @@ export default function HubPage() {
       clearInterval(authCheckInterval)
       clearInterval(qrRefreshInterval)
     }
-  }, [showQRModal, selectedMcpInstance])
+  }, [showQRModal, selectedMcpInstance, selectedQrResource, loadMcpInstances, loadTesterStatus])
 
   // Fetch allowed stdio binaries when MCP server modal opens
   useEffect(() => {
@@ -556,6 +630,7 @@ export default function HubPage() {
         fetchKokoroContainerStatus(),
         loadHubIntegrations(),
         loadMcpInstances(),
+        loadTesterStatus(),
         loadTelegramInstances(),  // Phase 10.1.1
         loadSlackIntegrations(),  // v0.6.0
         loadDiscordIntegrations(),  // v0.6.0
@@ -1014,36 +1089,6 @@ export default function HubPage() {
     }
   }
 
-  const loadMcpInstances = useCallback(async () => {
-    try {
-      const data = await api.getMCPInstances()
-      setMcpInstances(data)
-
-      // Load health status for each instance
-      const healthPromises = data.map(async (instance) => {
-        try {
-          const health = await api.getMCPHealth(instance.id)
-          return { instanceId: instance.id, health }
-        } catch (err) {
-          return { instanceId: instance.id, health: null }
-        }
-      })
-
-      const healthResults = await Promise.all(healthPromises)
-      setHealthStatuses(prev => {
-        const updated = { ...prev }
-        healthResults.forEach(({ instanceId, health }) => {
-          if (health) {
-            updated[instanceId] = health
-          }
-        })
-        return updated
-      })
-    } catch (err) {
-      console.error('Failed to load MCP instances:', err)
-    }
-  }, [])
-
   const handleSaveWhatsappDelay = async () => {
     if (!canEditSettings) {
       return
@@ -1298,6 +1343,7 @@ export default function HubPage() {
       setSuccessMessage(`Instance ${action}${action === 'delete' ? 'd' : 'ed'}`)
       setTimeout(() => setSuccessMessage(null), 3000)
       loadMcpInstances()
+      loadTesterStatus()
     } catch (err: any) {
       setError(err.message || `Failed to ${action} instance`)
     }
@@ -1305,10 +1351,13 @@ export default function HubPage() {
 
   const handleShowQR = async (instance: WhatsAppMCPInstance) => {
     setSelectedMcpInstance(instance)
+    setSelectedQrResource('instance')
     setShowQRModal(true)
     setQRCode(null)
     setQrAuthSuccess(false)
     setQrLastRefresh(null)
+    setQrStatus('loading')
+    setQrStatusMessage('Checking WhatsApp session...')
 
     try {
       // First check health to see if we really need a QR code
@@ -1323,8 +1372,11 @@ export default function HubPage() {
           setShowQRModal(false)
           setQRCode(null)
           setSelectedMcpInstance(null)
+          setSelectedQrResource(null)
           setQrAuthSuccess(false)
           setQrLastRefresh(null)
+          setQrStatus('loading')
+          setQrStatusMessage(null)
           loadMcpInstances()
           setSuccessMessage('WhatsApp is already connected!')
           setTimeout(() => setSuccessMessage(null), 3000)
@@ -1337,11 +1389,60 @@ export default function HubPage() {
       if (response.qr_code) {
         setQRCode(response.qr_code)
         setQrLastRefresh(new Date())
+        setQrStatus('ready')
+        setQrStatusMessage(response.message || 'Scan QR code with WhatsApp')
+      } else {
+        setQrStatus('loading')
+        setQrStatusMessage(response.message || 'Waiting for QR code...')
       }
-      // Don't show error if QR not available - polling will pick it up
-      // The loading state is shown by default when qrCode is null
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch QR code')
+      setQrStatus('degraded')
+      setQrStatusMessage(err.message || 'Failed to fetch QR code')
+    }
+  }
+
+  const handleShowTesterQR = async () => {
+    setSelectedMcpInstance(null)
+    setSelectedQrResource('tester')
+    setShowQRModal(true)
+    setQRCode(null)
+    setQrAuthSuccess(false)
+    setQrLastRefresh(null)
+    setQrStatus('loading')
+    setQrStatusMessage('Checking tester session...')
+
+    try {
+      const health = await api.getTesterStatus()
+      if (health.authenticated && health.connected && !health.needs_reauth) {
+        setQrAuthSuccess(true)
+        setTimeout(() => {
+          setShowQRModal(false)
+          setQRCode(null)
+          setSelectedQrResource(null)
+          setQrAuthSuccess(false)
+          setQrLastRefresh(null)
+          setQrStatus('loading')
+          setQrStatusMessage(null)
+          loadTesterStatus()
+          setSuccessMessage('Tester WhatsApp is already connected!')
+          setTimeout(() => setSuccessMessage(null), 3000)
+        }, 1500)
+        return
+      }
+
+      const response = await api.getTesterQRCode()
+      if (response.qr_code) {
+        setQRCode(response.qr_code)
+        setQrLastRefresh(new Date())
+        setQrStatus('ready')
+        setQrStatusMessage(response.message || 'Scan QR code with WhatsApp')
+      } else {
+        setQrStatus('loading')
+        setQrStatusMessage(response.message || 'Waiting for tester QR code...')
+      }
+    } catch (err: any) {
+      setQrStatus('degraded')
+      setQrStatusMessage(err.message || 'Failed to fetch tester QR code')
     }
   }
 
@@ -1371,6 +1472,35 @@ export default function HubPage() {
       }
     } catch (err: any) {
       setError(err.message || 'Failed to reset authentication')
+    }
+  }
+
+  const handleRestartTester = async () => {
+    try {
+      const result = await api.restartTester()
+      setSuccessMessage(result.message || 'Tester restarting')
+      setTimeout(() => setSuccessMessage(null), 3000)
+      await loadTesterStatus()
+    } catch (err: any) {
+      setError(err.message || 'Failed to restart tester')
+    }
+  }
+
+  const handleResetTesterAuth = async () => {
+    if (!confirm('Reset authentication for the tester WhatsApp instance?')) {
+      return
+    }
+
+    try {
+      const response = await api.logoutTester()
+      setSuccessMessage(response.message || 'Tester authentication reset. Opening QR code...')
+      setTimeout(() => setSuccessMessage(null), 3000)
+      await loadTesterStatus()
+      setTimeout(() => {
+        handleShowTesterQR()
+      }, 1500)
+    } catch (err: any) {
+      setError(err.message || 'Failed to reset tester authentication')
     }
   }
 
@@ -1824,6 +1954,8 @@ export default function HubPage() {
     }
     return `px-2 py-1 text-xs font-medium border rounded-full ${colors[status] || colors.stopped}`
   }
+
+  const agentMcpInstances = mcpInstances.filter(instance => instance.instance_type === 'agent')
 
   // Render integration card based on status
   const renderIntegrationCard = (
@@ -2593,7 +2725,7 @@ export default function HubPage() {
                     </div>
                   )}
 
-                  {mcpInstances.length === 0 ? (
+                  {agentMcpInstances.length === 0 ? (
                     <div className="empty-state py-12 border border-dashed border-tsushin-border rounded-xl">
                       <div className="empty-state-icon">
                         <SmartphoneIcon size={36} className="text-gray-400" />
@@ -2620,7 +2752,7 @@ export default function HubPage() {
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                      {mcpInstances.map(instance => {
+                      {agentMcpInstances.map(instance => {
                         const health = healthStatuses[instance.id]
                         return (
                           <div key={instance.id} className="card p-4 hover-glow">
@@ -2704,6 +2836,69 @@ export default function HubPage() {
                       })}
                     </div>
                   )}
+
+                  <div className="card p-4 border border-tsushin-border/60">
+                    <div className="flex items-start justify-between mb-3 gap-4">
+                      <div>
+                        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                          <BeakerIcon size={16} className="text-orange-400" /> QA Tester
+                        </h3>
+                        <p className="text-xs text-tsushin-slate mt-1">
+                          Compose-managed tester instance for WhatsApp QA, QR validation, and watcher diagnostics.
+                        </p>
+                        <p className="text-xs text-tsushin-slate/70 mt-2">
+                          Container: {testerStatus?.name || 'tester-mcp'}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className={getStatusBadge(testerStatus?.container_state || 'stopped')}>
+                          {testerStatus?.container_state || 'unknown'}
+                        </span>
+                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                          testerStatus?.authenticated && testerStatus?.connected && !testerStatus?.needs_reauth
+                            ? 'bg-green-600/20 text-green-400 border border-green-600/50'
+                            : testerStatus?.needs_reauth
+                              ? 'bg-orange-600/20 text-orange-300 border border-orange-600/50'
+                              : 'bg-yellow-600/20 text-yellow-400 border border-yellow-600/50'
+                        }`}>
+                          {testerStatus?.authenticated && testerStatus?.connected && !testerStatus?.needs_reauth
+                            ? 'Authenticated'
+                            : testerStatus?.needs_reauth
+                              ? 'Needs Reauth'
+                              : 'Not Auth'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2 md:grid-cols-2 mb-3 text-xs text-tsushin-slate">
+                      <div>API: {testerStatus?.api_reachable ? 'reachable' : 'unreachable'}</div>
+                      <div>QR: {testerStatus?.qr_available ? 'available' : testerStatus?.qr_message || 'not ready'}</div>
+                      {testerStatus?.error && (
+                        <div className="md:col-span-2 text-amber-300">{testerStatus.error}</div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        onClick={handleShowTesterQR}
+                        className="px-3 py-1.5 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded text-xs"
+                      >
+                        Tester QR
+                      </button>
+                      <button
+                        onClick={handleRestartTester}
+                        className="px-3 py-1.5 bg-blue-600/20 text-blue-400 border border-blue-600/50 rounded text-xs"
+                      >
+                        Restart
+                      </button>
+                      <button
+                        onClick={handleResetTesterAuth}
+                        className="px-3 py-1.5 bg-orange-600/20 text-orange-400 border border-orange-600/50 rounded text-xs"
+                      >
+                        Reset Auth
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Phase 10.1.1: Telegram Bot Instances */}
@@ -4155,11 +4350,14 @@ export default function HubPage() {
         onClose={() => {
           setShowQRModal(false)
           setSelectedMcpInstance(null)
+          setSelectedQrResource(null)
           setQRCode(null)
           setQrAuthSuccess(false)
           setQrLastRefresh(null)
+          setQrStatus('loading')
+          setQrStatusMessage(null)
         }}
-        title={`QR Code - ${selectedMcpInstance?.phone_number}`}
+        title={selectedQrResource === 'tester' ? 'QR Code - Tester MCP' : `QR Code - ${selectedMcpInstance?.phone_number}`}
         size="lg"
       >
         <div className="text-center">
@@ -4204,10 +4402,55 @@ export default function HubPage() {
                 <li>4. Scan this QR code</li>
               </ol>
             </div>
+          ) : qrStatus === 'degraded' ? (
+            <div className="py-8 space-y-4">
+              <div className="w-16 h-16 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center mx-auto">
+                <AlertTriangleIcon size={28} className="text-amber-400" />
+              </div>
+              <div>
+                <p className="text-amber-300 font-medium">QR generation is degraded</p>
+                <p className="text-gray-400 text-sm mt-2">
+                  {qrStatusMessage || 'The instance is not producing a QR code. Use the recovery actions below.'}
+                </p>
+              </div>
+              <div className="flex items-center justify-center gap-3">
+                {selectedQrResource === 'tester' ? (
+                  <>
+                    <button
+                      onClick={handleRestartTester}
+                      className="px-3 py-2 bg-blue-600/20 text-blue-300 border border-blue-600/40 rounded-lg text-sm"
+                    >
+                      Restart Tester
+                    </button>
+                    <button
+                      onClick={handleResetTesterAuth}
+                      className="px-3 py-2 bg-orange-600/20 text-orange-300 border border-orange-600/40 rounded-lg text-sm"
+                    >
+                      Reset Authentication
+                    </button>
+                  </>
+                ) : selectedMcpInstance ? (
+                  <>
+                    <button
+                      onClick={() => handleMcpAction('restart', selectedMcpInstance.id)}
+                      className="px-3 py-2 bg-blue-600/20 text-blue-300 border border-blue-600/40 rounded-lg text-sm"
+                    >
+                      Restart Instance
+                    </button>
+                    <button
+                      onClick={() => handleResetAuth(selectedMcpInstance)}
+                      className="px-3 py-2 bg-orange-600/20 text-orange-300 border border-orange-600/40 rounded-lg text-sm"
+                    >
+                      Reset Authentication
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            </div>
           ) : (
             <div className="py-8">
               <div className="w-16 h-16 border-4 border-tsushin-indigo border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-              <p className="text-gray-400">Loading QR code...</p>
+              <p className="text-gray-400">{qrStatusMessage || 'Loading QR code...'}</p>
             </div>
           )}
         </div>

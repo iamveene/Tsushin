@@ -9,6 +9,7 @@ eliminating the need for backend restarts.
 import asyncio
 import logging
 import json
+import os
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -19,6 +20,7 @@ from mcp_reader.sqlite_reader import MCPDatabaseReader
 from mcp_reader.api_reader import MCPAPIReader
 from agent.router import AgentRouter
 import settings
+from services.mcp_container_manager import MCPContainerManager
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,8 @@ class WatcherManager:
                 logger.warning(f"Instance {instance_id} status is {instance.status}, not starting watcher")
                 return False
 
+            MCPContainerManager().reconcile_instance(instance, db)
+
             # Get config
             config = db.query(Config).first()
             if not config:
@@ -81,13 +85,10 @@ class WatcherManager:
             group_keywords = json.loads(config.group_keywords) if config.group_keywords else []
             # Note: enabled_tools deprecated - tools now handled via Skills system
 
-            # Initialize contact service (reuse if exists)
+            # Use a tenant-scoped contact service so DM routing stays isolated.
             from agent.contact_service_cached import CachedContactService
-            if not hasattr(self.app_state, 'contact_service'):
-                contact_service = CachedContactService(db)
-                self.app_state.contact_service = contact_service
-            else:
-                contact_service = self.app_state.contact_service
+            contact_service = CachedContactService(db, tenant_id=instance.tenant_id)
+            self.app_state.contact_service = contact_service
 
             # Phase 17: Instance-Level Message Filtering
             # Use instance-specific filters if configured, otherwise fall back to global config
@@ -186,8 +187,15 @@ class WatcherManager:
                 mcp_reader = api_reader
                 logger.info(f"📡 Using HTTP API reader for instance {instance_id} (bypassing filesystem sync)")
             else:
-                mcp_reader = MCPDatabaseReader(instance.messages_db_path, contact_mappings=contact_mappings)
-                logger.warning(f"⚠️  Using SQLite reader for instance {instance_id} (API not available)")
+                if instance.messages_db_path and os.path.exists(instance.messages_db_path):
+                    mcp_reader = MCPDatabaseReader(instance.messages_db_path, contact_mappings=contact_mappings)
+                    logger.warning(f"⚠️  Using SQLite reader for instance {instance_id} (API not available)")
+                else:
+                    mcp_reader = api_reader
+                    logger.warning(
+                        f"⏳ MCP API not ready yet and local messages DB is unavailable for instance {instance_id}; "
+                        "starting watcher against the API reader so it can recover when the container becomes ready"
+                    )
 
             # Create agent router
             # Phase 10: Pass mcp_instance_id for channel-based agent filtering

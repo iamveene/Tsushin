@@ -850,6 +850,9 @@ export interface AgentGraphPreviewItem {
   memory_isolation_mode: string
   enabled_channels: string[]
   whatsapp_integration_id: number | null
+  resolved_whatsapp_integration_id?: number | null
+  whatsapp_binding_status?: string
+  whatsapp_binding_source?: string
   telegram_integration_id: number | null
   webhook_integration_id?: number | null  // v0.6.0
   skills_count: number
@@ -1600,6 +1603,26 @@ export interface WhatsAppMCPInstance {
   created_at: string
   last_started_at: string | null
   last_stopped_at: string | null
+}
+
+export interface TesterMCPStatus {
+  name: string
+  api_url: string
+  status: string
+  container_id: string | null
+  container_state: string
+  image?: string | null
+  api_reachable: boolean
+  connected?: boolean
+  authenticated?: boolean
+  needs_reauth?: boolean
+  is_reconnecting?: boolean
+  reconnect_attempts?: number
+  session_age_sec?: number
+  last_activity_sec?: number
+  qr_available?: boolean
+  qr_message?: string | null
+  error?: string | null
 }
 
 export interface WhatsAppInstanceFiltersUpdate {
@@ -4312,6 +4335,34 @@ export const api = {
   async getMCPQRCode(id: number): Promise<QRCodeResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/${id}/qr-code`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch QR code')
+    return res.json()
+  },
+
+  async getTesterStatus(): Promise<TesterMCPStatus> {
+    const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/tester/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch tester status')
+    return res.json()
+  },
+
+  async getTesterQRCode(): Promise<QRCodeResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/tester/qr-code`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch tester QR code')
+    return res.json()
+  },
+
+  async restartTester(): Promise<{ success: boolean; message: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/tester/restart`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to restart tester')
+    return res.json()
+  },
+
+  async logoutTester(): Promise<LogoutResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/mcp/instances/tester/logout`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to reset tester authentication')
     return res.json()
   },
 
