@@ -12,6 +12,7 @@ import { usePathname } from 'next/navigation'
 import StudioTabs from '@/components/studio/StudioTabs'
 import { api, Agent, Contact, ContactAgentMapping, TeamMember, ChannelMapping } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
+import InfoTooltip from '@/components/ui/InfoTooltip'
 import { useToast } from '@/contexts/ToastContext'
 import { SmartphoneIcon, WhatsAppIcon, TelegramIcon, UserIcon, FileTextIcon, SlackIcon, DiscordIcon } from '@/components/ui/icons'
 
@@ -681,7 +682,10 @@ export default function ContactsPage() {
                   className="mt-1 w-4 h-4 text-tsushin-indigo border-tsushin-border rounded"
                 />
                 <div>
-                  <span className="font-medium text-sm text-white">Enable DM Trigger</span>
+                  <span className="font-medium text-sm text-white flex items-center gap-2">
+                    Enable DM Trigger
+                    <InfoTooltip text="When enabled, direct messages from this contact will trigger an AI agent response, even when DM Auto Mode is off on the WhatsApp instance." position="right" />
+                  </span>
                   <p className="text-xs text-tsushin-slate mt-1">
                     Agent will automatically respond to direct messages from this contact
                   </p>
