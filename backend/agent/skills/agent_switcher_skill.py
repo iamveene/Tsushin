@@ -301,9 +301,14 @@ class AgentSwitcherSkill(BaseSkill):
         Returns:
             Agent ID if mapped, None otherwise
         """
-        mapping = self.db_session.query(ContactAgentMapping).filter(
+        # BUG-LOG-012 FIX: Scope mapping lookup by tenant_id
+        _tenant_id = (self._config or {}).get("tenant_id")
+        mapping_q = self.db_session.query(ContactAgentMapping).filter(
             ContactAgentMapping.contact_id == contact_id
-        ).first()
+        )
+        if _tenant_id:
+            mapping_q = mapping_q.filter(ContactAgentMapping.tenant_id == _tenant_id)
+        mapping = mapping_q.first()
 
         return mapping.agent_id if mapping else None
 
@@ -318,10 +323,17 @@ class AgentSwitcherSkill(BaseSkill):
             contact_id: User's contact ID
             agent_id: Target agent ID
         """
-        # Check if mapping exists
-        mapping = self.db_session.query(ContactAgentMapping).filter(
+        # BUG-LOG-012 FIX: Scope mapping lookup by tenant_id to prevent cross-tenant collision
+        _tenant_id = (self._config or {}).get("tenant_id")
+        if not _tenant_id:
+            agent_obj = self.db_session.query(Agent).filter(Agent.id == agent_id).first()
+            _tenant_id = agent_obj.tenant_id if agent_obj else None
+        mapping_q = self.db_session.query(ContactAgentMapping).filter(
             ContactAgentMapping.contact_id == contact_id
-        ).first()
+        )
+        if _tenant_id:
+            mapping_q = mapping_q.filter(ContactAgentMapping.tenant_id == _tenant_id)
+        mapping = mapping_q.first()
 
         if mapping:
             # Update existing mapping
@@ -329,11 +341,7 @@ class AgentSwitcherSkill(BaseSkill):
             mapping.agent_id = agent_id
             mapping.updated_at = datetime.utcnow()
         else:
-            # Create new mapping (BUG-LOG-012: include tenant_id from skill config or agent)
-            _tenant_id = (self._config or {}).get("tenant_id")
-            if not _tenant_id:
-                agent_obj = self.db_session.query(Agent).filter(Agent.id == agent_id).first()
-                _tenant_id = agent_obj.tenant_id if agent_obj else None
+            # Create new mapping (BUG-LOG-012: tenant_id already resolved above)
             logger.info(f"AgentSwitcherSkill: Creating new mapping - Contact {contact_id} → Agent {agent_id}")
             mapping = ContactAgentMapping(
                 contact_id=contact_id,

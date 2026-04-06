@@ -923,10 +923,15 @@ def list_contact_agent_mappings(
     current_user: User = Depends(require_permission("contacts.read")),
     ctx: TenantContext = Depends(get_tenant_context)
 ):
-    """List all contact-agent mappings for the current tenant (CRIT-011 security fix)."""
-    # Filter mappings by tenant: only show mappings where contact belongs to user's tenant
+    """List all contact-agent mappings for the current tenant (CRIT-011 + BUG-LOG-012)."""
+    # BUG-LOG-012 FIX: Filter by mapping's own tenant_id for direct isolation
     mappings = db.query(ContactAgentMapping).join(
         Contact, ContactAgentMapping.contact_id == Contact.id
+    ).filter(
+        or_(
+            ContactAgentMapping.tenant_id == ctx.tenant_id,
+            ContactAgentMapping.tenant_id.is_(None)  # legacy rows before migration 0025
+        )
     )
     mappings = ctx.filter_by_tenant(mappings, Contact.tenant_id).all()
 

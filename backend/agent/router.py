@@ -755,10 +755,14 @@ class AgentRouter:
                     self.logger.info(f"Contact found by WhatsApp ID: {contact.friendly_name} (ID: {sender_normalized})")
 
             # If contact found (by either method), check for agent mapping
+            # BUG-LOG-012 FIX: Scope mapping lookup by tenant_id to prevent cross-tenant agent assignment
             if contact:
-                mapping = self.db.query(ContactAgentMapping).filter(
+                mapping_q = self.db.query(ContactAgentMapping).filter(
                     ContactAgentMapping.contact_id == contact.id
-                ).first()
+                )
+                if _routing_tenant_id:
+                    mapping_q = mapping_q.filter(ContactAgentMapping.tenant_id == _routing_tenant_id)
+                mapping = mapping_q.first()
                 if mapping:
                     agent = self.db.query(Agent).filter(Agent.id == mapping.agent_id).first()
                     if agent and agent.is_active and is_agent_valid_for_channel(agent):
