@@ -31,6 +31,8 @@ class InboundMessage:
     media_path: Optional[str] = None
     # Phase Skills-as-Tools: Channel information for channel-aware tool behavior
     channel: Optional[str] = None  # "whatsapp", "telegram", "playground", "flow", None
+    # BUG-LOG-006: Metadata dict for propagating comm_depth, parent_session_id, etc.
+    metadata: Optional[Dict[str, Any]] = None
 
 
 @dataclass
