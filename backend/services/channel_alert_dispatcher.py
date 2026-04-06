@@ -126,7 +126,14 @@ class ChannelAlertDispatcher:
             db.close()
 
     async def _send_webhook(self, url: str, payload: Dict[str, Any]):
-        """POST JSON via httpx."""
+        """POST JSON via httpx (with SSRF validation)."""
+        from utils.ssrf_validator import validate_url, SSRFValidationError
+        try:
+            validate_url(url)
+        except SSRFValidationError as e:
+            logger.warning(f"Webhook URL blocked by SSRF validator: {url} - {e}")
+            return
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(url, json=payload)
             if resp.status_code >= 400:

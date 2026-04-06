@@ -32,6 +32,7 @@ class CircuitBreaker:
     state: CircuitBreakerState = CircuitBreakerState.CLOSED
     failure_count: int = 0
     success_count: int = 0
+    half_open_failure_count: int = 0
     last_failure_at: Optional[datetime] = None
     opened_at: Optional[datetime] = None
     config: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
@@ -62,14 +63,17 @@ class CircuitBreaker:
                 self.opened_at = datetime.utcnow()
                 return (old, self.state)
         elif self.state == CircuitBreakerState.HALF_OPEN:
-            self.state = CircuitBreakerState.OPEN
-            self.opened_at = datetime.utcnow()
-            self.success_count = 0
-            return (old, self.state)
+            self.half_open_failure_count += 1
+            if self.half_open_failure_count >= self.config.half_open_max_failures:
+                self.state = CircuitBreakerState.OPEN
+                self.opened_at = datetime.utcnow()
+                self.success_count = 0
+                self.half_open_failure_count = 0
+                return (old, self.state)
         return None if old == self.state else (old, self.state)
 
     def should_probe(self) -> bool:
-        """Whether a health probe should be attempted."""
+        """Whether a health probe should be attempted (pure read, no state mutation)."""
         if self.state == CircuitBreakerState.CLOSED:
             return True
         if self.state == CircuitBreakerState.HALF_OPEN:
@@ -78,14 +82,24 @@ class CircuitBreaker:
         if self.state == CircuitBreakerState.OPEN and self.opened_at:
             elapsed = (datetime.utcnow() - self.opened_at).total_seconds()
             if elapsed >= self.config.recovery_timeout_seconds:
+                return True
+        return False
+
+    def try_recover(self) -> bool:
+        """Attempt transition from OPEN to HALF_OPEN. Returns True if transitioned."""
+        if self.state == CircuitBreakerState.OPEN and self.opened_at:
+            elapsed = (datetime.utcnow() - self.opened_at).total_seconds()
+            if elapsed >= self.config.recovery_timeout_seconds:
                 self.state = CircuitBreakerState.HALF_OPEN
                 self.success_count = 0
+                self.half_open_failure_count = 0
                 return True
         return False
 
     def _reset_counters(self):
         self.failure_count = 0
         self.success_count = 0
+        self.half_open_failure_count = 0
         self.last_failure_at = None
         self.opened_at = None
 

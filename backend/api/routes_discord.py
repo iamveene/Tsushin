@@ -154,9 +154,20 @@ async def create_discord_integration(
         logger.error(f"Discord auth validation failed: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Failed to validate Discord token: {str(e)}")
 
+    # Check for duplicate registration (same tenant + application_id)
+    tenant_id = current_user.tenant_id
+    existing = db.query(DiscordIntegration).filter(
+        DiscordIntegration.tenant_id == tenant_id,
+        DiscordIntegration.application_id == data.application_id,
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Discord application {data.application_id} is already registered for this tenant"
+        )
+
     # Encrypt token
     encryption = _get_encryption(db)
-    tenant_id = current_user.tenant_id
 
     integration = DiscordIntegration(
         tenant_id=tenant_id,
@@ -273,9 +284,10 @@ async def delete_discord_integration(
     if not context.can_access_resource(integration.tenant_id):
         raise HTTPException(status_code=404, detail="Integration not found")
 
-    # Unlink agents that reference this integration
+    # Unlink agents that reference this integration (scoped to same tenant)
     linked_agents = db.query(Agent).filter(
-        Agent.discord_integration_id == integration_id
+        Agent.discord_integration_id == integration_id,
+        Agent.tenant_id == integration.tenant_id,
     ).all()
     for agent in linked_agents:
         agent.discord_integration_id = None

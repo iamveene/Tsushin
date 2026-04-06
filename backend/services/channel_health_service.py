@@ -194,6 +194,7 @@ class ChannelHealthService:
 
         if not cb.should_probe():
             return
+        cb.try_recover()
 
         start_time = time.monotonic()
         try:
@@ -249,6 +250,7 @@ class ChannelHealthService:
 
         if not cb.should_probe():
             return
+        cb.try_recover()
 
         start_time = time.monotonic()
         try:
@@ -320,6 +322,7 @@ class ChannelHealthService:
 
         if not cb.should_probe():
             return
+        cb.try_recover()
 
         start_time = time.monotonic()
         try:
@@ -384,6 +387,7 @@ class ChannelHealthService:
 
         if not cb.should_probe():
             return
+        cb.try_recover()
 
         start_time = time.monotonic()
         try:
