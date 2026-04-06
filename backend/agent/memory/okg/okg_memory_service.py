@@ -342,6 +342,7 @@ class OKGMemoryService:
                     OKGMemoryAuditLog.doc_id == doc_id,
                     OKGMemoryAuditLog.agent_id == self.agent_id,
                     OKGMemoryAuditLog.tenant_id == self.tenant_id,
+                    OKGMemoryAuditLog.user_id == user_id,
                     OKGMemoryAuditLog.action == "store",
                 )
                 .first()
@@ -414,14 +415,14 @@ class OKGMemoryService:
     def _compute_decay(self, created_at_iso: str, decay_lambda: float = 0.005) -> float:
         """Exponential temporal decay factor. Returns 0.0-1.0."""
         if not created_at_iso:
-            return 0.5  # Unknown age = moderate decay
+            return 1.0  # Unknown age = no decay (consistent with temporal_decay.py)
         try:
             created = datetime.fromisoformat(created_at_iso)
             age_hours = (datetime.utcnow() - created).total_seconds() / 3600
             import math
             return math.exp(-decay_lambda * age_hours)
         except (ValueError, TypeError):
-            return 0.5
+            return 1.0
 
     def _audit_log(
         self,

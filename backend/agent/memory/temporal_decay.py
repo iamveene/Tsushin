@@ -47,9 +47,11 @@ class DecayConfig:
 
 def compute_decay_factor(days_since_access: float, decay_lambda: float) -> float:
     """Exponential decay: e^(-lambda * days). Returns [0.0, 1.0]."""
+    decay_lambda = max(0.0, decay_lambda)
     if days_since_access <= 0:
         return 1.0
-    return math.exp(-decay_lambda * days_since_access)
+    result = math.exp(-decay_lambda * days_since_access)
+    return min(1.0, max(0.0, result))
 
 
 def apply_decay_to_score(raw_score: float, last_accessed_at: Optional[datetime],
@@ -60,7 +62,7 @@ def apply_decay_to_score(raw_score: float, last_accessed_at: Optional[datetime],
     la = last_accessed_at.replace(tzinfo=None) if last_accessed_at.tzinfo else last_accessed_at
     n = now.replace(tzinfo=None) if now.tzinfo else now
     days = max(0, (n - la).total_seconds() / 86400.0)
-    return raw_score * compute_decay_factor(days, decay_lambda)
+    return max(0.0, min(1.0, raw_score * compute_decay_factor(days, decay_lambda)))
 
 
 def apply_decay_to_confidence(confidence: float, last_accessed_at: Optional[datetime],
@@ -120,6 +122,7 @@ def mmr_rerank(
     Each candidate must have 'embedding' (list of floats) and 'decayed_score' fields.
     Returns top_k candidates balancing relevance and diversity.
     """
+    mmr_lambda = max(0.0, min(1.0, mmr_lambda))
     if not candidates:
         return []
     if len(candidates) <= top_k:
