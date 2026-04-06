@@ -10,7 +10,9 @@
 
 **Tsushin** (通信 — "Communication" in Japanese) is a multi-tenant agentic messaging platform that unifies AI agent orchestration, conversational channels, semantic memory, workflow automation, AI-powered security, and observability — self-hostable, with RBAC and full multi-tenancy.
 
-> 📖 **Full reference:** see **[documentation.md](documentation.md)** for the exhaustive guide covering every configuration item, feature, form field, channel, integration, API endpoint, and appendix.
+> 📖 **Full reference:** see **[DOCUMENTATION.md](DOCUMENTATION.md)** for the exhaustive technical guide covering every configuration item, feature, form field, channel, integration, API endpoint, and appendix.
+>
+> 📘 **User guide:** see **[USER_GUIDE.md](USER_GUIDE.md)** for a practical walkthrough of setting up channels, creating agents, configuring skills, building flows, using slash commands, and more.
 
 ---
 
@@ -71,7 +73,7 @@ python3 install.py --help
 
 The installer handles infrastructure only (containers, networking, SSL, `.env` secrets). Organization setup and LLM provider keys are configured per-tenant through the `/setup` wizard and Hub UI — not via environment variables — enabling multi-tenant isolation.
 
-→ Full deployment options, GKE/Helm, GCP Secret Manager, and rebuild-safety rules: see [documentation.md §4 Deployment & Operations](documentation.md#4-deployment--operations).
+→ Full deployment options, GKE/Helm, GCP Secret Manager, and rebuild-safety rules: see [DOCUMENTATION.md §4 Deployment & Operations](DOCUMENTATION.md#4-deployment--operations).
 
 ### Verify
 
@@ -123,7 +125,7 @@ docker compose ps                          # Container states
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-→ Full container topology, data flow, and dynamically-managed MCP containers: see [documentation.md §2 Architecture Overview](documentation.md#2-architecture-overview).
+→ Full container topology, data flow, and dynamically-managed MCP containers: see [DOCUMENTATION.md §2 Architecture Overview](DOCUMENTATION.md#2-architecture-overview).
 
 ---
 
@@ -131,23 +133,23 @@ docker compose ps                          # Container states
 
 | Topic | Section |
 |-------|---------|
-| Deployment (Compose / GKE / GCP SM) | [§4](documentation.md#4-deployment--operations) |
-| Environment variable reference | [§5](documentation.md#5-system-configuration) + [Appendix A](documentation.md#29-appendix-a-complete-environment-variable-reference) |
-| Authentication, SSO, RBAC | [§6](documentation.md#6-authentication--access) + [Appendix B](documentation.md#30-appendix-b-permission-scopes) |
-| Agents, personas, tone presets | [§7](documentation.md#7-agents), [§8](documentation.md#8-personas--tone-presets) |
-| Skills (built-in + custom) & sandboxed tools | [§9](documentation.md#9-skills) |
-| Memory, knowledge, vector stores | [§10](documentation.md#10-memory--knowledge), [§11](documentation.md#11-vector-stores) |
-| Sentinel security | [§12](documentation.md#12-security--sentinel) |
-| Flows & scheduler | [§13](documentation.md#13-flows), [§14](documentation.md#14-scheduler--triggers) |
-| Channels (WhatsApp / Telegram / Slack / Discord / Webhook / Playground) | [§15](documentation.md#15-channels) |
-| Contacts, projects, playground | [§16](documentation.md#16-contacts--channel-mapping), [§17](documentation.md#17-projects-studio), [§18](documentation.md#18-playground) |
-| LLM providers & hub integrations | [§19](documentation.md#19-llm-providers), [§20](documentation.md#20-hub-integrations) |
-| Settings UI (every subpage) & system admin | [§21](documentation.md#21-settings--ui-taxonomy), [§22](documentation.md#22-system-admin-global-admin-only) |
-| Audit & syslog | [§23](documentation.md#23-audit-logging--compliance) |
-| Observability & metrics | [§24](documentation.md#24-observability) |
-| Public API v1 reference | [§25](documentation.md#25-public-api-v1) |
-| Slash commands (37 commands + usage examples) | [§26](documentation.md#26-slash-commands-system-wide-catalog) |
-| Troubleshooting | [§28](documentation.md#28-troubleshooting) |
+| Deployment (Compose / GKE / GCP SM) | [§4](DOCUMENTATION.md#4-deployment--operations) |
+| Environment variable reference | [§5](DOCUMENTATION.md#5-system-configuration) + [Appendix A](DOCUMENTATION.md#29-appendix-a-complete-environment-variable-reference) |
+| Authentication, SSO, RBAC | [§6](DOCUMENTATION.md#6-authentication--access) + [Appendix B](DOCUMENTATION.md#30-appendix-b-permission-scopes) |
+| Agents, personas, tone presets | [§7](DOCUMENTATION.md#7-agents), [§8](DOCUMENTATION.md#8-personas--tone-presets) |
+| Skills (built-in + custom) & sandboxed tools | [§9](DOCUMENTATION.md#9-skills) |
+| Memory, knowledge, vector stores | [§10](DOCUMENTATION.md#10-memory--knowledge), [§11](DOCUMENTATION.md#11-vector-stores) |
+| Sentinel security | [§12](DOCUMENTATION.md#12-security--sentinel) |
+| Flows & scheduler | [§13](DOCUMENTATION.md#13-flows), [§14](DOCUMENTATION.md#14-scheduler--triggers) |
+| Channels (WhatsApp / Telegram / Slack / Discord / Webhook / Playground) | [§15](DOCUMENTATION.md#15-channels) |
+| Contacts, projects, playground | [§16](DOCUMENTATION.md#16-contacts--channel-mapping), [§17](DOCUMENTATION.md#17-projects-studio), [§18](DOCUMENTATION.md#18-playground) |
+| LLM providers & hub integrations | [§19](DOCUMENTATION.md#19-llm-providers), [§20](DOCUMENTATION.md#20-hub-integrations) |
+| Settings UI (every subpage) & system admin | [§21](DOCUMENTATION.md#21-settings--ui-taxonomy), [§22](DOCUMENTATION.md#22-system-admin-global-admin-only) |
+| Audit & syslog | [§23](DOCUMENTATION.md#23-audit-logging--compliance) |
+| Observability & metrics | [§24](DOCUMENTATION.md#24-observability) |
+| Public API v1 reference | [§25](DOCUMENTATION.md#25-public-api-v1) |
+| Slash commands (37 commands + usage examples) | [§26](DOCUMENTATION.md#26-slash-commands-system-wide-catalog) |
+| Troubleshooting | [§28](DOCUMENTATION.md#28-troubleshooting) |
 
 ---
 
@@ -178,9 +180,9 @@ TSN_LOG_FORMAT=text               # text | json (structured)
 TSN_METRICS_ENABLED=true
 ```
 
-**LLM provider API keys are configured per-tenant through the Hub UI**, not in environment variables — this enables true multi-tenant isolation. See [documentation.md §19 LLM Providers](documentation.md#19-llm-providers).
+**LLM provider API keys are configured per-tenant through the Hub UI**, not in environment variables — this enables true multi-tenant isolation. See [DOCUMENTATION.md §19 LLM Providers](DOCUMENTATION.md#19-llm-providers).
 
-→ Complete env-var reference (80+ variables, all defaults, all subsystems): [Appendix A](documentation.md#29-appendix-a-complete-environment-variable-reference).
+→ Complete env-var reference (80+ variables, all defaults, all subsystems): [Appendix A](DOCUMENTATION.md#29-appendix-a-complete-environment-variable-reference).
 
 ---
 
@@ -204,4 +206,4 @@ Tsushin is open-source software licensed under the [MIT License](LICENSE).
 
 ---
 
-**Version 0.6.0** · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Documentation](documentation.md)
+**Version 0.6.0** · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Documentation](DOCUMENTATION.md) · [User Guide](USER_GUIDE.md)

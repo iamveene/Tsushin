@@ -105,6 +105,8 @@ paths = [
     '''README\.md$''',
     '''CLAUDE\.md$''',
     '''ARCHITECTURE\.md$''',
+    '''DOCUMENTATION\.md$''',
+    '''USER_GUIDE\.md$''',
     '''docs/.*\.md$''',
 
     # Node modules and virtual environments

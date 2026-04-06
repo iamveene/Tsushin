@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- **DOC-001:** Comprehensive documentation overhaul of `documentation.md` — full accuracy audit against codebase
+- **DOC-001:** Comprehensive documentation overhaul of `DOCUMENTATION.md` — full accuracy audit against codebase
 - **DOC-002:** Document 11 missing slash commands: email (6), search, shell, thread (3) — total now 37 commands
 - **DOC-003:** Add §26.1 usage examples for all 37 slash commands organized by category
 - **DOC-004:** Add channel configuration reference tables — WhatsApp (`group_keywords`, `is_group_handler`, `api_secret`), Slack (`dm_policy`, `allowed_channels`), Discord (`dm_policy`, `allowed_guilds`, `guild_channel_config`)
@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **DOC-010:** Add OKG merge mode reference table (`replace`, `prepend`, `merge`) in §10.3
 - **DOC-011:** Add §16.4 contact usage examples (multi-channel mapping, system user linking, per-contact agent assignment)
 - **DOC-012:** Update README.md feature highlights and documentation map to reflect new content
+- **DOC-013:** Rename `documentation.md` → `DOCUMENTATION.md` (uppercase convention for all root MD files)
+- **DOC-014:** Create `USER_GUIDE.md` — practical user-facing guide covering getting started, channels setup, agents, skills, flows, scheduler, contacts, playground, security, settings, slash commands, API, and audit
 
 ### Added
 
