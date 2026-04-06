@@ -257,3 +257,4 @@ sample_data/
 test_documents/
 methodology/
 brand/
+deploy-to-vm.sh
