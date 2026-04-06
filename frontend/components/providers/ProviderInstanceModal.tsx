@@ -252,13 +252,16 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
     setTestResult(null)
     try {
       let result: { success: boolean; message: string; latency_ms?: number }
+      // Use the first model currently selected in the modal (not the saved DB state)
+      const testModel = models.length > 0 ? models[0] : undefined
       if (isEditing && instance) {
-        result = await api.testProviderConnection(instance.id)
+        result = await api.testProviderConnection(instance.id, testModel)
       } else {
         result = await api.testProviderConnectionRaw({
           vendor,
           base_url: baseUrl || undefined,
           api_key: isVertexAi ? (vertexPrivateKey || undefined) : (apiKey || undefined),
+          model: testModel,
         })
       }
       setTestResult(result)
@@ -272,6 +275,20 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
   const handleSave = async () => {
     if (!instanceName.trim()) {
       setError('Instance name is required')
+      return
+    }
+
+    // Auto-add any model text the user typed but didn't explicitly click "Add"
+    const finalModels = [...models]
+    const pendingModel = modelInput.trim()
+    if (pendingModel && !finalModels.includes(pendingModel)) {
+      finalModels.push(pendingModel)
+      setModels(finalModels)
+      setModelInput('')
+    }
+
+    if (finalModels.length === 0) {
+      setError('At least one model is required')
       return
     }
 
@@ -298,7 +315,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
         const updateData: Partial<ProviderInstanceCreate> = {
           instance_name: instanceName,
           base_url: baseUrl || undefined,
-          available_models: models,
+          available_models: finalModels,
           is_default: isDefault,
         }
         if (isVertexAi) {
@@ -317,7 +334,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
           vendor,
           instance_name: instanceName,
           base_url: baseUrl || undefined,
-          available_models: models,
+          available_models: finalModels,
           is_default: isDefault,
         }
         if (isVertexAi) {
@@ -375,7 +392,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
         </button>
         <button
           onClick={handleSave}
-          disabled={saving || !instanceName.trim()}
+          disabled={saving || !instanceName.trim() || (models.length === 0 && !modelInput.trim())}
           className="btn-primary px-5 py-2 text-sm font-medium rounded-lg disabled:opacity-50"
         >
           {saving ? 'Saving...' : (isEditing ? 'Update Instance' : 'Create Instance')}
@@ -592,7 +609,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
         {/* Models */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-sm font-medium text-tsushin-fog">Models</label>
+            <label className="text-sm font-medium text-tsushin-fog">Models <span className="text-tsushin-vermilion">*</span></label>
             {isEditing && instance && (
               <button
                 onClick={handleDiscoverModels}

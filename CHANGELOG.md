@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug fixes
 
+#### Provider Instance Validation (2026-04-06)
+
+- **BUG-305 — Provider instance model required validation:** Provider instances could be created without any models, making them unusable. Added frontend validation (disabled save button, red required asterisk, auto-add of typed model text on save) and backend validation (HTTP 400 if `available_models` is empty).
+
 #### Data Loss Prevention & Custom Skills UX (2026-04-06)
 
 - **BUG-302 — Database volume protection (CRITICAL):** PostgreSQL named volume `tsushin-postgres-data` was destroyed and recreated, wiping all tenant-created custom skills and MCP server configurations. Added explicit "Database Volume Protection" section to `CLAUDE.md` listing forbidden commands (`docker-compose down -v`, `docker volume rm`, `docker system prune --volumes`) with safe alternatives. Created `backend/scripts/backup_db.sh` for periodic pg_dump backups with automatic retention of the last 10 backups.

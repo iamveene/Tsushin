@@ -96,6 +96,12 @@ class TestConnectionRawRequest(BaseModel):
     vendor: str
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    model: Optional[str] = None  # Model to test — avoids relying on hardcoded fallback
+
+
+class TestConnectionSavedRequest(BaseModel):
+    """Optional body for testing a saved instance with a specific model."""
+    model: Optional[str] = None
 
 
 class DiscoverModelsRawRequest(BaseModel):
@@ -133,8 +139,8 @@ PREDEFINED_MODELS = {
     "anthropic": [
         "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
         "claude-sonnet-4-20250514",
-        "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
-        "claude-3-opus-20240229", "claude-3-haiku-20240307",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-opus-20240229",
     ],
     "gemini": [
         # Static fallback only — used when the live /v1beta/models call fails
@@ -366,6 +372,12 @@ def create_provider_instance(
         raise HTTPException(
             status_code=400,
             detail=f"Invalid vendor. Must be one of: {', '.join(sorted(VALID_VENDORS))}"
+        )
+
+    if not data.available_models:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one model is required"
         )
 
     # Check for duplicate instance name within tenant
@@ -619,9 +631,9 @@ async def test_provider_connection_raw(
                 message=f"Invalid base URL: {e}",
             )
 
-    # Determine a test model
+    # Determine a test model: prefer user-supplied model, then hardcoded fallback
     from api.routes_integrations import PROVIDER_TEST_MODELS
-    test_model = PROVIDER_TEST_MODELS.get(vendor)
+    test_model = data.model or PROVIDER_TEST_MODELS.get(vendor)
     if not test_model and vendor == "ollama":
         test_model = "llama3.2"
     if not test_model and vendor == "custom":
@@ -696,6 +708,7 @@ async def test_provider_connection_raw(
 @router.post("/provider-instances/{instance_id}/test-connection", response_model=TestConnectionResponse)
 async def test_provider_connection(
     instance_id: int,
+    body: TestConnectionSavedRequest = TestConnectionSavedRequest(),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -735,10 +748,10 @@ async def test_provider_connection(
             message="No API key configured for this instance or vendor",
         )
 
-    # Determine a test model
+    # Determine a test model: prefer explicit request > saved models > hardcoded fallback
     from api.routes_integrations import PROVIDER_TEST_MODELS
-    test_model = None
-    if instance.available_models:
+    test_model = body.model  # explicit model from request body (e.g. unsaved UI selection)
+    if not test_model and instance.available_models:
         test_model = instance.available_models[0]
     if not test_model:
         test_model = PROVIDER_TEST_MODELS.get(instance.vendor)

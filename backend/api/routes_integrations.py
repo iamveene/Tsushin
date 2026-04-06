@@ -17,12 +17,14 @@ from auth_dependencies import require_permission, get_tenant_context, TenantCont
 router = APIRouter(prefix="/api/integrations", tags=["Integration Tests"])
 logger = logging.getLogger(__name__)
 
-# Default models for testing each provider (cheap/fast models)
+# Default models for testing each provider (cheap/fast models).
+# IMPORTANT: Keep these up-to-date when vendors deprecate model IDs.
+# Use each vendor's cheapest currently-available model to minimise cost.
 PROVIDER_TEST_MODELS = {
-    "groq": "llama-3.1-8b-instant",
-    "grok": "grok-3",
+    "groq": "llama-3.3-70b-versatile",
+    "grok": "grok-3-mini",
     "openai": "gpt-4o-mini",
-    "anthropic": "claude-3-5-haiku-20241022",
+    "anthropic": "claude-haiku-4-5",
     "gemini": "gemini-2.5-flash",
     "openrouter": "meta-llama/llama-3.1-8b-instruct:free",
     "deepseek": "deepseek-chat",

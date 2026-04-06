@@ -6669,15 +6669,17 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete provider instance')
   },
 
-  async testProviderConnection(id: number): Promise<{ success: boolean; message: string; latency_ms?: number }> {
+  async testProviderConnection(id: number, model?: string): Promise<{ success: boolean; message: string; latency_ms?: number }> {
     const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/test-connection`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model || null }),
     })
     if (!res.ok) await handleApiError(res, 'Failed to test provider connection')
     return res.json()
   },
 
-  async testProviderConnectionRaw(data: { vendor: string, base_url?: string, api_key?: string }): Promise<{ success: boolean; message: string; latency_ms?: number }> {
+  async testProviderConnectionRaw(data: { vendor: string, base_url?: string, api_key?: string, model?: string }): Promise<{ success: boolean; message: string; latency_ms?: number }> {
     const res = await authenticatedFetch(`${API_URL}/api/provider-instances/test-connection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
