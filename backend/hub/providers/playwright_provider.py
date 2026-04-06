@@ -157,6 +157,12 @@ class PlaywrightProvider(BrowserAutomationProvider):
                 context_options["user_agent"] = self.config.user_agent
 
             if self.config.proxy_url:
+                # Validate proxy URL against SSRF (1A-02)
+                from utils.ssrf_validator import validate_url
+                try:
+                    validate_url(self.config.proxy_url)
+                except Exception as e:
+                    raise BrowserInitializationError(f"Proxy URL failed SSRF validation: {e}")
                 context_options["proxy"] = {"server": self.config.proxy_url}
 
             self._context = await self._browser.new_context(**context_options)
@@ -376,10 +382,12 @@ class PlaywrightProvider(BrowserAutomationProvider):
                     }
                 )
 
-            except ElementNotFoundError:
-                raise
             except Exception as e:
-                raise ElementNotFoundError(f"Extraction failed: {str(e)}")
+                code, suggestions = classify_error(e, "extract")
+                return BrowserResult(
+                    success=False, action="extract", error=f"Extraction failed: {str(e)}",
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def screenshot(
         self,
@@ -442,10 +450,12 @@ class PlaywrightProvider(BrowserAutomationProvider):
                     }
                 )
 
-            except ElementNotFoundError:
-                raise
             except Exception as e:
-                raise BrowserAutomationError(f"Screenshot failed: {str(e)}")
+                code, suggestions = classify_error(e, "screenshot")
+                return BrowserResult(
+                    success=False, action="screenshot", error=f"Screenshot failed: {str(e)}",
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def execute_script(self, script: str) -> BrowserResult:
         """
@@ -548,6 +558,13 @@ class PlaywrightProvider(BrowserAutomationProvider):
             try:
                 logger.info("Navigating back")
                 response = await self._page.go_back(timeout=self.config.timeout_seconds * 1000, wait_until="load")
+                if response is None:
+                    return BrowserResult(
+                        success=False, action="go_back",
+                        error="No previous page in history",
+                        error_code=BrowserErrorCode.PAGE_LOAD_FAILED,
+                        suggestions=["Navigate to a page first before going back"],
+                    )
                 url = self._page.url
                 title = await self._page.title()
                 return BrowserResult(success=True, action="go_back", data={"url": url, "title": title})
@@ -562,6 +579,13 @@ class PlaywrightProvider(BrowserAutomationProvider):
             try:
                 logger.info("Navigating forward")
                 response = await self._page.go_forward(timeout=self.config.timeout_seconds * 1000, wait_until="load")
+                if response is None:
+                    return BrowserResult(
+                        success=False, action="go_forward",
+                        error="No forward page in history",
+                        error_code=BrowserErrorCode.PAGE_LOAD_FAILED,
+                        suggestions=["Go back first before navigating forward"],
+                    )
                 url = self._page.url
                 title = await self._page.title()
                 return BrowserResult(success=True, action="go_forward", data={"url": url, "title": title})
@@ -606,14 +630,20 @@ class PlaywrightProvider(BrowserAutomationProvider):
     async def open_tab(self, url: Optional[str] = None) -> BrowserResult:
         if not self._initialized or not self._context:
             raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
-        max_tabs = self.config.max_concurrent_sessions  # reuse as tab cap
-        if len(self._pages) >= max_tabs:
-            return BrowserResult(
-                success=False, action="open_tab", error=f"Maximum {max_tabs} tabs reached",
-                error_code=BrowserErrorCode.MAX_SESSIONS,
-                suggestions=[f"Close an existing tab first (you have {len(self._pages)})"],
-            )
         async with self._lock:
+            # 2A-02: Tab-count guard inside lock to prevent TOCTOU race
+            max_tabs = self.config.max_concurrent_sessions  # reuse as tab cap
+            if len(self._pages) >= max_tabs:
+                return BrowserResult(
+                    success=False, action="open_tab", error=f"Maximum {max_tabs} tabs reached",
+                    error_code=BrowserErrorCode.MAX_SESSIONS,
+                    suggestions=[f"Close an existing tab first (you have {len(self._pages)})"],
+                )
+            # Save previous state for rollback on failure (2A-03)
+            prev_page = self._page
+            prev_tab_id = self._active_tab_id
+            new_page = None
+            tab_id = None
             try:
                 new_page = await self._context.new_page()
                 new_page.set_default_timeout(self.config.timeout_seconds * 1000)
@@ -623,20 +653,39 @@ class PlaywrightProvider(BrowserAutomationProvider):
                 while tab_id in self._pages:
                     counter += 1
                     tab_id = f"tab_{counter}"
-                self._pages[tab_id] = new_page
-                self._page = new_page
-                self._active_tab_id = tab_id
-                data = {"tab_id": tab_id, "tabs": list(self._pages.keys())}
+                # Navigate BEFORE registering (2A-03: avoid leak on nav failure)
+                data = {"tab_id": tab_id}
                 if url:
                     self._validate_url(url)
                     await new_page.goto(url, wait_until="load", timeout=self.config.timeout_seconds * 1000)
                     data["url"] = new_page.url
                     data["title"] = await new_page.title()
+                # All operations succeeded — register page and switch
+                self._pages[tab_id] = new_page
+                self._page = new_page
+                self._active_tab_id = tab_id
+                data["tabs"] = list(self._pages.keys())
                 logger.info(f"Opened new tab {tab_id}")
                 return BrowserResult(success=True, action="open_tab", data=data)
             except SecurityError:
+                # Close leaked page before re-raising
+                if new_page:
+                    try:
+                        await new_page.close()
+                    except Exception:
+                        pass
+                self._page = prev_page
+                self._active_tab_id = prev_tab_id
                 raise
             except Exception as e:
+                # 2A-03: Close leaked page and restore previous state
+                if new_page:
+                    try:
+                        await new_page.close()
+                    except Exception:
+                        pass
+                self._page = prev_page
+                self._active_tab_id = prev_tab_id
                 code, suggestions = classify_error(e, "open_tab")
                 return BrowserResult(success=False, action="open_tab", error=str(e), error_code=code, suggestions=suggestions)
 

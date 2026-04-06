@@ -1471,10 +1471,10 @@ class AgentRouter:
                     ).first()
 
                     # Validate override agent belongs to the same tenant
-                    if agent and agent.tenant_id != tenant_id:
+                    if agent and agent.tenant_id != self.tenant_id:
                         self.logger.warning(
                             f"[SLASH-MENTION] Agent {agent.id} tenant mismatch "
-                            f"(agent={agent.tenant_id}, router={tenant_id}). Ignoring."
+                            f"(agent={agent.tenant_id}, router={self.tenant_id}). Ignoring."
                         )
                         agent = None
 

@@ -477,7 +477,7 @@ export default function GlobalUsersPage() {
                     onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
                     className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
                     required
-                    minLength={8}
+                    minLength={6}
                   />
                 </div>
                 <div>

@@ -202,7 +202,8 @@ def update_shared_knowledge(
         content=request.content,
         topic=request.topic,
         accessible_to=request.accessible_to,
-        metadata=request.metadata
+        metadata=request.metadata,
+        tenant_id=ctx.tenant_id
     )
 
     if not success:
@@ -235,7 +236,8 @@ def delete_shared_knowledge(
     pool = SharedMemoryPool(db)
     success = pool.delete_shared_knowledge(
         knowledge_id=knowledge_id,
-        agent_id=agent_id
+        agent_id=agent_id,
+        tenant_id=ctx.tenant_id
     )
 
     if not success:

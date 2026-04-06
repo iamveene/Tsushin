@@ -41,7 +41,8 @@ class VectorStoreRegistry:
             with cls._lock:
                 if cls._instance is None:
                     inst = super().__new__(cls)
-                    inst._providers: Dict[int, VectorStoreProvider] = {}
+                    # Keyed by (instance_id, tenant_id) for tenant isolation
+                    inst._providers: Dict[tuple, VectorStoreProvider] = {}
                     inst._circuit_breakers: Dict[int, CircuitBreaker] = {}
                     inst._chromadb_cache: Dict[str, ChromaDBAdapter] = {}
                     inst._provider_lock = Lock()
@@ -53,14 +54,16 @@ class VectorStoreRegistry:
         Get or create a provider adapter for the given vector store instance.
         Decrypts credentials on first access and caches the adapter.
         tenant_id is required for multi-tenancy isolation — prevents cross-tenant access.
+        Cache is keyed by (instance_id, tenant_id) to prevent cross-tenant cache hits.
         """
-        if instance_id in self._providers:
-            return self._providers[instance_id]
+        cache_key = (instance_id, tenant_id)
+        if cache_key in self._providers:
+            return self._providers[cache_key]
 
         with self._provider_lock:
             # Double-check after acquiring lock
-            if instance_id in self._providers:
-                return self._providers[instance_id]
+            if cache_key in self._providers:
+                return self._providers[cache_key]
 
             from models import VectorStoreInstance
             query = db.query(VectorStoreInstance).filter(
@@ -79,7 +82,7 @@ class VectorStoreRegistry:
                 )
 
             adapter = self._create_adapter(instance, db)
-            self._providers[instance_id] = adapter
+            self._providers[cache_key] = adapter
             return adapter
 
     def get_chromadb_fallback(self, persist_directory: str) -> ChromaDBAdapter:
@@ -111,10 +114,17 @@ class VectorStoreRegistry:
                 )
             return self._circuit_breakers[instance_id]
 
-    def evict(self, instance_id: int) -> None:
-        """Remove cached provider (called on instance update/delete)."""
+    def evict(self, instance_id: int, tenant_id: str = None) -> None:
+        """Remove cached provider (called on instance update/delete).
+        If tenant_id is given, evicts only that (instance_id, tenant_id) key.
+        Otherwise evicts all entries matching the instance_id."""
         with self._provider_lock:
-            self._providers.pop(instance_id, None)
+            if tenant_id is not None:
+                self._providers.pop((instance_id, tenant_id), None)
+            else:
+                keys_to_remove = [k for k in self._providers if k[0] == instance_id]
+                for k in keys_to_remove:
+                    del self._providers[k]
             self._circuit_breakers.pop(instance_id, None)
 
     def evict_all(self) -> None:

@@ -55,7 +55,7 @@ class SkillManager:
 
         API Tools Migration: Migrated API Tools to Skills system:
         - SearchSkill (web_search) - replaces google_search tool
-        - WebScrapingSkill (web_scraping) - replaces web_scraping tool
+        - (web_scraping removed — functionality merged into search skill)
         """
         try:
             # Note: Asana is now a provider for the Scheduler skill (not standalone)
@@ -125,7 +125,7 @@ class SkillManager:
             from agent.skills.okg_term_memory_skill import OKGTermMemorySkill
             self.register_skill(OKGTermMemorySkill)
 
-            logger.info("Built-in skills registered: flight_search, web_search, web_scraping, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image, sandboxed_tools, okg_term_memory")
+            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image, sandboxed_tools, okg_term_memory")
         except Exception as e:
             logger.error(f"Error registering built-in skills: {e}", exc_info=True)
 

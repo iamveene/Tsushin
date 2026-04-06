@@ -5,6 +5,7 @@ Manages security profiles: CRUD, assignment, resolution, and hierarchy.
 Profiles are named, reusable security policies assigned at tenant/agent/skill levels.
 """
 
+import copy
 import json
 import logging
 import time
@@ -364,13 +365,14 @@ class SentinelProfilesService:
         Returns:
             SentinelEffectiveConfig or None if no profile found
         """
-        # Check cache
+        # Check cache — return a deep copy so callers (e.g. apply_skill_exemptions)
+        # cannot mutate the shared cached instance
         cache_key = self._cache_key(agent_id, skill_type)
         cached = self._profile_cache.get(cache_key)
         if cached:
             cache_time, cached_config = cached
             if time.time() - cache_time < self.PROFILE_CACHE_TTL:
-                return cached_config
+                return copy.deepcopy(cached_config)
 
         # 1. Skill-level
         if agent_id and skill_type:

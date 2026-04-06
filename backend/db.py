@@ -805,6 +805,53 @@ def ensure_rbac_permissions(session):
         session.commit()
         print("[RBAC] MCP server permissions ensured successfully")
 
+    # v0.6.0: Ensure channel health, agent communication, and vector store permissions exist
+    v060_extra_permissions = [
+        ("channel_health.read", "channel_health", "read", "View channel health and circuit breaker status"),
+        ("channel_health.write", "channel_health", "write", "Reset circuit breakers and configure alerts"),
+        ("agent_communication.read", "agent_communication", "read", "View agent-to-agent communication sessions"),
+        ("agent_communication.write", "agent_communication", "write", "Manage agent communication permissions"),
+        ("vector_stores.read", "vector_stores", "read", "View vector store instances"),
+        ("vector_stores.write", "vector_stores", "write", "Create and manage vector store instances"),
+    ]
+    v060_extra_role_assignments = {
+        "owner": [p[0] for p in v060_extra_permissions],
+        "admin": [p[0] for p in v060_extra_permissions],
+        "member": [p[0] for p in v060_extra_permissions if ".read" in p[0]],
+        "readonly": [p[0] for p in v060_extra_permissions if ".read" in p[0]],
+    }
+    v060_perms_added = False
+    for name, resource, action, description in v060_extra_permissions:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+            for role_name, role_perms in v060_extra_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+                        print(f"[RBAC] Assigned {name} to role: {role_name}")
+            v060_perms_added = True
+        else:
+            for role_name, role_perms in v060_extra_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            session.add(RolePermission(role_id=role.id, permission_id=existing_perm.id))
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            v060_perms_added = True
+    if v060_perms_added:
+        session.commit()
+        print("[RBAC] v0.6.0 extra permissions (channel_health, agent_communication, vector_stores) ensured")
+
 
 def seed_slash_commands(session):
     """

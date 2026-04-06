@@ -114,9 +114,9 @@ class AuthService:
         if existing_user:
             raise AuthenticationError("Email already registered")
 
-        # Validate password strength (minimum 8 characters)
-        if len(password) < 8:
-            raise AuthenticationError("Password must be at least 8 characters")
+        # Validate password strength (minimum 6 characters)
+        if len(password) < 6:
+            raise AuthenticationError("Password must be at least 6 characters")
 
         # Generate tenant ID and slug
         import re
@@ -250,8 +250,8 @@ class AuthService:
             raise AuthenticationError("Reset token expired")
 
         # Validate new password
-        if len(new_password) < 8:
-            raise AuthenticationError("Password must be at least 8 characters")
+        if len(new_password) < 6:
+            raise AuthenticationError("Password must be at least 6 characters")
 
         # Get user
         user = self.db.query(User).filter(User.id == reset_token.user_id).first()

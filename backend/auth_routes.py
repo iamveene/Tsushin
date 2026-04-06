@@ -450,6 +450,13 @@ async def setup_wizard(
                 detail="Global admin and tenant admin must use different email addresses"
             )
 
+        # Validate global admin password minimum length
+        if setup_request.global_admin_password and len(global_admin_password) < 6:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Global admin password must be at least 6 characters"
+            )
+
         # Hash password
         global_admin_password_hash = hash_password(global_admin_password)
 

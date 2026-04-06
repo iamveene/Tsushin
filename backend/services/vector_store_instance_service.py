@@ -226,7 +226,7 @@ class VectorStoreInstanceService:
             registry = VectorStoreRegistry()
             # Evict to force fresh connection with latest credentials
             registry.evict(instance_id)
-            provider = registry.get_provider(instance_id, db)
+            provider = registry.get_provider(instance_id, db, tenant_id=tenant_id)
             result = await provider.health_check()
 
             # Update health status
@@ -259,7 +259,7 @@ class VectorStoreInstanceService:
 
         try:
             from agent.memory.providers.registry import VectorStoreRegistry
-            provider = VectorStoreRegistry().get_provider(instance_id, db)
+            provider = VectorStoreRegistry().get_provider(instance_id, db, tenant_id=tenant_id)
             return await provider.get_stats()
         except Exception as e:
             logger.error(f"Vector store stats failed for instance {instance_id}: {e}")

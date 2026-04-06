@@ -78,8 +78,11 @@ class SharedMemoryPool:
                 self.logger.error(f"Invalid access level: {access_level}")
                 return False
 
-            # Validate agent exists
-            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+            # Validate agent exists (with tenant isolation)
+            agent_query = self.db.query(Agent).filter(Agent.id == agent_id)
+            if tenant_id is not None:
+                agent_query = agent_query.filter(Agent.tenant_id == tenant_id)
+            agent = agent_query.first()
             if not agent:
                 self.logger.error(f"Agent {agent_id} not found")
                 return False
@@ -320,7 +323,8 @@ class SharedMemoryPool:
         content: Optional[str] = None,
         topic: Optional[str] = None,
         accessible_to: Optional[List[int]] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        tenant_id: Optional[str] = None
     ) -> bool:
         """
         Update shared knowledge (only by sharing agent).
@@ -337,10 +341,13 @@ class SharedMemoryPool:
             True if successful
         """
         try:
-            # Find knowledge
-            knowledge = self.db.query(SharedMemory).filter(
+            # Find knowledge (with tenant isolation)
+            query = self.db.query(SharedMemory).filter(
                 SharedMemory.id == knowledge_id
-            ).first()
+            )
+            if tenant_id is not None:
+                query = query.filter(SharedMemory.tenant_id == tenant_id)
+            knowledge = query.first()
 
             if not knowledge:
                 self.logger.warning(f"Knowledge {knowledge_id} not found")
@@ -379,7 +386,8 @@ class SharedMemoryPool:
     def delete_shared_knowledge(
         self,
         knowledge_id: int,
-        agent_id: int
+        agent_id: int,
+        tenant_id: Optional[str] = None
     ) -> bool:
         """
         Delete shared knowledge (only by sharing agent).
@@ -392,10 +400,13 @@ class SharedMemoryPool:
             True if successful
         """
         try:
-            # Find knowledge
-            knowledge = self.db.query(SharedMemory).filter(
+            # Find knowledge (with tenant isolation)
+            query = self.db.query(SharedMemory).filter(
                 SharedMemory.id == knowledge_id
-            ).first()
+            )
+            if tenant_id is not None:
+                query = query.filter(SharedMemory.tenant_id == tenant_id)
+            knowledge = query.first()
 
             if not knowledge:
                 self.logger.warning(f"Knowledge {knowledge_id} not found")

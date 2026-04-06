@@ -134,6 +134,7 @@ async def list_exceptions(
     exception_type: Optional[str] = Query(None, description="Filter by exception type"),
     active_only: bool = Query(False, description="Only return active exceptions"),
     include_system: bool = Query(True, description="Include system-level exceptions"),
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -155,6 +156,7 @@ async def list_exceptions(
 @router.get("/{exception_id}", response_model=ExceptionResponse)
 async def get_exception(
     exception_id: int,
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -267,6 +269,7 @@ async def delete_exception(
 async def test_exception(
     exception_id: int,
     data: ExceptionTestRequest,
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
