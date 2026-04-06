@@ -22,7 +22,6 @@ from models import (
 )
 from api.api_auth import ApiCaller, require_api_permission
 from api.v1.schemas import COMMON_RESPONSES, NOT_FOUND_RESPONSE, VALIDATION_RESPONSE
-from services.whatsapp_binding_service import apply_agent_whatsapp_binding_policy
 from services.whatsapp_binding_service import apply_agent_whatsapp_binding_policy, parse_enabled_channels
 
 logger = logging.getLogger(__name__)

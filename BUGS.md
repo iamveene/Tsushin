@@ -1,6 +1,38 @@
 # Tsushin Bug Tracker
-**Open:** 1 | **In Progress:** 0 | **Resolved:** 326
-**Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)**
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 330
+**Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)** + **Post-Release Stabilization (2026-04-06)**
+
+## Post-Release Stabilization (2026-04-06)
+
+### BUG-299: Agent detail page 500 — missing `parse_enabled_channels` import
+- **Status:** Resolved
+- **Reported:** 2026-04-06
+- **Resolved:** 2026-04-06
+- **Severity:** Critical
+- **Category:** API / Import Error
+- **Files:** `backend/api/routes_agents.py:21-24, 642`
+- **Description:** `GET /api/agents/{agent_id}` returned HTTP 500 because `parse_enabled_channels` (used at line 642 to serialize `agent.enabled_channels`) was not imported in `routes_agents.py`. The function exists in `services.whatsapp_binding_service` and is correctly imported in `routes_agent_builder.py`, `routes_agents_protected.py`, and `routes_studio.py` — but was omitted from `routes_agents.py`. The agent list endpoint (`GET /api/agents`) was unaffected because it does not serialize `enabled_channels`. This caused the "Manage" button on the Agents page to fail with a JavaScript alert "Failed to load agent details" and redirect back to the agent list.
+- **Remediation:** Added `parse_enabled_channels` to the import block at line 21-24 of `routes_agents.py`. Rebuilt backend container and verified HTTP 200 on `GET /api/agents/1` with correct skills and channel data.
+
+### BUG-300: Agent list endpoint returns null for all channel/integration fields
+- **Status:** Resolved
+- **Reported:** 2026-04-06
+- **Resolved:** 2026-04-06
+- **Severity:** Medium
+- **Category:** API / Data Completeness
+- **Files:** `backend/api/routes_agents.py:483-521`
+- **Description:** `GET /api/agents` (list endpoint) constructed `agent_dict` without `enabled_channels`, `whatsapp_integration_id`, `telegram_integration_id`, `slack_integration_id`, `discord_integration_id`, `webhook_integration_id`, `vector_store_instance_id`, or `vector_store_mode`. Since `AgentResponse` declares these as `Optional` with `None` defaults, Pydantic silently filled them with `null` — no error raised, but clients reading channel data from the list got incorrect nulls.
+- **Remediation:** Added the same channel/integration/vector-store block from `get_agent` (detail) to the `list_agents` dict builder. Verified all agents now return correct `enabled_channels` arrays and integration IDs.
+
+### BUG-301: Duplicate import in routes_studio.py
+- **Status:** Resolved
+- **Reported:** 2026-04-06
+- **Resolved:** 2026-04-06
+- **Severity:** Low
+- **Category:** Code Quality
+- **Files:** `backend/api/v1/routes_studio.py:25-26`
+- **Description:** `apply_agent_whatsapp_binding_policy` was imported twice — once on line 25 (standalone) and again on line 26 (alongside `parse_enabled_channels`). Harmless at runtime but indicates a leftover from when `parse_enabled_channels` was added.
+- **Remediation:** Removed the redundant line 25 import. Single import line now covers both symbols.
 
 ## Retire.JS Next.js CVE Findings (2026-04-05)
 
@@ -230,14 +262,16 @@
 ## Docker Image Hygiene (2026-04-05)
 
 ### BUG-278: Redundant security-tool binaries in main backend image
-- **Status:** Open
+- **Status:** Resolved
 - **Reported:** 2026-04-05
+- **Resolved:** 2026-04-05
 - **Severity:** Low
 - **Category:** Docker / Image Size
 - **Files:** `backend/Dockerfile` (lines 64–103), `backend/containers/Dockerfile.toolbox`
 - **Description:** The backend runtime image installs `nmap`, `whois`, and `nuclei` (including the ~hundreds-of-MB nuclei download stanza) directly in `backend/Dockerfile`, but no Python code in the backend runtime invokes these binaries via subprocess/Popen. All sandboxed-tool execution goes through the per-tenant toolbox container (`tsushin-toolbox:base`) built from `backend/containers/Dockerfile.toolbox`, executed via `ToolboxContainerService.exec_run` (backend/services/toolbox_container_service.py:242, :510, :587) and exposed by `backend/api/routes_toolbox.py` + `SandboxedToolsSkill`. The backend copies are dead weight.
 - **Remediation:** Remove `nmap`, `whois`, and the nuclei download RUN block (backend/Dockerfile:69, :72, :94–103) from the runtime stage. Keep `curl`, `wget`, `unzip`, `ca-certificates`, `sqlite3`, `libpq5`, `ffmpeg`, and all Playwright libs — those are genuinely used by backend runtime. Rebuild backend with `docker-compose up -d --build --no-cache backend` and verify: (1) container starts healthy, (2) `/tool nmap …` and `/tool nuclei …` still work via the sandboxed-tool API (they execute inside the toolbox container, not the backend), (3) image size reduced.
 - **Note:** Operators who shell into `tsushin-backend` for ad-hoc debugging will lose these CLIs there — if that workflow matters, document that they must `docker exec` into the tenant toolbox container instead.
+- **Resolution:** Removed `nmap`, `whois`, and `nuclei` from `backend/Dockerfile` runtime stage. Sandboxed tools continue to execute in toolbox container unaffected. Backend image size reduced. Verified post-rebuild: container healthy, `/tool nmap` and `/tool nuclei` still work via sandboxed-tool API.
 
 ## WhatsApp Agent Silent-Drop Regression (2026-04-05)
 
