@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - develop
 
+### Security
+
+- **BUG-278:** Bump Next.js 14.1.0 → 14.2.33 — patches CVE-2025-29927, CVE-2024-34351, CVE-2024-46982, CVE-2024-51479 (4 High-severity Retire.JS findings)
+
 ### Fixed
 
 - **BUG-298:** Pass `tenant_id` to `AgentService` in `AgentRouter.__init__` — watcher instances crashed with "No API key found" for tenant-scoped providers
