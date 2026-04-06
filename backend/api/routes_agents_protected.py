@@ -90,6 +90,7 @@ SKILL_METADATA = {
     "browser_automation": {"category": "automation", "name": "Browser Automation", "description": "Control web browsers"},
     "shell": {"category": "automation", "name": "Shell", "description": "Execute shell commands"},
     "sandboxed_tools": {"category": "automation", "name": "Sandboxed Tools", "description": "Execute tools in sandboxed environment"},
+    "image_analysis": {"category": "media", "name": "Image Analysis", "description": "Interpret and extract information from attached images"},
     "image": {"category": "media", "name": "Image Generation", "description": "Generate and edit images"},
     # Flight Search - standalone skill category so it shows at Agent level
     "flight_search": {"category": "flight_search", "name": "Flight Search", "description": "Search for flights"},

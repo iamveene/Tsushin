@@ -20,6 +20,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal"
@@ -506,7 +507,66 @@ func formatButtonsResponseMessage(response *waProto.ButtonsResponseMessage) stri
 }
 
 // Extract text content from a message
-func extractTextContent(msg *waProto.Message) string {
+func sanitizeMentionToken(value string) string {
+	var builder strings.Builder
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
+}
+
+func resolveContactDisplayName(client *whatsmeow.Client, jidStr string) string {
+	if client == nil || jidStr == "" {
+		return ""
+	}
+
+	jid, err := types.ParseJID(jidStr)
+	if err != nil {
+		return ""
+	}
+
+	contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
+	if err == nil {
+		for _, candidate := range []string{
+			contact.FullName,
+			contact.PushName,
+			contact.FirstName,
+			contact.BusinessName,
+		} {
+			if token := sanitizeMentionToken(candidate); token != "" {
+				return token
+			}
+		}
+	}
+
+	return sanitizeMentionToken(jid.User)
+}
+
+func hydrateMentionText(client *whatsmeow.Client, text string, contextInfo *waProto.ContextInfo) string {
+	if client == nil || contextInfo == nil || text == "" {
+		return text
+	}
+
+	for _, mentionedJID := range contextInfo.GetMentionedJID() {
+		rawID := strings.Split(mentionedJID, "@")[0]
+		if rawID == "" {
+			continue
+		}
+
+		displayToken := resolveContactDisplayName(client, mentionedJID)
+		if displayToken == "" {
+			continue
+		}
+
+		text = strings.ReplaceAll(text, "@"+rawID, "@"+displayToken)
+	}
+
+	return text
+}
+
+func extractTextContent(client *whatsmeow.Client, msg *waProto.Message) string {
 	if msg == nil {
 		return ""
 	}
@@ -516,7 +576,7 @@ func extractTextContent(msg *waProto.Message) string {
 		return text
 	}
 	if extendedText := msg.GetExtendedTextMessage(); extendedText != nil {
-		return extendedText.GetText()
+		return hydrateMentionText(client, extendedText.GetText(), extendedText.GetContextInfo())
 	}
 
 	// Handle InteractiveMessage (used by business bots like Unimed)
@@ -857,7 +917,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	}
 
 	// Extract text content
-	content := extractTextContent(msg.Message)
+	content := extractTextContent(client, msg.Message)
 	fmt.Printf("🔍 Extracted content length: %d chars\n", len(content))
 
 	// Extract media info
@@ -2525,10 +2585,12 @@ func main() {
 
 // GetChatName determines the appropriate name for a chat based on JID and other info
 func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types.JID, chatJID string, conversation interface{}, sender string, logger waLog.Logger) string {
-	// First, check if chat already exists in database with a name
+	// First, check if chat already exists in database with a usable name.
+	// Raw numeric IDs like "145230074499115" are refreshed because they break
+	// DM contact resolution when WhatsApp hides the real phone behind @lid.
 	var existingName string
 	err := messageStore.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chatJID).Scan(&existingName)
-	if err == nil && existingName != "" {
+	if err == nil && existingName != "" && existingName != chatJID && existingName != jid.User {
 		// Chat exists with a name, use that
 		logger.Infof("Using existing chat name for %s: %s", chatJID, existingName)
 		return existingName

@@ -81,13 +81,11 @@ class WatcherManager:
             group_keywords = json.loads(config.group_keywords) if config.group_keywords else []
             # Note: enabled_tools deprecated - tools now handled via Skills system
 
-            # Initialize contact service (reuse if exists)
+            # Initialize a tenant-scoped contact service for this watcher instance.
+            # A shared singleton fails closed because CachedContactService requires
+            # tenant_id to query contacts safely.
             from agent.contact_service_cached import CachedContactService
-            if not hasattr(self.app_state, 'contact_service'):
-                contact_service = CachedContactService(db)
-                self.app_state.contact_service = contact_service
-            else:
-                contact_service = self.app_state.contact_service
+            contact_service = CachedContactService(db, tenant_id=instance.tenant_id)
 
             # Phase 17: Instance-Level Message Filtering
             # Use instance-specific filters if configured, otherwise fall back to global config
