@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### UX Friction Reduction
 
+- **WhatsApp Instance Creation Mode Selector:** Clicking "+ Create WhatsApp Instance" now opens a selection modal with two options: Guided Setup (8-step wizard, recommended) and Advanced Setup (manual form). Removes the previously hard-to-notice standalone "Setup Wizard" button. Empty state consolidated to a single button that also opens the selector.
+- **WhatsApp Wizard Welcome Auto-Fit:** Moved "Let's Get Started" button to a pinned modal footer so it's always visible. Added `autoHeight` prop to Modal component for flexible sizing (`max-h-[calc(100vh-2rem)]`).
 - **WhatsApp Setup Wizard (7→8 steps):** Added "About You" step (Step 3) that collects the user's name and phone number, auto-creates a contact with DM Trigger enabled, and links it to the bound agent. Step 2 now includes an optional "Instance Name" field that auto-creates a bot contact. Steps 4-5 (DM/Group settings) have Simple/Advanced mode toggle for progressive disclosure. Step 8 (Confirmation) shows enhanced summary with green/amber indicators for completed/skipped items.
 - **Image Analysis skill:** Added a dedicated multimodal image-analysis skill for inbound media. It uses Gemini vision models to describe screenshots/photos, answer captioned image questions, and hand off edit-style captions back to the image editing skill instead of double-handling them.
 - **Getting Started Checklist:** New dashboard widget on the Watcher page showing 5 setup milestones (Configure Agent, Connect Channel, Add Contacts, Test in Playground, Create Flow) with progress bar, action links, and dismiss button. Auto-hides when all items are complete.
