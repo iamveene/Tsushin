@@ -751,6 +751,10 @@ class AgentCommunicationService:
         prompt_parts.append(f"Question: {message}")
         full_prompt = "\n".join(prompt_parts)
 
+        # BUG-LOG-006: Inject comm_depth into agent config so that if skills
+        # are ever enabled for A2A targets, the depth limit will be enforced.
+        agent_config["comm_depth"] = depth
+
         agent_service = AgentService(
             agent_config,
             db=self.db,

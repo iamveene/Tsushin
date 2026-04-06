@@ -1,6 +1,7 @@
 import logging
 import time
 import re
+from datetime import datetime
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 from .ai_client import AIClient
@@ -899,6 +900,25 @@ IMPORTANT: When the user asks for system information, server status, file listin
                         # Phase 5: Execute skill-based tool via skill manager
                         self.logger.info(f"[SKILL TOOL] Executing skill tool '{tool_name}' via skill_manager")
 
+                        # BUG-LOG-006: Build InboundMessage with comm_depth metadata
+                        # so agent_communication_skill can enforce depth limits
+                        from agent.skills.base import InboundMessage as SkillInboundMessage
+                        skill_message_metadata = {}
+                        if self.config.get("comm_depth") is not None:
+                            skill_message_metadata["comm_depth"] = self.config["comm_depth"]
+                        skill_message = SkillInboundMessage(
+                            id=f"tool_call_{tool_name}",
+                            sender=sender_key or "tool_caller",
+                            sender_key=sender_key or "tool_caller",
+                            body=message_text[:500] if message_text else "",
+                            chat_id="tool_execution",
+                            chat_name=None,
+                            is_group=False,
+                            timestamp=datetime.utcnow(),
+                            channel="tool",
+                            metadata=skill_message_metadata or None,
+                        )
+
                         if is_shell_tool:
                             # Shell tool needs special parameter handling
                             script = parameters.get('script', '')
@@ -911,6 +931,7 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                     agent_id=self.agent_id,
                                     tool_name='run_shell_command',
                                     arguments={'script': script, 'target': target, 'timeout': timeout},
+                                    message=skill_message,
                                     sender_key=sender_key
                                 )
                             else:
@@ -927,6 +948,7 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                 agent_id=self.agent_id,
                                 tool_name=tool_name,
                                 arguments=parameters,
+                                message=skill_message,
                                 sender_key=sender_key,
                                 return_full_result=needs_full_result
                             )
