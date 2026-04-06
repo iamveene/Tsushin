@@ -44,6 +44,19 @@ class FlightSearchSkill(BaseSkill):
     skill_description = "Search for flights using configured provider (Amadeus, Skyscanner, etc.)"
     execution_mode = "tool"
 
+    def _resolve_tenant_id(self) -> Optional[str]:
+        """Resolve tenant_id from agent context for API key lookups."""
+        agent_id = getattr(self, '_agent_id', None)
+        if agent_id and self._db_session:
+            try:
+                from models import Agent
+                agent = self._db_session.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    return agent.tenant_id
+            except Exception:
+                pass
+        return None
+
     def __init__(self, db: Optional[Session] = None, provider_name: str = "amadeus"):
         """
         Initialize flight search skill.
@@ -322,7 +335,8 @@ class FlightSearchSkill(BaseSkill):
                 provider=skill_config.get('model_provider', 'gemini'),
                 model_name=skill_config.get('model_name', 'gemini-2.5-flash'),
                 db=self._db_session,
-                token_tracker=self._token_tracker
+                token_tracker=self._token_tracker,
+                tenant_id=self._resolve_tenant_id()
             )
 
             system_prompt = """You are a flight search parameter extractor. Parse flight requests and return ONLY valid JSON."""

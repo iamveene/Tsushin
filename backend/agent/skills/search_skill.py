@@ -52,6 +52,19 @@ class SearchSkill(BaseSkill):
     skill_description = "Search the web using Brave Search (default provider)"
     execution_mode = "tool"
 
+    def _resolve_tenant_id(self) -> Optional[str]:
+        """Resolve tenant_id from agent context for API key lookups."""
+        agent_id = getattr(self, '_agent_id', None)
+        if agent_id and self._db_session:
+            try:
+                from models import Agent
+                agent = self._db_session.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    return agent.tenant_id
+            except Exception:
+                pass
+        return None
+
     def __init__(self, db: Optional[Session] = None, token_tracker=None):
         """
         Initialize search skill.
@@ -244,7 +257,8 @@ class SearchSkill(BaseSkill):
                 provider=provider,
                 model_name=model,
                 db=self._db_session,
-                token_tracker=self._token_tracker
+                token_tracker=self._token_tracker,
+                tenant_id=self._resolve_tenant_id()
             )
 
             system_prompt = """You are a search query extractor. Parse user requests and return ONLY the search query, nothing else."""

@@ -42,6 +42,19 @@ class SchedulerSkill(BaseSkill):
     skill_description = "Schedule reminders and AI-driven conversations via natural language"
     execution_mode = "tool"
 
+    def _resolve_tenant_id(self) -> Optional[str]:
+        """Resolve tenant_id from agent context for API key lookups."""
+        agent_id = getattr(self, '_agent_id', None)
+        if agent_id and self._db_session:
+            try:
+                from models import Agent
+                agent = self._db_session.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    return agent.tenant_id
+            except Exception:
+                pass
+        return None
+
     @classmethod
     def get_mcp_tool_definition(cls) -> Dict[str, Any]:
         """
@@ -247,7 +260,7 @@ class SchedulerSkill(BaseSkill):
             db.close()
 
         # Create AI client (Phase 7.4: Pass db for API key loading)
-        ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker)
+        ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
         # Intent detection prompt
         prompt = f"""Analyze this user request and determine their intent.
@@ -690,7 +703,7 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
                 db.close()
 
             # Create AI client
-            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker)
+            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             # Get current time in Brazil timezone for context
             now_brazil = datetime.now(BRAZIL_TZ)
@@ -812,7 +825,7 @@ If you cannot determine the date/time, respond with: {{"error": "cannot parse"}}
                 db.close()
 
             # Create AI client (Phase 7.4: Pass db for API key loading)
-            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker)
+            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             # Get current time in Brazil timezone for context
             now_brazil = datetime.now(BRAZIL_TZ)
