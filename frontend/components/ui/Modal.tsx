@@ -10,6 +10,7 @@ interface ModalProps {
   children: ReactNode
   footer?: ReactNode
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
+  autoHeight?: boolean
   showCloseButton?: boolean
 }
 
@@ -28,6 +29,7 @@ export default function Modal({
   children,
   footer,
   size = 'md',
+  autoHeight = false,
   showCloseButton = true
 }: ModalProps) {
   // SSR safety: only render portal after mount
@@ -61,7 +63,7 @@ export default function Modal({
       }}
     >
       <div
-        className={`bg-tsushin-elevated border border-tsushin-border rounded-2xl ${sizeClasses[size]} w-full max-h-[85vh] flex flex-col shadow-elevated animate-scale-in`}
+        className={`bg-tsushin-elevated border border-tsushin-border rounded-2xl ${sizeClasses[size]} w-full ${autoHeight ? 'max-h-[calc(100vh-2rem)]' : 'max-h-[85vh]'} flex flex-col shadow-elevated animate-scale-in`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

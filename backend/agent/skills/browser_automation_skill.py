@@ -58,6 +58,19 @@ class BrowserAutomationSkill(BaseSkill):
     skill_description = "Control web browsers, navigate websites, click elements, fill forms, extract content, and capture screenshots"
     execution_mode = "tool"
 
+    def _resolve_tenant_id(self) -> Optional[str]:
+        """Resolve tenant_id from agent context for API key lookups."""
+        agent_id = getattr(self, '_agent_id', None)
+        if agent_id and self._db:
+            try:
+                from models import Agent
+                agent = self._db.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    return agent.tenant_id
+            except Exception:
+                pass
+        return None
+
     def __init__(self, db: Optional[Session] = None, token_tracker=None):
         """
         Initialize browser automation skill.
@@ -318,7 +331,8 @@ class BrowserAutomationSkill(BaseSkill):
                 provider=config.get('model_provider', 'gemini'),
                 model_name=config.get('model_name', 'gemini-2.5-flash'),
                 db=self._db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=self._resolve_tenant_id()
             )
 
             system_prompt = """You are a browser automation command parser. Convert natural language into structured browser actions.

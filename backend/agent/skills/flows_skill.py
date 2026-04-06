@@ -70,6 +70,23 @@ class FlowsSkill(BaseSkill):
         self._scheduler = SchedulerSkill()
         self._query = SchedulerQuerySkill()
         self._provider: Optional[SchedulerProviderBase] = None
+        self._cached_tenant_id: Optional[str] = None
+
+    def _resolve_tenant_id(self) -> Optional[str]:
+        """Resolve tenant_id from agent context for API key lookups."""
+        if self._cached_tenant_id:
+            return self._cached_tenant_id
+        agent_id = getattr(self, '_agent_id', None)
+        if agent_id and self._db_session:
+            try:
+                from models import Agent
+                agent = self._db_session.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    self._cached_tenant_id = agent.tenant_id
+                    return self._cached_tenant_id
+            except Exception:
+                pass
+        return None
 
     def set_db_session(self, db):
         """
@@ -251,7 +268,7 @@ class FlowsSkill(BaseSkill):
                 provider = "gemini"
 
             logger.info(f"FlowsSkill: Using provider={provider}, model={ai_model} for intent detection")
-            ai_client = AIClient(provider=provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker)
+            ai_client = AIClient(provider=provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             system_prompt = """You are an operation classifier for Flows/Scheduler system.
 
@@ -769,7 +786,7 @@ Answer:"""
             else:
                 ai_provider = "gemini"
 
-            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker)
+            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             system_prompt = """You are helping identify which calendar event the user wants to delete.
 Given a list of events and the user's message, return the ID of the matching event.
@@ -848,7 +865,7 @@ Answer:"""
             else:
                 ai_provider = "gemini"
 
-            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker)
+            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             # Get current time context
             brazil_tz = pytz.timezone('America/Sao_Paulo')
@@ -946,7 +963,7 @@ Answer (JSON only):"""
             else:
                 ai_provider = "gemini"
 
-            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker)
+            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             # Get current time in Brazil timezone for context
             brazil_tz = pytz.timezone('America/Sao_Paulo')

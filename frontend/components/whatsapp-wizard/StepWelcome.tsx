@@ -72,13 +72,6 @@ export default function StepWelcome() {
           <span className="font-semibold">Tip:</span> You can skip any step and come back later. Each step saves your progress immediately.
         </p>
       </div>
-
-      <button
-        onClick={nextStep}
-        className="w-full py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white font-semibold rounded-lg hover:from-teal-600 hover:to-cyan-600 transition-all"
-      >
-        Let's Get Started
-      </button>
     </div>
   )
 }

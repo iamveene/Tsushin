@@ -38,7 +38,8 @@ class AISkillClassifier:
         model: Optional[str] = None,
         custom_examples: Optional[Dict[str, List[str]]] = None,
         db = None,
-        token_tracker = None
+        token_tracker = None,
+        tenant_id: Optional[str] = None
     ) -> bool:
         """
         Classify if a message matches a skill's intent.
@@ -144,7 +145,7 @@ Answer (YES or NO):"""
             provider, model_name = self._parse_model(model)
 
             # Create AIClient instance for this request (Phase 7.4: pass db for API key loading)
-            ai_client = AIClient(provider=provider, model_name=model_name, db=db, token_tracker=token_tracker)
+            ai_client = AIClient(provider=provider, model_name=model_name, db=db, token_tracker=token_tracker, tenant_id=tenant_id)
 
             # Log the prompts for debugging
             logger.debug(f"AI Classification - System: {system_prompt[:100]}...")
@@ -192,7 +193,8 @@ Answer (YES or NO):"""
         available_options: Optional[List[str]] = None,
         model: Optional[str] = None,
         db = None,
-        token_tracker = None
+        token_tracker = None,
+        tenant_id: Optional[str] = None
     ) -> Optional[str]:
         """
         Extract a specific entity from a message.
@@ -245,7 +247,7 @@ Extract the {entity_type}:"""
             provider, model_name = self._parse_model(model)
 
             # Create AIClient instance for this request (Phase 7.4: pass db for API key loading)
-            ai_client = AIClient(provider=provider, model_name=model_name, db=db, token_tracker=token_tracker)
+            ai_client = AIClient(provider=provider, model_name=model_name, db=db, token_tracker=token_tracker, tenant_id=tenant_id)
 
             response_dict = await ai_client.generate(
                 system_prompt=system_prompt,

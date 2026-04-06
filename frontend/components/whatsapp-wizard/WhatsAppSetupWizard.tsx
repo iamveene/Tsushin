@@ -63,8 +63,16 @@ export default function WhatsAppSetupWizard() {
       onClose={handleClose}
       title={`WhatsApp Setup — ${stepTitles[state.currentStep - 1]}`}
       size="xl"
+      autoHeight
       footer={
-        state.currentStep > 1 && state.currentStep < state.totalSteps ? (
+        state.currentStep === 1 ? (
+          <button
+            onClick={nextStep}
+            className="w-full py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white font-semibold rounded-lg hover:from-teal-600 hover:to-cyan-600 transition-all"
+          >
+            Let's Get Started
+          </button>
+        ) : state.currentStep > 1 && state.currentStep < state.totalSteps ? (
           <div className="flex items-center justify-between">
             <button
               onClick={previousStep}
