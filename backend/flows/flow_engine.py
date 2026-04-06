@@ -3015,7 +3015,8 @@ class FlowEngine:
         trigger_type: str = "immediate",
         triggered_by: Optional[str] = None,
         parent_run_id: Optional[int] = None,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        resume_run_id: Optional[int] = None
     ) -> FlowRun:
         """
         Main execution entry point.
@@ -3077,23 +3078,33 @@ class FlowEngine:
             FlowNode.flow_definition_id == flow_definition_id
         ).order_by(FlowNode.position).all()
 
-        # Create FlowRun
-        flow_run = FlowRun(
-            flow_definition_id=flow_definition_id,
-            tenant_id=tenant_id,
-            status="running",
-            started_at=datetime.utcnow(),
-            initiator=initiator,
-            trigger_type=trigger_type,
-            triggered_by=triggered_by,
-            total_steps=len(steps),
-            completed_steps=0,
-            failed_steps=0,
-            trigger_context_json=json.dumps(trigger_context) if trigger_context else None
-        )
-        self.db.add(flow_run)
-        self.db.commit()
-        self.db.refresh(flow_run)
+        # Create or resume FlowRun
+        if resume_run_id:
+            flow_run = self.db.query(FlowRun).filter(FlowRun.id == resume_run_id).first()
+            if not flow_run:
+                raise FlowValidationError(f"Flow run {resume_run_id} not found")
+            flow_run.status = "running"
+            flow_run.started_at = datetime.utcnow()
+            flow_run.total_steps = len(steps)
+            self.db.commit()
+            self.db.refresh(flow_run)
+        else:
+            flow_run = FlowRun(
+                flow_definition_id=flow_definition_id,
+                tenant_id=tenant_id,
+                status="running",
+                started_at=datetime.utcnow(),
+                initiator=initiator,
+                trigger_type=trigger_type,
+                triggered_by=triggered_by,
+                total_steps=len(steps),
+                completed_steps=0,
+                failed_steps=0,
+                trigger_context_json=json.dumps(trigger_context) if trigger_context else None
+            )
+            self.db.add(flow_run)
+            self.db.commit()
+            self.db.refresh(flow_run)
 
         try:
             # Execute steps sequentially
