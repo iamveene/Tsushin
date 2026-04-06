@@ -1447,9 +1447,13 @@ class SummarizationStepHandler(FlowStepHandler):
                 thread_id = input_data.get("thread_id")
 
             # If still no thread_id, try to get raw text from source step
+            # Check multiple field names since different step types use different keys:
+            #   tool steps → raw_output, skill steps → output, slash_command → output/message
             if not thread_id and isinstance(source_data, dict):
                 source_text = (
                     source_data.get("raw_output")
+                    or source_data.get("output")
+                    or source_data.get("message")
                     or source_data.get("summary")
                     or source_data.get("search_results")
                     or source_data.get("error")
@@ -1463,6 +1467,8 @@ class SummarizationStepHandler(FlowStepHandler):
                 if not thread_id:
                     source_text = (
                         prev.get("raw_output")
+                        or prev.get("output")
+                        or prev.get("message")
                         or prev.get("summary")
                         or prev.get("search_results")
                         or prev.get("error")
