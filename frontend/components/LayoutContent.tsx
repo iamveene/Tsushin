@@ -5,10 +5,11 @@
  * Premium UI with animated navigation, glass effects, and polished interactions
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import RefreshButton from '@/components/RefreshButton'
+import UserGuidePanel from '@/components/UserGuidePanel'
 import { authenticatedFetch } from '@/lib/client'
 import { useAuth, useRequireAuth } from '@/contexts/AuthContext'
 import { useOnboarding } from '@/contexts/OnboardingContext'
@@ -45,6 +46,24 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
 
   // Mobile menu state
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+
+  // Help menu state
+  const [isHelpMenuOpen, setIsHelpMenuOpen] = useState(false)
+  const [isUserGuideOpen, setIsUserGuideOpen] = useState(false)
+  const helpMenuRef = useRef<HTMLDivElement>(null)
+
+  // Close help menu on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (helpMenuRef.current && !helpMenuRef.current.contains(e.target as Node)) {
+        setIsHelpMenuOpen(false)
+      }
+    }
+    if (isHelpMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isHelpMenuOpen])
 
   // Emergency Stop state
   const toast = useToast()
@@ -317,15 +336,39 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                     )}
                   </div>
                 </div>
-                <button
-                  onClick={startTour}
-                  className="btn-ghost text-sm p-2 hover:bg-tsushin-hover rounded-lg transition-colors"
-                  title="Take Tour"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </button>
+                <div className="relative" ref={helpMenuRef}>
+                  <button
+                    onClick={() => setIsHelpMenuOpen(!isHelpMenuOpen)}
+                    className="btn-ghost text-sm p-2 hover:bg-tsushin-hover rounded-lg transition-colors"
+                    title="Help"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </button>
+                  {isHelpMenuOpen && (
+                    <div className="absolute right-0 top-full mt-2 w-48 bg-tsushin-surface border border-tsushin-border rounded-lg shadow-xl overflow-hidden z-50">
+                      <button
+                        onClick={() => { startTour(); setIsHelpMenuOpen(false) }}
+                        className="flex items-center gap-2.5 w-full text-left px-4 py-2.5 text-sm text-tsushin-slate hover:text-white hover:bg-tsushin-hover transition-colors"
+                      >
+                        <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Take Tour
+                      </button>
+                      <button
+                        onClick={() => { setIsUserGuideOpen(true); setIsHelpMenuOpen(false) }}
+                        className="flex items-center gap-2.5 w-full text-left px-4 py-2.5 text-sm text-tsushin-slate hover:text-white hover:bg-tsushin-hover transition-colors"
+                      >
+                        <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                        </svg>
+                        User Guide
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={logout}
                   className="btn-ghost text-sm py-1.5 px-3"
@@ -513,6 +556,8 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
           </div>
         </footer>
       )}
+      {/* User Guide slide-over panel */}
+      <UserGuidePanel isOpen={isUserGuideOpen} onClose={() => setIsUserGuideOpen(false)} />
     </div>
   )
 }
