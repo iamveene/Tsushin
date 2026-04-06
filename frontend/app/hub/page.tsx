@@ -2534,6 +2534,18 @@ export default function HubPage() {
                           Refresh Models
                         </button>
                       </div>
+                      {/* Manage instance link */}
+                      {canEditSettings && (() => {
+                        const ollamaInst = providerInstances.find(i => i.vendor === 'ollama')
+                        return ollamaInst ? (
+                          <button
+                            onClick={() => setEditingInstance(ollamaInst)}
+                            className="w-full mt-2 text-xs text-tsushin-slate hover:text-white transition-colors text-center py-1"
+                          >
+                            Manage Instance
+                          </button>
+                        ) : null
+                      })()}
                     </div>
 
                     {/* Kokoro TTS Card (Enhanced - Container Management) */}
