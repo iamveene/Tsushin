@@ -95,7 +95,7 @@ const STEP_OUTPUT_FIELDS: Record<string, StepVariable[]> = {
     { field: 'conditions_evaluated', label: 'Conditions Evaluated', description: 'Array of evaluated conditions with pass/fail per condition', type: 'array' },
     { field: 'reasoning', label: 'Reasoning', description: 'Explanation of why the gate passed or blocked', type: 'string' },
     { field: 'status', label: 'Status', description: 'Execution status (completed or failed)', type: 'string' },
-    { field: 'fail_action_taken', label: 'Fail Action Taken', description: 'Action taken on gate failure (skip, notify, alternative)', type: 'string' },
+    { field: 'fail_action_taken', label: 'Fail Action Taken', description: 'Action taken on gate failure (skip or notify)', type: 'string' },
   ],
 }
 

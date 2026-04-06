@@ -241,7 +241,7 @@ class FlowStepConfig(BaseModel):
     gate_logic: Optional[str] = Field(default="all", description="'all' (AND) or 'any' (OR)")
     gate_prompt: Optional[str] = Field(default=None, description="Agentic mode: natural language evaluation prompt")
     gate_source_step: Optional[str] = Field(default=None, description="Step output to evaluate (e.g. 'inbox', 'step_1')")
-    gate_on_fail: Optional[str] = Field(default="skip", description="'skip', 'notify', or 'alternative'")
+    gate_on_fail: Optional[str] = Field(default="skip", description="'skip' or 'notify'")
     gate_fail_notification: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Notification config on gate fail: {channel, recipient, message_template}"

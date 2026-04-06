@@ -2542,7 +2542,10 @@ class FlowEngine:
         }
 
         # BUG-LOG-007: Clean up any globally stale runs at engine init
-        self._cleanup_stale_runs()
+        try:
+            self._cleanup_stale_runs()
+        except Exception as e:
+            logger.warning(f"Stale run cleanup at init failed (non-fatal): {e}")
 
     def _cleanup_stale_runs(self, flow_definition_id: Optional[int] = None) -> int:
         """
