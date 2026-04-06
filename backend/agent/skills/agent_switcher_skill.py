@@ -16,6 +16,7 @@ from .base import BaseSkill, InboundMessage, SkillResult
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 from models import Contact, Agent, ContactAgentMapping, UserAgentSession
+from agent.contact_service import ContactService
 import logging
 import re
 from datetime import datetime
@@ -180,7 +181,11 @@ class AgentSwitcherSkill(BaseSkill):
             logger.info(f"AgentSwitcherSkill: Resolved to Agent ID: {target_agent.id}")
 
             # Step 3: Identify the requesting user
-            sender_contact = self._identify_sender(message.sender)
+            sender_contact = self._identify_sender(
+                message.sender,
+                sender_key=message.sender_key,
+                chat_name=message.chat_name,
+            )
             if not sender_contact:
                 # Contact not found - create error message
                 return SkillResult(
@@ -268,28 +273,65 @@ class AgentSwitcherSkill(BaseSkill):
             Contact.is_active == True
         ).all()
 
-    def _identify_sender(self, sender: str) -> Optional[Contact]:
+    def _identify_sender(
+        self,
+        sender: str,
+        sender_key: Optional[str] = None,
+        chat_name: Optional[str] = None
+    ) -> Optional[Contact]:
         """
         Identify the sender's contact record.
 
-        Searches by phone number (with or without + prefix).
+        Resolve contact via direct identifiers, channel mappings, chat metadata,
+        and WhatsApp ID auto-discovery.
 
         Args:
-            sender: Phone number from message
+            sender: Sender identifier from the message
+            sender_key: Stable sender key/chat identifier
+            chat_name: Display name from the channel when available
 
         Returns:
             Contact object if found, None otherwise
         """
-        # Normalize sender (remove + prefix if present)
-        sender_normalized = sender.lstrip("+")
+        tenant_id = (self._config or {}).get("tenant_id")
+        contact_service = ContactService(self.db_session, tenant_id=tenant_id)
 
-        # Search by phone number
-        contact = self.db_session.query(Contact).filter(
-            Contact.is_active == True,
-            Contact.phone_number.like(f"%{sender_normalized}")
-        ).first()
+        for candidate in [sender, sender_key]:
+            candidate = (candidate or "").strip()
+            if not candidate:
+                continue
+            contact = contact_service.identify_sender(candidate)
+            if contact:
+                return contact
 
-        return contact
+        candidate_name = (chat_name or "").strip()
+        if candidate_name and not candidate_name.isdigit():
+            base_query = self.db_session.query(Contact).filter(Contact.is_active == True)
+            if tenant_id:
+                base_query = base_query.filter(Contact.tenant_id == tenant_id)
+
+            exact_matches = base_query.filter(Contact.friendly_name.ilike(candidate_name)).all()
+            if len(exact_matches) == 1:
+                return exact_matches[0]
+
+            candidate_lower = candidate_name.lower()
+            partial_matches = [
+                contact for contact in base_query.all()
+                if contact.friendly_name and contact.friendly_name.lower() in candidate_lower
+            ]
+            if len(partial_matches) == 1:
+                return partial_matches[0]
+
+        sender_normalized = (sender or "").split("@")[0].lstrip("+")
+        if sender_normalized:
+            try:
+                from services.whatsapp_id_discovery import WhatsAppIDDiscovery
+                discovery = WhatsAppIDDiscovery(time_window_minutes=60)
+                return discovery.auto_link_contact(self.db_session, sender_normalized, logger)
+            except Exception as e:
+                logger.warning(f"AgentSwitcherSkill: WhatsApp auto-discovery failed: {e}")
+
+        return None
 
     def _get_current_agent_id(self, contact_id: int) -> Optional[int]:
         """
@@ -558,7 +600,11 @@ class AgentSwitcherSkill(BaseSkill):
                 )
 
             # Step 2: Identify the requesting user
-            sender_contact = self._identify_sender(message.sender)
+            sender_contact = self._identify_sender(
+                message.sender,
+                sender_key=message.sender_key,
+                chat_name=message.chat_name,
+            )
             if not sender_contact:
                 return SkillResult(
                     success=False,
