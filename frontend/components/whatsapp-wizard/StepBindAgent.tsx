@@ -42,8 +42,17 @@ export default function StepBindAgent() {
         whatsapp_integration_id: state.createdInstanceId,
       })
 
+      // Link user contact to selected agent
+      if (state.userContact) {
+        try { await api.setContactAgentMapping(state.userContact.id, selectedAgentId) } catch {}
+      }
+      // Link bot contact to selected agent
+      if (state.botContact) {
+        try { await api.setContactAgentMapping(state.botContact.id, selectedAgentId) } catch {}
+      }
+
       setBoundAgent(selectedAgentId, agent.contact_name)
-      markStepComplete(6)
+      markStepComplete(7)
       nextStep()
     } catch (e: any) {
       setError(e.message || 'Failed to bind agent')
@@ -122,6 +131,10 @@ export default function StepBindAgent() {
           })}
         </div>
       )}
+
+      <p className="text-xs text-tsushin-slate">
+        The selected agent will handle messages from your WhatsApp contacts.
+      </p>
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">

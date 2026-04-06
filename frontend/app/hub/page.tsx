@@ -29,6 +29,7 @@ import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfig
 import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/TypeaheadChipInput'
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
+import IntegrationSummary from '@/components/hub/IntegrationSummary'
 import {
   GeminiIcon,
   OpenAIIcon,
@@ -1971,6 +1972,17 @@ export default function HubPage() {
           </div>
         )}
 
+        {/* Integration Summary */}
+        <IntegrationSummary
+          providerCount={providerInstances.length}
+          whatsappCount={mcpInstances.length}
+          telegramCount={telegramInstances.length}
+          slackCount={slackIntegrations.length}
+          discordCount={discordIntegrations.length}
+          webhookCount={webhookIntegrations.length}
+          onTabSelect={(tab) => setActiveTab(tab as TabType)}
+        />
+
         {/* Tabs */}
         <div className="glass-card rounded-xl overflow-clip">
           <div className="border-b border-tsushin-border/50 overflow-x-auto">
@@ -2614,8 +2626,9 @@ export default function HubPage() {
                           <div key={instance.id} className="card p-4 hover-glow">
                             <div className="flex items-start justify-between mb-3">
                               <div>
-                                <h3 className="font-semibold text-white">{instance.phone_number}</h3>
-                                <p className="text-xs text-tsushin-slate">Port: {instance.mcp_port}</p>
+                                <h3 className="font-semibold text-white">{instance.display_name || instance.phone_number}</h3>
+                                {instance.display_name && <p className="text-xs text-tsushin-slate">{instance.phone_number}</p>}
+                                <p className="text-xs text-tsushin-slate/60">Port: {instance.mcp_port}</p>
                               </div>
                               <div className="flex flex-col gap-1 items-end">
                                 <span className={getStatusBadge(instance.status)}>{instance.status}</span>

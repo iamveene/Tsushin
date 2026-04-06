@@ -7,37 +7,64 @@ export default function StepConfirmation() {
 
   const items = [
     {
-      label: 'WhatsApp Connected',
-      value: state.createdInstance?.phone_number || 'N/A',
+      label: 'WhatsApp Instance',
+      value: state.instanceDisplayName
+        ? `${state.instanceDisplayName} (${state.createdInstance?.phone_number})`
+        : state.createdInstance?.phone_number || 'N/A',
       done: !!state.stepsCompleted[2],
     },
     {
-      label: 'DM Settings',
+      label: 'Bot Contact',
+      value: state.botContact
+        ? state.botContact.friendly_name
+        : 'Skipped',
+      done: !!state.botContact,
+    },
+    {
+      label: 'Your Contact',
+      value: state.userContact
+        ? `${state.userContact.friendly_name} (${state.userContact.phone_number})`
+        : 'Skipped',
+      done: !!state.userContact,
+    },
+    {
+      label: 'DM Mode',
       value: state.configuredFilters?.dm_auto_mode
-        ? 'Auto-reply ON'
+        ? 'Auto-reply to everyone'
         : state.configuredFilters?.dm_auto_mode === false
-        ? 'Auto-reply OFF (DM Trigger contacts only)'
+        ? 'Contacts only'
         : 'Not configured',
-      done: !!state.stepsCompleted[3],
+      done: !!state.stepsCompleted[4],
     },
     {
       label: 'Group Filters',
       value: state.configuredFilters?.group_filters?.length
         ? `${state.configuredFilters.group_filters.length} group(s) selected`
         : 'All groups monitored',
-      done: !!state.stepsCompleted[4],
+      done: !!state.stepsCompleted[5],
     },
     {
-      label: 'Contacts',
-      value: state.createdContacts.length > 0
-        ? `${state.createdContacts.length} contact(s) added`
-        : 'None added (can add later)',
-      done: state.createdContacts.length > 0,
+      label: 'Additional Contacts',
+      value: (() => {
+        const wizardIds = new Set<number>()
+        if (state.botContact) wizardIds.add(state.botContact.id)
+        if (state.userContact) wizardIds.add(state.userContact.id)
+        const manual = state.createdContacts.filter((c) => !wizardIds.has(c.id))
+        return manual.length > 0
+          ? `${manual.length} contact(s) added`
+          : 'None added (can add later)'
+      })(),
+      done: (() => {
+        const wizardIds = new Set<number>()
+        if (state.botContact) wizardIds.add(state.botContact.id)
+        if (state.userContact) wizardIds.add(state.userContact.id)
+        return state.createdContacts.filter((c) => !wizardIds.has(c.id)).length > 0
+      })(),
     },
     {
-      label: 'Agent Bound',
+      label: 'Agent',
       value: state.boundAgentName || 'Not bound',
-      done: !!state.stepsCompleted[6],
+      done: !!state.stepsCompleted[7],
     },
   ]
 
@@ -61,7 +88,7 @@ export default function StepConfirmation() {
             <div className="flex items-center gap-3">
               <div
                 className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
-                  item.done ? 'bg-green-500' : 'bg-tsushin-slate/30'
+                  item.done ? 'bg-green-500' : 'bg-amber-500/30'
                 }`}
               >
                 {item.done ? (
@@ -69,12 +96,12 @@ export default function StepConfirmation() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                   </svg>
                 ) : (
-                  <span className="w-2 h-2 rounded-full bg-tsushin-slate/50" />
+                  <span className="w-2 h-2 rounded-full bg-amber-400" />
                 )}
               </div>
               <span className="text-sm font-medium text-white">{item.label}</span>
             </div>
-            <span className="text-xs text-tsushin-slate">{item.value}</span>
+            <span className={`text-xs ${item.done ? 'text-tsushin-slate' : 'text-amber-400'}`}>{item.value}</span>
           </div>
         ))}
       </div>
@@ -83,9 +110,9 @@ export default function StepConfirmation() {
         <h4 className="text-sm font-semibold text-teal-300 mb-2">What's next?</h4>
         <ul className="text-xs text-tsushin-slate space-y-1.5">
           <li>Send a message to {state.createdInstance?.phone_number || 'your WhatsApp number'} to test</li>
-          <li>Use the Playground to test agent responses before going live</li>
-          <li>Visit the Hub page to fine-tune filters anytime</li>
-          <li>Go to Contacts to manage who your agent recognizes</li>
+          <li>Use the <span className="text-white font-medium">Playground</span> to test agent responses before going live</li>
+          <li>Visit the <span className="text-white font-medium">Hub</span> page to fine-tune filters anytime</li>
+          <li>Go to <span className="text-white font-medium">Contacts</span> to manage who your agent recognizes</li>
         </ul>
       </div>
 

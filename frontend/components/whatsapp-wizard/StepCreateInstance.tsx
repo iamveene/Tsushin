@@ -5,8 +5,9 @@ import { api, WhatsAppMCPInstance } from '@/lib/client'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 
 export default function StepCreateInstance() {
-  const { state, setInstanceData, nextStep, markStepComplete } = useWhatsAppWizard()
+  const { state, setInstanceData, setInstanceDisplayName, setBotContact, addContact, nextStep, markStepComplete } = useWhatsAppWizard()
 
+  const [displayName, setDisplayName] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -57,7 +58,23 @@ export default function StepCreateInstance() {
           // Fetch full instance data
           const inst = await api.getMCPInstance(id)
           setInstanceData(inst)
+          setInstanceDisplayName(displayName.trim() || 'Tsushin Bot')
           markStepComplete(2)
+          // Auto-create bot contact
+          try {
+            const botName = displayName.trim() || 'Tsushin Bot'
+            const botContact = await api.createContact({
+              friendly_name: botName,
+              phone_number: inst.phone_number,
+              role: 'agent',
+              is_dm_trigger: false,
+              is_active: true,
+            })
+            setBotContact(botContact)
+            addContact(botContact)
+          } catch (e) {
+            console.warn('Failed to auto-create bot contact:', e)
+          }
           // Auto-advance after 1.5s
           setTimeout(() => nextStep(), 1500)
         }
@@ -71,7 +88,7 @@ export default function StepCreateInstance() {
         if (res.qr_code) setQrCode(res.qr_code)
       } catch {}
     }, 15000)
-  }, [setInstanceData, markStepComplete, nextStep])
+  }, [setInstanceData, setInstanceDisplayName, setBotContact, addContact, markStepComplete, nextStep, displayName])
 
   // Cleanup intervals on unmount
   useEffect(() => {
@@ -89,7 +106,7 @@ export default function StepCreateInstance() {
     setCreating(true)
     setError(null)
     try {
-      const instance = await api.createMCPInstance(phoneNumber.trim(), 'agent')
+      const instance = await api.createMCPInstance(phoneNumber.trim(), 'agent', displayName.trim() || undefined)
       setInstanceData(instance)
       startPolling(instance.id)
     } catch (e: any) {
@@ -129,14 +146,19 @@ export default function StepCreateInstance() {
           </svg>
         </div>
         <p className="text-green-400 font-medium text-lg">WhatsApp Connected!</p>
-        <p className="text-tsushin-slate text-sm mt-2">
-          Phone: {state.createdInstance?.phone_number || phoneNumber}
+        <p className="text-white text-sm mt-2 font-medium">
+          {state.instanceDisplayName || state.createdInstance?.phone_number}
         </p>
+        {state.instanceDisplayName && (
+          <p className="text-tsushin-slate text-xs mt-1">
+            {state.createdInstance?.phone_number}
+          </p>
+        )}
         <button
           onClick={nextStep}
           className="mt-6 px-6 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition-colors"
         >
-          Continue to DM Settings
+          Continue to About You
         </button>
       </div>
     )
@@ -237,6 +259,19 @@ export default function StepCreateInstance() {
         </div>
       ) : (
         <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-white mb-2">Instance Name <span className="text-tsushin-slate font-normal">(optional)</span></label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="e.g., Support Bot, Sales Line"
+              className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white placeholder-tsushin-slate/50"
+            />
+            <p className="mt-1 text-xs text-tsushin-slate">
+              A friendly label for this WhatsApp number. If blank, the phone number is used.
+            </p>
+          </div>
           <div>
             <label className="block text-sm font-medium text-white mb-2">Phone Number</label>
             <input

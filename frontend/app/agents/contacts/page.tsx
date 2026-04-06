@@ -13,6 +13,7 @@ import StudioTabs from '@/components/studio/StudioTabs'
 import { api, Agent, Contact, ContactAgentMapping, TeamMember, ChannelMapping } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import InfoTooltip from '@/components/ui/InfoTooltip'
+import EmptyState from '@/components/EmptyState'
 import { useToast } from '@/contexts/ToastContext'
 import { SmartphoneIcon, WhatsAppIcon, TelegramIcon, UserIcon, FileTextIcon, SlackIcon, DiscordIcon } from '@/components/ui/icons'
 
@@ -388,15 +389,7 @@ export default function ContactsPage() {
           </div>
 
           {contacts.length === 0 ? (
-            <div className="px-6 py-12 text-center">
-              <p className="text-tsushin-slate mb-4">No contacts found</p>
-              <button
-                onClick={() => setCreating(true)}
-                className="px-4 py-2 bg-tsushin-indigo text-white rounded-lg hover:bg-tsushin-indigo/90"
-              >
-                Add Your First Contact
-              </button>
-            </div>
+            <EmptyState variant="no-contacts" actionLabel="Add Contact" onAction={() => setCreating(true)} />
           ) : (
             <div className="divide-y divide-tsushin-border">
               {contacts.map((contact) => (

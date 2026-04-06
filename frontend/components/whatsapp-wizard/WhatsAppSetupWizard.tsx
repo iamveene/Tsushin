@@ -4,6 +4,7 @@ import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 import Modal from '@/components/ui/Modal'
 import StepWelcome from './StepWelcome'
 import StepCreateInstance from './StepCreateInstance'
+import StepUserInfo from './StepUserInfo'
 import StepDmConfig from './StepDmConfig'
 import StepGroupConfig from './StepGroupConfig'
 import StepContacts from './StepContacts'
@@ -13,6 +14,7 @@ import StepConfirmation from './StepConfirmation'
 const stepTitles = [
   'Welcome',
   'Connect Phone',
+  'About You',
   'DM Settings',
   'Group Settings',
   'Contacts',
@@ -39,16 +41,17 @@ export default function WhatsAppSetupWizard() {
     switch (state.currentStep) {
       case 1: return <StepWelcome />
       case 2: return <StepCreateInstance />
-      case 3: return <StepDmConfig />
-      case 4: return <StepGroupConfig />
-      case 5: return <StepContacts />
-      case 6: return <StepBindAgent />
-      case 7: return <StepConfirmation />
+      case 3: return <StepUserInfo />
+      case 4: return <StepDmConfig />
+      case 5: return <StepGroupConfig />
+      case 6: return <StepContacts />
+      case 7: return <StepBindAgent />
+      case 8: return <StepConfirmation />
       default: return null
     }
   }
 
-  // Steps 3-6 require an instance to be created first
+  // Steps 3-8 require an instance to be created first
   const canAccessStep = (step: number) => {
     if (step <= 2) return true
     return !!state.createdInstanceId
