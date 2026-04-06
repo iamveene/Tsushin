@@ -105,8 +105,8 @@ export default function AcceptInvitationPage() {
       errors.push('Full name is required')
     }
 
-    if (formData.password.length < 8) {
-      errors.push('Password must be at least 8 characters')
+    if (formData.password.length < 6) {
+      errors.push('Password must be at least 6 characters')
     }
 
     if (formData.password !== formData.confirmPassword) {
@@ -328,9 +328,9 @@ export default function AcceptInvitationPage() {
                 type="password"
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                placeholder="Min 8 characters"
+                placeholder="Min 6 characters"
                 required
-                minLength={8}
+                minLength={6}
                 className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface focus:ring-2 focus:ring-teal-500"
               />
             </div>

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from models_rbac import User
-from auth_dependencies import get_current_user_required, get_tenant_context, TenantContext
+from auth_dependencies import get_current_user_required, get_tenant_context, TenantContext, require_permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -431,7 +431,7 @@ async def reset_circuit_breaker(
     channel_type: str,
     instance_id: int,
     request: Request,
-    current_user: User = Depends(get_current_user_required),
+    current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Reset circuit breaker to CLOSED state (admin override)."""

@@ -471,9 +471,9 @@ export default function TenantsPage() {
                       onChange={(e) =>
                         setNewTenant({ ...newTenant, owner_password: e.target.value })
                       }
-                      placeholder="Min 8 characters"
+                      placeholder="Min 6 characters"
                       required
-                      minLength={8}
+                      minLength={6}
                       className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                     />
                   </div>

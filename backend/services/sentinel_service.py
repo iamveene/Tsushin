@@ -445,7 +445,7 @@ class SentinelService:
         if agent_id:
             try:
                 from services.skill_context_service import SkillContextService
-                exemptions = SkillContextService(self.db).get_agent_sentinel_exemptions(agent_id)
+                exemptions = SkillContextService(self.db).get_agent_sentinel_exemptions(agent_id, tenant_id=self.tenant_id)
                 if exemptions:
                     config.apply_skill_exemptions(exemptions)
                     self.logger.debug(f"Auto-exempted {exemptions} for agent {agent_id}")

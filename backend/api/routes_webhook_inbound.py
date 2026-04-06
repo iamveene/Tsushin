@@ -62,10 +62,8 @@ def _decrypt_secret(db: Session, integration: WebhookIntegration) -> Optional[st
 
 
 def _client_ip(request: Request) -> str:
-    # Honor first X-Forwarded-For if proxied; fall back to direct peer
-    fwd = request.headers.get("X-Forwarded-For")
-    if fwd:
-        return fwd.split(",")[0].strip()
+    # Use request.client.host which is already set correctly by ProxyHeadersMiddleware
+    # for trusted proxies. Reading X-Forwarded-For directly bypasses trust verification.
     return request.client.host if request.client else ""
 
 

@@ -2506,10 +2506,12 @@ class FlowEngine:
             raise FlowValidationError(f"Flow definition {flow_definition_id} not found")
 
         # BUG-LOG-007: Clean up stale flow runs stuck in "running"
+        # Scoped to this flow's definition to avoid cross-tenant collateral (2D-2)
         stale_cutoff = datetime.utcnow() - timedelta(hours=1)
         stale_runs = self.db.query(FlowRun).filter(
             FlowRun.status == "running",
-            FlowRun.started_at < stale_cutoff
+            FlowRun.started_at < stale_cutoff,
+            FlowRun.flow_definition_id == flow_definition_id,
         ).all()
         for stale in stale_runs:
             stale.status = "failed"

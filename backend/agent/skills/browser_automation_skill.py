@@ -158,7 +158,7 @@ class BrowserAutomationSkill(BaseSkill):
             skill_description=self.skill_description,
             model=ai_model,
             custom_examples=custom_examples,
-            db=self._db_session
+            db=self._db
         )
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:

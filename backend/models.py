@@ -3560,18 +3560,18 @@ class VectorStoreInstance(Base):
     is_active = Column(Boolean, default=True)
 
     # Auto-provisioning (Docker-managed containers)
-    is_auto_provisioned = Column(Boolean, default=False)
+    is_auto_provisioned = Column(Boolean, default=False, nullable=False)
     container_name = Column(String(200), nullable=True)
     container_id = Column(String(80), nullable=True)
     container_port = Column(Integer, nullable=True)
-    container_status = Column(String(20), default="none")  # none|creating|running|stopped|error
+    container_status = Column(String(20), default="none", nullable=False)  # none|creating|running|stopped|error
     container_image = Column(String(200), nullable=True)
     volume_name = Column(String(150), nullable=True)
     mem_limit = Column(String(20), nullable=True)
     cpu_quota = Column(Integer, nullable=True)
 
     # Security config (Item 4: MemGuard + rate limiting per-store)
-    security_config = Column(JSON, default=dict)  # thresholds, rate limits, batch limits
+    security_config = Column(JSON, default=dict, nullable=False)  # thresholds, rate limits, batch limits
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -23,7 +23,7 @@ from models import (
     Agent,
 )
 from models_rbac import User
-from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from auth_dependencies import TenantContext, get_tenant_context, require_permission, get_current_user_required
 from services.sentinel_service import SentinelService
 from services.sentinel_detections import DETECTION_REGISTRY, get_detection_types
 
@@ -710,6 +710,7 @@ async def test_sentinel_analysis(
 
 @router.get("/prompts", response_model=List[SentinelPromptResponse])
 async def get_sentinel_prompts(
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -881,7 +882,9 @@ LLM_MODELS = {
 
 
 @router.get("/llm/providers", response_model=List[LLMProviderResponse])
-async def get_llm_providers():
+async def get_llm_providers(
+    current_user: User = Depends(get_current_user_required),
+):
     """Get available LLM providers for Sentinel analysis."""
     return [
         LLMProviderResponse(
@@ -913,7 +916,10 @@ async def get_llm_providers():
 
 
 @router.get("/llm/models/{provider}")
-async def get_llm_models(provider: str):
+async def get_llm_models(
+    provider: str,
+    current_user: User = Depends(get_current_user_required),
+):
     """Get available models for a specific LLM provider."""
     if provider not in LLM_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
@@ -1035,7 +1041,9 @@ async def cleanup_poisoned_memory(
 # =============================================================================
 
 @router.get("/detection-types")
-async def get_detection_types_endpoint():
+async def get_detection_types_endpoint(
+    current_user: User = Depends(get_current_user_required),
+):
     """Get all available detection types with metadata."""
     return {
         detection_type: {

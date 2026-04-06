@@ -42,8 +42,8 @@ function ResetPasswordForm() {
       return
     }
 
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters')
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters')
       return
     }
 
@@ -105,7 +105,7 @@ function ResetPasswordForm() {
                   required
                   autoComplete="new-password"
                   placeholder="••••••••"
-                  helperText="Must be at least 8 characters"
+                  helperText="Must be at least 6 characters"
                 />
 
                 <Input

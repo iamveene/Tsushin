@@ -105,16 +105,6 @@ RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Install Nuclei vulnerability scanner - architecture-aware (cached across builds)
-RUN --mount=type=cache,target=/tmp/nuclei-cache \
-    ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
-    echo "Installing nuclei for architecture: $ARCH" && \
-    cd /tmp/nuclei-cache && \
-    ([ -f "nuclei_3.3.7_linux_${ARCH}.zip" ] || wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v3.3.7/nuclei_3.3.7_linux_${ARCH}.zip") && \
-    unzip -o "nuclei_3.3.7_linux_${ARCH}.zip" -d /tmp/nuclei-extract && \
-    mv /tmp/nuclei-extract/nuclei /usr/local/bin/ && \
-    chmod +x /usr/local/bin/nuclei && \
-    rm -rf /tmp/nuclei-extract
 
 # Create non-root user for security
 # Also create docker group with same GID as host for Docker socket access (GID 999)

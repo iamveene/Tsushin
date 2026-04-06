@@ -160,15 +160,15 @@ class SchedulerSkill(BaseSkill):
         # Asana operations are now handled through scheduler provider configuration
 
         # Defer to SchedulerQuerySkill if query keywords present
-        agent_id = getattr(self, '_agent_id', None)
-        if agent_id == 7:  # Agendador agent ID
+        # is_dedicated_scheduler: when True, this agent handles ALL messages as scheduling
+        if config.get('is_dedicated_scheduler', False):
             query_keywords = ['quais', 'meus lembretes', 'meus agendamentos', 'o que']
             if any(keyword in message.body.lower() for keyword in query_keywords):
                 logger.info(f"SchedulerSkill: Query keywords detected, deferring to SchedulerQuerySkill")
                 return False
 
             # Default: handle all other scheduling/reminder messages
-            logger.info(f"SchedulerSkill: Agendador agent detected, handling message as reminder/flow")
+            logger.info(f"SchedulerSkill: Dedicated scheduler agent detected, handling message as reminder/flow")
             return True
 
         # Check for scheduling keywords (for other agents)
@@ -1074,7 +1074,8 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             'agent_id': 1,
             'default_max_turns': 20,
             'default_timeout_hours': 24,
-            'notification_template': 'Hi {name}! Reminder: {reminder_text}'
+            'notification_template': 'Hi {name}! Reminder: {reminder_text}',
+            'is_dedicated_scheduler': False
         }
 
     @classmethod
@@ -1102,6 +1103,11 @@ Respond ONLY with valid JSON (no markdown, no explanation):
                     "type": "string",
                     "description": "Default notification message template",
                     "default": "Hi {name}! Reminder: {reminder_text}"
+                },
+                "is_dedicated_scheduler": {
+                    "type": "boolean",
+                    "description": "When true, agent handles ALL messages as scheduling requests (no keyword matching needed)",
+                    "default": False
                 }
             },
             "required": []

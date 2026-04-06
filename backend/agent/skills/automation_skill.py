@@ -79,7 +79,7 @@ class AutomationSkill(BaseSkill):
             return False
 
         # Check if skill is enabled in config
-        if not self._config.get('is_enabled', True):
+        if not config.get('is_enabled', True):
             return False
 
         body_lower = message.body.lower()
