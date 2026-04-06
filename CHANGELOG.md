@@ -81,6 +81,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Fixed
 
+- **BUG-299:** Fix agent detail 500 — add missing `parse_enabled_channels` import in `routes_agents.py`
+- **BUG-300:** Fix agent list returning null for `enabled_channels` and all integration IDs — add channel/vector-store fields to list endpoint dict builder
+- **BUG-301:** Remove duplicate `apply_agent_whatsapp_binding_policy` import in `routes_studio.py`
 - **BUG-298:** Pass `tenant_id` to `AgentService` in `AgentRouter.__init__`
 - **BUG-293:** Circuit breaker state now persisted to DB on transitions — survives backend restarts
 - **BUG-LOG-004:** Tenant-scoped project knowledge chunk queries (defense-in-depth)

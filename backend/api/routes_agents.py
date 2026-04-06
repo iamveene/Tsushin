@@ -21,6 +21,7 @@ from services.audit_service import log_tenant_event, TenantAuditActions
 from services.whatsapp_binding_service import (
     apply_agent_whatsapp_binding_policy,
     get_whatsapp_agent_instance,
+    parse_enabled_channels,
 )
 
 router = APIRouter()
@@ -515,6 +516,17 @@ def list_agents(
             "is_active": agent.is_active,
             "is_default": agent.is_default,
             "skills_count": skills_count,
+            # Phase 10: Channel Configuration
+            "enabled_channels": parse_enabled_channels(agent.enabled_channels),
+            "whatsapp_integration_id": agent.whatsapp_integration_id,
+            "telegram_integration_id": agent.telegram_integration_id,
+            "slack_integration_id": agent.slack_integration_id,
+            "discord_integration_id": agent.discord_integration_id,
+            "webhook_integration_id": getattr(agent, "webhook_integration_id", None),
+            # v0.6.0: Vector Store Configuration
+            "vector_store_instance_id": getattr(agent, 'vector_store_instance_id', None),
+            "vector_store_mode": getattr(agent, 'vector_store_mode', None),
+
             "created_at": agent.created_at,
             "updated_at": agent.updated_at
         }
