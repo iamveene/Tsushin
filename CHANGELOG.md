@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Implementations
 
+#### Flow Execution UX
+
+- **Async flow execution with live progress modal:** The `POST /api/flows/{flow_id}/execute` endpoint now returns immediately (HTTP 202) with a pending FlowRun, executing steps in a background task. The frontend ViewRunModal opens instantly on click and polls every 2s for live updates — showing a progress bar, per-step status with execution times, a pulsing "Live" header indicator, and a remaining-steps counter. Previously the modal only appeared after the entire flow finished executing, leaving users with no feedback.
+
 #### UX Friction Reduction
 
 - **WhatsApp Instance Creation Mode Selector:** Clicking "+ Create WhatsApp Instance" now opens a selection modal with two options: Guided Setup (8-step wizard, recommended) and Advanced Setup (manual form). Removes the previously hard-to-notice standalone "Setup Wizard" button. Empty state consolidated to a single button that also opens the selector.

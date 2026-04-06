@@ -1963,7 +1963,8 @@ async def execute_flow(
 ):
     """
     Execute a flow immediately (Phase 8.0).
-    Returns immediately with created FlowRun.
+    Returns immediately with a pending FlowRun; execution runs in background.
+    Poll GET /flows/runs/{run_id} for live progress.
     """
     try:
         query = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id)
@@ -1979,21 +1980,44 @@ async def execute_flow(
         if not is_valid:
             raise HTTPException(status_code=400, detail=f"Invalid flow structure: {error_message}")
 
-        logger.info(f"Executing flow {flow_id}")
+        logger.info(f"Executing flow {flow_id} (async)")
 
-        from flows.flow_engine import FlowEngine
-
-        engine = FlowEngine(db)
         trigger_context = run_data.trigger_context_json if run_data else None
 
-        flow_run = await engine.run_flow(
-            flow_definition_id=flow_id,
-            trigger_context=trigger_context,
-            initiator="api",
-            trigger_type="immediate"
-        )
+        # Count steps for the immediate response
+        step_count = db.query(FlowNode).filter(
+            FlowNode.flow_definition_id == flow_id
+        ).count()
 
-        logger.info(f"Flow run {flow_run.id} completed with status: {flow_run.status}")
+        # Create a pending FlowRun and return immediately
+        flow_run = FlowRun(
+            flow_definition_id=flow_id,
+            tenant_id=flow.tenant_id,
+            status="pending",
+            started_at=datetime.utcnow(),
+            initiator="api",
+            trigger_type="immediate",
+            total_steps=step_count,
+            completed_steps=0,
+            failed_steps=0,
+            trigger_context_json=json.dumps(trigger_context) if trigger_context else None
+        )
+        db.add(flow_run)
+        db.commit()
+        db.refresh(flow_run)
+
+        run_id = flow_run.id
+        flow_tenant_id = flow.tenant_id
+
+        # Fire background execution
+        asyncio.create_task(_run_flow_background(
+            run_id=run_id,
+            flow_id=flow_id,
+            trigger_context=trigger_context,
+            tenant_id=flow_tenant_id,
+        ))
+
+        logger.info(f"Flow run {run_id} created (pending), background execution started")
 
         return LegacyFlowRunResponse(
             id=flow_run.id,
@@ -2016,6 +2040,41 @@ async def execute_flow(
     except Exception as e:
         logger.exception(f"Error executing flow {flow_id}")
         raise HTTPException(status_code=500, detail="Failed to execute flow")
+
+
+async def _run_flow_background(run_id: int, flow_id: int, trigger_context, tenant_id: str):
+    """Execute a flow in the background using its own DB session."""
+    from db import get_global_engine
+    from sqlalchemy.orm import sessionmaker
+    from flows.flow_engine import FlowEngine
+
+    engine_obj = get_global_engine()
+    SessionLocal = sessionmaker(bind=engine_obj)
+    bg_db = SessionLocal()
+    try:
+        flow_engine = FlowEngine(bg_db)
+        await flow_engine.run_flow(
+            flow_definition_id=flow_id,
+            trigger_context=trigger_context,
+            initiator="api",
+            trigger_type="immediate",
+            tenant_id=tenant_id,
+            resume_run_id=run_id,
+        )
+        logger.info(f"Background flow run {run_id} finished")
+    except Exception as e:
+        logger.exception(f"Background flow execution failed for run {run_id}")
+        try:
+            flow_run = bg_db.query(FlowRun).filter(FlowRun.id == run_id).first()
+            if flow_run and flow_run.status not in ("completed", "completed_with_errors", "failed", "cancelled"):
+                flow_run.status = "failed"
+                flow_run.completed_at = datetime.utcnow()
+                flow_run.error_text = f"Background execution error: {str(e)}"
+                bg_db.commit()
+        except Exception:
+            logger.exception(f"Failed to mark run {run_id} as failed after background error")
+    finally:
+        bg_db.close()
 
 
 # Alias for backward compatibility

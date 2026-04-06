@@ -170,6 +170,7 @@ export default function FlowsPage() {
   const [showCreateFromTemplate, setShowCreateFromTemplate] = useState(false)
   const [editingFlowId, setEditingFlowId] = useState<number | null>(null)
   const [viewingRunId, setViewingRunId] = useState<number | null>(null)
+  const [executingFlowId, setExecutingFlowId] = useState<number | null>(null)
   const [activeThreads, setActiveThreads] = useState<ConversationThread[]>([])
 
   // Pagination
@@ -355,13 +356,16 @@ export default function FlowsPage() {
   }
 
   async function handleRunFlow(flowId: number) {
+    setExecutingFlowId(flowId)
     try {
       const run = await api.executeFlow(flowId)
       setViewingRunId(run.id)
-      await loadData()
+      loadData()
     } catch (error) {
       console.error('Failed to run flow:', error)
       toast.error('Execution Failed', 'Failed to run flow')
+    } finally {
+      setExecutingFlowId(null)
     }
   }
 
@@ -829,14 +833,18 @@ export default function FlowsPage() {
                             </button>
                             <button
                               onClick={() => handleRunFlow(flow.id)}
-                              disabled={!flow.is_active || (flow.node_count || 0) === 0}
+                              disabled={!flow.is_active || (flow.node_count || 0) === 0 || executingFlowId === flow.id}
                               className="p-2 text-teal-400 hover:text-teal-300 hover:bg-teal-500/10 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                               title="Run"
                             >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
+                              {executingFlowId === flow.id ? (
+                                <div className="w-4 h-4 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                              )}
                             </button>
                             <button
                               onClick={() => handleDeleteFlow(flow.id)}
@@ -4593,10 +4601,31 @@ function ViewRunModal({ runId, onClose }: {
   const [run, setRun] = useState<FlowRun | null>(null)
   const [nodeRuns, setNodeRuns] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const statusRef = useRef<string>('')
+
+  const isActive = statusRef.current === 'pending' || statusRef.current === 'running'
 
   useEffect(() => {
     loadRun()
+    return () => stopPolling()
   }, [runId])
+
+  // Start/stop polling based on run status
+  useEffect(() => {
+    if (isActive && !pollingRef.current) {
+      pollingRef.current = setInterval(pollRun, 2000)
+    } else if (!isActive && pollingRef.current) {
+      stopPolling()
+    }
+  }, [run?.status])
+
+  function stopPolling() {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+      pollingRef.current = null
+    }
+  }
 
   async function loadRun() {
     setLoading(true)
@@ -4606,6 +4635,7 @@ function ViewRunModal({ runId, onClose }: {
         api.getFlowNodeRuns(runId)
       ])
       setRun(runData)
+      statusRef.current = runData.status
       setNodeRuns(nodeRunsData)
     } catch (error) {
       console.error('Failed to load run:', error)
@@ -4614,10 +4644,24 @@ function ViewRunModal({ runId, onClose }: {
     }
   }
 
-  if (loading || !run) {
+  async function pollRun() {
+    try {
+      const [runData, nodeRunsData] = await Promise.all([
+        api.getFlowRun(runId),
+        api.getFlowNodeRuns(runId)
+      ])
+      setRun(runData)
+      statusRef.current = runData.status
+      setNodeRuns(nodeRunsData)
+    } catch (error) {
+      console.error('Failed to poll run:', error)
+    }
+  }
+
+  if (loading && !run) {
     return (
       <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
-        <div className="bg-slate-800 rounded-2xl p-8">
+        <div className="bg-slate-800 rounded-2xl p-8 text-center">
           <div className="animate-spin h-8 w-8 border-2 border-cyan-500 border-t-transparent rounded-full mx-auto" />
           <p className="text-slate-400 mt-4">Loading run details...</p>
         </div>
@@ -4625,14 +4669,30 @@ function ViewRunModal({ runId, onClose }: {
     )
   }
 
+  const totalSteps = run?.total_steps || 0
+  const completedSteps = (run?.completed_steps || 0) + (run?.failed_steps || 0)
+  const progressPct = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0
+  const runIsActive = run && ['pending', 'running'].includes(run.status)
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-slate-800 rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-700">
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-white">Run #{run.id}</h2>
-            <p className="text-sm text-slate-400">Flow #{run.flow_definition_id}</p>
+          <div className="flex items-center gap-3">
+            {runIsActive && (
+              <div className="relative flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500" />
+              </div>
+            )}
+            <div>
+              <h2 className="text-xl font-bold text-white">
+                Run #{run?.id || '...'}
+                {runIsActive && <span className="ml-2 text-sm font-normal text-cyan-400">Live</span>}
+              </h2>
+              <p className="text-sm text-slate-400">Flow #{run?.flow_definition_id}</p>
+            </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4641,30 +4701,53 @@ function ViewRunModal({ runId, onClose }: {
           </button>
         </div>
 
+        {/* Progress bar (visible while active) */}
+        {runIsActive && totalSteps > 0 && (
+          <div className="px-6 pt-4">
+            <div className="flex items-center justify-between text-sm mb-2">
+              <span className="text-slate-400">
+                {run?.status === 'pending' ? 'Preparing...' : `Executing step ${completedSteps + 1} of ${totalSteps}`}
+              </span>
+              <span className="text-cyan-400 font-medium">{progressPct}%</span>
+            </div>
+            <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-teal-400 transition-all duration-500 ease-out"
+                style={{ width: `${Math.max(progressPct, run?.status === 'pending' ? 0 : 3)}%` }}
+              />
+              {run?.status === 'running' && progressPct < 100 && (
+                <div className="h-full w-full -mt-2 bg-gradient-to-r from-transparent via-cyan-400/20 to-transparent animate-pulse" />
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Run Info */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-slate-700/30 rounded-lg p-4">
-              <div className="text-sm text-slate-400">Status</div>
-              <StatusBadge status={run.status} />
+          {run && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-slate-700/30 rounded-lg p-4">
+                <div className="text-sm text-slate-400">Status</div>
+                <StatusBadge status={run.status} />
+              </div>
+              <div className="bg-slate-700/30 rounded-lg p-4">
+                <div className="text-sm text-slate-400">Started</div>
+                <div className="text-white">{run.started_at ? formatDate(run.started_at) : '-'}</div>
+              </div>
+              <div className="bg-slate-700/30 rounded-lg p-4">
+                <div className="text-sm text-slate-400">Completed</div>
+                <div className="text-white">{run.completed_at ? formatDate(run.completed_at) : '-'}</div>
+              </div>
+              <div className="bg-slate-700/30 rounded-lg p-4">
+                <div className="text-sm text-slate-400">Steps</div>
+                <div className="text-white">{completedSteps}/{totalSteps}</div>
+              </div>
             </div>
-            <div className="bg-slate-700/30 rounded-lg p-4">
-              <div className="text-sm text-slate-400">Started</div>
-              <div className="text-white">{formatDate(run.started_at)}</div>
-            </div>
-            <div className="bg-slate-700/30 rounded-lg p-4">
-              <div className="text-sm text-slate-400">Completed</div>
-              <div className="text-white">{run.completed_at ? formatDate(run.completed_at) : '-'}</div>
-            </div>
-            <div className="bg-slate-700/30 rounded-lg p-4">
-              <div className="text-sm text-slate-400">Initiator</div>
-              <div className="text-white truncate">{run.initiator}</div>
-            </div>
-          </div>
+          )}
 
           {/* Error */}
-          {run.error_text && (
+          {run?.error_text && (
             <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
               <h4 className="text-sm font-semibold text-red-400 mb-2">Error</h4>
               <p className="text-sm text-red-300">{run.error_text}</p>
@@ -4674,17 +4757,38 @@ function ViewRunModal({ runId, onClose }: {
           {/* Step Runs */}
           <div>
             <h3 className="text-lg font-semibold text-white mb-4">Step Execution</h3>
-            {nodeRuns.length === 0 ? (
+            {nodeRuns.length === 0 && !runIsActive ? (
               <p className="text-slate-400">No step execution data available</p>
+            ) : nodeRuns.length === 0 && runIsActive ? (
+              <div className="flex items-center gap-3 text-slate-400 py-4">
+                <div className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
+                <span>{run?.status === 'pending' ? 'Preparing execution...' : 'Waiting for first step...'}</span>
+              </div>
             ) : (
               <div className="space-y-3">
                 {nodeRuns.map((nodeRun, index) => (
-                  <div key={nodeRun.id} className="bg-slate-700/30 rounded-lg p-4 border border-slate-700">
+                  <div
+                    key={nodeRun.id}
+                    className={`bg-slate-700/30 rounded-lg p-4 border transition-all duration-300 ${
+                      nodeRun.status === 'running'
+                        ? 'border-cyan-500/50 shadow-lg shadow-cyan-500/5'
+                        : nodeRun.status === 'completed'
+                          ? 'border-green-500/30'
+                          : nodeRun.status === 'failed'
+                            ? 'border-red-500/30'
+                            : 'border-slate-700'
+                    }`}
+                  >
                     <div className="flex items-center justify-between mb-2">
-                      <div className="font-medium text-white">Step {index + 1}</div>
+                      <div className="flex items-center gap-2">
+                        {nodeRun.status === 'running' && (
+                          <div className="w-3 h-3 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                        )}
+                        <div className="font-medium text-white">Step {index + 1}</div>
+                      </div>
                       <StatusBadge status={nodeRun.status} />
                     </div>
-                    {nodeRun.execution_time_ms && (
+                    {nodeRun.execution_time_ms != null && (
                       <div className="text-sm text-slate-400">
                         Execution time: {nodeRun.execution_time_ms}ms
                       </div>
@@ -4694,6 +4798,13 @@ function ViewRunModal({ runId, onClose }: {
                     )}
                   </div>
                 ))}
+                {/* Pending steps placeholder */}
+                {runIsActive && nodeRuns.length < totalSteps && (
+                  <div className="flex items-center gap-2 text-slate-500 text-sm px-4 py-2">
+                    <div className="w-3 h-3 border-2 border-slate-600 border-t-transparent rounded-full animate-spin" />
+                    {totalSteps - nodeRuns.length} step{totalSteps - nodeRuns.length > 1 ? 's' : ''} remaining...
+                  </div>
+                )}
               </div>
             )}
           </div>

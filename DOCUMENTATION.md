@@ -1134,7 +1134,11 @@ Built-in helpers (Source: `template_parser.py:69-82`): `truncate`, `upper`, `low
 | `cancelled` | Step cancelled (parent flow cancelled) |
 | `timeout` | Step exceeded `timeout_seconds` |
 
-### 13.6 Stale Flow Cleanup
+### 13.6 Async Execution & Live Progress Modal
+
+Flow execution via `POST /api/flows/{flow_id}/execute` is fully asynchronous. The endpoint creates a `FlowRun` record with status `pending`, returns it immediately (HTTP 202), and executes steps in a background task. The frontend's `ViewRunModal` opens instantly and polls `GET /api/flows/runs/{run_id}` + `GET /api/flows/runs/{run_id}/nodes` every 2 seconds while the run is active (`pending` or `running`). The modal shows a live progress bar (completed/total steps), per-step status badges with execution times, a pulsing "Live" indicator in the header, and a "remaining steps" counter. Polling stops automatically when the run reaches a terminal status (`completed`, `failed`, `cancelled`). The play button on the flows table shows a spinner during the brief API round-trip.
+
+### 13.7 Stale Flow Cleanup
 
 Source: `backend/flows/stale_flow_cleanup.py`. Periodically removes or marks stale flow runs (orphaned conversation threads, timed-out runs).
 
