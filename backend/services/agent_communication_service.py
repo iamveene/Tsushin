@@ -731,7 +731,7 @@ class AgentCommunicationService:
                     persist_dir = target_agent.chroma_db_path or f"./data/chroma_db/agent_{target_agent.id}"
                     from agent.memory.vector_store import VectorStore
                     vs = VectorStore(persist_dir, embedder)
-                    results = vs.search_similar(message, limit=5)
+                    results = await vs.search_similar(message, limit=5)
                     if results:
                         memory_parts = [f"- {r['text'][:300]}" for r in results if r.get('text')]
                         if memory_parts:

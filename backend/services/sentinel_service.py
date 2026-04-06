@@ -1402,8 +1402,8 @@ class SentinelService:
             score = float(parsed.get("score", 0.0))
             reason = parsed.get("reason", "")
 
-            # Validate threat_type
-            valid_types = ["none", "prompt_injection", "agent_takeover", "poisoning", "shell_malicious", "memory_poisoning"]
+            # Validate threat_type (dynamically derived from registry)
+            valid_types = ["none"] + list(DETECTION_REGISTRY.keys())
             if threat_type not in valid_types:
                 self.logger.warning(f"Invalid threat_type '{threat_type}', defaulting to 'none'")
                 threat_type = "none"
@@ -1817,30 +1817,19 @@ class SentinelService:
 
             self.logger.info(f"🧹 Found {len(blocked_message_ids)} blocked messages to clean up")
 
-            # 1. Delete from Memory table
-            memory_deleted = self.db.query(Memory).filter(
-                Memory.message_id.in_(blocked_message_ids)
-            ).delete(synchronize_session=False)
-            stats["memory_deleted"] = memory_deleted
-
-            # 2. Delete from FTS5 index
-            try:
-                from sqlalchemy import text
-                # SQLite FTS5 doesn't support IN with named parameters well, so we build the query
-                # Use individual deletes for safety
-                fts_deleted = 0
-                for msg_id in blocked_message_ids:
-                    result = self.db.execute(text("""
-                        DELETE FROM conversation_search_fts
-                        WHERE message_id = :message_id
-                    """), {"message_id": msg_id})
-                    fts_deleted += result.rowcount
-                stats["fts_deleted"] = fts_deleted
-            except Exception as e:
-                self.logger.warning(f"FTS cleanup failed (may not exist): {e}")
-
-            self.db.commit()
-            self.logger.info(f"🧹 Memory cleanup completed: {stats}")
+            # TODO: Redesign cleanup_poisoned_memory — the Memory model uses
+            # (tenant_id, agent_id, sender_key) as its key, NOT message_id.
+            # The current approach of matching Memory rows by message_id is
+            # incorrect and silently deletes nothing.  A proper fix requires
+            # correlating SentinelAnalysisLog entries back to Memory rows via
+            # sender_key + agent_id, or adding a message-level ID to the
+            # Memory/conversation model.
+            self.logger.error(
+                "cleanup_poisoned_memory: Memory model has no message_id column. "
+                "Cleanup cannot proceed until this function is redesigned. "
+                f"Found {len(blocked_message_ids)} blocked entries but cannot correlate "
+                "them to Memory rows. Returning without modifications."
+            )
             return stats
 
         except Exception as e:
