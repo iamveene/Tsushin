@@ -4,6 +4,7 @@
 # Dependencies (will be installed fresh)
 node_modules/
 .pnpm-store/
+pnpm-lock.yaml
 
 # Build outputs (will be generated)
 .next/

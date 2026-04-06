@@ -1,7 +1,7 @@
 # Tsushin Frontend Dockerfile
 # Phase 9: Application Containerization
 #
-# Multi-stage build for Next.js 14 frontend
+# Multi-stage build for Next.js 16 frontend
 
 # ============================================================================
 # Stage 1: Dependencies - Install node modules
