@@ -159,6 +159,7 @@ from services.queue_worker import start_queue_worker, stop_queue_worker
 # MCP Health Monitor Service (auto-recovery for keepalive timeouts)
 from services.mcp_health_monitor import MCPHealthMonitorService
 from services.mcp_container_manager import MCPContainerManager
+from services.whatsapp_binding_service import backfill_unambiguous_whatsapp_bindings
 
 # Global engine and watcher
 engine = None
@@ -371,182 +372,49 @@ async def lifespan(app: FastAPI):
         for inst in mcp_instances:
             print(f"  - Instance {inst.id}: {inst.phone_number} ({inst.status}, type={inst.instance_type})")
 
-        # Start a watcher for each instance
-        for instance in mcp_instances:
+        container_manager = MCPContainerManager()
+        reconciled_tenants = set()
+        for inst in mcp_instances:
             try:
-                print(f"🔄 Processing instance {instance.id} ({instance.instance_type})...")
+                container_manager.reconcile_instance(inst, session)
+                reconciled_tenants.add(inst.tenant_id)
+            except Exception as reconcile_error:
+                logging.warning(f"Failed to reconcile MCP instance {inst.id}: {reconcile_error}")
 
-                # Check if messages DB exists
-                if not os.path.exists(instance.messages_db_path):
-                    print(f"❌ Messages DB not found for instance {instance.id}: {instance.messages_db_path}")
-                    continue
+        for tenant_id in reconciled_tenants:
+            try:
+                linked = backfill_unambiguous_whatsapp_bindings(session, tenant_id)
+                if linked:
+                    session.commit()
+                    print(f"🔗 Backfilled WhatsApp bindings for tenant {tenant_id}: {linked} agent(s)")
+            except Exception as binding_error:
+                session.rollback()
+                logging.warning(f"Failed to backfill WhatsApp bindings for tenant {tenant_id}: {binding_error}")
 
-                print(f"✅ Messages DB exists for instance {instance.id}")
-
-                # Get config for this instance
-                config = session.query(Config).first()
-                if not config:
-                    logging.warning(f"No config found, skipping instance {instance.id}")
-                    continue
-
-                # Parse JSON fields
-                contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
-                group_keywords = json_lib.loads(config.group_keywords) if config.group_keywords else []
-
-                # Initialize CachedContactService scoped to this instance's tenant
-                # V060-CHN-006: CachedContactService is fail-closed when tenant_id is
-                # not set — queries return None — so every watcher MUST have its own
-                # tenant-scoped service (a shared one leaks across tenants and, worse,
-                # an unscoped one silently drops every contact lookup, which breaks
-                # DM trigger routing).
-                from agent.contact_service_cached import CachedContactService
-                if not hasattr(app.state, 'contact_services'):
-                    app.state.contact_services = {}
-                contact_service = app.state.contact_services.get(instance.tenant_id)
-                if contact_service is None:
-                    contact_service = CachedContactService(session, tenant_id=instance.tenant_id)
-                    app.state.contact_services[instance.tenant_id] = contact_service
-                # Backward compat: keep a single reference for legacy callers
-                app.state.contact_service = contact_service
-
-                # Collect group filters from active agents for this tenant
-                all_group_filters = set(config.group_filters or [])
-                active_agents = session.query(Agent).filter(
-                    Agent.is_active == True,
-                    Agent.tenant_id == instance.tenant_id
-                ).all()
-
-                for agent in active_agents:
-                    if agent.trigger_group_filters:
-                        agent_filters = json_lib.loads(agent.trigger_group_filters) if isinstance(agent.trigger_group_filters, str) else agent.trigger_group_filters
-                        if agent_filters:
-                            all_group_filters.update(agent_filters)
-
-                # Create message filter
-                # SAFETY FIX: Force dm_auto_mode=False for QA/User Phone instance (Instance 25 or matching phone)
-                # This ensures the bot never auto-replies to DMs on the user's personal phone, even if global setting is ON.
-                print(f"📋 Checking instance {instance.id} (phone: {instance.phone_number})")
-                # Check if this is a QA/testing instance using env var
-                qa_phone = os.getenv('QA_PHONE_NUMBER', '')
-                is_qa_instance = (str(instance.id) == "25" or (qa_phone and qa_phone in str(instance.phone_number)))
-                effective_dm_mode = False if is_qa_instance else config.dm_auto_mode
-
-                if is_qa_instance:
-                    print(f"🔒 ENFORCING SAFE MODE (dm_auto_mode=False) for QA/User instance {instance.id}")
-                else:
-                    print(f"Normal mode for instance {instance.id} (dm_auto_mode={effective_dm_mode})")
-
-                message_filter = MessageFilter(
-                    group_filters=list(all_group_filters),
-                    number_filters=config.number_filters or [],
-                    agent_number=config.agent_number,
-                    dm_auto_mode=effective_dm_mode,
-                    agent_phone_number=instance.phone_number,  # Use instance phone number
-                    agent_name=config.agent_name,
-                    group_keywords=group_keywords,
-                    contact_service=contact_service,
-                    db_session=session
-                )
-
-                # Create config dict
-                # Note: enabled_tools and enable_google_search have been deprecated - using Skills system instead
-                config_dict = {
-                    "model_provider": config.model_provider,
-                    "model_name": config.model_name,
-                    "system_prompt": config.system_prompt,
-                    "memory_size": config.memory_size,
-                    "contact_mappings": contact_mappings,
-                    "maintenance_mode": config.maintenance_mode,
-                    "maintenance_message": config.maintenance_message,
-                    "context_message_count": config.context_message_count,
-                    "context_char_limit": config.context_char_limit,
-                    "enable_semantic_search": getattr(config, "enable_semantic_search", False),
-                    "semantic_search_results": getattr(config, "semantic_search_results", 5),
-                    "semantic_similarity_threshold": getattr(config, "semantic_similarity_threshold", 0.3)
-                }
-
-                # CRITICAL SAFETY CHECK: Only create agent router for AGENT instances
-                # TESTER instances should NEVER have an agent router - they are for QA/testing only
-                if instance.instance_type == "tester":
-                    print(f"⚠️  SKIPPING watcher for TESTER instance {instance.id} - tester instances should NOT process messages with agent")
-                    continue
-
-                print(f"🚀 Creating watcher for AGENT instance {instance.id}...")
-
-                # Create MCP reader - prefer HTTP API over SQLite to bypass Docker filesystem sync issues
-                # The API reader fetches messages directly from the MCP container's HTTP endpoint,
-                # which is more reliable than reading from bind-mounted SQLite files on Docker Desktop macOS
-                from mcp_reader.api_reader import MCPAPIReader
-                from mcp_reader.sqlite_reader import MCPDatabaseReader
-
-                # Phase Security-1: Pass API secret for authentication
-                api_reader = MCPAPIReader(
-                    instance.mcp_api_url,
-                    contact_mappings=contact_mappings,
-                    api_secret=instance.api_secret
-                )
-
-                # Check if API is available, fallback to SQLite if not
-                print(f"🔍 Checking API availability for instance {instance.id}: {instance.mcp_api_url}")
-                if api_reader.is_available():
-                    mcp_reader = api_reader
-                    print(f"📡 Using HTTP API reader for instance {instance.id} (bypassing filesystem sync)")
-                else:
-                    mcp_reader = MCPDatabaseReader(instance.messages_db_path, contact_mappings=contact_mappings)
-                    print(f"⚠️  Using SQLite reader for instance {instance.id} (API not available)")
-
-                # Create agent router (only for agent instances)
-                # Phase 10: Pass mcp_instance_id for channel-based agent filtering
-                instance_agent_router = AgentRouter(session, config_dict, mcp_reader=mcp_reader, mcp_instance_id=instance.id, tenant_id=instance.tenant_id)  # V060-CHN-006
-
-                # Determine starting timestamp to prevent message replay
-                # For NEW instances (created within last 5 minutes), use creation time to skip history sync
-                # For EXISTING instances, use None to continue from DB timestamp
-                from datetime import datetime, timedelta
-                starting_timestamp = None
-                if instance.created_at:
-                    age_minutes = (datetime.utcnow() - instance.created_at).total_seconds() / 60
-                    if age_minutes < 5:
-                        # New instance - skip messages older than creation time
-                        starting_timestamp = instance.created_at.strftime("%Y-%m-%d %H:%M:%S+00:00")
-                        logging.info(f"🆕 Instance {instance.id} is new ({age_minutes:.1f}min old), will skip history sync messages")
-
-                # Create watcher (only for agent instances) with the selected reader
-                delay_seconds = getattr(config, "whatsapp_conversation_delay_seconds", None)
-                if delay_seconds is None:
-                    delay_seconds = settings.WHATSAPP_CONVERSATION_DELAY_SECONDS
-
-                instance_watcher = MCPWatcher(
-                    reader=mcp_reader,  # Pass the reader directly (API or SQLite)
-                    message_filter=message_filter,
-                    on_message_callback=instance_agent_router.route_message,
-                    poll_interval_ms=settings.POLL_INTERVAL_MS,
-                    contact_mappings=contact_mappings,
-                    db_session=session,
-                    starting_timestamp=starting_timestamp,
-                    whatsapp_conversation_delay_seconds=delay_seconds
-                )
-
-                # Start watcher task
-                print(f"▶️  Starting watcher task for instance {instance.id}...")
-                instance_watcher_task = asyncio.create_task(instance_watcher.start())
-
-                # Store watcher and task
-                watchers[instance.id] = instance_watcher
-                watcher_tasks[instance.id] = instance_watcher_task
-
-                print(f"✅ MCP Watcher started for AGENT instance {instance.id} (tenant: {instance.tenant_id}, port: {instance.mcp_port})")
-
-            except Exception as instance_error:
-                logging.error(f"Error starting watcher for instance {instance.id}: {instance_error}", exc_info=True)
-
-        # Store watchers in app.state for management
         app.state.watchers = watchers
         app.state.watcher_tasks = watcher_tasks
 
         # Initialize WatcherManager for dynamic watcher lifecycle
         from services.watcher_manager import WatcherManager
         app.state.watcher_manager = WatcherManager(app.state)
+
+        # Start a watcher for each instance through the same code path used for
+        # dynamic instance creation/restarts. This keeps startup behavior aligned
+        # with runtime behavior and avoids stale SQLite-path gating.
+        for instance in mcp_instances:
+            try:
+                print(f"🔄 Processing instance {instance.id} ({instance.instance_type})...")
+                if instance.instance_type == "tester":
+                    print(f"⚠️  SKIPPING watcher for TESTER instance {instance.id} - tester instances should NOT process messages with agent")
+                    continue
+
+                started = await app.state.watcher_manager.start_watcher_for_instance(instance.id, session)
+                if started:
+                    print(f"✅ MCP Watcher started for AGENT instance {instance.id} (tenant: {instance.tenant_id}, port: {instance.mcp_port})")
+                else:
+                    print(f"⚠️  Watcher not started for instance {instance.id} (already running or waiting on MCP readiness)")
+            except Exception as instance_error:
+                logging.error(f"Error starting watcher for instance {instance.id}: {instance_error}", exc_info=True)
 
         print(f"🎯 Total watchers started: {len(watchers)}")
         print(f"📋 Watcher IDs: {list(watchers.keys())}")

@@ -22,6 +22,8 @@ from models import (
 )
 from api.api_auth import ApiCaller, require_api_permission
 from api.v1.schemas import COMMON_RESPONSES, NOT_FOUND_RESPONSE, VALIDATION_RESPONSE
+from services.whatsapp_binding_service import apply_agent_whatsapp_binding_policy
+from services.whatsapp_binding_service import apply_agent_whatsapp_binding_policy, parse_enabled_channels
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -171,6 +173,7 @@ SKILL_METADATA = {
     "browser_automation": {"category": "automation", "name": "Browser Automation", "description": "Control web browsers"},
     "shell": {"category": "automation", "name": "Shell", "description": "Execute shell commands"},
     "sandboxed_tools": {"category": "automation", "name": "Sandboxed Tools", "description": "Execute tools in sandboxed environment"},
+    "image_analysis": {"category": "media", "name": "Image Analysis", "description": "Interpret and extract information from attached images"},
     "image": {"category": "media", "name": "Image Generation", "description": "Generate and edit images"},
     "flight_search": {"category": "flight_search", "name": "Flight Search", "description": "Search for flights"},
     "adaptive_personality": {"category": "special", "name": "Adaptive Personality", "description": "Dynamic tone adaptation"},
@@ -189,14 +192,8 @@ SENSITIVE_CONFIG_PATTERNS = {"api_key", "secret", "access_token", "auth_token", 
 
 def _parse_enabled_channels(agent: Agent) -> List[str]:
     """Parse enabled_channels which may be JSON string or list."""
-    if isinstance(agent.enabled_channels, list):
-        return agent.enabled_channels
-    elif isinstance(agent.enabled_channels, str) and agent.enabled_channels:
-        try:
-            return json.loads(agent.enabled_channels)
-        except (json.JSONDecodeError, TypeError):
-            return ["playground", "whatsapp"]
-    return ["playground", "whatsapp"]
+    parsed = parse_enabled_channels(agent.enabled_channels)
+    return parsed or ["playground", "whatsapp"]
 
 
 def _enrich_skill(skill: AgentSkill, skill_integration_map: dict, db: Session) -> dict:
@@ -445,6 +442,7 @@ async def save_builder_data(
                 if invalid_ch:
                     raise HTTPException(status_code=400, detail=f"Invalid channels: {', '.join(invalid_ch)}")
                 agent.enabled_channels = data.agent.enabled_channels
+                apply_agent_whatsapp_binding_policy(db, agent)
             if data.agent.memory_size is not None:
                 agent.memory_size = data.agent.memory_size
             if data.agent.memory_isolation_mode is not None:
@@ -455,6 +453,7 @@ async def save_builder_data(
                 agent.enable_semantic_search = data.agent.enable_semantic_search
             if data.agent.avatar is not None:
                 agent.avatar = data.agent.avatar if data.agent.avatar != "" else None
+            changes["resolved_whatsapp_integration_id"] = apply_agent_whatsapp_binding_policy(db, agent)
             agent.updated_at = datetime.utcnow()
             changes["agent_updated"] = True
 
@@ -666,6 +665,7 @@ async def clone_agent(
             user_id=caller.user_id,
         )
         db.add(new_agent)
+        apply_agent_whatsapp_binding_policy(db, new_agent)
         db.commit()
         db.refresh(new_agent)
 

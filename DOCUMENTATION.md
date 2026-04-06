@@ -562,6 +562,7 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `audio_transcript` | Audio Communication | special | Process audio messages with conversational AI or transcription-only mode | `audio_transcript.py:46-49` |
 | `audio_tts` | Audio TTS Response | passive | Convert text responses to audio using OpenAI, Kokoro, or ElevenLabs TTS | `audio_tts_skill.py:45-48` |
 | `web_search` | Web Search | tool | Search the web using Brave Search (default provider) | `search_skill.py:50-53` |
+| `image_analysis` | Image Analysis | special | Interpret screenshots/photos, answer questions about attached images, and extract visible text before the normal LLM reply path | `image_analysis_skill.py:25-33` |
 | `image` | Image Generation & Editing | tool | Generate new images from text prompts or edit existing images using AI | `image_skill.py:47-50` |
 | `gmail` | Gmail | tool | Read and search emails from connected Gmail accounts | `gmail_skill.py:47-50` |
 | `automation` | Automation | tool | Multi-step workflow automation and process orchestration | `automation_skill.py:42-45` |
@@ -602,6 +603,8 @@ Source: `backend/agent/skills/base.py:204-227`. Individual skills override to ad
 Bindings are stored in the `agent_skill` table (Source: `backend/models.py:712` — class AgentSkill). Each row associates an `agent_id` + `skill_type` with an `is_enabled` flag, a per-agent `execution_mode` override, and a JSON `config` blob validated against the skill's `get_config_schema()`.
 
 The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-220`, component `AgentSkillsManager`) lists available skills from the `SkillManager` catalog (Source: `backend/agent/skills/skill_manager.py:146-184`) and renders a per-skill config modal using the returned `config_schema`.
+
+`image_analysis` is media-triggered rather than tool-triggered. It activates on inbound image attachments, uses Gemini multimodal models to analyze the image, and returns a direct response with `skip_ai=true`. If the image caption looks like an edit request ("remove background", "change this", etc.), the skill intentionally defers so the existing `image` editing skill can handle the request instead.
 
 ### 9.3 Custom Skills (Instruction / Script / MCP Server)
 
@@ -1192,10 +1195,11 @@ Adapter capability flags (`backend/channels/whatsapp/adapter.py:22-28`):
 | `supports_media` | true |
 | `text_chunk_limit` | 4096 |
 
-**MCP resolution flow** (`adapter.py:137-173`):
+**MCP resolution flow** (`adapter.py:137-173`, `backend/services/whatsapp_binding_service.py`):
 1. Resolve `Agent.whatsapp_integration_id` → `WhatsAppMCPInstance` row for the agent's dedicated bridge.
-2. Else fall back to the tenant's first `instance_type == "agent"` instance with status in (`running`, `starting`).
-3. Else fall back to the development default `http://127.0.0.1:8080/api`.
+2. If no explicit binding exists, auto-resolve only when the tenant has exactly one unambiguous `instance_type == "agent"` WhatsApp instance.
+3. If multiple candidate instances exist, the backend leaves the agent unbound and Graph/Studio surface that ambiguity instead of silently guessing.
+4. Else fall back to the development default `http://127.0.0.1:8080/api`.
 
 **Pre-send health gate** (`adapter.py:175-211`): Before each send the adapter hits `{mcp_api_url}/health` with a 5 s timeout. If the MCP reports `connected=false`, the send is refused to prevent queue buildup while the QR is not scanned.
 
@@ -1209,6 +1213,8 @@ Adapter capability flags (`backend/channels/whatsapp/adapter.py:22-28`):
 - Per-instance filters: `group_filters`, `number_filters` on the MCP instance — `backend/models.py:2758-2759`.
 
 **Health check** (`adapter.py:99-121`): Calls the MCP bridge's `/health` endpoint via `MCPSender.check_health()`, returning connected/disconnected with latency (ms).
+
+**Runtime reconciliation** (`backend/services/mcp_container_manager.py`): before health-sensitive operations, the backend repairs stale MCP metadata from deterministic conventions and live container attrs. This includes recovering blank/stale `container_id` from `container_name`, normalizing `session_data_path` / `messages_db_path`, and restoring the canonical `mcp_api_url`. This is what prevents the legacy `Resource ID was not provided` failure when an old row has drifted from Docker state.
 
 **WhatsApp MCP instance configuration reference** (Source: `models.py:2759-2773`):
 
@@ -1248,6 +1254,13 @@ The wizard can also be launched manually from the Hub Communication tab or auto-
 6. **Configure filters** — set `group_filters`, `number_filters`, and `group_keywords` on the instance to control where the bot responds.
 7. **Assign to an agent** — on the agent's Channels tab, set `whatsapp_integration_id` to point to this instance.
 8. **Test** — send a message from the WhatsApp number; the bot should respond via the assigned agent.
+
+**Hub QR recovery behavior:** the Hub QR modal now has three explicit states: `loading`, `ready`, and `degraded`. After repeated health failures or repeated empty QR polls, the UI stops the infinite spinner and offers recovery actions (`Restart`, `Reset Auth`, reopen QR). The same recovery flow exists for the compose-managed tester card.
+
+**Graph + Studio consistency:** Graph View consumes `resolved_whatsapp_integration_id`, `whatsapp_binding_status`, and `whatsapp_binding_source` from `/api/v2/agents/graph-preview`. This allows Graph to show:
+- solid edge for explicit binding
+- dashed edge for resolved-default binding
+- `WhatsApp Unassigned` warning node when the channel is enabled but ambiguous/unassigned
 
 **Getting Started Checklist:** The Watcher dashboard displays a "Getting Started" widget tracking 5 setup milestones: Configure Agent, Connect Channel, Add Contacts, Test in Playground, Create Flow. It auto-hides when all items are complete and can be dismissed.
 
@@ -2562,12 +2575,14 @@ The Tester MCP is a containerized Go WhatsApp bridge dedicated to QA. It is conf
 
 | Method + Path | Purpose |
 |---|---|
-| `GET /health` | Health check |
+| `GET /api/health` | Health check |
 | `POST /api/send` | Send a WhatsApp message |
 | `POST /api/download` | Download media |
 | `GET /api/qr-code` | Get QR code for initial auth |
 
 **Authentication:** Bearer token on `Authorization: Bearer <api_secret>` (per project conventions; exact secret provisioning is container-specific — see the tester container's env).
+
+**Hub visibility:** the tester is intentionally not listed as a tenant-managed `WhatsAppMCPInstance`. Instead, Hub exposes it as a dedicated **QA Tester** card backed by `/api/mcp/instances/tester/*` endpoints so operators can monitor auth state, fetch QR, restart the tester, and reset auth without confusing it with production tenant instances.
 
 **Send-message example:**
 

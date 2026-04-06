@@ -18,6 +18,7 @@ from .scheduler_query_skill import SchedulerQuerySkill  # Phase 6.4 Week 5
 from .knowledge_sharing_skill import KnowledgeSharingSkill  # Task 3
 # AsanaSkill removed: Asana is now a provider for the Scheduler skill (via FlowsSkill)
 from .search_skill import SearchSkill  # API Tools Migration
+from .image_analysis_skill import ImageAnalysisSkill
 
 __all__ = [
     'BaseSkill',
@@ -30,4 +31,5 @@ __all__ = [
     'SchedulerQuerySkill',
     'KnowledgeSharingSkill',
     'SearchSkill',
+    'ImageAnalysisSkill',
 ]

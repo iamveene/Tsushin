@@ -223,17 +223,20 @@ class ImageSkill(BaseSkill):
         Determine if this skill should handle the message.
 
         Hybrid mode logic:
-        - Always handle image+caption (EDIT mode, media-triggered)
+        - Handle image+caption only when the caption looks like an edit request
         - In legacy mode: also handle keyword-based generation requests
         - In tool-only mode: only media-triggered edit
         """
         config = getattr(self, '_config', {}) or self.get_default_config()
 
-        # Case 1: Image with caption → EDIT mode (always handled, regardless of mode)
+        # Case 1: Image with caption that looks like an edit request -> EDIT mode
         if message.media_type and message.media_type.lower() in self.SUPPORTED_IMAGE_FORMATS:
             if message.body and message.body.strip():
-                logger.info(f"ImageSkill: Image with caption detected (EDIT mode)")
-                return True
+                if await self._is_edit_request(message, config):
+                    logger.info("ImageSkill: Image with edit caption detected (EDIT mode)")
+                    return True
+                logger.info("ImageSkill: Image caption does not look like edit request, deferring")
+                return False
             # Image without caption - cache for potential follow-up
             self._cache_recent_image(message)
             return False
@@ -531,7 +534,10 @@ class ImageSkill(BaseSkill):
         """Get Gemini API key from database."""
         try:
             if self._db_session:
-                return get_api_key("gemini", self._db_session)
+                tenant_id = None
+                if isinstance(getattr(self, '_config', None), dict):
+                    tenant_id = self._config.get('tenant_id')
+                return get_api_key("gemini", self._db_session, tenant_id=tenant_id)
             return None
         except Exception:
             return None

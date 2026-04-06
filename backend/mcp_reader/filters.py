@@ -1,6 +1,7 @@
 from typing import Dict, Optional
 import re
 import json
+import logging
 
 class MessageFilter:
     def __init__(
@@ -24,6 +25,7 @@ class MessageFilter:
         self.group_keywords = [kw.lower() for kw in (group_keywords or [])]
         self.contact_service = contact_service
         self.db_session = db_session
+        self.logger = logging.getLogger(__name__)
 
     def should_trigger(self, message: Dict) -> Optional[str]:
         """
@@ -75,27 +77,20 @@ class MessageFilter:
 
             # CRITICAL FIX 2026-01-08: Check contact's is_dm_trigger setting BEFORE dm_auto_mode
             # Contact-level settings MUST override global dm_auto_mode to prevent trigger hijacking
-            if self.contact_service:
-                # First, check if sender is a known contact
-                contact = self.contact_service.identify_sender(sender)
-
-                if contact:
-                    # If contact exists, respect their is_dm_trigger setting
-                    # This MUST be checked before dm_auto_mode to prevent bypassing contact settings
-                    if contact.is_dm_trigger:
-                        return "contact_trigger"
-                    else:
-                        # Contact exists but has is_dm_trigger=False → DO NOT TRIGGER
-                        # This overrides both dm_auto_mode AND legacy number_filters
-                        # ABSOLUTE: No trigger for this contact, regardless of other settings
-                        # MONITORING 2026-01-08: Log blocked triggers for audit
-                        try:
-                            import logging
-                            logger = logging.getLogger(__name__)
-                            logger.info(f"🚫 TRIGGER BLOCKED: Contact {contact.friendly_name} (is_dm_trigger=False) | Sender: {sender}")
-                        except:
-                            pass
-                        return None
+            contact = self._resolve_direct_message_contact(message)
+            if contact:
+                # If contact exists, respect their is_dm_trigger setting
+                # This MUST be checked before dm_auto_mode to prevent bypassing contact settings
+                if contact.is_dm_trigger:
+                    return "contact_trigger"
+                else:
+                    # Contact exists but has is_dm_trigger=False → DO NOT TRIGGER
+                    # This overrides both dm_auto_mode AND legacy number_filters
+                    self.logger.info(
+                        f"🚫 TRIGGER BLOCKED: Contact {contact.friendly_name} "
+                        f"(is_dm_trigger=False) | Sender: {sender}"
+                    )
+                    return None
 
                 # If not a known contact, fall through to global dm_auto_mode and number_filters
 
@@ -107,10 +102,74 @@ class MessageFilter:
             # This only applies to senders NOT in the contact database
             for filter_num in self.number_filters:
                 filter_normalized = filter_num.lstrip("+")
-                if sender_normalized == filter_normalized:
+                if (
+                    sender_normalized == filter_normalized or
+                    sender_normalized.endswith(filter_normalized) or
+                    filter_normalized.endswith(sender_normalized)
+                ):
                     return "number"
 
         return None
+
+    def _resolve_direct_message_contact(self, message: Dict):
+        """Resolve DM senders using WhatsApp metadata fallbacks in addition to raw sender IDs."""
+        sender = message.get("sender", "")
+        sender_normalized = sender.split("@")[0].lstrip("+")
+
+        if self.contact_service:
+            contact = self.contact_service.identify_sender(sender)
+            if contact:
+                return contact
+
+            chat_id = message.get("chat_id", "")
+            if chat_id and chat_id != sender:
+                contact = self.contact_service.identify_sender(chat_id)
+                if contact:
+                    return contact
+
+        if not self.db_session:
+            return None
+
+        from models import Contact
+
+        tenant_id = getattr(self.contact_service, "tenant_id", None)
+        names_to_try = []
+        for candidate in [message.get("chat_name"), message.get("sender_name")]:
+            candidate = (candidate or "").strip()
+            if candidate and candidate not in names_to_try and not candidate.isdigit():
+                names_to_try.append(candidate)
+
+        for candidate in names_to_try:
+            base_query = self.db_session.query(Contact).filter(Contact.is_active == True)
+            if tenant_id:
+                base_query = base_query.filter(Contact.tenant_id == tenant_id)
+
+            exact_matches = base_query.filter(Contact.friendly_name.ilike(candidate)).all()
+            if len(exact_matches) == 1:
+                self.logger.info(
+                    f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
+                    f"to contact '{exact_matches[0].friendly_name}' via exact chat metadata '{candidate}'"
+                )
+                return exact_matches[0]
+
+            candidate_lower = candidate.lower()
+            partial_matches = [
+                contact for contact in base_query.all()
+                if contact.friendly_name and contact.friendly_name.lower() in candidate_lower
+            ]
+            if len(partial_matches) == 1:
+                self.logger.info(
+                    f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
+                    f"to contact '{partial_matches[0].friendly_name}' via partial chat metadata '{candidate}'"
+                )
+                return partial_matches[0]
+
+        try:
+            from services.whatsapp_id_discovery import WhatsAppIDDiscovery
+            discovery = WhatsAppIDDiscovery(time_window_minutes=60)
+            return discovery.auto_link_contact(self.db_session, sender_normalized, self.logger)
+        except Exception:
+            return None
 
     def _has_active_conversation(self, sender_normalized: str) -> bool:
         """
