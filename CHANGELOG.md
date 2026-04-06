@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Summarization tenant_id:** Both summarization paths (conversation + raw text) now pass `tenant_id` to `AIClient` for proper API key resolution
 - **Gate tenant_id:** Agentic gate handler passes `tenant_id` to `AIClient` for API key resolution
 - **WhatsApp MCP registration:** Flow notification steps now resolve MCP URL from registered `WhatsAppMCPInstance` records
+- **WhatsApp reliability hardening:** Added instance metadata reconciliation for stale `container_id` / path / URL state, health-check fallback from `container_id` to `container_name`, startup watcher preference for API-reader bootstrap, tenant-safe auto-binding metadata for Graph/Studio, Hub QR degraded-state recovery actions, and a dedicated QA Tester status surface. The tester Docker health probe now targets `GET /api/health`, and both WhatsApp bridges use supervised reconnect loops plus logout-triggered QR regeneration instead of one-shot reconnect attempts.
 
 ### Implementations
 

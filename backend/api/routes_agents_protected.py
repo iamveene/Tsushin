@@ -29,6 +29,7 @@ from auth_dependencies import (
     require_permission,
     TenantContext
 )
+from services.whatsapp_binding_service import parse_enabled_channels, resolve_agent_whatsapp_binding
 
 router = APIRouter(prefix="/api/v2/agents", tags=["agents-protected"])
 
@@ -111,6 +112,9 @@ class AgentGraphPreviewItem(BaseModel):
     memory_isolation_mode: str
     enabled_channels: List[str]
     whatsapp_integration_id: Optional[int]
+    resolved_whatsapp_integration_id: Optional[int] = None
+    whatsapp_binding_status: str = "disabled"
+    whatsapp_binding_source: str = "disabled"
     telegram_integration_id: Optional[int]
     webhook_integration_id: Optional[int] = None  # v0.6.0
     skills_count: int
@@ -167,8 +171,6 @@ async def get_agents_graph_preview(
 
     Returns all data needed for Graph View in a single request.
     """
-    import json
-
     # Query agents with aggregated skills and knowledge counts
     # Using subqueries for efficiency
     skills_subq = (
@@ -231,15 +233,8 @@ async def get_agents_graph_preview(
         sentinel_enabled = row[5]
 
         # Parse enabled_channels (may be JSON string or list)
-        if isinstance(agent.enabled_channels, list):
-            enabled_channels = agent.enabled_channels
-        elif isinstance(agent.enabled_channels, str) and agent.enabled_channels:
-            try:
-                enabled_channels = json.loads(agent.enabled_channels)
-            except (json.JSONDecodeError, TypeError):
-                enabled_channels = ["playground", "whatsapp"]
-        else:
-            enabled_channels = ["playground", "whatsapp"]
+        enabled_channels = parse_enabled_channels(agent.enabled_channels)
+        binding = resolve_agent_whatsapp_binding(ctx.db, agent, active_only=True)
 
         agents.append(AgentGraphPreviewItem(
             id=agent.id,
@@ -251,6 +246,9 @@ async def get_agents_graph_preview(
             memory_isolation_mode=agent.memory_isolation_mode or "isolated",
             enabled_channels=enabled_channels,
             whatsapp_integration_id=agent.whatsapp_integration_id,
+            resolved_whatsapp_integration_id=binding.resolved_instance_id,
+            whatsapp_binding_status=binding.status,
+            whatsapp_binding_source=binding.source,
             telegram_integration_id=agent.telegram_integration_id,
             webhook_integration_id=getattr(agent, "webhook_integration_id", None),
             skills_count=skills_count,

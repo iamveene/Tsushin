@@ -16,10 +16,11 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from db import get_db
-from models import WhatsAppMCPInstance, Agent
+from models import WhatsAppMCPInstance
 from models_rbac import User
 from services.mcp_container_manager import MCPContainerManager
 from services.mcp_auth_service import get_auth_headers
+from services.whatsapp_binding_service import backfill_unambiguous_whatsapp_bindings
 from auth_dependencies import get_current_user_required, require_permission, get_tenant_context, TenantContext
 
 logger = logging.getLogger(__name__)
@@ -119,9 +120,90 @@ class LogoutResponse(BaseModel):
     backup_path: Optional[str] = None
 
 
+class TesterStatusResponse(BaseModel):
+    name: str
+    api_url: str
+    status: str
+    container_id: Optional[str] = None
+    container_state: str
+    image: Optional[str] = None
+    api_reachable: bool
+    connected: Optional[bool] = False
+    authenticated: Optional[bool] = False
+    needs_reauth: Optional[bool] = False
+    is_reconnecting: Optional[bool] = False
+    reconnect_attempts: Optional[int] = 0
+    session_age_sec: Optional[int] = 0
+    last_activity_sec: Optional[int] = 0
+    qr_available: bool = False
+    qr_message: Optional[str] = None
+    error: Optional[str] = None
+
+
 # ============================================================================
 # API Endpoints
 # ============================================================================
+
+@router.get("/tester/status", response_model=TesterStatusResponse)
+async def get_tester_status(
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.read")),
+):
+    manager = MCPContainerManager()
+    status = manager.get_tester_status()
+    return TesterStatusResponse(
+        **status,
+        qr_message="Scan QR code with WhatsApp" if status.get("qr_available") else None,
+    )
+
+
+@router.get("/tester/qr-code", response_model=QRCodeResponse)
+async def get_tester_qr_code(
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.read")),
+):
+    manager = MCPContainerManager()
+    try:
+        qr_code = manager.get_tester_qr_code()
+        return QRCodeResponse(
+            qr_code=qr_code,
+            message="Scan QR code with WhatsApp" if qr_code else "QR code not available yet"
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch tester QR code: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch tester QR code. Check server logs for details.")
+
+
+@router.post("/tester/restart")
+async def restart_tester(
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.manage")),
+):
+    manager = MCPContainerManager()
+    try:
+        manager.restart_tester()
+        return {"success": True, "message": "Tester restarting"}
+    except Exception as e:
+        logger.error(f"Failed to restart tester: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to restart tester. Check server logs for details.")
+
+
+@router.post("/tester/logout", response_model=LogoutResponse)
+async def logout_tester(
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.manage")),
+):
+    manager = MCPContainerManager()
+    try:
+        result = manager.logout_tester()
+        return LogoutResponse(
+            success=bool(result.get("success", True)),
+            message=result.get("message", "Tester authentication reset"),
+            qr_code_ready=False,
+        )
+    except Exception as e:
+        logger.error(f"Failed to reset tester auth: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to reset tester auth. Check server logs for details.")
 
 @router.post("/", response_model=MCPInstanceResponse)
 async def create_mcp_instance(
@@ -157,6 +239,7 @@ async def create_mcp_instance(
             instance.display_name = data.display_name.strip()
             db.commit()
 
+        manager.reconcile_instance(instance, db)
         logger.info(f"MCP instance {instance.id} ({data.instance_type}) created for tenant {current_user.tenant_id}")
 
         # Start watcher dynamically ONLY for agent instances (not tester)
@@ -170,25 +253,10 @@ async def create_mcp_instance(
             logger.info(f"Skipping watcher for tester instance {instance.id}")
 
         # Auto-link: assign this WhatsApp instance to agents that have
-        # "whatsapp" enabled but no whatsapp_integration_id yet (agent instances only)
+        # "whatsapp" enabled but no whatsapp_integration_id yet when there is
+        # exactly one unambiguous active agent instance for the tenant.
         if data.instance_type == "agent":
-            import json as json_lib
-
-            unlinked_agents = db.query(Agent).filter(
-                Agent.tenant_id == current_user.tenant_id,
-                Agent.whatsapp_integration_id == None,
-                Agent.is_active == True
-            ).all()
-
-            linked_count = 0
-            for agent in unlinked_agents:
-                enabled_channels = agent.enabled_channels if isinstance(agent.enabled_channels, list) else (
-                    json_lib.loads(agent.enabled_channels) if agent.enabled_channels else []
-                )
-                if "whatsapp" in enabled_channels:
-                    agent.whatsapp_integration_id = instance.id
-                    linked_count += 1
-
+            linked_count = backfill_unambiguous_whatsapp_bindings(db, current_user.tenant_id)
             if linked_count > 0:
                 db.commit()
                 logger.info(f"Auto-linked WhatsApp instance {instance.id} to {linked_count} agent(s) in tenant {current_user.tenant_id}")
@@ -227,6 +295,12 @@ async def list_mcp_instances(
     """
     query = context.filter_by_tenant(db.query(WhatsAppMCPInstance), WhatsAppMCPInstance.tenant_id)
     instances = query.order_by(WhatsAppMCPInstance.created_at.desc()).all()
+    manager = MCPContainerManager()
+    for instance in instances:
+        try:
+            manager.reconcile_instance(instance, db)
+        except Exception as e:
+            logger.warning(f"Failed to reconcile instance {instance.id} during list: {e}")
 
     logger.info(f"Returning {len(instances)} MCP instances for tenant {current_user.tenant_id}")
 
@@ -255,6 +329,7 @@ async def get_mcp_instance(
     if not context.can_access_resource(instance.tenant_id):
         raise HTTPException(status_code=404, detail="MCP instance not found")
 
+    MCPContainerManager().reconcile_instance(instance, db)
     return MCPInstanceResponse.model_validate(instance)
 
 
@@ -748,7 +823,8 @@ async def get_mcp_health(
 
     try:
         manager = MCPContainerManager()
-        health_data = manager.health_check(instance)
+        manager.reconcile_instance(instance, db)
+        health_data = manager.health_check(instance, db)
 
         # Log health check results for debugging
         logger.info(
@@ -780,7 +856,19 @@ async def get_mcp_health(
 
     except Exception as e:
         logger.error(f"Failed to check health for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to check health. Check server logs for details.")
+        return MCPHealthResponse(
+            status="error",
+            container_state=instance.status or "unknown",
+            api_reachable=False,
+            connected=False,
+            authenticated=False,
+            needs_reauth=False,
+            is_reconnecting=False,
+            reconnect_attempts=0,
+            session_age_sec=0,
+            last_activity_sec=0,
+            error=str(e),
+        )
 
 
 @router.get("/{instance_id}/qr-code", response_model=QRCodeResponse)
@@ -810,7 +898,8 @@ async def get_qr_code(
 
     try:
         manager = MCPContainerManager()
-        qr_code = manager.get_qr_code(instance)
+        manager.reconcile_instance(instance, db)
+        qr_code = manager.get_qr_code(instance, db)
 
         if qr_code:
             return QRCodeResponse(qr_code=qr_code, message="Scan QR code with WhatsApp")
@@ -822,7 +911,7 @@ async def get_qr_code(
 
     except Exception as e:
         logger.error(f"Failed to fetch QR code for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to fetch QR code. Check server logs for details.")
+        return QRCodeResponse(qr_code=None, message=f"QR code unavailable: {e}")
 
 
 @router.post("/{instance_id}/logout", response_model=LogoutResponse)

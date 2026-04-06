@@ -182,6 +182,11 @@ TSN_METRICS_ENABLED=true
 
 **LLM provider API keys are configured per-tenant through the Hub UI**, not in environment variables — this enables true multi-tenant isolation. See [DOCUMENTATION.md §19 LLM Providers](DOCUMENTATION.md#19-llm-providers).
 
+**Operational notes for WhatsApp:**
+- Prefer `docker-compose up -d --build --no-cache backend` / `frontend` for rebuilds instead of `docker-compose down`, so active WhatsApp sessions stay attached to `tsushin-network`.
+- Hub → Communication now exposes a dedicated **QA Tester** card for the compose-managed tester instance. Use it for QR validation, restart, and reset-auth without mixing it into normal tenant WhatsApp instances.
+- Graph View now distinguishes explicit WhatsApp bindings, resolved-default bindings, and ambiguous/unassigned states; if an agent has WhatsApp enabled but no wire, check for the `WhatsApp Unassigned` warning node instead of assuming the graph failed to load.
+
 → Complete env-var reference (80+ variables, all defaults, all subsystems): [Appendix A](DOCUMENTATION.md#29-appendix-a-complete-environment-variable-reference).
 
 ---

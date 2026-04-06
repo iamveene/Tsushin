@@ -66,7 +66,7 @@ EXPOSE 8080
 
 # Health check - check if HTTP server is responding
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
-  CMD curl -f http://localhost:8080/health || exit 1
+  CMD curl -f http://localhost:8080/api/health || exit 1
 
 # Labels for identification
 LABEL org.opencontainers.image.title="Tester WhatsApp MCP"

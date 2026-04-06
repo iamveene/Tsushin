@@ -33,6 +33,7 @@ from auth_dependencies import (
     require_permission,
     TenantContext,
 )
+from services.whatsapp_binding_service import apply_whatsapp_binding_policy, parse_enabled_channels
 
 router = APIRouter(prefix="/api/v2/agents", tags=["agent-builder"])
 
@@ -319,15 +320,11 @@ def _enrich_skill(skill: AgentSkill, skill_integration_map: Dict, db: Session) -
 
 def _parse_enabled_channels(agent: Agent) -> List[str]:
     """Parse enabled_channels field which may be JSON string or list."""
-    if isinstance(agent.enabled_channels, list):
-        return agent.enabled_channels
-    elif isinstance(agent.enabled_channels, str) and agent.enabled_channels:
-        try:
-            return json.loads(agent.enabled_channels)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning(f"Agent {agent.id}: failed to parse enabled_channels '{agent.enabled_channels}', falling back to defaults")
-            return ["playground", "whatsapp"]
-    return ["playground", "whatsapp"]
+    parsed = parse_enabled_channels(agent.enabled_channels)
+    if not parsed:
+        logger.warning(f"Agent {agent.id}: enabled_channels empty after parsing, falling back to defaults")
+        return ["playground", "whatsapp"]
+    return parsed
 
 
 # =============================================================================
@@ -618,6 +615,16 @@ async def save_builder_data(
                 agent.memory_decay_mmr_lambda = val
             if data.agent.avatar is not None:
                 agent.avatar = data.agent.avatar if data.agent.avatar != "" else None
+            try:
+                binding = apply_whatsapp_binding_policy(
+                    db,
+                    agent,
+                    enabled_channels=_parse_enabled_channels(agent),
+                )
+                changes["whatsapp_binding_status"] = binding.status
+                changes["resolved_whatsapp_integration_id"] = binding.resolved_instance_id
+            except ValueError as e:
+                raise HTTPException(status_code=404, detail=str(e))
             agent.updated_at = datetime.utcnow()
             changes["agent_updated"] = True
 
