@@ -64,6 +64,7 @@ import {
   LightbulbIcon,
   FileTextIcon,
   ClipboardIcon,
+  ShieldCheckIcon,
   type IconProps
 } from '@/components/ui/icons'
 import { parseUTCTimestamp, formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
@@ -93,6 +94,7 @@ const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; d
   { value: 'skill', label: 'Skill', Icon: BrainIcon, description: 'Execute an agentic skill (flight search, web search, etc.)' },
   { value: 'summarization', label: 'Summarization', Icon: DocumentIcon, description: 'AI-powered summary of conversation' },
   { value: 'slash_command', label: 'Slash Command', Icon: CommandIcon, description: 'Execute a slash command (/scheduler, /memory, etc.)' },
+  { value: 'gate', label: 'Gate', Icon: ShieldCheckIcon, description: 'Conditional check \u2014 block or pass' },
 ]
 
 const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram' | 'slack' | 'discord' | 'webhook'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
@@ -1660,10 +1662,31 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                 </div>
 
                 <div className="flex-1">
-                  <div className="font-medium text-white">{step.name}</div>
+                  <div className="font-medium text-white flex items-center gap-2">
+                    {step.name}
+                    {step.type === 'gate' && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        (step.config?.gate_mode || 'programmatic') === 'programmatic'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                      }`}>
+                        {(step.config?.gate_mode || 'programmatic') === 'programmatic' ? 'Programmatic' : 'Agentic'}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-sm text-slate-400">
                     {STEP_TYPES.find(t => t.value === step.type)?.label}
                     {step.allow_multi_turn && ' • Multi-turn'}
+                    {step.type === 'gate' && step.config?.gate_conditions && step.config.gate_conditions.length > 0 && (
+                      <span className="text-xs text-slate-500 ml-1">
+                        • {step.config.gate_conditions.length} condition{step.config.gate_conditions.length !== 1 ? 's' : ''} ({step.config?.gate_logic || 'all'})
+                      </span>
+                    )}
+                    {step.type === 'gate' && step.config?.gate_mode === 'agentic' && step.config?.gate_prompt && (
+                      <span className="text-xs text-slate-500 ml-1">
+                        • AI prompt set
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -2627,6 +2650,311 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         </>
       )}
 
+      {/* Gate Settings */}
+      {step.type === 'gate' && (
+        <>
+          {/* Mode Toggle */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-200 mb-2">Gate Mode</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => updateConfig('gate_mode', 'programmatic')}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                  (currentConfig?.gate_mode || 'programmatic') === 'programmatic'
+                    ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
+                    : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                }`}
+              >
+                Programmatic
+              </button>
+              <button
+                type="button"
+                onClick={() => updateConfig('gate_mode', 'agentic')}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                  currentConfig?.gate_mode === 'agentic'
+                    ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                    : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                }`}
+              >
+                Agentic (AI)
+              </button>
+            </div>
+          </div>
+
+          {/* Programmatic Mode Panel */}
+          {(currentConfig?.gate_mode || 'programmatic') === 'programmatic' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_source_step || ''}
+                  onValueChange={(v) => updateConfig('gate_source_step', v)}
+                  placeholder="e.g. inbox, step_1"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <p className="text-xs text-slate-500 mt-1">Step whose output the gate evaluates</p>
+              </div>
+
+              {/* Logic Toggle */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Condition Logic</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateConfig('gate_logic', 'all')}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      (currentConfig?.gate_logic || 'all') === 'all'
+                        ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400'
+                        : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    ALL (AND)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateConfig('gate_logic', 'any')}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      currentConfig?.gate_logic === 'any'
+                        ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400'
+                        : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    ANY (OR)
+                  </button>
+                </div>
+              </div>
+
+              {/* Conditions List */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Conditions</label>
+                <div className="space-y-2">
+                  {(currentConfig?.gate_conditions || []).map((cond: any, ci: number) => (
+                    <div key={ci} className="flex gap-2 items-start p-2 bg-slate-800/50 rounded-lg border border-slate-700">
+                      <div className="flex-1 grid grid-cols-4 gap-2">
+                        <CursorSafeInput
+                          type="text"
+                          value={cond.field || ''}
+                          onValueChange={(v) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], field: v }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          placeholder="e.g. count"
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        />
+                        <select
+                          value={cond.operator || '=='}
+                          onChange={(e) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], operator: e.target.value }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        >
+                          <optgroup label="Numeric">
+                            <option value="==">==</option>
+                            <option value="!=">!=</option>
+                            <option value=">">&gt;</option>
+                            <option value=">=">&gt;=</option>
+                            <option value="<">&lt;</option>
+                            <option value="<=">&lt;=</option>
+                          </optgroup>
+                          <optgroup label="String">
+                            <option value="contains">contains</option>
+                            <option value="not_contains">not_contains</option>
+                            <option value="starts_with">starts_with</option>
+                            <option value="ends_with">ends_with</option>
+                          </optgroup>
+                          <optgroup label="Regex">
+                            <option value="matches">matches</option>
+                          </optgroup>
+                          <optgroup label="Existence">
+                            <option value="is_empty">is_empty</option>
+                            <option value="is_not_empty">is_not_empty</option>
+                          </optgroup>
+                          <optgroup label="Collection">
+                            <option value="count_gte">count_gte</option>
+                            <option value="count_lte">count_lte</option>
+                          </optgroup>
+                        </select>
+                        <CursorSafeInput
+                          type="text"
+                          value={cond.value ?? ''}
+                          onValueChange={(v) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], value: v }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          placeholder="value"
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        />
+                        <select
+                          value={cond.type || 'string'}
+                          onChange={(e) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], type: e.target.value }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        >
+                          <option value="number">number</option>
+                          <option value="string">string</option>
+                          <option value="boolean">boolean</option>
+                          <option value="regex">regex</option>
+                          <option value="count">count</option>
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = (currentConfig?.gate_conditions || []).filter((_: any, i: number) => i !== ci)
+                          updateConfig('gate_conditions', updated)
+                        }}
+                        className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const updated = [...(currentConfig?.gate_conditions || []), { field: '', operator: '==', value: '', type: 'string' }]
+                    updateConfig('gate_conditions', updated)
+                  }}
+                  className="mt-2 px-3 py-1.5 text-xs font-medium rounded-lg border border-dashed border-slate-600
+                             text-slate-400 hover:border-cyan-500/50 hover:text-cyan-400 transition-colors"
+                >
+                  + Add Condition
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Agentic Mode Panel */}
+          {currentConfig?.gate_mode === 'agentic' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_source_step || ''}
+                  onValueChange={(v) => updateConfig('gate_source_step', v)}
+                  placeholder="e.g. inbox, step_1"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <p className="text-xs text-slate-500 mt-1">Step whose output the AI evaluates</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
+                <CursorSafeTextarea
+                  value={currentConfig?.gate_prompt || ''}
+                  onValueChange={(v) => updateConfig('gate_prompt', v)}
+                  rows={4}
+                  placeholder="Describe when the gate should PASS..."
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                </svg>
+                <span className="text-xs text-amber-400">Uses AI tokens &mdash; will incur LLM cost</span>
+              </div>
+            </>
+          )}
+
+          {/* Common: On Fail Action */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">On Fail Action</label>
+            <select
+              value={currentConfig?.gate_on_fail || 'skip'}
+              onChange={(e) => updateConfig('gate_on_fail', e.target.value)}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                         focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            >
+              <option value="skip">Skip remaining steps (silent)</option>
+              <option value="notify">Send notification, then stop</option>
+            </select>
+          </div>
+
+          {/* Notify sub-fields */}
+          {currentConfig?.gate_on_fail === 'notify' && (
+            <div className="space-y-3 pl-4 border-l-2 border-amber-500/30">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Channel</label>
+                <select
+                  value={currentConfig?.gate_fail_notification?.channel || 'whatsapp'}
+                  onChange={(e) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    channel: e.target.value
+                  })}
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                >
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="telegram">Telegram</option>
+                  <option value="slack">Slack</option>
+                  <option value="discord">Discord</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_fail_notification?.recipient || ''}
+                  onValueChange={(v) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    recipient: v
+                  })}
+                  placeholder="e.g. +5527999999999"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
+                <CursorSafeTextarea
+                  value={currentConfig?.gate_fail_notification?.message_template || ''}
+                  onValueChange={(v) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    message_template: v
+                  })}
+                  rows={3}
+                  placeholder="Gate blocked: {{gate.reasoning}}"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Tips */}
+          <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <p className="text-xs text-slate-400">
+              <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><ShieldCheckIcon size={12} /> Gate Tips:</span>
+              <br />{'•'} <strong>Programmatic</strong> mode is zero-cost {'—'} no AI tokens used
+              <br />{'•'} <strong>Agentic</strong> mode uses LLM for complex decisions
+              <br />{'•'} Reference gate output with {'{{'}step_N.gate_result{'}}'} in subsequent steps
+            </p>
+          </div>
+        </>
+      )}
+
       {/* Agent & Persona Selection */}
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -2895,6 +3223,15 @@ function EditableStepBuilder({
                 <div className="flex-1">
                   <div className="font-medium text-white flex items-center gap-2">
                     {step.name}
+                    {step.type === 'gate' && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        (step.config?.gate_mode || 'programmatic') === 'programmatic'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                      }`}>
+                        {(step.config?.gate_mode || 'programmatic') === 'programmatic' ? 'Programmatic' : 'Agentic'}
+                      </span>
+                    )}
                     {step._saving && (
                       <span className="text-xs text-cyan-400">Saving...</span>
                     )}
@@ -2905,6 +3242,16 @@ function EditableStepBuilder({
                   <div className="text-sm text-slate-400">
                     {STEP_TYPES.find(t => t.value === step.type)?.label}
                     {step.allow_multi_turn && ' • Multi-turn'}
+                    {step.type === 'gate' && step.config?.gate_conditions && step.config.gate_conditions.length > 0 && (
+                      <span className="text-xs text-slate-500 ml-1">
+                        • {step.config.gate_conditions.length} condition{step.config.gate_conditions.length !== 1 ? 's' : ''} ({step.config?.gate_logic || 'all'})
+                      </span>
+                    )}
+                    {step.type === 'gate' && step.config?.gate_mode === 'agentic' && step.config?.gate_prompt && (
+                      <span className="text-xs text-slate-500 ml-1">
+                        • AI prompt set
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -3592,6 +3939,311 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
             </p>
             <p className="text-xs text-slate-500 mt-2">
               Output available as {'{{'}step_N.output{'}}'} in subsequent steps
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* Gate Settings */}
+      {step.type === 'gate' && (
+        <>
+          {/* Mode Toggle */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-200 mb-2">Gate Mode</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => updateConfig('gate_mode', 'programmatic')}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                  (currentConfig?.gate_mode || 'programmatic') === 'programmatic'
+                    ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
+                    : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                }`}
+              >
+                Programmatic
+              </button>
+              <button
+                type="button"
+                onClick={() => updateConfig('gate_mode', 'agentic')}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                  currentConfig?.gate_mode === 'agentic'
+                    ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                    : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                }`}
+              >
+                Agentic (AI)
+              </button>
+            </div>
+          </div>
+
+          {/* Programmatic Mode Panel */}
+          {(currentConfig?.gate_mode || 'programmatic') === 'programmatic' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_source_step || ''}
+                  onValueChange={(v) => updateConfig('gate_source_step', v)}
+                  placeholder="e.g. inbox, step_1"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <p className="text-xs text-slate-500 mt-1">Step whose output the gate evaluates</p>
+              </div>
+
+              {/* Logic Toggle */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Condition Logic</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateConfig('gate_logic', 'all')}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      (currentConfig?.gate_logic || 'all') === 'all'
+                        ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400'
+                        : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    ALL (AND)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateConfig('gate_logic', 'any')}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      currentConfig?.gate_logic === 'any'
+                        ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400'
+                        : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    ANY (OR)
+                  </button>
+                </div>
+              </div>
+
+              {/* Conditions List */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Conditions</label>
+                <div className="space-y-2">
+                  {(currentConfig?.gate_conditions || []).map((cond: any, ci: number) => (
+                    <div key={ci} className="flex gap-2 items-start p-2 bg-slate-800/50 rounded-lg border border-slate-700">
+                      <div className="flex-1 grid grid-cols-4 gap-2">
+                        <CursorSafeInput
+                          type="text"
+                          value={cond.field || ''}
+                          onValueChange={(v) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], field: v }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          placeholder="e.g. count"
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        />
+                        <select
+                          value={cond.operator || '=='}
+                          onChange={(e) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], operator: e.target.value }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        >
+                          <optgroup label="Numeric">
+                            <option value="==">==</option>
+                            <option value="!=">!=</option>
+                            <option value=">">&gt;</option>
+                            <option value=">=">&gt;=</option>
+                            <option value="<">&lt;</option>
+                            <option value="<=">&lt;=</option>
+                          </optgroup>
+                          <optgroup label="String">
+                            <option value="contains">contains</option>
+                            <option value="not_contains">not_contains</option>
+                            <option value="starts_with">starts_with</option>
+                            <option value="ends_with">ends_with</option>
+                          </optgroup>
+                          <optgroup label="Regex">
+                            <option value="matches">matches</option>
+                          </optgroup>
+                          <optgroup label="Existence">
+                            <option value="is_empty">is_empty</option>
+                            <option value="is_not_empty">is_not_empty</option>
+                          </optgroup>
+                          <optgroup label="Collection">
+                            <option value="count_gte">count_gte</option>
+                            <option value="count_lte">count_lte</option>
+                          </optgroup>
+                        </select>
+                        <CursorSafeInput
+                          type="text"
+                          value={cond.value ?? ''}
+                          onValueChange={(v) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], value: v }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          placeholder="value"
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        />
+                        <select
+                          value={cond.type || 'string'}
+                          onChange={(e) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], type: e.target.value }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        >
+                          <option value="number">number</option>
+                          <option value="string">string</option>
+                          <option value="boolean">boolean</option>
+                          <option value="regex">regex</option>
+                          <option value="count">count</option>
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = (currentConfig?.gate_conditions || []).filter((_: any, i: number) => i !== ci)
+                          updateConfig('gate_conditions', updated)
+                        }}
+                        className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const updated = [...(currentConfig?.gate_conditions || []), { field: '', operator: '==', value: '', type: 'string' }]
+                    updateConfig('gate_conditions', updated)
+                  }}
+                  className="mt-2 px-3 py-1.5 text-xs font-medium rounded-lg border border-dashed border-slate-600
+                             text-slate-400 hover:border-cyan-500/50 hover:text-cyan-400 transition-colors"
+                >
+                  + Add Condition
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Agentic Mode Panel */}
+          {currentConfig?.gate_mode === 'agentic' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_source_step || ''}
+                  onValueChange={(v) => updateConfig('gate_source_step', v)}
+                  placeholder="e.g. inbox, step_1"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <p className="text-xs text-slate-500 mt-1">Step whose output the AI evaluates</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
+                <CursorSafeTextarea
+                  value={currentConfig?.gate_prompt || ''}
+                  onValueChange={(v) => updateConfig('gate_prompt', v)}
+                  rows={4}
+                  placeholder="Describe when the gate should PASS..."
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                </svg>
+                <span className="text-xs text-amber-400">Uses AI tokens &mdash; will incur LLM cost</span>
+              </div>
+            </>
+          )}
+
+          {/* Common: On Fail Action */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">On Fail Action</label>
+            <select
+              value={currentConfig?.gate_on_fail || 'skip'}
+              onChange={(e) => updateConfig('gate_on_fail', e.target.value)}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                         focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            >
+              <option value="skip">Skip remaining steps (silent)</option>
+              <option value="notify">Send notification, then stop</option>
+            </select>
+          </div>
+
+          {/* Notify sub-fields */}
+          {currentConfig?.gate_on_fail === 'notify' && (
+            <div className="space-y-3 pl-4 border-l-2 border-amber-500/30">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Channel</label>
+                <select
+                  value={currentConfig?.gate_fail_notification?.channel || 'whatsapp'}
+                  onChange={(e) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    channel: e.target.value
+                  })}
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                >
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="telegram">Telegram</option>
+                  <option value="slack">Slack</option>
+                  <option value="discord">Discord</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_fail_notification?.recipient || ''}
+                  onValueChange={(v) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    recipient: v
+                  })}
+                  placeholder="e.g. +5527999999999"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
+                <CursorSafeTextarea
+                  value={currentConfig?.gate_fail_notification?.message_template || ''}
+                  onValueChange={(v) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    message_template: v
+                  })}
+                  rows={3}
+                  placeholder="Gate blocked: {{gate.reasoning}}"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Tips */}
+          <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <p className="text-xs text-slate-400">
+              <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><ShieldCheckIcon size={12} /> Gate Tips:</span>
+              <br />{'•'} <strong>Programmatic</strong> mode is zero-cost {'—'} no AI tokens used
+              <br />{'•'} <strong>Agentic</strong> mode uses LLM for complex decisions
+              <br />{'•'} Reference gate output with {'{{'}step_N.gate_result{'}}'} in subsequent steps
             </p>
           </div>
         </>
