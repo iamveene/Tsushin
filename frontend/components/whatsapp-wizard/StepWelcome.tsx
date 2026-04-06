@@ -26,27 +26,32 @@ export default function StepWelcome() {
             {
               icon: '1',
               title: 'Link your phone',
-              desc: 'Scan a QR code to connect your WhatsApp number',
+              desc: 'Scan a QR code and name your WhatsApp instance',
             },
             {
               icon: '2',
-              title: 'Configure direct messages',
-              desc: 'Choose who can message your agent privately',
+              title: 'Tell us about you',
+              desc: 'Register yourself so the agent recognizes you',
             },
             {
               icon: '3',
-              title: 'Set up group monitoring',
-              desc: 'Pick which groups your agent listens to and what triggers it',
+              title: 'Configure DMs',
+              desc: 'Choose who triggers the AI in private chats',
             },
             {
               icon: '4',
+              title: 'Set up groups',
+              desc: 'Pick which groups your agent listens to',
+            },
+            {
+              icon: '5',
               title: 'Add contacts',
               desc: 'Register people your agent should recognize',
             },
             {
-              icon: '5',
+              icon: '6',
               title: 'Connect to an agent',
-              desc: 'Choose which AI agent handles this WhatsApp number',
+              desc: 'Choose which AI handles this number',
             },
           ].map((item) => (
             <div key={item.icon} className="flex items-start gap-3">

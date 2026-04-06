@@ -690,9 +690,9 @@ export default function PlaygroundPage() {
       const cachedAgents = getCachedAgents(user.id)
       if (cachedAgents) {
         setAgents(cachedAgents)
-        // Auto-select first agent if available and none selected
+        // Auto-select default agent (or first) if available and none selected
         if (cachedAgents.length > 0) {
-          setSelectedAgentId(currentId => currentId === null ? cachedAgents[0].id : currentId)
+          setSelectedAgentId(currentId => currentId === null ? (cachedAgents.find(a => a.is_default) || cachedAgents[0]).id : currentId)
         }
       }
 
@@ -703,9 +703,9 @@ export default function PlaygroundPage() {
       // Update cache with fresh data
       setCachedAgents(user.id, data)
 
-      // Auto-select first agent if available and none selected
+      // Auto-select default agent (or first) if available and none selected
       if (data.length > 0) {
-        setSelectedAgentId(currentId => currentId === null ? data[0].id : currentId)
+        setSelectedAgentId(currentId => currentId === null ? (data.find(a => a.is_default) || data[0]).id : currentId)
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load agents')

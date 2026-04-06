@@ -9,8 +9,10 @@ import { useEffect, useState } from 'react'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import StudioTabs from '@/components/studio/StudioTabs'
-import { api, Agent, TonePreset, Contact, Persona } from '@/lib/client'
+import { api, Agent, TonePreset, Contact, Persona, ProviderInstance } from '@/lib/client'
 import { useToast } from '@/contexts/ToastContext'
+import InfoTooltip from '@/components/ui/InfoTooltip'
+import EmptyState from '@/components/EmptyState'
 import {
   SettingsIcon,
   StarIcon,
@@ -82,6 +84,7 @@ export default function AgentsPage() {
   const [personas, setPersonas] = useState<Persona[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
   const [agentSkillsCounts, setAgentSkillsCounts] = useState<Record<number, number>>({})
+  const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean>(false)
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -110,6 +113,13 @@ export default function AgentsPage() {
   const [useCustomModel, setUseCustomModel] = useState(false)
   const [customModelName, setCustomModelName] = useState('')
 
+  // Load configured provider instances for smart defaults
+  useEffect(() => {
+    api.getProviderInstances().then(instances => {
+      setProviderInstances(instances)
+    }).catch(() => {})
+  }, [])
+
   useEffect(() => {
     loadData()
     checkOllamaHealth()
@@ -123,7 +133,27 @@ export default function AgentsPage() {
 
   useGlobalRefresh(() => { loadData(); checkOllamaHealth() })
 
+  // Map provider instance vendor to MODEL_PROVIDERS value
+  const getSmartDefaults = () => {
+    if (providerInstances.length > 0) {
+      const vendorMap: Record<string, string> = {
+        anthropic: 'anthropic', openai: 'openai', gemini: 'gemini',
+        google: 'gemini', ollama: 'ollama', openrouter: 'openrouter'
+      }
+      const firstVendor = providerInstances[0].vendor?.toLowerCase() || ''
+      const mappedProvider = vendorMap[firstVendor]
+      if (mappedProvider) {
+        const provider = MODEL_PROVIDERS.find(p => p.value === mappedProvider)
+        if (provider) {
+          return { model_provider: mappedProvider, model_name: provider.models[0] || '' }
+        }
+      }
+    }
+    return { model_provider: 'anthropic', model_name: 'claude-sonnet-4.5' }
+  }
+
   const resetForm = () => {
+    const defaults = getSmartDefaults()
     setFormData({
       contact_id: 0,
       agent_name: '',
@@ -134,8 +164,8 @@ export default function AgentsPage() {
       custom_tone: '',
       keywords: [],
       // enabled_tools removed - use Skills system
-      model_provider: 'anthropic',
-      model_name: 'claude-sonnet-4.5',
+      model_provider: defaults.model_provider,
+      model_name: defaults.model_name,
       is_active: true,
       is_default: false
     })
@@ -438,21 +468,7 @@ export default function AgentsPage() {
           </div>
 
           {agents.length === 0 ? (
-            <div className="empty-state py-16">
-              <div className="empty-state-icon">
-                <svg className="w-full h-full text-tsushin-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-semibold text-white mb-2">No agents configured yet</h3>
-              <p className="text-tsushin-slate mb-6 max-w-md">Create your first AI agent to start automating conversations and workflows.</p>
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="btn-primary"
-              >
-                Create Your First Agent
-              </button>
-            </div>
+            <EmptyState variant="no-agents" actionLabel="Create Your First Agent" onAction={() => setShowCreateModal(true)} />
           ) : (
             <div className="divide-y divide-tsushin-border/30">
               {agents.map((agent, index) => (
@@ -743,6 +759,23 @@ export default function AgentsPage() {
 
               <div>
                 <label className="block text-sm font-medium text-white mb-2">System Prompt *</label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {[
+                    { label: 'General Assistant', prompt: 'You are a helpful, friendly AI assistant. You provide clear, concise answers and help users with their questions.' },
+                    { label: 'Customer Support', prompt: 'You are a customer support agent. You help users resolve issues, answer questions about products and services, and escalate complex problems when needed. Always be empathetic and solution-oriented.' },
+                    { label: 'Sales Outreach', prompt: 'You are a sales assistant. You engage potential customers, answer product questions, highlight key features, and guide them toward making informed decisions. Be friendly and professional.' },
+                    { label: 'Technical Support', prompt: 'You are a technical support specialist. You troubleshoot issues, provide step-by-step solutions, and explain technical concepts in simple terms. Ask clarifying questions when needed.' },
+                  ].map((tpl) => (
+                    <button
+                      key={tpl.label}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, system_prompt: tpl.prompt })}
+                      className="bg-tsushin-deep border border-tsushin-border text-xs px-3 py-1 rounded-full text-tsushin-slate hover:text-white hover:border-teal-500/50 transition-colors"
+                    >
+                      {tpl.label}
+                    </button>
+                  ))}
+                </div>
                 <textarea
                   value={formData.system_prompt}
                   onChange={(e) => setFormData({ ...formData, system_prompt: e.target.value })}
@@ -857,7 +890,10 @@ export default function AgentsPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-white mb-2">Model Provider *</label>
+                  <label className="block text-sm font-medium text-white mb-2 flex items-center gap-2">
+                    Model Provider *
+                    <InfoTooltip text="Choose a provider for which you have an API key configured in the Hub. If unsure, the default model works for most use cases." />
+                  </label>
                   <select
                     value={formData.model_provider}
                     onChange={(e) => {

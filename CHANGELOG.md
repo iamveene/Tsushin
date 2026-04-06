@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - develop
 
+### UX Friction Reduction
+
+- **WhatsApp Setup Wizard (7→8 steps):** Added "About You" step (Step 3) that collects the user's name and phone number, auto-creates a contact with DM Trigger enabled, and links it to the bound agent. Step 2 now includes an optional "Instance Name" field that auto-creates a bot contact. Steps 4-5 (DM/Group settings) have Simple/Advanced mode toggle for progressive disclosure. Step 8 (Confirmation) shows enhanced summary with green/amber indicators for completed/skipped items.
+- **Getting Started Checklist:** New dashboard widget on the Watcher page showing 5 setup milestones (Configure Agent, Connect Channel, Add Contacts, Test in Playground, Create Flow) with progress bar, action links, and dismiss button. Auto-hides when all items are complete.
+- **Hub Integration Summary Banner:** Compact status strip above the Hub tab bar showing connection counts for AI Providers, WhatsApp, Telegram, Slack, Discord, and Webhooks with colored dots. Clickable to switch tabs.
+- **WhatsApp Instance Display Name:** New `display_name` column on WhatsApp instances. Shown as primary title on Hub cards with phone number as subtitle. Passed via wizard's Instance Name field.
+- **Settings Progressive Disclosure:** Settings page now groups cards into "Essential" (Organization, Team Members, System AI, Integrations) always visible, and "Advanced" (8 more) collapsed by default with persistent preference.
+- **Agent Creation Smart Defaults:** 4 system prompt template buttons (General Assistant, Customer Support, Sales Outreach, Technical Support) above the textarea. Model provider auto-populates from first configured provider instance. InfoTooltip on model provider field.
+- **Playground Default Agent:** Auto-selects the agent marked `is_default` instead of always picking the first in the list.
+- **Empty States Standardization:** New `no-contacts` EmptyState variant with address-book SVG. Applied to Agents and Contacts pages, replacing ad-hoc inline empty markup.
+- **Backend:** Added `is_default` to PlaygroundAgentInfo API response. Fixed `dm_auto_mode` default from `False` to `True` in MCPInstanceResponse schema.
+
 ### Documentation
 
 - **DOC-001:** Comprehensive documentation overhaul of `DOCUMENTATION.md` — full accuracy audit against codebase

@@ -15,6 +15,7 @@ import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { api, type Message, type AgentRun } from '@/lib/client'
 
 // Dashboard sections
+import GettingStartedChecklist from './dashboard/GettingStartedChecklist'
 import HeroKPISection from './dashboard/HeroKPISection'
 import ActivityTimelineSection from './dashboard/ActivityTimelineSection'
 import DistributionChartsSection from './dashboard/DistributionChartsSection'
@@ -176,6 +177,9 @@ export default function DashboardTab() {
 
   return (
     <div className="space-y-6">
+      {/* Getting Started Checklist */}
+      <GettingStartedChecklist />
+
       {/* Hero KPI Section */}
       <HeroKPISection
         totalMessages={totalMessages}

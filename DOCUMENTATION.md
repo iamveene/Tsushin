@@ -1218,20 +1218,42 @@ Adapter capability flags (`backend/channels/whatsapp/adapter.py:22-28`):
 | `group_filters` | JSON (nullable) | NULL | WhatsApp group names to monitor. Example: `["Support Group", "VIP Chat"]` |
 | `number_filters` | JSON (nullable) | NULL | Phone number allowlist for DMs. Example: `["+5500000000001"]` |
 | `group_keywords` | JSON (nullable) | NULL | Keywords that trigger bot responses in groups. Example: `["help", "bot", "support"]`. When set, the bot only responds to group messages containing these keywords. |
+| `display_name` | String(100) (nullable) | NULL | Optional human-readable label for the instance (e.g., "Support Bot"). Shown in Hub UI; falls back to `phone_number` when NULL. |
 | `dm_auto_mode` | Boolean | `true` | Auto-reply to direct messages from unknown senders. Disable to require contacts to be pre-registered. |
 | `api_secret` | String(64) (nullable) | NULL | 32-byte hex-encoded token for cross-tenant MCP authentication (SSRF prevention) |
 | `api_secret_created_at` | DateTime (nullable) | NULL | Timestamp for secret rotation tracking |
 
-**E2E setup — WhatsApp channel:**
+**E2E setup — WhatsApp channel (8-step guided wizard):**
 
-1. Navigate to **Hub → Channels → WhatsApp** in the UI.
-2. Click **Add Instance** — provide a name and the WhatsApp phone number.
+The **WhatsApp Setup Wizard** (Hub → Communication → Setup Wizard) walks through the full configuration in 8 steps:
+
+1. **Welcome** — overview of the setup process.
+2. **Connect Phone** — enter an optional Instance Name (display label) and phone number, then scan the QR code. A bot contact is auto-created with the instance name.
+3. **About You** — register yourself as a contact (name + phone + DM Trigger toggle). Pre-populates from your account name.
+4. **DM Settings** — toggle Auto-Reply mode (Simple mode by default; Advanced reveals number allowlist).
+5. **Group Settings** — toggle "Monitor all groups" or select specific groups (Advanced reveals keyword triggers).
+6. **Contacts** — review auto-created contacts (bot + user) and add more manually.
+7. **Bind Agent** — select which AI agent handles this WhatsApp number. Auto-creates ContactAgentMapping for user and bot contacts.
+8. **All Done** — summary of all configured items with green/amber indicators.
+
+The wizard can also be launched manually from the Hub Communication tab or auto-launches after the onboarding tour if no WhatsApp instances exist.
+
+**Manual setup (alternative):**
+
+1. Navigate to **Hub → Communication → WhatsApp** in the UI.
+2. Click **Manual Setup** — provide a name and the WhatsApp phone number.
 3. The system spawns a Docker container (`mcp-agent-tenant_{timestamp}_{id}`) on `tsushin-network`.
 4. **Scan the QR code** — visible in the UI or via `docker logs <container_name> --tail=20`. The QR expires after ~60 seconds; refresh if needed.
 5. Once authenticated, the instance status changes to `running` with `connected=true`.
 6. **Configure filters** — set `group_filters`, `number_filters`, and `group_keywords` on the instance to control where the bot responds.
 7. **Assign to an agent** — on the agent's Channels tab, set `whatsapp_integration_id` to point to this instance.
 8. **Test** — send a message from the WhatsApp number; the bot should respond via the assigned agent.
+
+**Getting Started Checklist:** The Watcher dashboard displays a "Getting Started" widget tracking 5 setup milestones: Configure Agent, Connect Channel, Add Contacts, Test in Playground, Create Flow. It auto-hides when all items are complete and can be dismissed.
+
+**Hub Integration Summary:** A compact status strip above the Hub tab bar shows connection counts for AI Providers, WhatsApp, Telegram, Slack, Discord, and Webhooks at a glance.
+
+**Settings Progressive Disclosure:** The Settings page groups cards into "Essential" (Organization, Team Members, System AI, Integrations) always visible, and "Advanced" collapsed by default.
 
 ### 15.2 Telegram
 

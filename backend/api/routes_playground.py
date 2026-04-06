@@ -82,6 +82,7 @@ class PlaygroundAgentInfo(BaseModel):
     name: str
     description: Optional[str] = None
     is_active: bool
+    is_default: bool = False
 
 
 class ClearHistoryResponse(BaseModel):
@@ -137,7 +138,8 @@ async def get_available_agents(
                 "id": agent.id,
                 "name": agent_name,
                 "description": description,
-                "is_active": agent.is_active
+                "is_active": agent.is_active,
+                "is_default": bool(getattr(agent, 'is_default', False))
             })
 
         return result

@@ -58,7 +58,7 @@ export default function StepContacts() {
         await api.resolveAllContactsWhatsApp()
       } catch {}
     }
-    markStepComplete(5)
+    markStepComplete(6)
     nextStep()
   }
 
@@ -67,6 +67,44 @@ export default function StepContacts() {
       <p className="text-tsushin-slate text-sm">
         Add people your agent should recognize. Contacts let you control who gets responses, assign default agents, and personalize interactions.
       </p>
+
+      {/* Contacts from earlier steps */}
+      {(state.botContact || state.userContact) && (
+        <div>
+          <h4 className="text-sm font-medium text-white mb-2">Registered contacts</h4>
+          <div className="space-y-2">
+            {state.botContact && (
+              <div className="flex items-center justify-between bg-tsushin-deep/50 border border-tsushin-border rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span className="text-sm text-white">{state.botContact.friendly_name}</span>
+                  <span className="text-xs text-tsushin-slate">{state.botContact.phone_number}</span>
+                </div>
+                <span className="text-xs bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded font-medium">Bot</span>
+              </div>
+            )}
+            {state.userContact && (
+              <div className="flex items-center justify-between bg-tsushin-deep/50 border border-tsushin-border rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span className="text-sm text-white">{state.userContact.friendly_name}</span>
+                  <span className="text-xs text-tsushin-slate">{state.userContact.phone_number}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {state.userContact.is_dm_trigger && (
+                    <span className="text-xs bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded">DM Trigger</span>
+                  )}
+                  <span className="text-xs bg-teal-500/20 text-teal-400 px-2 py-0.5 rounded font-medium">You</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Contact creation form */}
       <div className="bg-tsushin-deep/50 rounded-xl p-4 space-y-3">
