@@ -23,6 +23,7 @@
 - **Vector stores** — Chroma (default), Pinecone, Qdrant, or MongoDB Atlas.
 - **19 built-in skills** — audio TTS/transcription, web search, scraping, browser automation, Gmail, flight search, scheduler, knowledge sharing, OKG terms, sandboxed shell/network tools, and more.
 - **Custom skills** — Instruction, Script (Python/Bash/Node), and MCP-server skills, gated by a Sentinel scan at save-time.
+- **37 slash commands** — agent management, email (Gmail), web search, shell, thread control, sandboxed tools, flows, scheduler, memory, project context, and system commands — all with per-contact access control.
 - **Sandboxed tools** — per-tenant Docker containers with `nmap`, `nuclei`, `dig`, `httpx`, `whois`, `katana`, `subfinder`, `sqlmap`, and a generic webhook tool. Invoked via `/tool <name> <cmd> param=value`.
 - **Flows** — 4 flow types (conversation, notification, workflow, task) with immediate, scheduled, or recurring (cron) execution; 7 step types with template-variable interpolation.
 - **Sentinel security** — AI-powered detection of prompt injection, agent takeover, poisoning, shell malicious intent, memory poisoning (MemGuard), browser SSRF, and vector-store poisoning. Profiles with block / warn-only / detect-only / off modes.
@@ -145,7 +146,7 @@ docker compose ps                          # Container states
 | Audit & syslog | [§23](documentation.md#23-audit-logging--compliance) |
 | Observability & metrics | [§24](documentation.md#24-observability) |
 | Public API v1 reference | [§25](documentation.md#25-public-api-v1) |
-| Slash commands | [§26](documentation.md#26-slash-commands-system-wide-catalog) |
+| Slash commands (37 commands + usage examples) | [§26](documentation.md#26-slash-commands-system-wide-catalog) |
 | Troubleshooting | [§28](documentation.md#28-troubleshooting) |
 
 ---
