@@ -1483,7 +1483,7 @@ class SummarizationStepHandler(FlowStepHandler):
 
         # === Path B: Raw text summarization (for tool/skill outputs) ===
         if not thread_id and source_text:
-            return await self._summarize_raw_text(source_text, config, source_step)
+            return await self._summarize_raw_text(source_text, config, source_step, flow_run=flow_run)
 
         # === Path A: Thread-based summarization (for conversation steps) ===
         try:
@@ -1634,11 +1634,15 @@ Summary:"""
             # Phase 7.2: Token tracking integrated via handler's token_tracker
             from agent.ai_client import AIClient
 
+            # Resolve tenant_id for API key lookup
+            tenant_id = getattr(flow_run, 'tenant_id', None)
+
             ai_client = AIClient(
                 provider=model_provider,
                 model_name=model,
                 db=self.db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=tenant_id,
             )
 
             logger.info(f"Generating summary for thread {thread_id} using {model_provider}/{model}...")
@@ -1688,7 +1692,8 @@ Summary:"""
         self,
         source_text: str,
         config: Dict[str, Any],
-        source_step: Optional[str] = None
+        source_step: Optional[str] = None,
+        flow_run: Optional[FlowRun] = None
     ) -> Dict[str, Any]:
         """Summarize raw text output from tool/skill steps using AI."""
         try:
@@ -1767,11 +1772,15 @@ Summary:"""
 
             from agent.ai_client import AIClient
 
+            # Resolve tenant_id for API key lookup
+            tenant_id = getattr(flow_run, 'tenant_id', None) if flow_run else None
+
             ai_client = AIClient(
                 provider=model_provider,
                 model_name=model,
                 db=self.db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=tenant_id,
             )
 
             source_label = source_step or "previous_step"
