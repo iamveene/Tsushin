@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Community Contributions
 
 - **WhatsApp contact name enrichment (PR [#6](https://github.com/iamveene/Tsushin/pull/6) by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Improved WhatsApp DM contact name resolution across all layers. The Go MCP bridge now uses a richer fallback chain (FullName → PushName → FirstName → BusinessName → message PushName → sender) and detects raw numeric identifiers to force re-resolution. The API reader reuses human-readable `chat_name` as `sender_name` for DMs when contact mappings miss. The messages API endpoint enriches responses via `CachedContactService`, replacing raw @lid identifiers with friendly names in both `sender_name` and `chat_name` columns.
+- **WhatsApp LID contact agent routing (PR [#8](https://github.com/iamveene/Tsushin/pull/8) by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Fixed DM routing for contacts using WhatsApp LID identifiers. Extracted contact resolution into `_resolve_direct_message_contact()` with a richer fallback chain: `CachedContactService` → chat_id metadata → fuzzy name matching → WhatsApp auto-discovery. The auto-discovery service now records newly observed LID aliases as `ContactChannelMapping` entries instead of discarding them, ensuring contact-agent mappings are preserved across identifier changes.
 
 ### Bug fixes
 
