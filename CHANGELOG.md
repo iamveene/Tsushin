@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - develop
 
+### Documentation
+
+- **DOC-001:** Comprehensive documentation overhaul of `documentation.md` — full accuracy audit against codebase
+- **DOC-002:** Document 11 missing slash commands: email (6), search, shell, thread (3) — total now 37 commands
+- **DOC-003:** Add §26.1 usage examples for all 37 slash commands organized by category
+- **DOC-004:** Add channel configuration reference tables — WhatsApp (`group_keywords`, `is_group_handler`, `api_secret`), Slack (`dm_policy`, `allowed_channels`), Discord (`dm_policy`, `allowed_guilds`, `guild_channel_config`)
+- **DOC-005:** Add E2E setup guides for all 5 external channels (WhatsApp, Telegram, Slack, Discord, Webhook)
+- **DOC-006:** Document per-agent trigger/context override fields (`trigger_dm_enabled`, `trigger_group_filters`, `trigger_number_filters`, `context_message_count`, `context_char_limit`) in §7.3
+- **DOC-007:** Expand §9.3 custom skills with subsections for Instruction, Script, and MCP Server variants including creation examples and resource quotas
+- **DOC-008:** Expand §9.4 sandboxed tools with full command/parameter tables from all 9 YAML manifests
+- **DOC-009:** Formalize FlowRun and FlowNodeRun status lifecycle enums in §13.5
+- **DOC-010:** Add OKG merge mode reference table (`replace`, `prepend`, `merge`) in §10.3
+- **DOC-011:** Add §16.4 contact usage examples (multi-channel mapping, system user linking, per-contact agent assignment)
+- **DOC-012:** Update README.md feature highlights and documentation map to reflect new content
+
 ### Security
 
 - **BUG-278:** Bump Next.js 14.1.0 → 14.2.33 — patches CVE-2025-29927, CVE-2024-34351, CVE-2024-46982, CVE-2024-51479 (4 High-severity Retire.JS findings)

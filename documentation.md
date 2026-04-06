@@ -463,11 +463,39 @@ Semantics:
 - **shared** — buffer is shared across senders for the agent.
 - **channel_isolated** — buffer is partitioned per channel (whatsapp/telegram/playground…).
 
-### 7.3 Cloning Agents
+### 7.3 Per-Agent Trigger & Context Overrides
+
+These fields on the Agent model allow per-agent overrides for messaging triggers and group context. When set to `NULL`, the system/tenant default from the `Config` table is used.
+
+Source: `backend/models.py:342-354`.
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `trigger_dm_enabled` | Boolean (nullable) | NULL (system default) | Enable/disable DM auto-response for this agent. When `true`, the agent responds to direct messages from unknown senders. |
+| `trigger_group_filters` | JSON (nullable) | NULL (system default) | List of WhatsApp group names this agent monitors, overriding `Config.group_filters`. Example: `["Support Group", "VIP Chat"]` |
+| `trigger_number_filters` | JSON (nullable) | NULL (system default) | List of phone numbers this agent monitors, overriding `Config.number_filters`. Example: `["+5511999990001"]` |
+| `context_message_count` | Integer (nullable) | NULL (system default) | Number of recent group messages fetched for context before responding. |
+| `context_char_limit` | Integer (nullable) | NULL (system default) | Character limit for the context window sent to the LLM. |
+
+**Configuration example** — Agent "SupportBot" with custom trigger settings:
+
+```json
+{
+  "trigger_dm_enabled": true,
+  "trigger_group_filters": ["Support Group", "VIP Chat"],
+  "trigger_number_filters": ["+5511999990001", "+5511999990002"],
+  "context_message_count": 15,
+  "context_char_limit": 8000
+}
+```
+
+These overrides are applied at the trigger/routing layer (`backend/mcp_reader/`) and `AgentRouter` (`backend/agent/agent_router.py`). The system default is inherited from the tenant `Config` row (`backend/models.py:19-20`). See also §15.1 for instance-level WhatsApp filters.
+
+### 7.4 Cloning Agents
 
 Cloning is performed via the agents API (`api.deleteAgent`, `api.updateAgent` exposed in `frontend/app/agents/page.tsx`). The Persona/Skills entities have dedicated Clone buttons (`frontend/app/agents/personas/page.tsx:185-203` — handleClonePersona); per-agent cloning follows the same duplicate-form pattern — not verified in source at the agent page level (confirm via `backend/api/routes_agents.py`).
 
-### 7.4 Multi-Agent Orchestration
+### 7.5 Multi-Agent Orchestration
 
 Two skills drive inter-agent behavior:
 
@@ -579,36 +607,235 @@ The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-
 
 Custom skills are tenant-authored skills registered under `backend/api/routes_custom_skills.py` and managed via Studio → Custom Skills (`frontend/app/agents/custom-skills/page.tsx`).
 
-Three type variants (Source: `frontend/app/agents/custom-skills/page.tsx:46-66`):
-- **Instruction** — natural-language instructions executed by the LLM.
-- **Script** — executable script deployed to a sandbox container.
-- **MCP Server** — external MCP-compliant tool server.
+**Resource quotas** (Source: `routes_custom_skills.py:33-35`):
+- Max instruction length: **8,000 characters**
+- Max script size: **256 KB**
+- Max skills per tenant: **50**
+
+**Common schema fields** (Source: `routes_custom_skills.py:59-77`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string, required | — | Skill display name |
+| `description` | string | null | Short description |
+| `icon` | string | null | Icon identifier |
+| `skill_type_variant` | string | `"instruction"` | `instruction` \| `script` \| `mcp_server` |
+| `execution_mode` | string | `"tool"` | `tool` (LLM-facing) \| `passive` (post-processing) |
+| `trigger_mode` | string | `"llm_decided"` | `llm_decided` (LLM decides when to call) \| `keyword` \| `always` |
+| `trigger_keywords` | string[] | `[]` | Keywords that activate the skill (when `trigger_mode=keyword`) |
+| `timeout_seconds` | integer | `30` | Execution timeout |
+| `priority` | integer | `50` | Priority order (lower = higher priority) |
+| `sentinel_profile_id` | integer | null | Security profile for Sentinel scan at save-time |
+| `input_schema` | object | `{}` | JSON Schema for skill input parameters |
 
 Lifecycle fields rendered in UI: `scan_status` (`pending`, `clean`, `rejected`, `unknown`), `last_scan_result`, `skill_type_variant` (Source: `:20-66`). Deployment handled by `backend/services/custom_skill_deploy_service.py`.
 
 At runtime, custom skills are adapted by `CustomSkillAdapter` (Source: `backend/agent/skills/custom_skill_adapter.py:25-53`): its `skill_type` becomes `"custom:{slug}"`, `skill_name` and `execution_mode` are pulled from the database record; `passive` adapters have no `can_handle`.
 
+#### 9.3.1 Instruction Skills
+
+Natural-language instructions executed by the LLM as a tool. The simplest custom skill type — no code required.
+
+| Field | Type | Description |
+|---|---|---|
+| `instructions_md` | string (max 8,000 chars) | Markdown instructions injected into the LLM tool definition |
+
+**Example — Create a "Policy Lookup" instruction skill:**
+
+```bash
+curl -X POST http://localhost:8081/api/custom-skills \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Policy Lookup",
+    "description": "Answers questions about company policies",
+    "skill_type_variant": "instruction",
+    "execution_mode": "tool",
+    "trigger_mode": "llm_decided",
+    "instructions_md": "When asked about company policies, search the knowledge base for relevant policy documents. Always cite the policy name and section number. If no policy is found, say so clearly.",
+    "timeout_seconds": 30
+  }'
+```
+
+#### 9.3.2 Script Skills
+
+Executable scripts deployed to a sandboxed container. Supports Python, Bash, and Node.js.
+
+| Field | Type | Description |
+|---|---|---|
+| `script_content` | string (max 256 KB) | The script source code |
+| `script_language` | string | `python` \| `bash` \| `nodejs` |
+| `script_entrypoint` | string | Entry function or file to execute |
+
+**Example — Create a Python data-processing skill:**
+
+```bash
+curl -X POST http://localhost:8081/api/custom-skills \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "CSV Analyzer",
+    "description": "Analyzes CSV data and returns statistics",
+    "skill_type_variant": "script",
+    "execution_mode": "tool",
+    "script_language": "python",
+    "script_entrypoint": "analyze",
+    "script_content": "import json\nimport statistics\n\ndef analyze(data: str) -> str:\n    rows = data.strip().split(\"\\n\")\n    return json.dumps({\"row_count\": len(rows)})",
+    "timeout_seconds": 60
+  }'
+```
+
+#### 9.3.3 MCP Server Skills
+
+Connect to an external MCP-compliant tool server. The skill proxies requests to the MCP server and returns results.
+
+| Field | Type | Description |
+|---|---|---|
+| `mcp_server_id` | integer | FK to a registered MCP server integration |
+| `mcp_tool_name` | string | The specific tool name exposed by the MCP server |
+
+**Example — Create an MCP Server skill:**
+
+```bash
+curl -X POST http://localhost:8081/api/custom-skills \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Database Query",
+    "description": "Query the analytics database via MCP",
+    "skill_type_variant": "mcp_server",
+    "execution_mode": "tool",
+    "mcp_server_id": 3,
+    "mcp_tool_name": "query_analytics",
+    "timeout_seconds": 45
+  }'
+```
+
 ### 9.4 Sandboxed Tools
 
 Command syntax via chat / API: `/tool <tool_name> <command_name> param=value` (e.g. `/tool nmap quick_scan target=scanme.nmap.org`, `/tool dig lookup domain=google.com`). Flags like `--target` are NOT supported — only `param=value`.
 
-Seeded tools (Source: `backend/services/sandboxed_tool_seeding.py:38-49`):
-
-| Slug | Purpose |
-|---|---|
-| `nuclei` | Vulnerability scanner |
-| `nmap` | Network scanner |
-| `dig` | DNS lookup |
-| `httpx` | HTTP probing |
-| `whois_lookup` | Domain WHOIS info |
-| `katana` | Web crawler |
-| `subfinder` | Subdomain discovery |
-| `webhook` | HTTP requests via curl |
-| `sqlmap` | SQL injection testing |
-
 Tools are defined via YAML manifests in `backend/tools/manifests/` (`sandboxed_tool_seeding.py:36`) and loaded into `SandboxedTool`/`SandboxedToolCommand`/`SandboxedToolParameter` tables (`models.py`). Container execution is the default (`execution_mode="container"`, Source: `models.py:1347`). The master toolbox image is built from `backend/containers/Dockerfile.toolbox`.
 
 The `sandboxed_tools` skill acts as a passive gate — it grants the agent access to these tools without itself being an LLM-facing tool (`sandboxed_tools_skill.py:36`).
+
+#### 9.4.1 nmap — Network Scanner
+
+| Command | Template | Parameters |
+|---|---|---|
+| `quick_scan` | `nmap -T4 -F {target} -oN {output_file}` | `target` (string, **required**), `output_file` (string, default: `nmap_quick_scan.txt`) |
+| `service_scan` | `nmap -sV --version-intensity {intensity} {target} -oN {output_file}` | `target` (**required**), `intensity` (integer 0-9, default: `5`), `output_file` |
+| `ping_scan` | `nmap -sn {target} -oN {output_file}` | `target` (**required**), `output_file` |
+| `aggressive_scan` | `nmap -A -p {ports} {target} -oN {output_file}` | `target` (**required**), `ports` (string, default: `1-1000`), `output_file` |
+
+**Examples:**
+```
+/tool nmap quick_scan target=scanme.nmap.org
+/tool nmap service_scan target=192.168.1.1 intensity=7
+/tool nmap ping_scan target=192.168.1.0/24
+/tool nmap aggressive_scan target=scanme.nmap.org ports=80,443
+```
+
+#### 9.4.2 nuclei — Vulnerability Scanner
+
+| Command | Template | Parameters |
+|---|---|---|
+| `start_scan` | `nuclei -u {url} ... -t http/misconfiguration/ -t http/vulnerabilities/` | `url` (string, **required**) |
+| `severity_scan` | `nuclei -u {url} -s {severity}` | `url` (**required**), `severity` (string: `info`/`low`/`medium`/`high`/`critical`, default: `critical`) |
+| `full_scan` | `nuclei -u {url}` (all templates, long-running) | `url` (**required**) |
+
+**Examples:**
+```
+/tool nuclei start_scan url=http://testphp.vulnweb.com
+/tool nuclei severity_scan url=http://testphp.vulnweb.com severity=high
+/tool nuclei full_scan url=http://testphp.vulnweb.com
+```
+
+#### 9.4.3 dig — DNS Lookup
+
+| Command | Template | Parameters |
+|---|---|---|
+| `lookup` | `dig {domain} {record_type} +short` | `domain` (string, **required**), `record_type` (string: `A`/`AAAA`/`MX`/`NS`/`TXT`/`CNAME`/`SOA`/`ANY`, default: `A`) |
+| `reverse` | `dig -x {ip_address} +short` | `ip_address` (string, **required**) |
+
+**Examples:**
+```
+/tool dig lookup domain=google.com record_type=MX
+/tool dig reverse ip_address=8.8.8.8
+```
+
+#### 9.4.4 httpx — HTTP Probing
+
+| Command | Template | Parameters |
+|---|---|---|
+| `probe` | `httpx -u {target} -silent -o {output_file}` | `target` (string, **required**), `output_file` (default: `httpx_results.txt`) |
+| `tech_detect` | `httpx -u {target} -tech-detect -o {output_file}` | `target` (**required**), `output_file` (default: `httpx_tech.txt`) |
+
+**Examples:**
+```
+/tool httpx probe target=https://github.com
+/tool httpx tech_detect target=https://shopify.com
+```
+
+#### 9.4.5 whois_lookup — Domain WHOIS Info
+
+| Command | Template | Parameters |
+|---|---|---|
+| `lookup` | `whois {domain} \| head -30` | `domain` (string, **required**) |
+
+**Example:**
+```
+/tool whois_lookup lookup domain=github.com
+```
+
+#### 9.4.6 katana — Web Crawler
+
+| Command | Template | Parameters |
+|---|---|---|
+| `crawl` | `katana -u {target} -d {depth} -jc -silent ...` | `target` (string, **required**), `depth` (integer 1-3, default: `1`) |
+
+**Examples:**
+```
+/tool katana crawl target=https://example.com
+/tool katana crawl target=https://example.com depth=2
+```
+
+#### 9.4.7 subfinder — Subdomain Discovery
+
+| Command | Template | Parameters |
+|---|---|---|
+| `scan` | `subfinder -d {domain} -silent` | `domain` (string, **required**) |
+
+**Example:**
+```
+/tool subfinder scan domain=github.com
+```
+
+#### 9.4.8 webhook — HTTP Requests
+
+| Command | Template | Parameters |
+|---|---|---|
+| `get` | `curl -sSLk -X GET "{url}" ...` | `url` (string, **required**) |
+| `post` | `curl -sSLk -X POST "{url}" -d '{payload}' ...` | `url` (**required**), `payload` (JSON string, **required**), `output_file` |
+
+**Examples:**
+```
+/tool webhook get url=https://api.github.com/users/octocat
+/tool webhook post url=https://webhook.site/your-id payload={"message":"Hello from Tsushin"}
+```
+
+#### 9.4.9 sqlmap — SQL Injection Testing
+
+| Command | Template | Parameters |
+|---|---|---|
+| `scan` | `sqlmap -u {target} --batch --level=1 --risk=1 --dbs` | `target` (string, **required** — URL with testable parameter) |
+
+**Example:**
+```
+/tool sqlmap scan target=http://testphp.vulnweb.com/listproducts.php?cat=1
+```
+
+Source: YAML manifests in `backend/tools/manifests/` (9 files). Seeding: `backend/services/sandboxed_tool_seeding.py:38-49`.
 
 ---
 
@@ -652,8 +879,15 @@ Core operations: **store**, **recall**, **forget**, **merge**. Features:
 - **MemGuard Layer A** pre-storage validation (security gate).
 - Deterministic deduplication by `doc_id` (`sha256(agent_id:user_id:subject:relation:text[:100])[:32]`, `:31-37`).
 - Temporal decay scoring.
-- Merge modes: `replace`, `prepend`, `merge` (`:28`).
 - Audit logging to `okg_memory_audit_log` (Source: `models.py:3579-3609`).
+
+**Merge modes** (Source: `okg_memory_service.py:28`):
+
+| Mode | Behavior |
+|---|---|
+| `merge` (default) | Intelligent merge of new content into existing memory entry |
+| `replace` | New value completely overwrites the existing entry |
+| `prepend` | New value is prepended to the existing text |
 
 Valid memory types (`okg_memory_service.py:26`): `fact`, `episodic`, `semantic`, `procedural`, `belief`.
 Valid sources (`:27`): `tool_call`, `auto_capture`, `import`.
@@ -871,9 +1105,35 @@ Variable references inside step configs/messages:
 
 Built-in helpers (Source: `template_parser.py:69-82`): `truncate`, `upper`, `lower`, `default`, `json`, `length`, `first`, `last`, `join`, `replace`, `trim`.
 
-### 13.5 Stale Flow Cleanup
+### 13.5 Flow Execution Status Lifecycle
 
-Source: `backend/flows/stale_flow_cleanup.py`. Periodically removes or marks stale flow runs (orphaned conversation threads, timed-out runs). `FlowRun` statuses include `pending`, `running`, `completed`, `failed`, `cancelled`, `paused`, `timeout` (`models.py:1656`).
+**FlowRun statuses** (Source: `models.py:1663`):
+
+| Status | Meaning |
+|---|---|
+| `pending` | Queued but not yet started |
+| `running` | Currently executing steps |
+| `completed` | All steps finished successfully |
+| `failed` | One or more steps failed |
+| `cancelled` | Manually cancelled by user or system |
+| `paused` | Execution paused (e.g., conversation step awaiting response) |
+| `timeout` | Exceeded time limit, auto-terminated |
+
+**FlowNodeRun (step-level) statuses** (Source: `models.py:1708`):
+
+| Status | Meaning |
+|---|---|
+| `pending` | Step queued, awaiting execution |
+| `running` | Step currently executing |
+| `completed` | Step finished successfully |
+| `failed` | Step failed (may retry based on `retry_on_failure` config) |
+| `skipped` | Step skipped due to condition or `on_failure=skip` |
+| `cancelled` | Step cancelled (parent flow cancelled) |
+| `timeout` | Step exceeded `timeout_seconds` |
+
+### 13.6 Stale Flow Cleanup
+
+Source: `backend/flows/stale_flow_cleanup.py`. Periodically removes or marks stale flow runs (orphaned conversation threads, timed-out runs).
 
 ---
 
@@ -950,6 +1210,29 @@ Adapter capability flags (`backend/channels/whatsapp/adapter.py:22-28`):
 
 **Health check** (`adapter.py:99-121`): Calls the MCP bridge's `/health` endpoint via `MCPSender.check_health()`, returning connected/disconnected with latency (ms).
 
+**WhatsApp MCP instance configuration reference** (Source: `models.py:2759-2773`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `is_group_handler` | Boolean | `false` | Only one instance per tenant should handle groups (prevents duplicate responses in multi-instance setups) |
+| `group_filters` | JSON (nullable) | NULL | WhatsApp group names to monitor. Example: `["Support Group", "VIP Chat"]` |
+| `number_filters` | JSON (nullable) | NULL | Phone number allowlist for DMs. Example: `["+5500000000001"]` |
+| `group_keywords` | JSON (nullable) | NULL | Keywords that trigger bot responses in groups. Example: `["help", "bot", "support"]`. When set, the bot only responds to group messages containing these keywords. |
+| `dm_auto_mode` | Boolean | `true` | Auto-reply to direct messages from unknown senders. Disable to require contacts to be pre-registered. |
+| `api_secret` | String(64) (nullable) | NULL | 32-byte hex-encoded token for cross-tenant MCP authentication (SSRF prevention) |
+| `api_secret_created_at` | DateTime (nullable) | NULL | Timestamp for secret rotation tracking |
+
+**E2E setup — WhatsApp channel:**
+
+1. Navigate to **Hub → Channels → WhatsApp** in the UI.
+2. Click **Add Instance** — provide a name and the WhatsApp phone number.
+3. The system spawns a Docker container (`mcp-agent-tenant_{timestamp}_{id}`) on `tsushin-network`.
+4. **Scan the QR code** — visible in the UI or via `docker logs <container_name> --tail=20`. The QR expires after ~60 seconds; refresh if needed.
+5. Once authenticated, the instance status changes to `running` with `connected=true`.
+6. **Configure filters** — set `group_filters`, `number_filters`, and `group_keywords` on the instance to control where the bot responds.
+7. **Assign to an agent** — on the agent's Channels tab, set `whatsapp_integration_id` to point to this instance.
+8. **Test** — send a message from the WhatsApp number; the bot should respond via the assigned agent.
+
 ### 15.2 Telegram
 
 **Source:** `backend/channels/telegram/adapter.py`
@@ -966,6 +1249,17 @@ Capability flags (`adapter.py:19-25`):
 **Health check** (`adapter.py:86-100`): Calls the Telegram bot API `getMe` and reports the bot's `@username`. `ChannelHealthService` directly hits `https://api.telegram.org/bot{token}/getMe` as well (`channel_health_service.py:268-269`).
 
 **Token storage**: Encrypted with Fernet using the Telegram per-workspace encryption key (`services/encryption_key_service.get_telegram_encryption_key`, `services/channel_health_service.py:451-466`). Stored on `TelegramBotInstance.bot_token_encrypted`.
+
+**E2E setup — Telegram channel:**
+
+1. Create a bot via **@BotFather** on Telegram — use `/newbot`, choose a name and username.
+2. Copy the bot token (format: `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`).
+3. Navigate to **Hub → Channels → Telegram** in the UI.
+4. Click **Add Bot** — paste the bot token; the system validates by calling `getMe`.
+5. Choose delivery mode: **Webhook** (recommended for production) or **Polling** (simpler, no public URL required).
+6. If using webhook: provide the publicly accessible URL where Telegram will send updates.
+7. **Assign to an agent** — on the agent's Channels tab, set `telegram_integration_id`.
+8. **Test** — message the bot on Telegram; it should respond via the assigned agent.
 
 ### 15.3 Slack
 
@@ -989,6 +1283,28 @@ Capability flags (`adapter.py:20-26`):
 
 **OAuth & scopes:** Credentials and scope configuration are not enumerated in the adapter; Slack app installation produces a `xoxb-` bot token that is stored encrypted on the integration row. Not verified in source — refer to SlackIntegration model and OAuth install route for exact scopes.
 
+**Slack access control configuration** (Source: `models.py:2867-2868`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `dm_policy` | String(20) | `"allowlist"` | DM access policy: `open` (accept all DMs), `allowlist` (only respond in allowed channels), `disabled` (ignore all DMs) |
+| `allowed_channels` | JSON | `[]` | List of Slack channel IDs the bot may respond in. Only used when `dm_policy=allowlist`. Example: `["C0123ABC", "C0456DEF"]` |
+
+**E2E setup — Slack channel:**
+
+1. **Create a Slack App** at [api.slack.com/apps](https://api.slack.com/apps):
+   - Add bot token scopes: `chat:write`, `channels:read`, `users:read`, `files:write` (minimum).
+   - For Socket Mode: enable Socket Mode and generate an app-level token (`xapp-...`).
+   - For HTTP Events API: set the Request URL and copy the Signing Secret.
+2. **Install the app** to your workspace — copy the `xoxb-` bot token.
+3. Navigate to **Hub → Channels → Slack** in the UI.
+4. Click **Add Integration** — paste the bot token and app token (or signing secret for HTTP mode).
+5. Choose mode: **Socket Mode** (recommended — no public URL needed) or **HTTP Events API**.
+6. Set `dm_policy` — `open` to accept all DMs, `allowlist` to restrict to specific channels, or `disabled`.
+7. If using allowlist, add the Slack channel IDs where the bot should operate.
+8. **Assign to an agent** — on the agent's Channels tab, set `slack_integration_id`.
+9. **Test** — message the bot in an allowed channel or DM; it should respond via the assigned agent.
+
 ### 15.4 Discord
 
 **Source:** `backend/channels/discord/adapter.py`
@@ -1009,6 +1325,26 @@ Capability flags (`adapter.py:27-33`):
 **Health check** (`adapter.py:141-162`): `GET /users/@me`.
 
 **Model:** `DiscordIntegration` (`backend/models.py:2876`). Bot token Fernet-encrypted (`services/encryption_key_service.get_discord_encryption_key`).
+
+**Discord access control configuration** (Source: `models.py:2904-2906`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `dm_policy` | String(20) | `"allowlist"` | DM access policy: `open` (accept all DMs), `allowlist` (only respond in allowed guilds/channels), `disabled` (ignore all DMs) |
+| `allowed_guilds` | JSON | `[]` | List of Discord guild (server) IDs the bot may operate in. Example: `["123456789012345678"]` |
+| `guild_channel_config` | JSON | `{}` | Per-guild channel configuration — controls which channels within each guild the bot listens to. Example: `{"123456789012345678": {"channels": ["987654321098765432"]}}` |
+
+**E2E setup — Discord channel:**
+
+1. **Create a Discord Application** at [discord.com/developers](https://discord.com/developers/applications).
+2. Under **Bot** settings: reset/copy the bot token, enable **Message Content Intent** and other required Gateway Intents.
+3. Under **OAuth2 → URL Generator**: select `bot` scope and required permissions (`Send Messages`, `Read Message History`, `Attach Files`). Use the generated URL to invite the bot to your server.
+4. Navigate to **Hub → Channels → Discord** in the UI.
+5. Click **Add Integration** — paste the bot token and the Application ID.
+6. Set `dm_policy` and `allowed_guilds` to control where the bot responds.
+7. Optionally configure `guild_channel_config` for per-guild channel restrictions.
+8. **Assign to an agent** — on the agent's Channels tab, set `discord_integration_id`.
+9. **Test** — message the bot in a Discord channel or DM; it should respond via the assigned agent.
 
 ### 15.5 Webhook
 
@@ -1036,6 +1372,31 @@ Capability flags (`adapter.py:39-46`):
 **Health:** Uses stored snapshot from the `WebhookIntegration` row (`is_active`, `status`, `circuit_breaker_state`, `health_status`, `circuit_breaker_failure_count`) — no live probe to avoid amplification (`adapter.py:204-222`).
 
 **Model:** `WebhookIntegration` (`backend/models.py:2918`).
+
+**E2E setup — Webhook channel:**
+
+1. Navigate to **Hub → Channels → Webhooks** in the UI.
+2. Click **Add Integration** — provide a name and optionally a callback URL for outbound responses.
+3. The system generates an HMAC signing secret (visible once, stored encrypted). **Copy and save it.**
+4. Configure optional defenses: IP allowlist (CIDR ranges), rate limit (RPM), max payload size.
+5. **Assign to an agent** — on the agent's Channels tab, set `webhook_integration_id`.
+6. **Test inbound** — send a signed event to your webhook:
+
+```bash
+# Generate HMAC signature
+TIMESTAMP=$(date +%s)
+BODY='{"text":"Hello from webhook","sender_key":"external-user-1"}'
+SIGNATURE=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "<your_api_secret>" | awk '{print $2}')
+
+# Send inbound event
+curl -X POST http://localhost:8081/api/webhooks/<webhook_id>/inbound \
+  -H "Content-Type: application/json" \
+  -H "X-Tsushin-Signature: sha256=${SIGNATURE}" \
+  -H "X-Tsushin-Timestamp: ${TIMESTAMP}" \
+  -d "${BODY}"
+```
+
+7. If `callback_url` is configured, the agent's response will be POSTed there with HMAC-signed headers.
 
 ### 15.6 Playground
 
@@ -1132,6 +1493,58 @@ Two-level policy (tenant default + per-contact override):
 - **Per-contact override** — `Contact.slash_commands_enabled` (NULL/True/False) (Source: `models.py:166`).
 
 Enforcement logic: `backend/services/slash_command_permission_service.py` (referenced under `backend/services/`). Available slash commands are defined in `backend/services/slash_command_service.py` and related `*_command_service.py` modules.
+
+### 16.4 Usage Examples
+
+**Create a contact with multi-channel mapping:**
+
+```bash
+# Create the contact
+curl -X POST http://localhost:8081/api/contacts \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "friendly_name": "John Doe",
+    "role": "user",
+    "is_dm_trigger": true,
+    "slash_commands_enabled": true,
+    "notes": "VIP customer, priority support"
+  }'
+
+# Add WhatsApp channel mapping
+curl -X POST http://localhost:8081/api/contacts/<contact_id>/channel-mappings \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_type": "whatsapp", "channel_identifier": "+5511999990001"}'
+
+# Add Telegram channel mapping
+curl -X POST http://localhost:8081/api/contacts/<contact_id>/channel-mappings \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_type": "telegram", "channel_identifier": "123456789"}'
+```
+
+**Link a contact to a system user account:**
+
+```bash
+curl -X PATCH http://localhost:8081/api/contacts/<contact_id> \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"linked_user_id": 5}'
+```
+
+When a contact is linked to a system user, messages from that contact inherit the user's RBAC permissions and audit trail.
+
+**Assign a default agent per contact:**
+
+```bash
+curl -X POST http://localhost:8081/api/contacts/<contact_id>/agent-mapping \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": 3}'
+```
+
+This ensures messages from this contact are always routed to the specified agent, overriding the tenant's default agent.
 
 ---
 
@@ -1982,12 +2395,129 @@ Seed entries (`backend/db.py:830-1259`, all `tenant_id="_system"`, `handler_type
 | scheduler | `scheduler create` | `^/scheduler\s+create\s+(.+)$` | NL event creation with recurrence/duration |
 | scheduler | `scheduler update` | see regex | Update event name/description |
 | scheduler | `scheduler delete` | | Delete an event |
+| email | `email inbox` | `^/email\s+inbox(?:\s+(\d+))?$` | List recent emails from inbox (zero AI tokens). Optional count param. |
+| email | `email search` | `^/email\s+search\s+"?(.+?)"?$` | Search emails with Gmail query syntax (zero AI tokens) |
+| email | `email unread` | `^/email\s+unread$` | Show unread email count and list |
+| email | `email info` | `^/email\s+info$` | Show Gmail configuration and connection status |
+| email | `email list` | `^/email\s+list(?:\s+(\w+))?$` | List emails with optional filter: `unread`, `today`, or a count |
+| email | `email read` | `^/email\s+read\s+(.+)$` | Read full email by ID or list index |
+| search | `search` | `^/search\s+"?(.+?)"?$` | Web search (zero AI tokens, uses Brave Search) |
+| shell | `shell` | `^/shell\s+(?:([\w\-@]+):)?(.+)$` | Execute shell command on a registered beacon host |
+| thread | `thread end` | `^/thread\s+end$` | End the active conversation thread |
+| thread | `thread list` | `^/thread\s+list$` | List active conversation threads for this sender |
+| thread | `thread status` | `^/thread\s+status$` | Show current thread details (objective, progress, time) |
+
+**Total: 37 built-in commands** (26 seeded in `db.py` + 11 added via migrations).
 
 **Tenant customization:** `SlashCommand.tenant_id` supports per-tenant overrides; the service query unions the tenant and `_system` rows (`slash_command_service.py:58-73`). Tenant custom commands are managed under **Settings → Prompts & Patterns → Slash Commands** (§21.11).
 
 **Handler dispatch:** `SlashCommandService` (`slash_command_service.py:20`) matches the incoming text against each command's regex `pattern`, filters by `language_code`, and routes to the matching built-in handler. If a command resolves to a sandboxed tool name, execution is delegated through `_parse_tool_arguments` → `ToolDiscoveryService`. Flag-style args (`--target`) are rejected for sandboxed tools (`:1668`) — use `param=value` syntax instead.
 
 **`/help` behavior** (`slash_command_service.py:1017-1086`): `/help` lists all commands grouped by category; `/help <command>` shows syntax + examples for one command; `/help all` renders every command's first-line usage.
+
+### 26.1 Usage Examples by Category
+
+#### Agent commands
+```
+/invoke SecurityBot              — Switch to SecurityBot agent
+/agent info                      — Show current active agent details
+/agent skills                    — List skills enabled for the active agent
+/agent list                      — List all agents in the tenant
+```
+
+#### Project commands
+```
+/project enter MyProject         — Enter project context
+/project exit                    — Exit current project context
+/project list                    — List all projects
+/project info                    — Show current project details
+```
+
+#### Memory commands
+```
+/memory clear                    — Clear conversation memory for current sender
+/memory status                   — Show memory statistics (ring buffer, semantic, facts)
+/facts list                      — List all learned facts about the current user
+```
+
+#### Email commands (requires Gmail skill enabled)
+```
+/email inbox                     — Show last 10 emails
+/email inbox 20                  — Show last 20 emails
+/email unread                    — Show unread emails
+/email search "from:boss subject:urgent"  — Search with Gmail query syntax
+/email read 3                    — Read email #3 from the last list
+/email info                      — Show Gmail connection status
+/email list unread               — List filtered by unread
+/email list today                — List today's emails
+```
+
+#### Search commands (requires web_search skill)
+```
+/search "kubernetes best practices 2026"  — Web search via Brave Search
+```
+
+#### Shell commands (requires shell skill + registered beacon)
+```
+/shell ls -la                    — Execute on default target beacon
+/shell myserver:df -h            — Execute on specific host "myserver"
+/shell @all:uptime               — Execute on all registered beacons
+```
+
+#### Thread commands
+```
+/thread status                   — Show current thread objective, progress, time
+/thread list                     — Show all active threads for this sender
+/thread end                      — End the current active thread
+```
+
+#### Tool commands (sandboxed — see §9.4 for full parameter reference)
+```
+/tool nmap quick_scan target=scanme.nmap.org
+/tool dig lookup domain=google.com record_type=MX
+/tool nuclei start_scan url=http://testphp.vulnweb.com
+/tool httpx probe target=https://github.com
+/tool subfinder scan domain=github.com
+/tool katana crawl target=https://example.com depth=2
+/tool whois_lookup lookup domain=github.com
+/tool webhook get url=https://api.github.com/users/octocat
+/tool sqlmap scan target=http://testphp.vulnweb.com/listproducts.php?cat=1
+```
+
+#### Inject commands (buffer tool output for conversation context)
+```
+/inject                          — Inject last tool output into conversation
+/inject list                     — List buffered tool executions
+/inject clear                    — Clear inject buffer
+```
+
+#### Flow commands
+```
+/flows list                      — List all workflows
+/flows run "Daily Report"        — Execute a workflow by name
+/flows run 42                    — Execute a workflow by ID
+```
+
+#### Scheduler commands
+```
+/scheduler info                  — Show calendar provider and account info
+/scheduler list today            — List today's events
+/scheduler list week             — List this week's events
+/scheduler list 2026-04-15       — List events for a specific date
+/scheduler create "Team standup tomorrow at 9am, recurring weekdays"
+/scheduler update 42 name="Updated Standup"
+/scheduler delete 42             — Delete event by ID
+```
+
+#### System commands
+```
+/commands                        — List all available commands (aliases: /help, /?)
+/help                            — General help
+/help email                      — Help for email commands
+/status                          — Show agent/channel/project context
+/tools                           — List available sandboxed tools
+/shortcuts                       — Show keyboard shortcuts
+```
 
 ---
 
