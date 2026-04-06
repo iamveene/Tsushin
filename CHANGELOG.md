@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - develop
 
+### Bug Fixes (E2E validated 2026-04-06)
+
+- **Summarization source_step field mapping:** `SummarizationStepHandler` now resolves `output` and `message` fields from slash_command/skill steps (previously only checked `raw_output`)
+- **Summarization tenant_id:** Both summarization paths (conversation + raw text) now pass `tenant_id` to `AIClient` for proper API key resolution
+- **Gate tenant_id:** Agentic gate handler passes `tenant_id` to `AIClient` for API key resolution
+- **WhatsApp MCP registration:** Flow notification steps now resolve MCP URL from registered `WhatsAppMCPInstance` records
+
 ### UX Friction Reduction
 
 - **WhatsApp Setup Wizard (7→8 steps):** Added "About You" step (Step 3) that collects the user's name and phone number, auto-creates a contact with DM Trigger enabled, and links it to the bound agent. Step 2 now includes an optional "Instance Name" field that auto-creates a bot contact. Steps 4-5 (DM/Group settings) have Simple/Advanced mode toggle for progressive disclosure. Step 8 (Confirmation) shows enhanced summary with green/amber indicators for completed/skipped items.
