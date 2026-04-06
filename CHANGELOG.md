@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BUG-298:** Pass `tenant_id` to `AgentService` in `AgentRouter.__init__` — watcher instances crashed with "No API key found" for tenant-scoped providers
+
 #### v0.6.0 Comprehensive Audit Remediation (2026-04-06)
 99-finding security and quality audit across 11 teams, 51 fixes applied in 41 files.
 

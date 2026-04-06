@@ -125,7 +125,8 @@ class AgentRouter:
             config,
             contact_service=self.contact_service,
             db=db_session,
-            token_tracker=self.token_tracker
+            token_tracker=self.token_tracker,
+            tenant_id=self.tenant_id
         )
         self.mcp_sender = MCPSender()
         self.mcp_reader = mcp_reader  # For fetching context messages
