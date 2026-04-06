@@ -27,6 +27,50 @@ router = APIRouter(tags=["Projects"])
 MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB max file size
 MAX_FILENAME_LENGTH = 255
 
+# BUG-SEC-019: Magic bytes signatures for file type validation.
+# Maps file extension to a list of (offset, magic_bytes) tuples.
+# If extension not listed, content-type check is skipped (text-based formats).
+MAGIC_BYTES_SIGNATURES: Dict[str, list] = {
+    ".pdf":  [(0, b"%PDF")],
+    ".xlsx": [(0, b"PK\x03\x04")],      # OOXML ZIP container
+    ".xls":  [(0, b"\xD0\xCF\x11\xE0")],  # OLE2 compound document
+    ".docx": [(0, b"PK\x03\x04")],      # OOXML ZIP container
+    ".doc":  [(0, b"\xD0\xCF\x11\xE0")],  # OLE2 compound document
+    ".rtf":  [(0, b"{\\rtf")],
+}
+
+# Extensions that are plain text and don't have magic bytes
+TEXT_EXTENSIONS = {".txt", ".csv", ".json", ".md", ".markdown"}
+
+
+def validate_file_magic_bytes(file_data: bytes, extension: str) -> bool:
+    """
+    BUG-SEC-019: Validate that a file's content matches its declared extension
+    by checking magic bytes. Returns True if valid, False if mismatch detected.
+
+    Text-based formats (.txt, .csv, .json, .md) are always accepted since they
+    have no reliable magic bytes signature.
+    """
+    ext_lower = extension.lower()
+
+    # Text formats: no magic bytes to check
+    if ext_lower in TEXT_EXTENSIONS:
+        return True
+
+    # If we have a known signature, verify it
+    signatures = MAGIC_BYTES_SIGNATURES.get(ext_lower)
+    if not signatures:
+        # Unknown extension with no signature — allow (conservative)
+        return True
+
+    for offset, magic in signatures:
+        end = offset + len(magic)
+        if len(file_data) >= end and file_data[offset:end] == magic:
+            return True
+
+    # None of the signatures matched
+    return False
+
 
 def secure_filename(filename: str) -> str:
     """
@@ -407,6 +451,15 @@ async def upload_project_document(
         # Sanitize filename to prevent path traversal
         filename = secure_filename(file.filename or "document")
 
+        # BUG-SEC-019: Validate file magic bytes match declared extension
+        ext = os.path.splitext(filename)[1].lower()
+        if not validate_file_magic_bytes(file_data, ext):
+            raise HTTPException(
+                status_code=400,
+                detail=f"File content does not match declared type '{ext}'. "
+                       f"The file may be corrupted or mislabeled."
+            )
+
         result = await service.upload_project_document(
             tenant_id=current_user.tenant_id or project.tenant_id,
             user_id=current_user.id,
@@ -453,21 +506,18 @@ async def get_project_knowledge_chunks(
     current_user: User = Depends(get_current_user_required)
 ):
     """Get chunks for a project knowledge document."""
-    from models import ProjectKnowledge, ProjectKnowledgeChunk
+    from models import Project, ProjectKnowledge, ProjectKnowledgeChunk
 
-    service = ProjectService(db)
-
-    # Verify project access
-    project = await service.get_project(
-        tenant_id=current_user.tenant_id,
-        user_id=current_user.id,
-        project_id=project_id
-    )
-
+    # BUG-LOG-004 FIX: Defense-in-depth — verify project belongs to tenant
+    # at the DB level before accessing any child resources.
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.tenant_id == current_user.tenant_id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Verify doc_id belongs to this project (prevents cross-tenant IDOR)
+    # Verify doc_id belongs to this tenant-validated project (prevents cross-tenant IDOR)
     doc = db.query(ProjectKnowledge).filter(
         ProjectKnowledge.id == doc_id,
         ProjectKnowledge.project_id == project_id
