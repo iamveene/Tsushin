@@ -703,7 +703,10 @@ class AgentRouter:
         # Step 1: Check for keyword-based invocation (second priority)
         # Keywords work for any user in both groups and DMs
         # Phase 10: Filter by channel assignment
-        active_agents = self.db.query(Agent).filter(Agent.is_active == True).all()
+        active_query = self.db.query(Agent).filter(Agent.is_active == True)
+        if self.tenant_id:
+            active_query = active_query.filter(Agent.tenant_id == self.tenant_id)
+        active_agents = active_query.all()
         for agent in active_agents:
             if not is_agent_valid_for_channel(agent):
                 continue
@@ -780,7 +783,10 @@ class AgentRouter:
         # Step 3: Default agent (fallback for DMs only - LOWEST PRIORITY)
         # Phase 10: Also check channel validity for default agent
         # MONITORING 2026-01-08: Log default agent usage for audit
-        default_agent = self.db.query(Agent).filter(Agent.is_default == True).first()
+        default_query = self.db.query(Agent).filter(Agent.is_default == True)
+        if self.tenant_id:
+            default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
+        default_agent = default_query.first()
         if default_agent and is_agent_valid_for_channel(default_agent):
             self.logger.warning(f"⚠️ DEFAULT AGENT FALLBACK: Using agent {default_agent.id} for {sender} (no contact mapping, no mention, no keyword)")
             self.logger.warning(f"📊 AUDIT: Sender {sender} | Trigger: {trigger_type} | Default fallback used")
@@ -3672,7 +3678,10 @@ Current turn: {thread.current_turn} of {thread.max_turns}
 
             # If no saved session, try to get default agent
             if not agent_id:
-                default_agent = self.db.query(Agent).filter(Agent.is_default == True).first()
+                default_query = self.db.query(Agent).filter(Agent.is_default == True)
+                if self.tenant_id:
+                    default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
+                default_agent = default_query.first()
                 if default_agent:
                     agent_id = default_agent.id
 

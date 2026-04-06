@@ -247,7 +247,7 @@ def create_persona(
     # Generate AI summary for custom personas
     ai_summary = None
     try:
-        ai_service = AISummaryService()
+        ai_service = AISummaryService(db=db, tenant_id=ctx.tenant_id)
         ai_summary = ai_service.generate_persona_summary(
             name=persona_data.name,
             description=persona_data.description,
@@ -359,7 +359,7 @@ def update_persona(
                 if tone_preset:
                     tone_preset_name = tone_preset.name
 
-            ai_service = AISummaryService()
+            ai_service = AISummaryService(db=db, tenant_id=ctx.tenant_id)
             persona.ai_summary = ai_service.generate_persona_summary(
                 name=persona.name,
                 description=persona.description,

@@ -1136,7 +1136,8 @@ Important:
                 provider=agent.model_provider,
                 model_name=agent.model_name,
                 db=self.db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Get analysis (AWAIT the async method)
@@ -1361,7 +1362,8 @@ Generate your reply to continue working towards the objective.""")
                 provider=agent.model_provider,
                 model_name=agent.model_name,
                 db=self.db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Generate reply (AWAIT and use correct parameters)
@@ -1587,7 +1589,8 @@ Generate ONLY the message text - no quotes, no explanations."""
                 provider=agent.model_provider,
                 model_name=agent.model_name,
                 db=self.db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Generate opening (AWAIT the coroutine)
@@ -1679,7 +1682,8 @@ Generate a brief, professional closing message. Thank them and confirm completio
                 provider=agent.model_provider,
                 model_name=agent.model_name,
                 db=self.db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Generate closing (AWAIT the async method)
@@ -1804,7 +1808,8 @@ Generate a message to get the conversation back on track towards the objective, 
                 provider=agent.model_provider,
                 model_name=agent.model_name,
                 db=self.db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             response = await ai_client.generate(

@@ -15,7 +15,7 @@ class AISummaryService:
     Should use agent's configured LLM (model_provider and model_name).
     """
 
-    def __init__(self, model_provider: str = None, model_name: str = None, db=None, token_tracker=None):
+    def __init__(self, model_provider: str = None, model_name: str = None, db=None, token_tracker=None, tenant_id: Optional[str] = None):
         """
         Initialize AI Summary Service.
 
@@ -38,7 +38,8 @@ class AISummaryService:
             provider=self.model_provider,
             model_name=self.model_name,
             db=db,
-            token_tracker=token_tracker
+            token_tracker=token_tracker,
+            tenant_id=tenant_id
         )
 
     def generate_persona_summary(

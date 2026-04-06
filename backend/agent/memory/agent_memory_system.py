@@ -75,7 +75,8 @@ class AgentMemorySystem:
             provider=config.get("model_provider"),
             model_name=config.get("model_name"),
             db=db_session,
-            token_tracker=token_tracker
+            token_tracker=token_tracker,
+            tenant_id=config.get("tenant_id")
         )
 
         # Layer 4: Shared Memory Pool (cross-agent knowledge)

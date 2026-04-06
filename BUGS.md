@@ -1,6 +1,18 @@
 # Tsushin Bug Tracker
-**Open:** 0 | **In Progress:** 0 | **Resolved:** 330
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 331
 **Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)** + **Post-Release Stabilization (2026-04-06)**
+
+## Systemic tenant_id Audit (2026-04-06)
+
+### BUG-LOG-016: Systemic tenant_id resolution gaps — 11 instances across 6 files
+- **Status:** Resolved
+- **Reported:** 2026-04-06
+- **Resolved:** 2026-04-06
+- **Severity:** High
+- **Category:** Multi-Tenancy / API Key Resolution / Cross-Tenant Isolation
+- **Files:** `backend/scheduler/scheduler_service.py`, `backend/services/conversation_knowledge_service.py`, `backend/agent/ai_summary_service.py`, `backend/agent/memory/fact_extractor.py`, `backend/agent/router.py`, `backend/api/routes_personas.py`, `backend/agent/memory/agent_memory_system.py`, `backend/agent/skills/okg_term_memory_skill.py`, `backend/services/playground_service.py`
+- **Description:** Full-codebase audit found 11 remaining `tenant_id` resolution gaps across two categories: (A) 8 `AIClient` instantiations missing `tenant_id` parameter — `SchedulerService` (5 methods: `_analyze_conversation`, `_generate_agent_reply`, `_generate_opening_message`, `_generate_closing_message`, `provide_conversation_guidance`), `ConversationKnowledgeService._call_agent_llm`, `AISummaryService.__init__`, `FactExtractor._get_ai_client`. Without `tenant_id`, per-tenant API keys are silently bypassed, falling back to system-wide keys. (B) 3 `Agent` database queries in `AgentRouter._select_agent` missing `tenant_id` filter — keyword match (fetched ALL tenants' active agents), default agent fallback (returned first default across all tenants), and slash-command default agent. These allowed cross-tenant agent routing.
+- **Remediation:** (A) Added `tenant_id=agent.tenant_id` to all 8 AIClient calls. For `AISummaryService` and `FactExtractor`, added `tenant_id` constructor parameter and updated all 5 callers. (B) Added `Agent.tenant_id == self.tenant_id` filter to all 3 router queries (backward-compatible: no filter when `tenant_id` is None). Rebuilt backend, verified health/readiness.
 
 ## Post-Release Stabilization (2026-04-06)
 

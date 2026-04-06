@@ -431,7 +431,8 @@ Do not include any explanation, only the JSON array."""
                 provider=agent.model_provider,
                 model_name=agent.model_name,
                 db=self.db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Call LLM with simple prompt

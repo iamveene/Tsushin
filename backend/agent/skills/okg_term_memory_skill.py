@@ -437,6 +437,7 @@ class OKGTermMemorySkill(BaseSkill):
                 provider=provider_name,
                 model_name=model_name,
                 db=self._db,
+                tenant_id=agent.tenant_id if agent else None,
             )
 
             conversation = [
