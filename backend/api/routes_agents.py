@@ -18,6 +18,10 @@ from models import Agent, TonePreset, Contact, ContactAgentMapping, Config, Agen
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from services.audit_service import log_tenant_event, TenantAuditActions
+from services.whatsapp_binding_service import (
+    apply_agent_whatsapp_binding_policy,
+    get_whatsapp_agent_instance,
+)
 
 router = APIRouter()
 
@@ -635,9 +639,7 @@ def get_agent(
         "is_default": agent.is_default,
         "skills_count": skills_count,
         # Phase 10: Channel Configuration
-        "enabled_channels": agent.enabled_channels if isinstance(agent.enabled_channels, list) else (
-            json.loads(agent.enabled_channels) if agent.enabled_channels else ["playground", "whatsapp"]
-        ),
+        "enabled_channels": parse_enabled_channels(agent.enabled_channels),
         "whatsapp_integration_id": agent.whatsapp_integration_id,
         "telegram_integration_id": agent.telegram_integration_id,
         "slack_integration_id": agent.slack_integration_id,
@@ -702,6 +704,11 @@ def create_agent(
         if not _webhook:
             raise HTTPException(status_code=404, detail="Webhook integration not found")
 
+    if agent.whatsapp_integration_id is not None:
+        whatsapp_instance = get_whatsapp_agent_instance(db, ctx.tenant_id, agent.whatsapp_integration_id)
+        if not whatsapp_instance:
+            raise HTTPException(status_code=404, detail="WhatsApp integration not found")
+
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
         db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).update({"is_default": False})
@@ -723,6 +730,9 @@ def create_agent(
 
     new_agent = Agent(**agent_data)
     db.add(new_agent)
+
+    apply_agent_whatsapp_binding_policy(db, new_agent)
+
     db.commit()
     db.refresh(new_agent)
 
@@ -814,6 +824,11 @@ def update_agent(
         if not _webhook:
             raise HTTPException(status_code=404, detail="Webhook integration not found")
 
+    if agent.whatsapp_integration_id is not None:
+        whatsapp_instance = get_whatsapp_agent_instance(db, ctx.tenant_id, agent.whatsapp_integration_id)
+        if not whatsapp_instance:
+            raise HTTPException(status_code=404, detail="WhatsApp integration not found")
+
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
         db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id, Agent.id != agent_id).update({"is_default": False})
@@ -834,6 +849,8 @@ def update_agent(
     for field, value in update_data.items():
         if field in UPDATABLE_AGENT_FIELDS:
             setattr(db_agent, field, value)
+
+    apply_agent_whatsapp_binding_policy(db, db_agent)
 
     db_agent.updated_at = datetime.utcnow()
     db.commit()

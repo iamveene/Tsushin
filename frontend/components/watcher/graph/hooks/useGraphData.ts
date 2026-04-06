@@ -89,6 +89,7 @@ function transformBatchToAgentsGraphData(
   // Track which instances are used by agents
   const usedWhatsAppInstances = new Set<number>()
   const usedTelegramInstances = new Set<number>()
+  let needsWhatsAppUnassignedNode = false
 
   // Always show Playground channel node (always available for all agents)
   // Phase 6: Changed to always show Playground
@@ -125,13 +126,28 @@ function transformBatchToAgentsGraphData(
     }
 
     // WhatsApp channel
-    if (enabledChannels.includes('whatsapp') && agent.whatsapp_integration_id) {
-      usedWhatsAppInstances.add(agent.whatsapp_integration_id)
+    const resolvedWhatsAppInstanceId = agent.resolved_whatsapp_integration_id ?? agent.whatsapp_integration_id
+    if (enabledChannels.includes('whatsapp') && resolvedWhatsAppInstanceId) {
+      usedWhatsAppInstances.add(resolvedWhatsAppInstanceId)
       edges.push({
-        id: `e-whatsapp-${agent.whatsapp_integration_id}-${agentId}`,
-        source: `channel-whatsapp-${agent.whatsapp_integration_id}`,  // Channel is source
+        id: `e-whatsapp-${resolvedWhatsAppInstanceId}-${agentId}`,
+        source: `channel-whatsapp-${resolvedWhatsAppInstanceId}`,  // Channel is source
         target: agentId,                                              // Agent is target
         animated: true,
+        style: agent.whatsapp_binding_source === 'resolved_default'
+          ? { strokeDasharray: '6,4', opacity: 0.9 }
+          : undefined,
+      })
+    } else if (
+      enabledChannels.includes('whatsapp') &&
+      ['ambiguous', 'unassigned', 'stale_explicit'].includes(agent.whatsapp_binding_status || '')
+    ) {
+      needsWhatsAppUnassignedNode = true
+      edges.push({
+        id: `e-whatsapp-unassigned-${agentId}`,
+        source: 'channel-whatsapp-unassigned',
+        target: agentId,
+        style: { strokeDasharray: '4,4', stroke: '#f59e0b', opacity: 0.9 },
       })
     }
 
@@ -186,6 +202,22 @@ function transformBatchToAgentsGraphData(
         channelNodeIds.add(nodeId)
       }
     })
+
+  if (needsWhatsAppUnassignedNode && !channelNodeIds.has('channel-whatsapp-unassigned')) {
+    nodes.push({
+      id: 'channel-whatsapp-unassigned',
+      type: 'channel',
+      position: { x: 0, y: 0 },
+      data: {
+        type: 'channel',
+        channelType: 'whatsapp',
+        label: 'WhatsApp Unassigned',
+        status: 'error' as ChannelStatus,
+        healthStatus: 'warning',
+      },
+    })
+    channelNodeIds.add('channel-whatsapp-unassigned')
+  }
 
   // v0.6.0: Create Webhook channel nodes (for all instances in tenant)
   ;(data.channels.webhook || []).forEach((instance: WebhookChannelInfo) => {

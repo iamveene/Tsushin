@@ -53,6 +53,7 @@ type ReconnectionState struct {
 	lastActivityTime     time.Time
 	sessionStartTime     time.Time
 	isReconnecting       bool
+	reconnectLoopActive  bool
 	needsReauth          bool
 }
 
@@ -1188,8 +1189,12 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 	http.HandleFunc("/api/qr-code", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		// Check if client is already logged in
-		if client.IsLoggedIn() {
+		reconnectState.mutex.RLock()
+		needsReauth := reconnectState.needsReauth
+		reconnectState.mutex.RUnlock()
+
+		// Check if client is truly authenticated (not just holding stale credentials)
+		if client.IsLoggedIn() && !needsReauth {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"qr_code": nil,
@@ -1679,6 +1684,60 @@ func attemptReconnect(client *whatsmeow.Client, logger waLog.Logger) bool {
 	return false
 }
 
+func scheduleReconnectLoop(client *whatsmeow.Client, logger waLog.Logger, initialDelay time.Duration, reason string) {
+	go func() {
+		reconnectState.mutex.Lock()
+		if reconnectState.reconnectLoopActive || reconnectState.needsReauth {
+			reconnectState.mutex.Unlock()
+			return
+		}
+		reconnectState.reconnectLoopActive = true
+		reconnectState.mutex.Unlock()
+		defer func() {
+			reconnectState.mutex.Lock()
+			reconnectState.reconnectLoopActive = false
+			reconnectState.mutex.Unlock()
+		}()
+
+		if initialDelay > 0 {
+			time.Sleep(initialDelay)
+		}
+
+		for {
+			if client.IsConnected() && client.IsLoggedIn() {
+				return
+			}
+
+			reconnectState.mutex.RLock()
+			needsReauth := reconnectState.needsReauth
+			attempts := reconnectState.reconnectAttempts
+			maxAttempts := reconnectState.maxReconnectAttempts
+			reconnectState.mutex.RUnlock()
+
+			if needsReauth || attempts >= maxAttempts {
+				return
+			}
+
+			if attemptReconnect(client, logger) {
+				return
+			}
+
+			reconnectState.mutex.RLock()
+			needsReauth = reconnectState.needsReauth
+			attempts = reconnectState.reconnectAttempts
+			reconnectState.mutex.RUnlock()
+
+			if needsReauth || attempts >= maxAttempts {
+				return
+			}
+
+			wait := calculateBackoffDuration(attempts)
+			logger.Warnf("Reconnect loop (%s) still recovering; retrying in %v", reason, wait)
+			time.Sleep(wait)
+		}
+	}()
+}
+
 // startKeepalive sends periodic presence updates to maintain session
 func startKeepalive(client *whatsmeow.Client, logger waLog.Logger, stopChan <-chan struct{}) {
 	ticker := time.NewTicker(30 * time.Second)
@@ -1792,14 +1851,7 @@ func main() {
 
 		case *events.Disconnected:
 			logger.Warnf("⚠️  Disconnected from WhatsApp")
-
-			// Attempt automatic reconnection
-			go func() {
-				time.Sleep(2 * time.Second) // Brief pause before reconnecting
-				if !client.IsConnected() {
-					attemptReconnect(client, logger)
-				}
-			}()
+			scheduleReconnectLoop(client, logger, 2*time.Second, "disconnect")
 
 		case *events.LoggedOut:
 			logger.Errorf("❌ Device logged out from WhatsApp")
@@ -1813,6 +1865,46 @@ func main() {
 			currentQRCode = ""
 			qrCodeMutex.Unlock()
 
+			go func() {
+				logger.Infof("Triggering tester QR regeneration after logout...")
+				time.Sleep(1 * time.Second)
+
+				client.Disconnect()
+				time.Sleep(500 * time.Millisecond)
+
+				if err := client.Store.Delete(context.Background()); err != nil {
+					logger.Errorf("Failed to delete tester device from store: %v", err)
+				}
+
+				qrChan, _ := client.GetQRChannel(context.Background())
+				err := client.Connect()
+				if err != nil {
+					logger.Errorf("Failed to reconnect tester after logout: %v", err)
+					return
+				}
+
+				for evt := range qrChan {
+					if evt.Event == "code" {
+						qrPNG, err := qrcode.Encode(evt.Code, qrcode.Medium, 256)
+						if err == nil {
+							qrCodeMutex.Lock()
+							currentQRCode = base64.StdEncoding.EncodeToString(qrPNG)
+							qrCodeMutex.Unlock()
+							logger.Infof("✅ New tester QR code generated after logout")
+						}
+					} else if evt.Event == "success" {
+						qrCodeMutex.Lock()
+						currentQRCode = ""
+						qrCodeMutex.Unlock()
+						reconnectState.mutex.Lock()
+						reconnectState.needsReauth = false
+						reconnectState.mutex.Unlock()
+						logger.Infof("✅ Tester successfully re-authenticated after logout")
+						break
+					}
+				}
+			}()
+
 		case *events.StreamReplaced:
 			logger.Warnf("⚠️  Stream replaced - another device logged in with same session")
 			reconnectState.mutex.Lock()
@@ -1821,14 +1913,7 @@ func main() {
 
 		case *events.StreamError:
 			logger.Errorf("❌ Stream error: %v", v)
-
-			// Attempt reconnection for stream errors
-			go func() {
-				time.Sleep(5 * time.Second) // Wait a bit longer for stream errors
-				if !client.IsConnected() {
-					attemptReconnect(client, logger)
-				}
-			}()
+			scheduleReconnectLoop(client, logger, 5*time.Second, "stream_error")
 
 		case *events.TemporaryBan:
 			logger.Errorf("❌ Temporary ban from WhatsApp. Code: %s, Expire: %v", v.Code, v.Expire)

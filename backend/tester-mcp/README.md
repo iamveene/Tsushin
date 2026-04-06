@@ -47,7 +47,7 @@ docker run -d \
 
 ## API Endpoints
 
-- `GET /health` - Health check
+- `GET /api/health` - Health check
 - `POST /api/send` - Send message
 - `POST /api/download` - Download media
 - `GET /api/qr-code` - Get QR code for authentication

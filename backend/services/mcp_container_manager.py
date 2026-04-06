@@ -12,7 +12,7 @@ import logging
 import requests
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Any, Optional, Dict, Tuple
 from sqlalchemy.orm import Session
 
 from models import WhatsAppMCPInstance, Agent
@@ -36,6 +36,9 @@ class MCPContainerManager:
     CONTAINER_PREFIX = "mcp-"
     HEALTH_CHECK_TIMEOUT = 60  # seconds
     HEALTH_CHECK_INTERVAL = 5  # seconds
+    DNS_FALLBACK_ENV = "WHATSAPP_MCP_DNS_SERVERS"
+    TESTER_CONTAINER_NAME = "tester-mcp"
+    TESTER_API_URL = os.getenv("TESTER_MCP_API_URL", "http://tester-mcp:8080/api")
 
     def __init__(self):
         """Initialize container runtime"""
@@ -271,6 +274,7 @@ class MCPContainerManager:
             restart_policy={"Name": "unless-stopped"},
             network=network_name,  # Connect to tsushin network for backend communication
             command=["--port", "8080"],
+            dns=self._get_dns_servers(),
         )
 
         return container
@@ -307,6 +311,129 @@ class MCPContainerManager:
             logger.error(f"Failed to get container IP: {e}")
             return ''
 
+    def _sanitize_container_ref(self, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        value = value.strip()
+        return value or None
+
+    def _get_dns_servers(self) -> Optional[list[str]]:
+        raw_value = os.getenv(self.DNS_FALLBACK_ENV, "").strip()
+        if not raw_value:
+            return None
+        servers = [item.strip() for item in raw_value.split(",") if item.strip()]
+        return servers or None
+
+    def _canonical_session_data_path(self, instance: WhatsAppMCPInstance) -> str:
+        """Return the container-visible session directory path for an instance."""
+        return str(Path("/app/data") / "mcp" / instance.tenant_id / instance.container_name / "store")
+
+    def _canonical_messages_db_path(self, instance: WhatsAppMCPInstance) -> str:
+        return str(Path(self._canonical_session_data_path(instance)) / "messages.db")
+
+    def _extract_host_port(self, container_attrs: Dict[str, Any]) -> Optional[int]:
+        try:
+            port_info = (
+                container_attrs.get("NetworkSettings", {})
+                .get("Ports", {})
+                .get("8080/tcp")
+            )
+            if not port_info:
+                return None
+            host_port = port_info[0].get("HostPort")
+            return int(host_port) if host_port else None
+        except (TypeError, ValueError, IndexError, AttributeError):
+            return None
+
+    def _resolve_container(self, instance: WhatsAppMCPInstance, db: Optional[Session] = None) -> Tuple[Optional[Any], Optional[str]]:
+        """
+        Resolve a container by ID first, then by name.
+
+        Returns:
+            (container_object, preferred_reference)
+        """
+        refs = []
+        container_id = self._sanitize_container_ref(instance.container_id)
+        if instance.container_id != container_id:
+            instance.container_id = container_id
+            if db is not None:
+                db.flush()
+        if container_id:
+            refs.append(container_id)
+        container_name = self._sanitize_container_ref(instance.container_name)
+        if container_name and container_name not in refs:
+            refs.append(container_name)
+
+        for ref in refs:
+            try:
+                container = self.runtime.get_container(ref)
+                container_id = container.id if hasattr(container, "id") else str(container)
+                if instance.container_id != container_id:
+                    instance.container_id = container_id
+                    if db is not None:
+                        db.flush()
+                # Prefer container name for later lifecycle calls; it survives ID churn.
+                return container, instance.container_name or container_id
+            except ContainerNotFoundError:
+                continue
+
+        return None, None
+
+    def reconcile_instance(self, instance: WhatsAppMCPInstance, db: Optional[Session] = None) -> Dict[str, Any]:
+        """
+        Repair stale instance metadata from deterministic conventions and container attrs.
+
+        This keeps health checks, QR flows, and watcher startup aligned with runtime truth.
+        """
+        changes: Dict[str, Any] = {}
+
+        expected_session_path = self._canonical_session_data_path(instance)
+        expected_messages_db_path = self._canonical_messages_db_path(instance)
+        expected_api_url = f"http://{instance.container_name}:8080/api"
+
+        normalized_container_id = self._sanitize_container_ref(instance.container_id)
+        if instance.container_id != normalized_container_id:
+            instance.container_id = normalized_container_id
+            changes["container_id"] = normalized_container_id
+
+        if instance.session_data_path != expected_session_path:
+            instance.session_data_path = expected_session_path
+            changes["session_data_path"] = expected_session_path
+
+        if instance.messages_db_path != expected_messages_db_path:
+            instance.messages_db_path = expected_messages_db_path
+            changes["messages_db_path"] = expected_messages_db_path
+
+        if instance.mcp_api_url != expected_api_url:
+            instance.mcp_api_url = expected_api_url
+            changes["mcp_api_url"] = expected_api_url
+
+        container, container_ref = self._resolve_container(instance, db)
+        if container_ref:
+            changes["container_ref"] = container_ref
+
+        if container is not None:
+            container_id = container.id if hasattr(container, "id") else str(container)
+            if instance.container_id != container_id:
+                instance.container_id = container_id
+                changes["container_id"] = container_id
+
+            try:
+                attrs = self.runtime.get_container_attrs(container_ref)
+                host_port = self._extract_host_port(attrs)
+                if host_port and instance.mcp_port != host_port:
+                    instance.mcp_port = host_port
+                    changes["mcp_port"] = host_port
+            except Exception as e:
+                logger.debug(f"Could not inspect attrs for {instance.container_name}: {e}")
+
+        if db is not None and changes:
+            db.commit()
+            db.refresh(instance)
+            logger.info(f"Reconciled MCP instance {instance.id}: {sorted(changes.keys())}")
+
+        return changes
+
     def start_instance(self, instance_id: int, db: Session):
         """
         Start existing container, recreating if necessary
@@ -324,38 +451,24 @@ class MCPContainerManager:
             raise ValueError(f"MCP instance {instance_id} not found")
 
         logger.info(f"Starting MCP instance {instance_id} (container {instance.container_name})")
+        self.reconcile_instance(instance, db)
 
         container_found = False
 
-        # Try to get container by ID first
-        try:
-            self.runtime.get_container(instance.container_id)
+        # Try to resolve the existing container first
+        container, container_ref = self._resolve_container(instance, db)
+        if container is not None:
             container_found = True
-        except ContainerNotFoundError:
-            logger.warning(f"Container {instance.container_id} not found by ID, trying by name...")
-
-        # Try by name if ID failed
-        if not container_found:
-            try:
-                container = self.runtime.get_container(instance.container_name)
-                # Update container_id in database
-                container_id = container.id if hasattr(container, 'id') else str(container)
-                instance.container_id = container_id
-                db.commit()
-                logger.info(f"Found container by name, updated ID to {container_id}")
-                container_found = True
-            except ContainerNotFoundError:
-                logger.warning(f"Container {instance.container_name} not found, will recreate...")
+        else:
+            logger.warning(f"Container {instance.container_name} not found, will recreate...")
 
         # If container exists, just start it
         if container_found:
-            # Determine which identifier to use
-            container_ref = instance.container_name
             try:
-                self.runtime.start_container(container_ref)
+                self.runtime.start_container(container_ref or instance.container_name)
 
                 # Ensure container is connected to tsushin network for backend communication
-                self._ensure_container_on_tsushin_network(container_ref)
+                self._ensure_container_on_tsushin_network(container_ref or instance.container_name)
 
                 instance.status = "starting"
                 instance.last_started_at = datetime.utcnow()
@@ -375,9 +488,8 @@ class MCPContainerManager:
         if not container_found:
             logger.info(f"Recreating container for instance {instance_id}")
             try:
-                # Extract session directory from stored path
-                # session_data_path is like /app/data/mcp/tenant_xxx/container_name/store
-                session_dir = os.path.dirname(instance.session_data_path)  # Remove /store
+                # session_data_path already points at the store directory mounted as /app/store
+                session_dir = instance.session_data_path
 
                 # Create container (pass api_secret for Phase Security-1)
                 new_container = self._start_container(
@@ -423,9 +535,11 @@ class MCPContainerManager:
             raise ValueError(f"MCP instance {instance_id} not found")
 
         logger.info(f"Stopping MCP instance {instance_id} (container {instance.container_name})")
+        self.reconcile_instance(instance, db)
+        _, container_ref = self._resolve_container(instance, db)
 
         try:
-            self.runtime.stop_container(instance.container_id, timeout=timeout)
+            self.runtime.stop_container(container_ref or instance.container_name, timeout=timeout)
 
             instance.status = "stopped"
             instance.last_stopped_at = datetime.utcnow()
@@ -484,11 +598,13 @@ class MCPContainerManager:
             raise ValueError(f"MCP instance {instance_id} not found")
 
         logger.info(f"Deleting MCP instance {instance_id} (container {instance.container_name})")
+        self.reconcile_instance(instance, db)
+        _, container_ref = self._resolve_container(instance, db)
 
         # 1. Stop and remove container
         try:
-            self.runtime.stop_container(instance.container_id, timeout=10)
-            self.runtime.remove_container(instance.container_id)
+            self.runtime.stop_container(container_ref or instance.container_name, timeout=10)
+            self.runtime.remove_container(container_ref or instance.container_name)
             logger.info(f"Container {instance.container_name} removed")
 
         except ContainerNotFoundError:
@@ -521,7 +637,7 @@ class MCPContainerManager:
         db.commit()
         logger.info(f"MCP instance {instance_id} deleted from database")
 
-    def get_qr_code(self, instance: WhatsAppMCPInstance) -> Optional[str]:
+    def get_qr_code(self, instance: WhatsAppMCPInstance, db: Optional[Session] = None) -> Optional[str]:
         """
         Fetch QR code from MCP API with retry logic
 
@@ -534,6 +650,7 @@ class MCPContainerManager:
         from services.mcp_auth_service import get_auth_headers
 
         max_retries = 2
+        self.reconcile_instance(instance, db)
         # Phase Security-1: Include auth headers for MCP API requests
         headers = get_auth_headers(instance.api_secret)
 
@@ -621,27 +738,15 @@ class MCPContainerManager:
             raise ValueError(f"MCP instance {instance_id} not found")
 
         logger.info(f"Logging out MCP instance {instance_id} (container {instance.container_name})")
+        self.reconcile_instance(instance, db)
 
         backup_path = None
 
         try:
             # Helper to get container identifier (tries ID then name)
             def find_container_ref() -> Optional[str]:
-                try:
-                    self.runtime.get_container(instance.container_id)
-                    return instance.container_id
-                except ContainerNotFoundError:
-                    logger.warning(f"Container {instance.container_id} not found by ID, trying by name...")
-                    try:
-                        container = self.runtime.get_container(instance.container_name)
-                        # Update container_id in database
-                        new_id = container.id if hasattr(container, 'id') else str(container)
-                        instance.container_id = new_id
-                        db.commit()
-                        logger.info(f"Found container by name, updated ID to {new_id}")
-                        return instance.container_name
-                    except ContainerNotFoundError:
-                        return None
+                _, resolved_ref = self._resolve_container(instance, db)
+                return resolved_ref
 
             # 2. Call WhatsApp logout API (if container is running)
             container_ref = find_container_ref()
@@ -697,11 +802,13 @@ class MCPContainerManager:
             # 7. Start container
             logger.info("Starting container to regenerate QR code")
             container_ref = find_container_ref()
-            if not container_ref:
-                raise RuntimeError("Container not found, cannot restart")
             try:
-                self.runtime.start_container(container_ref)
-                logger.info("Container started")
+                if container_ref:
+                    self.runtime.start_container(container_ref)
+                    logger.info("Container started")
+                else:
+                    logger.info("Container missing during logout reset, recreating it")
+                    self.start_instance(instance_id, db)
 
                 instance.status = "starting"
                 instance.last_started_at = datetime.utcnow()
@@ -830,7 +937,180 @@ class MCPContainerManager:
         logger.warning(f"QR code not available after {timeout}s timeout")
         return False
 
-    def health_check(self, instance: WhatsAppMCPInstance) -> Dict[str, any]:
+    def _extract_container_env(self, container: Any) -> Dict[str, str]:
+        attrs = getattr(container, "attrs", {}) or {}
+        env_items = attrs.get("Config", {}).get("Env", []) or []
+        env_map: Dict[str, str] = {}
+        for item in env_items:
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            env_map[key] = value
+        return env_map
+
+    def _get_container_env(self, container_name_or_id: str) -> Dict[str, str]:
+        try:
+            container = self.runtime.get_container(container_name_or_id)
+        except ContainerNotFoundError:
+            return {}
+        return self._extract_container_env(container)
+
+    def _get_tester_container(self) -> Optional[Any]:
+        try:
+            return self.runtime.get_container(self.TESTER_CONTAINER_NAME)
+        except ContainerNotFoundError:
+            return None
+
+    def _get_tester_headers(self) -> Dict[str, str]:
+        tester_container = self._get_tester_container()
+        if tester_container is None:
+            return {}
+
+        tester_secret = self._extract_container_env(tester_container).get("MCP_API_SECRET")
+        if not tester_secret:
+            return {}
+
+        from services.mcp_auth_service import get_auth_headers
+        return get_auth_headers(tester_secret)
+
+    def get_tester_status(self) -> Dict[str, Any]:
+        tester_status = {
+            "name": self.TESTER_CONTAINER_NAME,
+            "api_url": self.TESTER_API_URL,
+            "status": "unavailable",
+            "container_state": "not_found",
+            "api_reachable": False,
+            "connected": False,
+            "authenticated": False,
+            "needs_reauth": False,
+            "is_reconnecting": False,
+            "reconnect_attempts": 0,
+            "session_age_sec": 0,
+            "last_activity_sec": 0,
+            "container_id": None,
+            "image": None,
+            "error": None,
+            "qr_available": False,
+        }
+
+        tester_container = self._get_tester_container()
+        if tester_container is None:
+            tester_status["error"] = "Tester container not found"
+            return tester_status
+
+        try:
+            self._ensure_container_on_tsushin_network(self.TESTER_CONTAINER_NAME)
+        except Exception:
+            pass
+
+        try:
+            attrs = self.runtime.get_container_attrs(self.TESTER_CONTAINER_NAME)
+            tester_status["container_state"] = attrs.get("status", "unknown")
+            tester_status["container_id"] = attrs.get("id")
+            image_tags = attrs.get("image_tags") or []
+            tester_status["image"] = image_tags[0] if image_tags else None
+        except Exception as e:
+            tester_status["error"] = str(e)
+            return tester_status
+
+        if tester_status["container_state"] != "running":
+            tester_status["status"] = "unhealthy"
+            return tester_status
+
+        headers = self._get_tester_headers()
+
+        try:
+            response = requests.get(f"{self.TESTER_API_URL}/health", headers=headers, timeout=5)
+            if response.status_code != 200:
+                tester_status["status"] = "degraded"
+                tester_status["error"] = f"Tester health returned HTTP {response.status_code}"
+                return tester_status
+
+            payload = response.json()
+            tester_status.update({
+                "status": payload.get("status", "healthy"),
+                "api_reachable": True,
+                "connected": payload.get("connected", False),
+                "authenticated": payload.get("authenticated", False),
+                "needs_reauth": payload.get("needs_reauth", False),
+                "is_reconnecting": payload.get("is_reconnecting", False),
+                "reconnect_attempts": payload.get("reconnect_attempts", 0),
+                "session_age_sec": payload.get("session_age_sec", 0),
+                "last_activity_sec": payload.get("last_activity_sec", 0),
+            })
+        except requests.RequestException as e:
+            tester_status["status"] = "degraded"
+            tester_status["error"] = str(e)
+            return tester_status
+
+        try:
+            qr_response = requests.get(f"{self.TESTER_API_URL}/qr-code", headers=headers, timeout=5)
+            if qr_response.status_code == 200:
+                tester_status["qr_available"] = bool(qr_response.json().get("qr_code"))
+        except requests.RequestException:
+            pass
+
+        return tester_status
+
+    def get_tester_qr_code(self) -> Optional[str]:
+        headers = self._get_tester_headers()
+        try:
+            response = requests.get(f"{self.TESTER_API_URL}/qr-code", headers=headers, timeout=10)
+            if response.status_code != 200:
+                return None
+            return response.json().get("qr_code")
+        except requests.RequestException:
+            return None
+
+    def restart_tester(self) -> Dict[str, Any]:
+        self.runtime.restart_container(self.TESTER_CONTAINER_NAME, timeout=15)
+        return {"success": True, "message": "Tester MCP restarting"}
+
+    def logout_tester(self) -> Dict[str, Any]:
+        return self.reset_tester_auth()
+
+    def reset_tester_auth(self) -> Dict[str, Any]:
+        headers = self._get_tester_headers()
+        logout_error: Optional[str] = None
+
+        try:
+            response = requests.post(f"{self.TESTER_API_URL}/logout", headers=headers, timeout=10)
+            if response.status_code == 200:
+                return response.json()
+            logout_error = f"Tester logout failed with HTTP {response.status_code}"
+        except requests.RequestException as exc:
+            logout_error = str(exc)
+
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        cleanup_cmd = [
+            "sh",
+            "-lc",
+            (
+                "if [ -f /app/store/whatsapp.db ]; then "
+                f"cp /app/store/whatsapp.db /app/store/whatsapp.db.backup.{timestamp}; "
+                "fi; "
+                "rm -f /app/store/whatsapp.db /app/store/whatsapp.db-shm /app/store/whatsapp.db-wal"
+            ),
+        ]
+
+        try:
+            result = self.runtime.exec_run(self.TESTER_CONTAINER_NAME, cleanup_cmd, user="root")
+            exit_code = getattr(result, "exit_code", 0)
+            if exit_code not in (0, None):
+                output = getattr(result, "output", b"")
+                if isinstance(output, bytes):
+                    output = output.decode("utf-8", errors="ignore")
+                raise RuntimeError(output or "unknown tester cleanup error")
+            self.runtime.restart_container(self.TESTER_CONTAINER_NAME, timeout=15)
+            return {
+                "success": True,
+                "message": "Tester authentication reset via filesystem cleanup",
+                "fallback_error": logout_error,
+            }
+        except (ContainerNotFoundError, ContainerRuntimeError, RuntimeError) as exc:
+            raise RuntimeError(logout_error or str(exc))
+
+    def health_check(self, instance: WhatsAppMCPInstance, db: Optional[Session] = None) -> Dict[str, any]:
         """
         Check container and API health with enhanced session monitoring
 
@@ -857,19 +1137,12 @@ class MCPContainerManager:
         container_ref = None
 
         try:
-            # 1. Check container status - try by ID first, then by name
-            try:
-                self.runtime.get_container(instance.container_id)
-                container_ref = instance.container_id
-                logger.debug(f"Found container by ID: {instance.container_id}")
-            except ContainerNotFoundError:
-                # Try by container name as fallback (more robust to ID changes)
-                try:
-                    self.runtime.get_container(instance.container_name)
-                    container_ref = instance.container_name
-                    logger.info(f"Found container by name (ID was stale): {instance.container_name}")
-                except ContainerNotFoundError:
-                    raise ContainerNotFoundError(f"Container not found by ID or name")
+            self.reconcile_instance(instance, db)
+
+            # 1. Check container status - recover cleanly from missing/stale container_id
+            _, container_ref = self._resolve_container(instance, db)
+            if not container_ref:
+                raise ContainerNotFoundError("Container not found by ID or name")
 
             # Get container state with detailed info
             container_state = self.runtime.get_container_status(container_ref)
@@ -983,7 +1256,7 @@ class MCPContainerManager:
         except ContainerNotFoundError:
             health_data['status'] = 'unavailable'
             health_data['container_state'] = 'not_found'
-            health_data['error'] = 'Container not found'
+            health_data['error'] = 'Container not found. Verify the WhatsApp container is still present or restart the instance.'
             logger.error(f"Container not found for instance {instance.id} (id={instance.container_id}, name={instance.container_name})")
 
         except ContainerRuntimeError as e:
@@ -992,3 +1265,16 @@ class MCPContainerManager:
             logger.error(f"Runtime error for instance {instance.id}: {e}")
 
         return health_data
+
+    def reconcile_all_instances(self, db: Session) -> Dict[int, Dict[str, Any]]:
+        """Repair stale metadata for every WhatsApp MCP instance row."""
+        reconciled: Dict[int, Dict[str, Any]] = {}
+        instances = db.query(WhatsAppMCPInstance).all()
+        for instance in instances:
+            changes = self.reconcile_instance(instance, db=None)
+            if changes:
+                reconciled[instance.id] = changes
+        if reconciled:
+            db.commit()
+            logger.info(f"Reconciled {len(reconciled)} WhatsApp MCP instance(s) at startup")
+        return reconciled

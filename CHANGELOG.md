@@ -15,12 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Summarization tenant_id:** Both summarization paths (conversation + raw text) now pass `tenant_id` to `AIClient` for proper API key resolution
 - **Gate tenant_id:** Agentic gate handler passes `tenant_id` to `AIClient` for API key resolution
 - **WhatsApp MCP registration:** Flow notification steps now resolve MCP URL from registered `WhatsAppMCPInstance` records
+- **WhatsApp reliability hardening:** Added instance metadata reconciliation for stale `container_id` / path / URL state, health-check fallback from `container_id` to `container_name`, startup watcher preference for API-reader bootstrap, tenant-safe auto-binding metadata for Graph/Studio, Hub QR degraded-state recovery actions, and a dedicated QA Tester status surface. The tester Docker health probe now targets `GET /api/health`, and both WhatsApp bridges use supervised reconnect loops plus logout-triggered QR regeneration instead of one-shot reconnect attempts.
 
 ### Implementations
 
 #### UX Friction Reduction
 
 - **WhatsApp Setup Wizard (7→8 steps):** Added "About You" step (Step 3) that collects the user's name and phone number, auto-creates a contact with DM Trigger enabled, and links it to the bound agent. Step 2 now includes an optional "Instance Name" field that auto-creates a bot contact. Steps 4-5 (DM/Group settings) have Simple/Advanced mode toggle for progressive disclosure. Step 8 (Confirmation) shows enhanced summary with green/amber indicators for completed/skipped items.
+- **Image Analysis skill:** Added a dedicated multimodal image-analysis skill for inbound media. It uses Gemini vision models to describe screenshots/photos, answer captioned image questions, and hand off edit-style captions back to the image editing skill instead of double-handling them.
 - **Getting Started Checklist:** New dashboard widget on the Watcher page showing 5 setup milestones (Configure Agent, Connect Channel, Add Contacts, Test in Playground, Create Flow) with progress bar, action links, and dismiss button. Auto-hides when all items are complete.
 - **Hub Integration Summary Banner:** Compact status strip above the Hub tab bar showing connection counts for AI Providers, WhatsApp, Telegram, Slack, Discord, and Webhooks with colored dots. Clickable to switch tabs.
 - **WhatsApp Instance Display Name:** New `display_name` column on WhatsApp instances. Shown as primary title on Hub cards with phone number as subtitle. Passed via wizard's Instance Name field.

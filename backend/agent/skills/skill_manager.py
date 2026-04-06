@@ -113,6 +113,10 @@ class SkillManager:
             from agent.skills.browser_automation_skill import BrowserAutomationSkill
             self.register_skill(BrowserAutomationSkill)
 
+            # Image Analysis Skill: multimodal understanding for inbound images
+            from agent.skills.image_analysis_skill import ImageAnalysisSkill
+            self.register_skill(ImageAnalysisSkill)
+
             # Image Skill: Image generation and editing (Skills-as-Tools)
             from agent.skills.image_skill import ImageSkill
             self.register_skill(ImageSkill)
@@ -125,7 +129,7 @@ class SkillManager:
             from agent.skills.okg_term_memory_skill import OKGTermMemorySkill
             self.register_skill(OKGTermMemorySkill)
 
-            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image, sandboxed_tools, okg_term_memory")
+            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory")
         except Exception as e:
             logger.error(f"Error registering built-in skills: {e}", exc_info=True)
 
@@ -773,6 +777,8 @@ class SkillManager:
             return skill_class(db, agent_id)
         elif skill_type == "browser_automation":
             return skill_class(db=db, token_tracker=self.token_tracker)
+        elif skill_type == "image_analysis":
+            return skill_class(token_tracker=self.token_tracker)
         elif skill_type == "image":
             return skill_class(token_tracker=self.token_tracker)
         elif skill_type == "okg_term_memory":
