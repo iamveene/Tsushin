@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-04-06
 
+### Security
+
+- **Next.js 16 upgrade (PR [#5](https://github.com/iamveene/Tsushin/pull/5) revival, originally by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Upgraded frontend from Next.js 14.2.33 to 16.2.2, React 18.2.0 to 19.2.0, ESLint 8 to 9 (flat config). Resolves CVE-2025-29927, CVE-2024-34351, CVE-2024-46982, CVE-2024-51479. Applied fixes for Google Fonts Docker build failure (--webpack flag), removed unnecessary monorepo boilerplate from next.config.mjs, migrated ESLint to flat config (eslint.config.mjs), updated TypeScript JSX mode to react-jsx. Removed stale pnpm-lock.yaml and added it to .dockerignore.
+
 ### Community Contributions
 
 - **WhatsApp contact name enrichment (PR [#6](https://github.com/iamveene/Tsushin/pull/6) by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Improved WhatsApp DM contact name resolution across all layers. The Go MCP bridge now uses a richer fallback chain (FullName → PushName → FirstName → BusinessName → message PushName → sender) and detects raw numeric identifiers to force re-resolution. The API reader reuses human-readable `chat_name` as `sender_name` for DMs when contact mappings miss. The messages API endpoint enriches responses via `CachedContactService`, replacing raw @lid identifiers with friendly names in both `sender_name` and `chat_name` columns.
