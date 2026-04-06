@@ -229,15 +229,34 @@ class ApiClientService:
         """
         Generate a new secret for an API client, invalidating the old one.
         Returns the new raw_secret (shown only once).
+
+        BUG-SEC-010 FIX: Also revokes all existing JWT tokens for this client
+        so that previously issued tokens cannot be used after rotation.
         """
         raw_secret = f"tsn_cs_{secrets.token_urlsafe(32)}"
         client.client_secret_hash = hash_password(raw_secret)
         client.client_secret_prefix = raw_secret[:12]
         client.secret_rotated_at = datetime.utcnow()
         client.updated_at = datetime.utcnow()
+
+        # BUG-SEC-010 FIX: Revoke all existing token records for this client.
+        # The JWT validation layer also checks secret_rotated_at, but explicitly
+        # marking token records as revoked provides defense-in-depth and ensures
+        # audit trail accuracy.
+        revoked_count = self.db.query(ApiClientToken).filter(
+            ApiClientToken.api_client_id == client.id,
+            ApiClientToken.revoked_at.is_(None),
+        ).update(
+            {"revoked_at": datetime.utcnow()},
+            synchronize_session="fetch",
+        )
+
         self.db.commit()
 
-        logger.info(f"Rotated secret for API client '{client.client_id}'")
+        logger.info(
+            f"Rotated secret for API client '{client.client_id}', "
+            f"revoked {revoked_count} existing token(s)"
+        )
         return raw_secret
 
     def revoke_client(self, client: ApiClient):

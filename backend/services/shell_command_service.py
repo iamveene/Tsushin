@@ -337,11 +337,15 @@ class ShellCommandService:
         allowed_paths = shell.allowed_paths or []
 
         # Check all commands against patterns
+        # BUG-SEC-016 FIX: Pass tenant_id and db so that per-tenant command
+        # restriction policies are enforced by check_commands.
         all_allowed, security_result = security_service.check_commands(
             commands=commands,
             allowed_commands=allowed_commands if allowed_commands else None,
             allowed_paths=allowed_paths if allowed_paths else None,
-            require_approval_for_high_risk=True
+            require_approval_for_high_risk=True,
+            tenant_id=tenant_id,
+            db=self.db,
         )
 
         if not all_allowed:

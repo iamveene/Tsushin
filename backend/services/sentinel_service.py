@@ -1052,8 +1052,37 @@ class SentinelService:
             )
         except Exception as e:
             self.logger.error(f"LLM call failed: {e}", exc_info=True)
-            # On LLM failure, allow the content (fail open)
-            return self._create_allowed_result(analysis_type, detection_type, start_time)
+            # BUG-LOG-020 FIX: Fail-CLOSED on LLM errors — block content when
+            # security analysis cannot complete.  A fail-open path would let
+            # malicious input bypass Sentinel whenever the LLM is unreachable.
+            response_time_ms = int((time.time() - start_time) * 1000)
+            blocked_result = SentinelAnalysisResult(
+                is_threat_detected=True,
+                threat_score=1.0,
+                threat_reason=f"Security analysis unavailable (LLM error: {type(e).__name__}). Content blocked as a precaution.",
+                action="blocked",
+                detection_type=detection_type,
+                analysis_type=analysis_type,
+                cached=False,
+                response_time_ms=response_time_ms,
+            )
+            # Log the fail-closed event for audit
+            if config.log_all_analyses:
+                self._log_analysis(
+                    analysis_type=analysis_type,
+                    detection_type=detection_type,
+                    input_content=input_content[:500],
+                    input_hash=input_hash,
+                    result=blocked_result,
+                    sender_key=sender_key,
+                    message_id=message_id,
+                    agent_id=agent_id,
+                    llm_provider=config.llm_provider,
+                    llm_model=config.llm_model,
+                    response_time_ms=response_time_ms,
+                    detection_mode_used=detection_mode,
+                )
+            return blocked_result
 
         # Parse LLM response
         response_time_ms = int((time.time() - start_time) * 1000)
@@ -1297,7 +1326,35 @@ class SentinelService:
             )
         except Exception as e:
             self.logger.error(f"Unified LLM call failed: {e}", exc_info=True)
-            return self._create_allowed_result(analysis_type, "llm_error", start_time)
+            # BUG-LOG-020 FIX: Fail-CLOSED on LLM errors — block content when
+            # security analysis cannot complete.
+            response_time_ms = int((time.time() - start_time) * 1000)
+            blocked_result = SentinelAnalysisResult(
+                is_threat_detected=True,
+                threat_score=1.0,
+                threat_reason=f"Security analysis unavailable (LLM error: {type(e).__name__}). Content blocked as a precaution.",
+                action="blocked",
+                detection_type="unified",
+                analysis_type=analysis_type,
+                cached=False,
+                response_time_ms=response_time_ms,
+            )
+            if config.log_all_analyses:
+                self._log_analysis(
+                    analysis_type=analysis_type,
+                    detection_type="unified",
+                    input_content=input_content[:500],
+                    input_hash=input_hash,
+                    result=blocked_result,
+                    sender_key=sender_key,
+                    message_id=message_id,
+                    agent_id=agent_id,
+                    llm_provider=config.llm_provider,
+                    llm_model=config.llm_model,
+                    response_time_ms=response_time_ms,
+                    detection_mode_used=detection_mode,
+                )
+            return blocked_result
 
         # Parse unified response
         response_time_ms = int((time.time() - start_time) * 1000)

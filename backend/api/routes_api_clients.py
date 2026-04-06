@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from db import get_db
 from models_rbac import User
 from auth_dependencies import require_permission
-from services.api_client_service import ApiClientService, VALID_ROLES
+from services.api_client_service import ApiClientService, VALID_ROLES, API_ROLE_SCOPES
 from services.audit_service import log_tenant_event, TenantAuditActions
 
 logger = logging.getLogger(__name__)
@@ -188,7 +188,24 @@ async def update_api_client(
     if not client:
         raise HTTPException(status_code=404, detail="API client not found")
 
-    # BUG-SEC-008 FIX: Pass updater permissions for privilege escalation check
+    # BUG-SEC-008 FIX: Explicit api_owner role escalation check
+    # Non-global-admin callers must already hold api_owner role on an existing
+    # client to grant api_owner to another client.  The scope-level check below
+    # catches most cases, but an explicit role gate prevents edge-case bypasses.
+    if request.role == "api_owner" and not current_user.is_global_admin:
+        from auth_service import AuthService
+        auth_svc = AuthService(db)
+        caller_perms = auth_svc.get_user_permissions(current_user.id)
+        # api_owner includes audit.read — if caller lacks it, reject immediately
+        api_owner_scopes = set(API_ROLE_SCOPES.get("api_owner", []))
+        missing = api_owner_scopes - set(caller_perms)
+        if missing:
+            raise HTTPException(
+                status_code=403,
+                detail="Privilege escalation denied: cannot upgrade client to api_owner without holding equivalent permissions",
+            )
+
+    # Pass updater permissions for scope-level escalation check
     updater_perms = None
     if not current_user.is_global_admin:
         from auth_service import AuthService
