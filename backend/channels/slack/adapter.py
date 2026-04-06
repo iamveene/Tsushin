@@ -76,7 +76,7 @@ class SlackChannelAdapter(ChannelAdapter):
         thread_ts = kwargs.get("thread_ts")
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             if media_path:
                 import os
                 response = await loop.run_in_executor(
@@ -115,7 +115,7 @@ class SlackChannelAdapter(ChannelAdapter):
     async def health_check(self) -> HealthResult:
         """Check Slack Bot API connection via auth.test."""
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(None, self.client.auth_test)
             if response.get("ok"):
                 return HealthResult(

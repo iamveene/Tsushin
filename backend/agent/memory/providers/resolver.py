@@ -43,10 +43,12 @@ class ResolvedVectorStore(VectorStoreProvider):
     def _is_circuit_open(self) -> bool:
         if not self.circuit_breaker:
             return False
-        return (
-            self.circuit_breaker.state == CircuitBreakerState.OPEN
-            and not self.circuit_breaker.should_probe()
-        )
+        if self.circuit_breaker.state == CircuitBreakerState.OPEN:
+            if self.circuit_breaker.should_probe():
+                self.circuit_breaker.try_recover()
+                return False  # Allow probe attempt
+            return True  # Still in cooldown
+        return False
 
     def _record_success(self):
         if self.circuit_breaker:

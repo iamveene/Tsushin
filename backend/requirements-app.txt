@@ -7,7 +7,7 @@ google-auth>=2.28.0  # Vertex AI service account auth + OAuth2 token refresh
 
 # Browser Automation (Phase 14.5)
 playwright>=1.48.0  # Browser automation for web tasks
-aiohttp>=3.8.0  # Phase 8: MCP HTTP bridge communication
+aiohttp>=3.10.11  # Phase 8: MCP HTTP bridge communication (CVE floor bump)
 
 # Telegram Integration (Phase 10.1.1)
 python-telegram-bot>=21.0

@@ -157,9 +157,20 @@ async def create_slack_integration(
         logger.error(f"Slack auth.test failed: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Failed to validate Slack token: {str(e)}")
 
+    # Check for duplicate registration (same tenant + workspace)
+    tenant_id = current_user.tenant_id
+    existing = db.query(SlackIntegration).filter(
+        SlackIntegration.tenant_id == tenant_id,
+        SlackIntegration.workspace_id == workspace_id,
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Slack workspace {workspace_id} is already registered for this tenant"
+        )
+
     # Encrypt tokens
     encryption = _get_encryption(db)
-    tenant_id = current_user.tenant_id
 
     integration = SlackIntegration(
         tenant_id=tenant_id,
@@ -284,9 +295,10 @@ async def delete_slack_integration(
     if not context.can_access_resource(integration.tenant_id):
         raise HTTPException(status_code=404, detail="Integration not found")
 
-    # Unlink agents that reference this integration
+    # Unlink agents that reference this integration (scoped to same tenant)
     linked_agents = db.query(Agent).filter(
-        Agent.slack_integration_id == integration_id
+        Agent.slack_integration_id == integration_id,
+        Agent.tenant_id == integration.tenant_id,
     ).all()
     for agent in linked_agents:
         agent.slack_integration_id = None
