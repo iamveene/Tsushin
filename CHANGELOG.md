@@ -5,16 +5,20 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - develop
+## [0.6.0] - 2026-04-06
 
-### Bug Fixes (E2E validated 2026-04-06)
+### Bug fixes
+
+#### Bug Fixes (E2E validated 2026-04-06)
 
 - **Summarization source_step field mapping:** `SummarizationStepHandler` now resolves `output` and `message` fields from slash_command/skill steps (previously only checked `raw_output`)
 - **Summarization tenant_id:** Both summarization paths (conversation + raw text) now pass `tenant_id` to `AIClient` for proper API key resolution
 - **Gate tenant_id:** Agentic gate handler passes `tenant_id` to `AIClient` for API key resolution
 - **WhatsApp MCP registration:** Flow notification steps now resolve MCP URL from registered `WhatsAppMCPInstance` records
 
-### UX Friction Reduction
+### Implementations
+
+#### UX Friction Reduction
 
 - **WhatsApp Setup Wizard (7→8 steps):** Added "About You" step (Step 3) that collects the user's name and phone number, auto-creates a contact with DM Trigger enabled, and links it to the bound agent. Step 2 now includes an optional "Instance Name" field that auto-creates a bot contact. Steps 4-5 (DM/Group settings) have Simple/Advanced mode toggle for progressive disclosure. Step 8 (Confirmation) shows enhanced summary with green/amber indicators for completed/skipped items.
 - **Getting Started Checklist:** New dashboard widget on the Watcher page showing 5 setup milestones (Configure Agent, Connect Channel, Add Contacts, Test in Playground, Create Flow) with progress bar, action links, and dismiss button. Auto-hides when all items are complete.
@@ -26,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Empty States Standardization:** New `no-contacts` EmptyState variant with address-book SVG. Applied to Agents and Contacts pages, replacing ad-hoc inline empty markup.
 - **Backend:** Added `is_default` to PlaygroundAgentInfo API response. Fixed `dm_auto_mode` default from `False` to `True` in MCPInstanceResponse schema.
 
-### Documentation
+#### Documentation
 
 - **DOC-001:** Comprehensive documentation overhaul of `DOCUMENTATION.md` — full accuracy audit against codebase
 - **DOC-002:** Document 11 missing slash commands: email (6), search, shell, thread (3) — total now 37 commands
@@ -43,7 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **DOC-013:** Rename `documentation.md` → `DOCUMENTATION.md` (uppercase convention for all root MD files)
 - **DOC-014:** Create `USER_GUIDE.md` — practical user-facing guide covering getting started, channels setup, agents, skills, flows, scheduler, contacts, playground, security, settings, slash commands, API, and audit
 
-### Added
+### Implementations
+
+#### Added
 
 - **Gate Node Step Type** — New conditional flow control node with two modes:
   - *Programmatic* (zero LLM cost): 15+ operators for numeric, string, regex, existence, and count conditions with AND/OR logic
@@ -54,7 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Zero-Cost Inbox Monitor Template** — Fully programmatic email monitoring (Gmail poll → gate → WhatsApp delivery) with zero AI token cost. "Zero AI Cost" badge in template wizard
 - **Smart Email Filter Template** — AI-powered email filtering (Gmail poll → agentic gate → summarization → delivery). Gate criteria configurable (financial, project-specific, etc.)
 
-### Security
+### Bug fixes
+
+#### Security
 
 - **BUG-SEC-008 (CRITICAL):** Block privilege escalation in `update_client` — non-`api_owner` callers can no longer elevate to `api_owner` role
 - **BUG-LOG-020 (CRITICAL):** Sentinel fail-closed on exceptions — security analysis now blocks content when Sentinel crashes instead of silently bypassing
@@ -63,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BUG-SEC-019:** Add magic bytes file type validation for uploads (PDF, DOCX, XLSX, images) — no longer extension-only
 - **BUG-278:** Bump Next.js 14.1.0 → 14.2.33 — patches CVE-2025-29927, CVE-2024-34351, CVE-2024-46982, CVE-2024-51479
 
-### Fixed
+#### Fixed
 
 - **BUG-298:** Pass `tenant_id` to `AgentService` in `AgentRouter.__init__`
 - **BUG-293:** Circuit breaker state now persisted to DB on transitions — survives backend restarts
@@ -125,7 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replace hardcoded agent ID 7 with config flag in scheduler_skill
 - Fix VectorStoreInstance nullable mismatches vs migration definitions
 
-### Added
+### Implementations
 
 #### WhatsApp Post-Install Setup Wizard + Inline Helpers (2026-04-05)
 Guided 7-step wizard that walks non-technical users through the full WhatsApp onboarding flow end-to-end, replacing the previous "figure it out across 3 pages" experience.
@@ -146,9 +154,9 @@ New "From Template" button on `/flows` opens a 3-step wizard (pick → configure
 - **Scheduling correctness**: `_first_scheduled_at` uses pytz to compute UTC-naive `scheduled_at` from the user's wall-clock HH:MM in their chosen timezone (verified: 08:00 São Paulo → 11:00 UTC).
 - **Frontend**: `CreateFromTemplateModal.tsx` dynamically renders parameter forms from each template's `params_schema`. Matches existing design system (slate-800 shell, teal/cyan accents, rounded-2xl, backdrop-blur).
 
-### Changed
+#### Changed
 
-#### WhatsApp filter typeahead + Studio Contacts UX overhaul (2026-04-05, branch `wpp`)
+##### WhatsApp filter typeahead + Studio Contacts UX overhaul (2026-04-05, branch `wpp`)
 Replaced free-text entry in Hub > Communications > WhatsApp "Message Filters" (Group Filters + DM Allowlist) with live-autocomplete dropdowns, and streamlined the Studio > Contacts add/edit workflow so users no longer have to manage WhatsApp IDs or click resolve buttons.
 
 **Hub filter typeahead**
@@ -164,14 +172,15 @@ Replaced free-text entry in Hub > Communications > WhatsApp "Message Filters" (G
 - Helper text under Phone Number: *"WhatsApp ID will be auto-detected from the phone number after saving."*
 - Contacts page schedules a `loadData()` refresh 2.5 s after create/update to surface server-side resolution without manual reload.
 
-### Fixed
+### Bug fixes
 
 #### WhatsApp proactive resolver missing Bearer auth (2026-04-05, branch `wpp`)
 `services/whatsapp_proactive_resolver.py` was calling the MCP `/check-numbers` endpoint without an `Authorization` header, causing auto-resolution to fail with **HTTP 401** after Phase Security-1 enabled `MCP_API_SECRET` enforcement. Both single-number and batch resolution paths now pull the instance's `api_secret` via `get_auth_headers()` and include the Bearer token. Verified end-to-end: creating a contact with phone `+5527998701042` auto-populates `whatsapp_id=5527998701042` within ~2 s.
 
-### Performance
+### Implementations
 
-#### Backend image optimization — dependency hygiene + opt-out flags (2026-04-05)
+#### Performance
+##### Backend image optimization — dependency hygiene + opt-out flags (2026-04-05)
 Follow-up to commit `c2402bd` (CPU-only torch). Removed declared-but-unused dependencies, deduped conflicting pytest declarations, split test deps into a dev-only tier, removed system packages that belong in the `toolbox` sandbox container, and added opt-out ARG flags for heavy optional assets. Default image preserves every existing feature; new lean build variant drops ~2.05 GB.
 
 **Dependency removals & reshuffling:**
@@ -206,8 +215,7 @@ Build time (no-cache, BuildKit pip mounts intact): ~3m 23s for default rebuild.
 
 **Verified end-to-end:** backend health + readiness endpoints return 200; API v1 `/agents` sweep returns 200; `slack_sdk`/`docker`/`google.generativeai`/`playwright`/`ffmpeg`/`sentence-transformers` all importable; `import pytest` + `import slack_bolt` correctly raise `ModuleNotFoundError` in production image; torch remains `2.11.0+cpu` (no CUDA regression); Kokoro TTS provider imports; Slack adapter imports; per-tenant toolbox container still reachable with nmap + dig available.
 
-### Fixed
-
+### Bug fixes
 #### BUG-275 — Global refresh button did not reliably update lists across pages (2026-04-05)
 The header global refresh button dispatches a `tsushin:refresh` CustomEvent that pages subscribe to in `useEffect`. Audit found 9 pages registered the listener with empty deps `[]`, capturing the FIRST render's `loadData` closure — the listener kept calling that stale closure forever, so loaders executed with initial state values instead of current state.
 
@@ -270,7 +278,9 @@ Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, group
 **Group E — Custom Skill Security** (commit cc0de12)
 - `V060-SKL-001`: New `_scan_skill_content()` helper concatenates `instructions_md` + `script_content` into a single analyzable blob and submits to `SentinelService.analyze_skill_instructions`. Both `create_custom_skill` and `update_custom_skill` now invoke this helper whenever either field is present/changed. Previously script-type skills with empty instructions landed as `scan_status='clean'` without Sentinel ever seeing the code — an attacker could upload a script that reads `OPENAI_API_KEY` + `/etc/passwd` and exfiltrates via HTTP and it would auto-enable in the agent sandbox. The network-import advisory is retained as an augmenting signal, no longer the primary defense.
 
-### Added
+### Implementations
+
+#### Added
 
 #### Webhook-as-a-Channel (v0.6.0)
 - **New first-class channel type** alongside WhatsApp/Telegram/Slack/Discord/Playground. Bidirectional HTTP integration for CRMs, Zapier, custom apps, ticketing systems.
@@ -364,7 +374,7 @@ Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, group
 
 ## [0.6.0] - 2026-04-01
 
-### Added
+### Implementations
 
 #### Temporal Memory Decay Frontend (Item 37)
 
@@ -393,12 +403,10 @@ Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, group
 
 - **Router circuit breaker check**: `route_message()` now checks channel circuit breaker state before processing. If the channel's circuit breaker is OPEN, messages are enqueued via `MessageQueueService` instead of being processed immediately. Guarded by `TSN_CB_QUEUE_ENABLED` env var (default: true). Fail-safe: if enqueue fails, falls through to normal processing.
 
-### Changed
+#### Changed
 
 - **Docker env passthrough**: Added `GROQ_API_KEY`, `GROK_API_KEY`, `ELEVENLABS_API_KEY` to docker-compose.yml backend environment.
 - **Docker Compose v2 required**: Installer no longer supports `docker-compose` v1. Reverts the BUG-271 `DOCKER_BUILDKIT=0` workaround (installer would force-disable BuildKit for v1 compatibility). The backend Dockerfile now requires BuildKit for pip/nuclei cache mounts. Docker Compose v2 (`docker compose`) is bundled with Docker Desktop ≥20.10 and is the CLAUDE.md convention. Installer errors out with a clear upgrade message if only v1 is detected.
-
-### Performance
 
 #### Backend Container Build Optimization (2026-04-04)
 
@@ -411,7 +419,7 @@ Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, group
 - **Nuclei download cache**: Cached across builds, saving ~5-10s per full rebuild.
 - **Updated references**: `.github/workflows/gke-deploy.yml` and `ops/manage_servers.py` now reference the tiered requirements files.
 
-### Fixed
+### Bug fixes
 
 #### Pre-Release Security Audit (2026-04-03)
 
@@ -425,8 +433,6 @@ Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, group
 - **(BUG-270) CORS origin wrong for remote HTTP installs**: Installer set `TSN_CORS_ORIGINS` to `http://localhost:3030` for remote installs, blocking all API calls from the actual IP. Fixed by using the public host for `frontend_url` and CORS origins.
 - **(BUG-271) docker-compose v1 ContainerConfig error**: BuildKit images lack the `ContainerConfig` key that docker-compose v1 expects on container recreate. Installer now sets `DOCKER_BUILDKIT=0` for both `run_docker_compose()` and `build_additional_images()` when using docker-compose v1.
 - **(BUG-272) Setup wizard loses API key if "Add" not clicked**: Users who typed an API key but clicked "Complete Setup" without clicking "Add" lost the key. `handleSubmit` now auto-includes any uncommitted key from the text field.
-
-### Changed
 
 #### Installer Redesign (2026-04-03)
 
