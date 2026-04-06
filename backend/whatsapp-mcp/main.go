@@ -909,7 +909,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 
 	// Save message to database
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
-	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, logger)
+	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, msg.Info.PushName, logger)
 
 	// Update chat in database with the message timestamp (keeps last message time updated)
 	err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp)
@@ -2619,14 +2619,34 @@ func main() {
 	client.Disconnect()
 }
 
+func looksLikeRawIdentifier(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return true
+	}
+	if strings.Contains(trimmed, "@") {
+		trimmed = strings.SplitN(trimmed, "@", 2)[0]
+	}
+	trimmed = strings.TrimPrefix(trimmed, "+")
+	if trimmed == "" {
+		return true
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // GetChatName determines the appropriate name for a chat based on JID and other info
-func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types.JID, chatJID string, conversation interface{}, sender string, logger waLog.Logger) string {
+func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types.JID, chatJID string, conversation interface{}, sender string, fallbackName string, logger waLog.Logger) string {
 	// First, check if chat already exists in database with a usable name.
 	// Raw numeric IDs like "145230074499115" are refreshed because they break
 	// DM contact resolution when WhatsApp hides the real phone behind @lid.
 	var existingName string
 	err := messageStore.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chatJID).Scan(&existingName)
-	if err == nil && existingName != "" && existingName != chatJID && existingName != jid.User {
+	if err == nil && existingName != "" && existingName != chatJID && !looksLikeRawIdentifier(existingName) {
 		// Chat exists with a name, use that
 		logger.Infof("Using existing chat name for %s: %s", chatJID, existingName)
 		return existingName
@@ -2686,10 +2706,18 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		// This is an individual contact
 		logger.Infof("Getting name for contact: %s", chatJID)
 
-		// Just use contact info (full name)
+		// Prefer the richest contact info available from WhatsApp.
 		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
 		if err == nil && contact.FullName != "" {
 			name = contact.FullName
+		} else if err == nil && contact.PushName != "" {
+			name = contact.PushName
+		} else if err == nil && contact.FirstName != "" {
+			name = contact.FirstName
+		} else if err == nil && contact.BusinessName != "" {
+			name = contact.BusinessName
+		} else if fallbackName != "" && !looksLikeRawIdentifier(fallbackName) {
+			name = fallbackName
 		} else if sender != "" {
 			// Fallback to sender
 			name = sender
@@ -2725,7 +2753,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 		}
 
 		// Get appropriate chat name by passing the history sync conversation directly
-		name := GetChatName(client, messageStore, jid, chatJID, conversation, "", logger)
+		name := GetChatName(client, messageStore, jid, chatJID, conversation, "", "", logger)
 
 		// Process messages
 		messages := conversation.Messages

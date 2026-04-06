@@ -48,6 +48,18 @@ class MCPAPIReader:
         self.api_secret = api_secret
         self.logger = logging.getLogger(__name__)
 
+    @staticmethod
+    def _looks_like_raw_identifier(value: Optional[str]) -> bool:
+        if not value:
+            return True
+        normalized = value.strip()
+        if not normalized:
+            return True
+        if "@" in normalized:
+            normalized = normalized.split("@", 1)[0]
+        normalized = normalized.lstrip("+")
+        return normalized.isdigit()
+
     def get_new_messages(self, last_timestamp: str, limit: int = 500) -> List[Dict]:
         """
         Fetch new messages since last_timestamp via HTTP API.
@@ -89,6 +101,7 @@ class MCPAPIReader:
                 # Get sender name from contact_mappings
                 sender_id = msg.get("sender", "")
                 sender_name = None
+                chat_name = msg.get("chat_name")
 
                 for contact_id, name in self.contact_mappings.items():
                     norm_contact = contact_id.lstrip("+")
@@ -101,12 +114,20 @@ class MCPAPIReader:
                 chat_jid = msg.get("chat_jid", "")
                 is_group = 1 if "@g.us" in chat_jid else 0
 
+                if (
+                    not is_group and
+                    not sender_name and
+                    chat_name and
+                    not self._looks_like_raw_identifier(chat_name)
+                ):
+                    sender_name = chat_name
+
                 # Map to expected format (same as SQLite reader output)
                 messages.append({
                     "id": msg.get("id"),
                     "chat_id": chat_jid,
                     "chat_jid": chat_jid,
-                    "chat_name": msg.get("chat_name"),
+                    "chat_name": chat_name,
                     "sender": sender_id,
                     "sender_name": sender_name,
                     "body": msg.get("content", ""),

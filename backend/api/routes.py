@@ -384,7 +384,88 @@ def get_messages(
             pass
 
     messages = query.limit(limit).all()
-    return messages
+
+    def _looks_like_raw_identifier(value: Optional[str]) -> bool:
+        if not value:
+            return True
+        normalized = value.strip()
+        if not normalized:
+            return True
+        if "@" in normalized:
+            normalized = normalized.split("@")[0]
+        normalized = normalized.lstrip("+")
+        return normalized.isdigit()
+
+    enriched_messages = []
+    contact_services = {}
+
+    for message in messages:
+        enriched = {
+            "id": message.id,
+            "source_id": message.source_id,
+            "chat_name": message.chat_name,
+            "sender": message.sender,
+            "sender_name": message.sender_name,
+            "body": message.body,
+            "timestamp": message.timestamp,
+            "is_group": message.is_group,
+            "matched_filter": message.matched_filter,
+            "seen_at": message.seen_at,
+            "channel": message.channel,
+        }
+
+        tenant_id = getattr(message, "tenant_id", None)
+        if tenant_id:
+            from agent.contact_service_cached import CachedContactService
+
+            contact_service = contact_services.get(tenant_id)
+            if contact_service is None:
+                contact_service = CachedContactService(db, tenant_id=tenant_id)
+                contact_services[tenant_id] = contact_service
+
+            resolved_contact = None
+            for candidate in [
+                message.sender,
+                message.sender_name,
+                message.chat_name,
+            ]:
+                if not candidate:
+                    continue
+                resolved_contact = contact_service.identify_sender(candidate)
+                if resolved_contact:
+                    break
+
+            if resolved_contact:
+                friendly_name = resolved_contact.friendly_name
+
+                if (
+                    not enriched["sender_name"] or
+                    _looks_like_raw_identifier(enriched["sender_name"])
+                ):
+                    enriched["sender_name"] = friendly_name
+
+                if (
+                    not message.is_group and (
+                        not enriched["chat_name"] or
+                        _looks_like_raw_identifier(enriched["chat_name"]) or
+                        enriched["chat_name"] == enriched["sender"]
+                    )
+                ):
+                    enriched["chat_name"] = friendly_name
+            elif (
+                not message.is_group and
+                enriched["chat_name"] and
+                not _looks_like_raw_identifier(enriched["chat_name"]) and
+                (
+                    not enriched["sender_name"] or
+                    _looks_like_raw_identifier(enriched["sender_name"])
+                )
+            ):
+                enriched["sender_name"] = enriched["chat_name"]
+
+        enriched_messages.append(enriched)
+
+    return enriched_messages
 
 
 @router.get("/api/agent-runs", response_model=List[AgentRunResponse])
