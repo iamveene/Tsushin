@@ -556,14 +556,25 @@ class ProjectService:
                 knowledge.status = "completed"
                 knowledge.processed_date = datetime.utcnow()
 
-                # Store embeddings
+                # BUG-389 fix: Commit the completed status BEFORE attempting embeddings.
+                # If embedding storage fails (model download, ChromaDB init, etc.),
+                # the document status is still properly marked as completed with chunks.
+                self.db.commit()
+
+                # Store embeddings (best-effort — failure is logged but doesn't affect status)
                 await self._store_project_embeddings(project, knowledge, chunks)
 
             except Exception as e:
                 knowledge.status = "failed"
                 knowledge.error_message = str(e)
+                self.logger.error(f"Document processing failed: {e}", exc_info=True)
 
-            self.db.commit()
+            # BUG-389: Final safety commit to ensure status is persisted
+            try:
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                self.db.commit()
 
             return {
                 "status": "success",

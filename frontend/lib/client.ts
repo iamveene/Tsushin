@@ -1639,6 +1639,7 @@ export interface TesterMCPStatus {
   qr_available?: boolean
   qr_message?: string | null
   error?: string | null
+  source?: 'compose' | 'runtime'
 }
 
 export interface WhatsAppInstanceFiltersUpdate {

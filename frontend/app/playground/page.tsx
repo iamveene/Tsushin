@@ -135,6 +135,13 @@ export default function PlaygroundPage() {
         setStreamingMessage(message)
       },
       onMessageComplete: (message) => {
+        // BUG-398 fix: Guard against cross-thread message delivery
+        // If the incoming message belongs to a different thread, ignore it
+        const msgThreadId = message.metadata?.thread_id
+        if (msgThreadId && activeThreadIdRef.current && msgThreadId !== activeThreadIdRef.current) {
+          console.log(`[BUG-398] Ignoring message for thread ${msgThreadId} (active: ${activeThreadIdRef.current})`)
+          return
+        }
         // Add completed message to messages list
         setMessages((prev) => [...prev, message])
         setStreamingMessage(null)
@@ -749,10 +756,15 @@ export default function PlaygroundPage() {
         title: `New Conversation${agentNameSuffix}`
       })
 
+      // BUG-398 fix: Update ref immediately (before React batches the state update)
+      // to prevent stale closure in WebSocket callbacks from leaking old thread data
+      activeThreadIdRef.current = newThread.id
+
       // Navigate to the new thread immediately
       setActiveThreadId(newThread.id)
       setActiveThread(newThread)
       setMessages([])  // New thread has no messages yet
+      setStreamingMessage(null)  // Clear any in-flight streaming from old thread
 
       // Refresh thread list in background
       await loadThreads()

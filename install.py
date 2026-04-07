@@ -1026,7 +1026,7 @@ NEXT_PUBLIC_API_URL={backend_url}
         """Ensure frontend container is running — workaround for docker-compose v1 race condition."""
         try:
             result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Running}}", "tsushin-frontend"],
+                ["docker", "inspect", "--format", "{{.State.Running}}", f"{self.config.get('TSN_STACK_NAME', 'tsushin')}-frontend"],
                 capture_output=True, text=True
             )
             if result.returncode != 0 or result.stdout.strip() != 'true':

@@ -1106,7 +1106,13 @@ export default function ExpertMode({
                 {activeInspector === 'memory' && (
                   <MemoryInspector
                     agentId={selectedAgentId}
-                    senderKey={activeThread?.recipient}
+                    senderKey={
+                      // BUG-397 fix: Use stable per-user-per-agent key (without _t{threadId} suffix)
+                      // to match the key format used by playground_service.py for memory storage.
+                      // Thread recipient is "playground_u{uid}_a{aid}_t{tid}" but memory is stored
+                      // under "playground_u{uid}_a{aid}".
+                      activeThread?.recipient?.replace(/_t\d+$/, '')
+                    }
                   />
                 )}
                 {activeInspector === 'skills' && <SkillsPanel agentId={selectedAgentId} />}

@@ -2865,10 +2865,16 @@ export default function HubPage() {
                           <BeakerIcon size={16} className="text-orange-400" /> QA Tester
                         </h3>
                         <p className="text-xs text-tsushin-slate mt-1">
-                          Compose-managed tester instance for WhatsApp QA, QR validation, and watcher diagnostics.
+                          {/* BUG-395 fix: Show correct source for runtime vs compose testers */}
+                          {testerStatus?.source === 'runtime'
+                            ? 'Runtime tester instance for WhatsApp QA and watcher diagnostics.'
+                            : 'Compose-managed tester instance for WhatsApp QA, QR validation, and watcher diagnostics.'}
                         </p>
                         <p className="text-xs text-tsushin-slate/70 mt-2">
                           Container: {testerStatus?.name || 'tester-mcp'}
+                          {testerStatus?.source === 'runtime' && (
+                            <span className="ml-2 px-1.5 py-0.5 text-[10px] bg-blue-500/20 text-blue-300 rounded">runtime</span>
+                          )}
                         </p>
                       </div>
                       <div className="flex flex-col items-end gap-1">

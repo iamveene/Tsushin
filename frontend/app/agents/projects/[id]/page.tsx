@@ -435,16 +435,16 @@ export default function StudioProjectDetailPage() {
                   <div>
                     <label className="block text-sm text-white/70 mb-1.5">Icon</label>
                     <div className="flex flex-wrap gap-1.5">
-                      {PROJECT_ICONS.map((icon) => (
+                      {PROJECT_ICON_MAP.map(({ Icon, label }) => (
                         <button
-                          key={icon}
+                          key={label}
                           type="button"
-                          onClick={() => setFormData({ ...formData, icon })}
+                          onClick={() => setFormData({ ...formData, icon: label })}
                           className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg transition-all ${
-                            formData.icon === icon ? 'bg-teal-500/20 ring-2 ring-teal-500' : 'bg-white/5 hover:bg-white/10'
+                            formData.icon === label ? 'bg-teal-500/20 ring-2 ring-teal-500' : 'bg-white/5 hover:bg-white/10'
                           }`}
                         >
-                          {icon}
+                          <Icon className="w-5 h-5" />
                         </button>
                       ))}
                     </div>

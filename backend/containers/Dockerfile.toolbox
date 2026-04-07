@@ -96,7 +96,8 @@ RUN pip install --no-cache-dir \
     python-nmap \
     dnspython \
     paramiko \
-    netaddr
+    netaddr \
+    uv
 
 # ============================================================================
 # User Setup (non-root for security)

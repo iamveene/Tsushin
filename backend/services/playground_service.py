@@ -187,6 +187,12 @@ class PlaygroundService:
                     "status": "error"
                 }
 
+            # BUG-388 fix: For shared-memory agents, use a stable "shared" sender_key
+            # so that all threads/users share the same memory pool for cross-thread recall.
+            if getattr(agent, 'memory_isolation_mode', 'isolated') == 'shared':
+                sender_key = "shared"
+                self.logger.info(f"BUG-388: Shared memory mode — overriding sender_key to 'shared'")
+
             # Phase 10: Check if playground channel is enabled for this agent
             import json as json_module
             enabled_channels = agent.enabled_channels if isinstance(agent.enabled_channels, list) else (
@@ -252,6 +258,8 @@ class PlaygroundService:
                 "max_tokens": max_tokens,
                 "semantic_search_results": agent.semantic_search_results or 10,
                 "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
+                # BUG-387 fix: Pass provider_instance_id so AIClient resolves instance-scoped credentials
+                "provider_instance_id": agent.provider_instance_id,
                 # Fact extraction configuration (auto-enabled for all conversations)
                 "auto_extract_facts": True,
                 "fact_extraction_threshold": 3,  # Lower threshold for playground (faster testing)
@@ -931,6 +939,11 @@ class PlaygroundService:
                 yield {"type": "error", "error": f"Agent {agent_id} not found or inactive"}
                 return
 
+            # BUG-388 fix: For shared-memory agents, use a stable "shared" sender_key
+            if getattr(agent, 'memory_isolation_mode', 'isolated') == 'shared':
+                sender_key = "shared"
+                self.logger.info(f"[STREAMING] BUG-388: Shared memory mode — overriding sender_key to 'shared'")
+
             # Check if playground channel is enabled
             import json as json_module
             enabled_channels = agent.enabled_channels if isinstance(agent.enabled_channels, list) else (
@@ -1035,6 +1048,8 @@ class PlaygroundService:
                 "max_tokens": max_tokens,
                 "semantic_search_results": agent.semantic_search_results or 10,
                 "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
+                # BUG-387 fix: Pass provider_instance_id so AIClient resolves instance-scoped credentials
+                "provider_instance_id": agent.provider_instance_id,
             }
 
             # Initialize memory manager

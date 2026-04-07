@@ -157,10 +157,12 @@ async def execute_command(
     service = SlashCommandService(db)
 
     # SECURITY: Always generate sender_key from authenticated user — never accept from request body
-    # Match the format used in playground_service.py for proper tool buffer integration
-    if data.channel == "playground" and data.thread_id:
-        # Use thread-specific sender_key format for proper isolation
-        sender_key = f"playground_u{current_user.id}_a{data.agent_id}_t{data.thread_id}"
+    # BUG-392 fix: Use stable per-user-per-agent key (NO thread suffix) to match
+    # playground_service.py send_message() and process_message_streaming().
+    # The old thread-suffixed format caused /inject to store pending injections under
+    # a different buffer key than the next message would check.
+    if data.channel == "playground" and data.agent_id:
+        sender_key = f"playground_u{current_user.id}_a{data.agent_id}"
     elif data.channel == "playground":
         sender_key = f"playground_user_{current_user.id}"
     else:

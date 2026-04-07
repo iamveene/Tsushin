@@ -449,8 +449,16 @@ class SharedMemoryPool:
                 query = query.filter(SharedMemory.tenant_id == tenant_id)
 
             if agent_id:
-                # Stats for specific agent (what they shared)
-                query = query.filter(SharedMemory.shared_by_agent == agent_id)
+                # BUG-399 fix: Stats for knowledge accessible TO the agent (not just shared BY it).
+                # This matches the access filter used in get_accessible_knowledge() so that
+                # stat cards display counts consistent with the knowledge list below them.
+                query = query.filter(
+                    or_(
+                        cast(SharedMemory.accessible_to, Text) == '[]',
+                        SharedMemory.shared_by_agent == agent_id,
+                        cast(SharedMemory.accessible_to, Text).like(f'%{agent_id}%')
+                    )
+                )
 
             all_knowledge = query.all()
 

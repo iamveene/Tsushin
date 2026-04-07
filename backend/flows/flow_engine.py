@@ -1040,7 +1040,10 @@ class SkillStepHandler(FlowStepHandler):
                            f"{'tool' if use_tool_mode else 'legacy'} "
                            f"(tool_arguments={'yes' if tool_arguments else 'no'})")
 
-            if use_tool_mode and has_execute_tool and is_tool_enabled:
+            # BUG-393 fix: When use_tool_mode is explicitly True in step config,
+            # respect it even if the skill's agent-level config has execution_mode="legacy".
+            # The flow step explicitly requested tool mode, so bypass is_tool_enabled check.
+            if use_tool_mode and has_execute_tool and (is_tool_enabled or config.get("use_tool_mode") is True):
                 logger.info(f"SkillStepHandler: Using execute_tool() for skill '{skill_type}'")
                 # Execute skill via tool mode
                 result = await skill_instance.execute_tool(tool_arguments, inbound_message, final_config)
@@ -1055,7 +1058,7 @@ class SkillStepHandler(FlowStepHandler):
                 result = await skill_instance.process(inbound_message, final_config)
 
             # Determine actual execution mode used
-            actual_execution_mode = "tool" if (use_tool_mode and has_execute_tool and is_tool_enabled) else "legacy"
+            actual_execution_mode = "tool" if (use_tool_mode and has_execute_tool and (is_tool_enabled or config.get("use_tool_mode") is True)) else "legacy"
 
             # Return structured output for template injection
             return {
@@ -3178,19 +3181,40 @@ class FlowEngine:
             final_report = self.generate_final_report(flow_run)
             flow_run.final_report_json = json.dumps(final_report)
 
-            self.db.commit()
-            self.db.refresh(flow_run)
+            try:
+                self.db.commit()
+                self.db.refresh(flow_run)
+            except Exception as commit_err:
+                # BUG-394 fix: Robust commit for keyword-triggered flows sharing DB session
+                logger.warning(f"Flow completion commit failed, retrying: {commit_err}")
+                self.db.rollback()
+                self.db.add(flow_run)
+                self.db.commit()
+                self.db.refresh(flow_run)
 
             logger.info(f"Flow run {flow_run.id} completed with status: {flow_run.status}")
             return flow_run
 
         except Exception as e:
-            logger.error(f"Flow execution failed: {e}")
+            logger.error(f"Flow execution failed: {e}", exc_info=True)
             flow_run.status = "failed"
             flow_run.completed_at = datetime.utcnow()
             flow_run.error_text = str(e)
-            self.db.commit()
-            self.db.refresh(flow_run)
+            try:
+                self.db.commit()
+                self.db.refresh(flow_run)
+            except Exception as commit_err:
+                # BUG-394 fix: If the shared DB session is in a bad state (e.g., from
+                # keyword-triggered flows sharing the playground_service session),
+                # rollback and retry the commit to prevent stuck "running" flow_runs.
+                logger.error(f"Flow finalization commit failed: {commit_err}, attempting rollback + retry")
+                try:
+                    self.db.rollback()
+                    self.db.add(flow_run)
+                    self.db.commit()
+                    self.db.refresh(flow_run)
+                except Exception as retry_err:
+                    logger.error(f"Flow finalization retry also failed: {retry_err}")
             return flow_run
 
 

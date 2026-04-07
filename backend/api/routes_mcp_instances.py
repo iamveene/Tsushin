@@ -138,6 +138,7 @@ class TesterStatusResponse(BaseModel):
     qr_available: bool = False
     qr_message: Optional[str] = None
     error: Optional[str] = None
+    source: Optional[str] = None  # BUG-395: 'compose' or 'runtime'
 
 
 # ============================================================================

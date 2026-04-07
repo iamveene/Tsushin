@@ -792,6 +792,12 @@ class SkillManager:
             return skill_class(token_tracker=self.token_tracker)
         elif skill_type == "okg_term_memory":
             return skill_class(db=db, agent_id=agent_id)
+        elif skill_type.startswith("custom:"):
+            # BUG-391 fix: Dynamic custom skill classes store the DB record as a class
+            # attribute (_custom_skill_record) via type(). Pass it to __init__ so that
+            # self._record is set and get_mcp_tool_definition() works correctly.
+            record = getattr(skill_class, '_custom_skill_record', None)
+            return skill_class(skill_record=record)
         else:
             return skill_class()
 

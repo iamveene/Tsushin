@@ -571,8 +571,14 @@ async def setup_wizard(
                     f"(id={first_provider_instance.id}) for tenant {tenant.id}"
                 )
 
-                # Auto-assign as System AI
+                # BUG-386 fix: Persist the selected model on the provider instance
                 primary_model = setup_request.default_model or provider_defaults.get(primary_vendor, "gemini-2.5-flash")
+                if not first_provider_instance.available_models:
+                    first_provider_instance.available_models = [primary_model]
+                    db.commit()
+                    logger.info(f"Setup wizard: Set available_models=[{primary_model}] on ProviderInstance {first_provider_instance.id}")
+
+                # Auto-assign as System AI
                 config_row = db.query(ConfigModel).first()
                 if config_row:
                     config_row.system_ai_provider_instance_id = first_provider_instance.id
