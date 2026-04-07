@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### Installer & QA Hardening — 2026-04-07
+
+- **Installer remote HTTP health checks:** `install.py` now probes backend/frontend health on `127.0.0.1` instead of `localhost`, which avoids false frontend failures when localhost-only redirect logic is active. For HTTP remote installs, the success output now prints the configured public host/IP instead of `localhost`.
+- **Remote VM helper refreshed:** `backend/dev_tests/remote_install.sh` now supports password-auth SSH workflows, installs Docker Compose v2 plus `rsync`, derives the default remote path from the actual remote `$HOME`, and fixes stale executable-path handling.
+- **Fresh-install regression coverage:** Added `backend/dev_tests/test_install_remote_http_helpers.py` to lock in loopback health URLs and public-host success URLs for remote HTTP installs.
+- **QA credential alignment:** `backend/dev_tests/test_med010_shell_permission.py` now uses `member@example.com`, matching the seeded helper users from `backend/ops/create_test_users.py`.
+
 #### VM Retest Bug Sprint (BUG-348, BUG-349, BUG-350, BUG-352, BUG-353, BUG-356, BUG-360, BUG-361) — 2026-04-07
 
 - **BUG-348 — HTTP redirect breaks remote installs (CRITICAL):** Middleware now only redirects `localhost` HTTP to HTTPS, preserving remote HTTP access for IP-based installs.

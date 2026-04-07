@@ -163,9 +163,14 @@ python3 install.py --defaults --http
 
 # Custom ports
 python3 install.py --port 9090 --frontend-port 3031
+
+# Optional: prepare a remote Ubuntu VM over SSH, then run install.py on the VM
+backend/dev_tests/remote_install.sh user@host [/remote/path]
 ```
 
 Source: `README.md:29-48`, `install.py:38-96`. `--http` and `--domain` are mutually exclusive and both require `--defaults` (`install.py:102-109`).
+
+The remote helper syncs the repo to the VM, installs Docker plus Docker Compose v2, and supports interactive password-based SSH flows. For remote HTTP installs, the installer's final success output uses the public host/IP you entered rather than `localhost`.
 
 The installer automatically:
 
@@ -180,7 +185,7 @@ Source: `install.py:49-53`, `docker-compose.yml:131-134` (HOST_BACKEND_DATA_PATH
 
 ### 3.3 Complete setup via browser
 
-Open the URL printed at the end of install (e.g. `https://localhost` or `http://localhost:3030`) and finish the `/setup` wizard:
+Open the URL printed at the end of install (e.g. `https://localhost`, `http://localhost:3030`, or `http://<public-host>:3030` for remote HTTP) and finish the `/setup` wizard:
 
 1. Create admin account + organization.
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
