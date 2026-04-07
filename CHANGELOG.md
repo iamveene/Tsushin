@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### Onboarding UX Overhaul — Fragmented Experiences Unified (BUG-318, 319, 320, 321, 322, 323, 325, 334) — 2026-04-07
+
+Eight overlapping onboarding UX bugs resolved in a coordinated fix across `OnboardingContext.tsx`, `OnboardingWizard.tsx`, `WhatsAppWizardContext.tsx`, `GettingStartedChecklist.tsx`, and `LayoutContent.tsx`:
+
+- **BUG-318 — Three sequential onboarding experiences on fresh install (MEDIUM):** Removed the `tsushin:onboarding-complete` event dispatch from `completeTour()` and the auto-launch listener from `WhatsAppWizardContext`. The WhatsApp wizard now only opens when explicitly triggered: via the Getting Started Checklist "Connect a Channel" button (`forceOpenWizard`) or tour step 5 action button (`openWizard`).
+
+- **BUG-319 — Tour step 9 duplicated Getting Started Checklist (LOW):** Removed tour step 9 ("Setup Checklist") entirely. `TOTAL_STEPS` reduced from 9 to 8. New step 8 ("You're All Set!") is a brief completion message pointing users to the Getting Started Checklist on the dashboard. Tour now shows "Step 1 of 8".
+
+- **BUG-320 — Getting Started Checklist visible beneath tour modal (LOW):** `GettingStartedChecklist.tsx` now imports `useOnboarding` and returns `null` immediately when `onboardingState.isActive` is true. Checklist is completely hidden while the tour is running.
+
+- **BUG-321 — Tour step 5 and WhatsApp Wizard covered the same task (MEDIUM):** Tour step 5 action button now calls `openChannelsWizard()` which launches the WhatsApp Setup Wizard directly. When the wizard closes, `tsushin:whatsapp-wizard-closed` event fires and the tour auto-advances to step 6 (Flows).
+
+- **BUG-322 — "Connect a Channel" link couldn't relaunch dismissed wizard (LOW):** Added `forceOpenWizard()` to `WhatsAppWizardContext` that clears `tsushin_whatsapp_wizard_dismissed` before opening. Getting Started Checklist "Connect a Channel" item is now a button calling `forceOpenWizard()` instead of a Link to `/hub?tab=communication`. Hub page also updated to use `forceOpenWizard`.
+
+- **BUG-323 — Tour steps 4 and 5 both navigated to /hub with no context (LOW):** Step 5 now launches the WhatsApp wizard directly via `openChannelsWizard()`. This provides clear channel-specific UX instead of re-showing the generic Hub page.
+
+- **BUG-325 — Tour auto-started on top of open User Guide panel (MEDIUM):** `OnboardingContext` tracks `isUserGuideOpen` via event listeners for `tsushin:open-user-guide` / `tsushin:close-user-guide`. Auto-start skips if User Guide is open (using ref to avoid stale closure race). `LayoutContent.tsx` dispatches `tsushin:close-user-guide` when the panel closes. Tour step 1 "Open User Guide" button is disabled with updated label when the guide is already open.
+
+- **BUG-334 — Tour overlay reappeared on every page navigation (MEDIUM):** Added dedicated `dismissTour()` function that calls `localStorage.setItem('tsushin_onboarding_completed', 'true')` SYNCHRONOUSLY before any React state update. Modal's `onClose` prop and Escape key handler both call `dismissTour()`. A `tourDismissedRef` prevents deferred auto-start from restarting the tour after dismissal. Verified: programmatic Escape key immediately sets localStorage; navigation to `/agents` does not reshow the tour.
+
 #### Settings & Admin Navigation UX (BUG-326, BUG-327, BUG-330) — 2026-04-07
 
 - **BUG-326 — `/settings/filtering` orphaned from Settings hub (MEDIUM):** Added a "Message Filtering" card to the advanced settings section of `frontend/app/settings/page.tsx`. The card includes a filter funnel icon, links to `/settings/filtering`, and requires `org.settings.write` permission. The page (group filters, DM allowlists, keywords, auto-response rules) was previously only discoverable by direct URL.

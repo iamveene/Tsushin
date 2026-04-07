@@ -6,11 +6,19 @@
  *
  * Interactive tour that guides users through Tsushin platform features.
  * Auto-starts for new users, can be minimized, and easily dismissible.
+ *
+ * BUG-319: Removed step 9 (Setup Checklist) — it duplicated GettingStartedChecklist.
+ *           Replaced with a "You're all set" message pointing to the checklist.
+ * BUG-321: Step 5 action button launches WhatsApp wizard directly (not just /hub nav).
+ * BUG-323: Step 5 navigates to /hub?tab=communication, not /hub.
+ * BUG-325: "Open User Guide" action button disabled when User Guide is already open.
+ * BUG-334: Escape and Close button call dismissTour() which persists to localStorage immediately.
  */
 
 import React, { useEffect, useCallback } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useOnboarding } from '@/contexts/OnboardingContext'
+import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 import Modal from '@/components/ui/Modal'
 
 interface TourStep {
@@ -21,22 +29,57 @@ interface TourStep {
   actionButton?: {
     label: string
     action: () => void
+    disabled?: boolean
+    disabledReason?: string
   }
 }
 
 export default function OnboardingWizard() {
-  const { state, nextStep, previousStep, minimize, maximize, completeTour, skipTour } = useOnboarding()
+  const { state, nextStep, previousStep, minimize, maximize, completeTour, dismissTour, skipTour } = useOnboarding()
+  const { openWizard: openWhatsAppWizard } = useWhatsAppWizard()
   const router = useRouter()
   const pathname = usePathname()
   const isAuthPage = pathname?.startsWith('/auth/')
+
+  // BUG-325: "Open User Guide" should be disabled when guide is already open
+  const isUserGuideOpen = state.isUserGuideOpen
 
   const openUserGuide = useCallback(() => {
     window.dispatchEvent(new CustomEvent('tsushin:open-user-guide'))
     minimize()
   }, [minimize])
 
+  // BUG-321: Step 5 launches WhatsApp wizard directly AND advances tour when wizard closes
+  const openChannelsWizard = useCallback(() => {
+    openWhatsAppWizard()
+    minimize()
+    // Listen for wizard close to advance tour to next step (step 6)
+    const handleWizardClose = () => {
+      // Advance to step 6 (Flows) when wizard is dismissed
+      window.removeEventListener('tsushin:whatsapp-wizard-closed', handleWizardClose)
+      // Use a small delay to allow wizard close animation to complete
+      setTimeout(() => {
+        // Only advance if tour is still minimized (user didn't manually reopen it)
+        // We signal to advance the step
+        window.dispatchEvent(new CustomEvent('tsushin:advance-tour-step'))
+      }, 300)
+    }
+    window.addEventListener('tsushin:whatsapp-wizard-closed', handleWizardClose)
+  }, [openWhatsAppWizard, minimize])
+
+  // Listen for advance-tour-step event (triggered after WhatsApp wizard closes)
+  useEffect(() => {
+    const handleAdvance = () => {
+      // Only advance if we're on step 5 or the wizard just closed
+      nextStep()
+    }
+    window.addEventListener('tsushin:advance-tour-step', handleAdvance)
+    return () => window.removeEventListener('tsushin:advance-tour-step', handleAdvance)
+  }, [nextStep])
+
   const tourSteps: TourStep[] = [
     {
+      // Step 1
       title: 'Welcome to Tsushin!',
       targetSelector: null,
       content: 'Tsushin is a powerful multi-agent platform that helps you build, deploy, and manage AI agents across multiple communication channels. This tour covers the mandatory setup steps to get you operational. For detailed documentation, open the User Guide anytime via the ? button in the header.',
@@ -47,11 +90,13 @@ export default function OnboardingWizard() {
         'Flow automation & scheduling'
       ],
       actionButton: {
-        label: 'Open User Guide',
-        action: openUserGuide
+        label: isUserGuideOpen ? 'User Guide is already open' : 'Open User Guide',
+        action: openUserGuide,
+        disabled: isUserGuideOpen,
       }
     },
     {
+      // Step 2
       title: 'Watcher - Real-Time Monitoring',
       targetSelector: 'nav a[href="/"]',
       content: 'The Watcher dashboard provides real-time visibility into all conversations across your agents and channels. Monitor message streams, track agent activity, and gain insights into user interactions.',
@@ -63,6 +108,7 @@ export default function OnboardingWizard() {
       ]
     },
     {
+      // Step 3
       title: 'Studio - Agent Management',
       targetSelector: 'a[href="/agents"]',
       content: 'The Studio is where you create, configure, and manage your AI agents. Define agent personalities, assign skills, and control how agents interact with users.',
@@ -78,6 +124,7 @@ export default function OnboardingWizard() {
       }
     },
     {
+      // Step 4
       title: 'Hub - AI Providers & System AI',
       targetSelector: 'a[href="/hub"]',
       content: 'The Hub centralizes all your external integrations. Your primary AI provider was automatically set as the System AI during setup — this powers intent classification, skill routing, and other system operations. You can add more providers or change the System AI here at any time.',
@@ -93,9 +140,10 @@ export default function OnboardingWizard() {
       }
     },
     {
+      // Step 5 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
       title: 'Communication Channels (Required)',
       targetSelector: 'a[href="/hub"]',
-      content: 'To receive and respond to messages, you must connect at least one communication channel. Set up WhatsApp via QR code scanning in the Hub, connect Telegram with a bot token, or configure webhooks for other services. Without a channel, your agents can only be tested in the Playground.',
+      content: 'To receive and respond to messages, you must connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Without a channel, agents can only be tested in the Playground.',
       highlightFeatures: [
         'WhatsApp: scan QR code to connect your phone',
         'Telegram: add your bot token',
@@ -103,11 +151,12 @@ export default function OnboardingWizard() {
         'Each channel can be independently routed to agents'
       ],
       actionButton: {
-        label: 'Set Up Channels in Hub',
-        action: () => router.push('/hub')
+        label: 'Set Up Channels (guided wizard)',
+        action: openChannelsWizard
       }
     },
     {
+      // Step 6
       title: 'Flows - Automation & Scheduling',
       targetSelector: 'a[href="/flows"]',
       content: 'Flows enable you to create automated workflows, scheduled tasks, and multi-step agent orchestrations. Build complex automation without code.',
@@ -123,6 +172,7 @@ export default function OnboardingWizard() {
       }
     },
     {
+      // Step 7
       title: 'Playground - Safe Testing Environment',
       targetSelector: 'a[href="/playground"]',
       content: 'The Playground is your safe space to test agents, experiment with prompts, and validate configurations before connecting real channels.',
@@ -138,30 +188,16 @@ export default function OnboardingWizard() {
       }
     },
     {
-      title: 'Security & API Access',
+      // Step 8 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
+      // Points users to the Getting Started Checklist on the dashboard instead of duplicating it.
+      title: "You're All Set!",
       targetSelector: null,
-      content: 'Tsushin includes built-in AI security controls and a public API for programmatic access. Sentinel and MemGuard protect your agents from prompt injection and data leaks. The API v1 lets external systems interact with your agents.',
+      content: "You've completed the Tsushin onboarding tour. Check the Getting Started checklist on the dashboard for your setup progress — it tracks channel setup, contacts, playground testing, and more. You can relaunch this tour anytime via the ? button in the header.",
       highlightFeatures: [
-        'Sentinel AI security and MemGuard protection',
-        'Security profiles with SSRF protection',
-        'API v1 for programmatic access',
-        'OAuth2 client credentials for integrations'
-      ],
-      actionButton: {
-        label: 'Go to Settings',
-        action: () => router.push('/settings')
-      }
-    },
-    {
-      title: 'Setup Checklist',
-      targetSelector: null,
-      content: 'Here is a summary of the mandatory and recommended steps to get Tsushin fully operational. Complete these to ensure your agents can communicate across all channels.',
-      highlightFeatures: [
-        'AI Provider configured (done during setup)',
-        'System AI auto-assigned (done during setup)',
-        'Connect a channel: WhatsApp or Telegram (Hub)',
-        'Test your agents in the Playground',
-        'Review the User Guide for advanced features (?)'
+        'Default agents are already configured',
+        'Getting Started checklist tracks your progress on the dashboard',
+        'Connect a channel via the checklist or Hub → Communication tab',
+        'Access this tour anytime via the ? button'
       ],
       actionButton: {
         label: 'Finish & Go to Playground',
@@ -175,13 +211,14 @@ export default function OnboardingWizard() {
 
   const currentStepData = tourSteps[state.currentStep - 1]
 
-  // Handle keyboard shortcuts
+  // BUG-334: Escape key calls dismissTour() which persists to localStorage immediately
   useEffect(() => {
     if (!state.isActive || state.isMinimized) return
 
     const handleKeyPress = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        minimize()
+        // BUG-334: Permanently dismiss — localStorage is set in dismissTour() before state update
+        dismissTour()
       } else if (e.key === 'ArrowRight' && state.currentStep < state.totalSteps) {
         nextStep()
       } else if (e.key === 'ArrowLeft' && state.currentStep > 1) {
@@ -191,7 +228,7 @@ export default function OnboardingWizard() {
 
     window.addEventListener('keydown', handleKeyPress)
     return () => window.removeEventListener('keydown', handleKeyPress)
-  }, [state.isActive, state.isMinimized, state.currentStep, state.totalSteps, nextStep, previousStep, minimize])
+  }, [state.isActive, state.isMinimized, state.currentStep, state.totalSteps, nextStep, previousStep, dismissTour])
 
   // Highlight target UI elements when step changes
   useEffect(() => {
@@ -241,7 +278,7 @@ export default function OnboardingWizard() {
   return (
     <Modal
       isOpen={state.isActive && !state.isMinimized}
-      onClose={minimize}
+      onClose={dismissTour}
       size="xl"
       showCloseButton={true}
     >
@@ -297,10 +334,20 @@ export default function OnboardingWizard() {
           {currentStepData.actionButton && (
             <button
               onClick={() => {
-                currentStepData.actionButton!.action()
-                minimize()
+                if (!currentStepData.actionButton!.disabled) {
+                  currentStepData.actionButton!.action()
+                  // Only minimize (not dismiss) when using action buttons mid-tour
+                  if (state.currentStep < state.totalSteps) {
+                    minimize()
+                  }
+                }
               }}
-              className="mt-4 w-full bg-gradient-to-r from-teal-500 to-cyan-500 text-white px-4 py-2 rounded-lg hover:from-teal-600 hover:to-cyan-600 transition-all font-medium"
+              disabled={currentStepData.actionButton.disabled}
+              className={`mt-4 w-full px-4 py-2 rounded-lg transition-all font-medium ${
+                currentStepData.actionButton.disabled
+                  ? 'bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white hover:from-teal-600 hover:to-cyan-600'
+              }`}
             >
               {currentStepData.actionButton.label}
             </button>
@@ -321,7 +368,7 @@ export default function OnboardingWizard() {
             <button
               onClick={minimize}
               className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-              title="Minimize (ESC)"
+              title="Minimize (use × to permanently dismiss)"
             >
               Minimize
             </button>
@@ -344,21 +391,12 @@ export default function OnboardingWizard() {
           </div>
         </div>
 
-        {/* Completion Checkbox (only on last step) */}
+        {/* Completion hint on last step */}
         {state.currentStep === state.totalSteps && (
           <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
-              <input
-                type="checkbox"
-                defaultChecked={true}
-                onChange={(e) => {
-                  // If checked, mark as completed when finishing
-                  // If unchecked, tour will show again next login
-                }}
-                className="rounded text-teal-500 focus:ring-teal-500"
-              />
-              <span>Don't show this tour again</span>
-            </label>
+            <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+              The Getting Started checklist on the dashboard will track your remaining setup steps.
+            </p>
           </div>
         )}
       </div>

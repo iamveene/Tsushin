@@ -1,66 +1,83 @@
 'use client'
 
+/**
+ * Getting Started Checklist
+ *
+ * BUG-320: Hidden when the onboarding tour is active (tour modal and checklist competed for attention).
+ * BUG-322: "Connect a Channel" item now calls forceOpenWizard() directly instead of linking to
+ *          /hub?tab=communication, ensuring the guided wizard always launches (even after dismissal).
+ */
+
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useSetupProgress } from '@/hooks/useSetupProgress'
+import { useOnboarding } from '@/contexts/OnboardingContext'
+import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 
 const DISMISSED_KEY = 'tsushin_getting_started_dismissed'
 
 interface ChecklistItem {
   title: string
   subtitle: string
-  href: string
+  href?: string
   actionLabel: string
   completedKey: keyof ReturnType<typeof useSetupProgress>
+  onClick?: () => void
 }
-
-const items: ChecklistItem[] = [
-  {
-    title: 'Configure an AI Agent',
-    subtitle: 'Create and customize your AI assistant',
-    href: '/agents',
-    actionLabel: 'Go to Studio',
-    completedKey: 'hasAgents',
-  },
-  {
-    title: 'Connect a Channel',
-    subtitle: 'Set up WhatsApp, Telegram, or other channels',
-    href: '/hub?tab=communication',
-    actionLabel: 'Go to Hub',
-    completedKey: 'hasChannels',
-  },
-  {
-    title: 'Add Contacts',
-    subtitle: 'Register people your agent should recognize',
-    href: '/agents/contacts',
-    actionLabel: 'Add Contacts',
-    completedKey: 'hasContacts',
-  },
-  {
-    title: 'Test in Playground',
-    subtitle: 'Send a test message to your agent',
-    href: '/playground',
-    actionLabel: 'Open Playground',
-    completedKey: 'hasMessages',
-  },
-  {
-    title: 'Create a Flow',
-    subtitle: 'Automate tasks with visual workflows',
-    href: '/flows',
-    actionLabel: 'Create Flow',
-    completedKey: 'hasFlows',
-  },
-]
 
 export default function GettingStartedChecklist() {
   const progress = useSetupProgress()
   const [dismissed, setDismissed] = useState(true) // default hidden until we check
+  const { state: onboardingState } = useOnboarding()
+  const { forceOpenWizard } = useWhatsAppWizard()
 
   useEffect(() => {
     setDismissed(localStorage.getItem(DISMISSED_KEY) === 'true')
   }, [])
 
+  // BUG-320: Hide checklist while onboarding tour is active — they compete for attention
+  if (onboardingState.isActive) return null
+
   if (dismissed || progress.loading || progress.allComplete) return null
+
+  const items: ChecklistItem[] = [
+    {
+      title: 'Configure an AI Agent',
+      subtitle: 'Create and customize your AI assistant',
+      href: '/agents',
+      actionLabel: 'Go to Studio',
+      completedKey: 'hasAgents',
+    },
+    {
+      // BUG-322: Use forceOpenWizard instead of linking to /hub?tab=communication
+      title: 'Connect a Channel',
+      subtitle: 'Set up WhatsApp, Telegram, or other channels',
+      actionLabel: 'Launch Setup Wizard',
+      completedKey: 'hasChannels',
+      onClick: forceOpenWizard,
+    },
+    {
+      title: 'Add Contacts',
+      subtitle: 'Register people your agent should recognize',
+      href: '/agents/contacts',
+      actionLabel: 'Add Contacts',
+      completedKey: 'hasContacts',
+    },
+    {
+      title: 'Test in Playground',
+      subtitle: 'Send a test message to your agent',
+      href: '/playground',
+      actionLabel: 'Open Playground',
+      completedKey: 'hasMessages',
+    },
+    {
+      title: 'Create a Flow',
+      subtitle: 'Automate tasks with visual workflows',
+      href: '/flows',
+      actionLabel: 'Create Flow',
+      completedKey: 'hasFlows',
+    },
+  ]
 
   const completedCount = items.filter(item => progress[item.completedKey]).length
   const progressPercent = (completedCount / items.length) * 100
@@ -120,14 +137,23 @@ export default function GettingStartedChecklist() {
                 <p className="text-xs text-tsushin-slate/70 truncate">{item.subtitle}</p>
               </div>
 
-              {/* Action */}
+              {/* Action — either a button (onClick) or a Link (href) */}
               {!completed && (
-                <Link
-                  href={item.href}
-                  className="flex-shrink-0 px-3 py-1 text-xs font-medium bg-teal-600/20 text-teal-400 hover:bg-teal-600/30 rounded-lg transition-colors"
-                >
-                  {item.actionLabel}
-                </Link>
+                item.onClick ? (
+                  <button
+                    onClick={item.onClick}
+                    className="flex-shrink-0 px-3 py-1 text-xs font-medium bg-teal-600/20 text-teal-400 hover:bg-teal-600/30 rounded-lg transition-colors"
+                  >
+                    {item.actionLabel}
+                  </button>
+                ) : (
+                  <Link
+                    href={item.href!}
+                    className="flex-shrink-0 px-3 py-1 text-xs font-medium bg-teal-600/20 text-teal-400 hover:bg-teal-600/30 rounded-lg transition-colors"
+                  >
+                    {item.actionLabel}
+                  </Link>
+                )
               )}
             </div>
           )

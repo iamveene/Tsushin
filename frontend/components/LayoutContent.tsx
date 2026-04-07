@@ -72,6 +72,13 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
     return () => window.removeEventListener('tsushin:open-user-guide', handleOpenGuide)
   }, [])
 
+  // BUG-325: Dispatch close event when User Guide panel closes so OnboardingContext
+  // can defer auto-start of the tour until after the guide is closed.
+  const handleUserGuideClose = () => {
+    setIsUserGuideOpen(false)
+    window.dispatchEvent(new CustomEvent('tsushin:close-user-guide'))
+  }
+
   // Emergency Stop state
   const toast = useToast()
   const [emergencyStop, setEmergencyStop] = useState(false)
@@ -564,7 +571,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
         </footer>
       )}
       {/* User Guide slide-over panel */}
-      <UserGuidePanel isOpen={isUserGuideOpen} onClose={() => setIsUserGuideOpen(false)} />
+      <UserGuidePanel isOpen={isUserGuideOpen} onClose={handleUserGuideClose} />
     </div>
   )
 }

@@ -253,7 +253,9 @@ const NOTIFICATION_SERVICES: { value: string; label: string; Icon: React.FC<Icon
 export default function HubPage() {
   const toast = useToast()
   const { isGlobalAdmin, hasPermission } = useAuth()
-  const { openWizard: openWhatsAppWizard } = useWhatsAppWizard()
+  // BUG-322: Use forceOpenWizard so the wizard always opens when explicitly triggered from Hub,
+  // even if the user previously dismissed it.
+  const { forceOpenWizard: openWhatsAppWizard } = useWhatsAppWizard()
   const searchParams = useSearchParams()
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     if (typeof window === 'undefined') return 'ai-providers'
@@ -2507,6 +2509,19 @@ export default function HubPage() {
                             <p className="text-xs">Start with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">ollama serve</code></p>
                           </>
                         )}
+                        {/* BUG-331: Docker networking guidance — always visible */}
+                        <div className="mt-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
+                          <p className="text-xs font-medium text-tsushin-accent">Docker Networking Note</p>
+                          <p className="text-xs text-tsushin-slate">
+                            Tsushin runs inside Docker. Use <code className="bg-tsushin-ink px-1 rounded font-mono text-tsushin-accent">http://172.18.0.1:11434</code> instead of <code className="bg-tsushin-ink px-1 rounded font-mono">localhost</code> so the backend container can reach Ollama on the host.
+                          </p>
+                          <p className="text-xs text-tsushin-slate">
+                            Also ensure Ollama listens on all interfaces — add to its systemd override:
+                          </p>
+                          <code className="block text-xs bg-tsushin-ink px-2 py-1.5 rounded font-mono text-tsushin-success whitespace-nowrap overflow-x-auto">
+                            Environment=&quot;OLLAMA_HOST=0.0.0.0:11434&quot;
+                          </code>
+                        </div>
                         {/* Test result display */}
                         {ollamaTestResult && (
                           <p className={`text-xs ${ollamaTestResult.success ? 'text-tsushin-success' : 'text-tsushin-vermilion'}`}>

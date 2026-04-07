@@ -1,6 +1,19 @@
 'use client'
 
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
+/**
+ * WhatsApp Wizard Context
+ *
+ * BUG-318: Removed auto-launch on 'tsushin:onboarding-complete' event.
+ *           The WhatsApp wizard should only open when explicitly triggered by the user
+ *           (via Getting Started Checklist or tour step 5 action button).
+ * BUG-322: Added forceOpen() method that ignores the dismissed state — used by
+ *           Getting Started Checklist "Connect a Channel" item so users can
+ *           relaunch the wizard even after previously dismissing it.
+ * BUG-321: Dispatches 'tsushin:whatsapp-wizard-closed' when wizard closes so the
+ *           onboarding tour can advance to the next step.
+ */
+
+import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 import { api, WhatsAppMCPInstance, Contact } from '@/lib/client'
 
 interface WizardState {
@@ -28,6 +41,7 @@ interface WizardState {
 interface WhatsAppWizardContextType {
   state: WizardState
   openWizard: () => void
+  forceOpenWizard: () => void
   closeWizard: () => void
   nextStep: () => void
   previousStep: () => void
@@ -66,36 +80,32 @@ const initialState: WizardState = {
 export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<WizardState>(initialState)
 
-  // Listen for onboarding completion to auto-launch wizard
-  useEffect(() => {
-    const handleOnboardingComplete = async () => {
-      const dismissed = localStorage.getItem(DISMISSED_KEY) === 'true'
-      if (dismissed) return
+  // BUG-318: Removed the 'tsushin:onboarding-complete' auto-launch listener.
+  // The wizard no longer auto-starts after the onboarding tour completes.
+  // Users access the wizard explicitly via:
+  //   (a) Getting Started Checklist "Connect a Channel" item (uses forceOpenWizard)
+  //   (b) Tour Step 5 "Set Up Channels" action button (uses openWizard)
 
-      try {
-        const instances = await api.getMCPInstances()
-        if (instances.length === 0) {
-          // Auto-launch after 1s delay
-          setTimeout(() => {
-            setState(prev => ({ ...prev, isOpen: true, currentStep: 1 }))
-          }, 1000)
-        }
-      } catch {
-        // If API fails, don't auto-launch
-      }
-    }
-
-    window.addEventListener('tsushin:onboarding-complete', handleOnboardingComplete)
-    return () => window.removeEventListener('tsushin:onboarding-complete', handleOnboardingComplete)
-  }, [])
-
+  // openWizard: respects dismissed state (won't reopen if user previously dismissed)
   const openWizard = useCallback(() => {
+    const dismissed = localStorage.getItem(DISMISSED_KEY) === 'true'
+    if (dismissed) return
     setState({ ...initialState, isOpen: true })
   }, [])
 
+  // BUG-322: forceOpenWizard: ignores dismissed state — used from Getting Started Checklist
+  const forceOpenWizard = useCallback(() => {
+    // Clear dismissed flag so the wizard can function normally after force-open
+    localStorage.removeItem(DISMISSED_KEY)
+    setState({ ...initialState, isOpen: true })
+  }, [])
+
+  // BUG-321: closeWizard dispatches event so onboarding tour can advance step
   const closeWizard = useCallback(() => {
     setState(prev => ({ ...prev, isOpen: false }))
     localStorage.setItem(DISMISSED_KEY, 'true')
+    // Signal to onboarding tour that wizard was closed (BUG-321)
+    window.dispatchEvent(new CustomEvent('tsushin:whatsapp-wizard-closed'))
   }, [])
 
   const nextStep = useCallback(() => {
@@ -173,6 +183,7 @@ export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
       value={{
         state,
         openWizard,
+        forceOpenWizard,
         closeWizard,
         nextStep,
         previousStep,
