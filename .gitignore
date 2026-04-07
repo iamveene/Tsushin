@@ -131,8 +131,9 @@ archive/
 # PERSONAL/USER DATA - NEVER TRACK
 # ========================================
 
-# Private strategic documents
+# Private strategic documents and internal validation/audit notes
 .private/
+.private/**/*.md
 private/
 backend/private/
 
@@ -250,12 +251,14 @@ backend/test-api.html
 /output/
 /deployment-test-playbook.md
 
-# Local-only directories (QA artifacts, test data, methodology docs, brand assets)
+# Local-only directories (QA artifacts, internal validation markdown, test data, methodology docs, brand assets)
 qa-screenshots/
 test-evidence/
+test-evidence/**/*.md
 test-screenshots/
 sample_data/
 test_documents/
 methodology/
 brand/
 deploy-to-vm.sh
+.fresh-install/
