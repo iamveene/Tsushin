@@ -561,8 +561,13 @@ class ProjectService:
                 # the document status is still properly marked as completed with chunks.
                 self.db.commit()
 
-                # Store embeddings (best-effort — failure is logged but doesn't affect status)
-                await self._store_project_embeddings(project, knowledge, chunks)
+                # Store embeddings in background (best-effort — failure doesn't affect status)
+                # BUG-400 fix: Fire-and-forget so worker crash during embedding
+                # doesn't kill the response. Status is already "completed" in DB.
+                import asyncio
+                asyncio.get_event_loop().create_task(
+                    self._store_project_embeddings(project, knowledge, chunks)
+                )
 
             except Exception as e:
                 knowledge.status = "failed"
