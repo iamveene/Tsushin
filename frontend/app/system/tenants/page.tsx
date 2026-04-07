@@ -7,14 +7,12 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
 import { useRequireGlobalAdmin } from '@/contexts/AuthContext'
 import { api, TenantInfo } from '@/lib/client'
 import { GlobeIcon } from '@/components/ui/icons'
 
 export default function TenantsPage() {
   const { user, loading: authLoading } = useRequireGlobalAdmin()
-  const router = useRouter()
   const [tenants, setTenants] = useState<TenantInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -30,6 +28,20 @@ export default function TenantsPage() {
     owner_password: '',
     owner_name: '',
     plan: 'free',
+  })
+
+  // Edit tenant state
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editLoading, setEditLoading] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+  const [editingTenant, setEditingTenant] = useState<TenantInfo | null>(null)
+  const [editForm, setEditForm] = useState({
+    name: '',
+    plan: 'free',
+    max_users: 5,
+    max_agents: 5,
+    max_monthly_requests: 10000,
+    status: 'active',
   })
 
   // Pagination
@@ -109,6 +121,44 @@ export default function TenantsPage() {
       setCreateError(err.message || 'Failed to create tenant')
     } finally {
       setCreateLoading(false)
+    }
+  }
+
+  const handleOpenEdit = (tenant: TenantInfo) => {
+    setEditingTenant(tenant)
+    setEditForm({
+      name: tenant.name,
+      plan: tenant.plan,
+      max_users: tenant.max_users,
+      max_agents: tenant.max_agents,
+      max_monthly_requests: tenant.max_monthly_requests,
+      status: tenant.status,
+    })
+    setEditError(null)
+    setShowEditModal(true)
+  }
+
+  const handleUpdateTenant = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingTenant) return
+    setEditLoading(true)
+    setEditError(null)
+    try {
+      await api.updateTenant(editingTenant.id, {
+        name: editForm.name,
+        plan: editForm.plan,
+        max_users: editForm.max_users,
+        max_agents: editForm.max_agents,
+        max_monthly_requests: editForm.max_monthly_requests,
+        status: editForm.status,
+      })
+      setShowEditModal(false)
+      setEditingTenant(null)
+      fetchTenants()
+    } catch (err: any) {
+      setEditError(err.message || 'Failed to update tenant')
+    } finally {
+      setEditLoading(false)
     }
   }
 
@@ -349,10 +399,10 @@ export default function TenantsPage() {
                       </td>
                       <td className="py-3 px-4 text-right">
                         <button
-                          onClick={() => router.push(`/system/tenants/${tenant.id}`)}
+                          onClick={() => handleOpenEdit(tenant)}
                           className="text-sm text-teal-400 hover:underline mr-3"
                         >
-                          View
+                          Edit
                         </button>
                         <button
                           onClick={() => handleDeleteTenant(tenant.id)}
@@ -394,6 +444,145 @@ export default function TenantsPage() {
             </div>
           )}
         </div>
+
+        {/* Edit Tenant Modal */}
+        {showEditModal && editingTenant && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border shadow-xl max-w-2xl w-full">
+              <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
+                <h2 className="text-xl font-bold text-white">
+                  Edit Tenant: {editingTenant.name}
+                </h2>
+                <button
+                  onClick={() => setShowEditModal(false)}
+                  className="p-2 text-tsushin-slate hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateTenant}>
+                <div className="p-6 space-y-4">
+                  {editError && (
+                    <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-800 dark:text-red-200">
+                      {editError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      Organization Name
+                    </label>
+                    <input
+                      type="text"
+                      value={editForm.name}
+                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                      required
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Plan
+                      </label>
+                      <select
+                        value={editForm.plan}
+                        onChange={(e) => setEditForm({ ...editForm, plan: e.target.value })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      >
+                        <option value="free">Free</option>
+                        <option value="pro">Pro</option>
+                        <option value="team">Team</option>
+                        <option value="enterprise">Enterprise</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Status
+                      </label>
+                      <select
+                        value={editForm.status}
+                        onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      >
+                        <option value="active">Active</option>
+                        <option value="trial">Trial</option>
+                        <option value="suspended">Suspended</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Max Users
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={editForm.max_users}
+                        onChange={(e) => setEditForm({ ...editForm, max_users: parseInt(e.target.value) || 1 })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Max Agents
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={editForm.max_agents}
+                        onChange={(e) => setEditForm({ ...editForm, max_agents: parseInt(e.target.value) || 1 })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Monthly Request Limit
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={editForm.max_monthly_requests}
+                        onChange={(e) => setEditForm({ ...editForm, max_monthly_requests: parseInt(e.target.value) || 1 })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-tsushin-slate bg-tsushin-ink rounded p-3">
+                    Current usage: <span className="text-white font-medium">{editingTenant.user_count}</span> / {editingTenant.max_users} users
+                    &nbsp;&bull;&nbsp;
+                    <span className="text-white font-medium">{editingTenant.agent_count}</span> / {editingTenant.max_agents} agents
+                  </div>
+                </div>
+
+                <div className="flex justify-end space-x-3 p-6 border-t border-tsushin-border">
+                  <button
+                    type="button"
+                    onClick={() => setShowEditModal(false)}
+                    className="px-4 py-2 bg-tsushin-elevated text-white rounded-md"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={editLoading}
+                    className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
+                  >
+                    {editLoading ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* Create Tenant Modal */}
         {showCreateModal && (

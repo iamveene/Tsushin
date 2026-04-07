@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### Settings & Admin Navigation UX (BUG-326, BUG-327, BUG-330) — 2026-04-07
+
+- **BUG-326 — `/settings/filtering` orphaned from Settings hub (MEDIUM):** Added a "Message Filtering" card to the advanced settings section of `frontend/app/settings/page.tsx`. The card includes a filter funnel icon, links to `/settings/filtering`, and requires `org.settings.write` permission. The page (group filters, DM allowlists, keywords, auto-response rules) was previously only discoverable by direct URL.
+
+- **BUG-327 — Global-admin landing page was a placeholder (MEDIUM):** Replaced the placeholder content in `frontend/app/system/integrations/page.tsx` with a proper "System Administration" overview dashboard featuring four navigation cards: Tenant Management, User Management, Plans & Limits, and Platform Integrations. Removed all "This page will contain" placeholder text. Cards use consistent glass-card styling with purple theme.
+
+- **BUG-330 — No admin UI for `max_agents` / tenant plan limits (LOW):** Added an "Edit" modal to `frontend/app/system/tenants/page.tsx`. The modal exposes editable fields for `max_agents`, `max_users`, `max_monthly_requests`, `plan`, and `status`, with current usage stats shown inline. The "View" button in the tenant table is replaced with "Edit". Uses existing backend `PUT /api/tenants/{id}` endpoint which already supports global-admin updates to all plan limit fields.
+
 #### Skills, Memory & Sentinel Bug Fixes (BUG-328, BUG-329, BUG-332, BUG-333, BUG-341) — 2026-04-07
 
 - **BUG-341 — Web search `serpapi` provider key rejected at runtime (MEDIUM):** The skill registry registers SerpAPI under the key `"google"`, but users who configured the skill with `"serpapi"` got a silent failure. Added `PROVIDER_ALIASES = {"serpapi": "google"}` normalization at the start of both `process()` and `execute_tool()` in `search_skill.py` so both provider names work identically at runtime.
