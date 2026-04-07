@@ -1084,28 +1084,23 @@ async def get_memory_layers(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # BUG-PLAYGROUND-003 Fix: Improved sender_key resolution for playground
-    # When a specific sender_key is provided (from thread.recipient), use it FIRST
-    # This allows Memory Inspector to show thread-specific memory instead of shared contact memory
-    possible_keys = []
+    # BUG-352 FIX: The stable per-user-per-agent key used by send_message()
+    # MUST be first — this is where playground messages are actually stored.
+    possible_keys = [f"playground_u{current_user.id}_a{agent_id}"]
 
-    # BUG-PLAYGROUND-003: User-provided sender_key takes FIRST priority
-    # This enables thread-isolated memory viewing in Memory Inspector
+    # User-provided sender_key (from thread.recipient) as second priority
     if sender_key:
-        # Try both with and without sender_ prefix
         possible_keys.append(f"sender_{sender_key}")
         possible_keys.append(sender_key)
 
-    # Try to find if user has a contact mapping - used for shared/contact-based memory
+    # Contact-based memory for users with contact mappings
     mapping = db.query(UserContactMapping).filter(
         UserContactMapping.user_id == current_user.id
     ).first()
     if mapping:
         contact = db.query(Contact).filter(Contact.id == mapping.contact_id).first()
         if contact:
-            # Contact-based memory (shared across threads)
             possible_keys.append(f"contact_{contact.id}")
-            # WhatsApp formats
             if contact.phone_number:
                 possible_keys.append(f"sender_{contact.phone_number}@s.whatsapp.net")
                 possible_keys.append(f"sender_{contact.phone_number}")
@@ -1114,10 +1109,7 @@ async def get_memory_layers(
                 possible_keys.append(f"sender_{contact.whatsapp_id}")
                 possible_keys.append(contact.whatsapp_id)
 
-    # BUG-352 FIX: Include the stable per-user-per-agent key used by send_message()
-    possible_keys.append(f"playground_u{current_user.id}_a{agent_id}")
-
-    # Playground-specific formats (fallback)
+    # Legacy playground formats (fallback)
     possible_keys.append(f"sender_playground_user_{current_user.id}")
     possible_keys.append(f"playground_user_{current_user.id}")
     possible_keys.append(f"contact_{current_user.id}")

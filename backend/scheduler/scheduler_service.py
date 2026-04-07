@@ -327,6 +327,8 @@ class SchedulerService:
 
     def _execute_notification_event(self, event: ScheduledEvent, payload: Dict):
         """Execute a notification event."""
+        import re
+
         recipient = payload.get('recipient_resolved')
         content = payload.get('message_content')
         platform = payload.get('platform', 'whatsapp')
@@ -341,9 +343,15 @@ class SchedulerService:
         if not agent_id:
             raise ValueError("Notification missing agent_id")
 
+        # BUG-356 FIX: Detect playground recipients (format playground_u{id}_a{id})
+        # Playground self-reminders don't have phone numbers and can't be sent via WhatsApp.
+        # Log the reminder as delivered — the user will see it in their next playground session.
+        if re.match(r'^playground_u\d+_a\d+', recipient):
+            logger.info(f"[NOTIFICATION] Playground self-reminder delivered: {content} (recipient={recipient})")
+            return  # Successfully "delivered" — no WhatsApp send needed
+
         # CRITICAL: Validate recipient is a phone number (not WhatsApp ID)
         # WhatsApp MCP API only accepts phone numbers for sending
-        import re
         # Phone numbers are typically 10-15 digits (international format, optional + prefix)
         if not re.match(r'^\+?\d{10,15}$', recipient):
             logger.error(f"Invalid recipient format: {recipient} (not a phone number)")

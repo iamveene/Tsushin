@@ -191,15 +191,23 @@ class PlaygroundThreadService:
 
             result = []
             for thread in threads:
-                # Get message count from memory
-                # Note: Memory sender_key has "sender_" prefix, but thread.recipient does not
-                sender_key = f"sender_{thread.recipient}" if not thread.recipient.startswith("sender_") else thread.recipient
-
-                self.logger.info(f"[DEBUG] Thread {thread.id}: recipient={thread.recipient}, sender_key={sender_key}")
+                # BUG-360 FIX: Messages are stored under the stable key
+                # playground_u{uid}_a{aid} (without thread suffix _t{tid}).
+                # Extract the stable key from the thread recipient.
+                recipient = thread.recipient
+                if recipient and '_t' in recipient:
+                    # Remove thread suffix: playground_u1_a1_t1 -> playground_u1_a1
+                    parts = recipient.rsplit('_t', 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        stable_key = parts[0]
+                    else:
+                        stable_key = recipient
+                else:
+                    stable_key = recipient
 
                 memory = self.db.query(Memory).filter(
                     Memory.agent_id == thread.agent_id,
-                    Memory.sender_key == sender_key
+                    Memory.sender_key == stable_key
                 ).first()
 
                 message_count = len(memory.messages_json) if memory and memory.messages_json else 0
