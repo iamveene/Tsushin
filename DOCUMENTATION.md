@@ -163,14 +163,11 @@ python3 install.py --defaults --http
 
 # Custom ports
 python3 install.py --port 9090 --frontend-port 3031
-
-# Optional: prepare a remote Ubuntu VM over SSH, then run install.py on the VM
-backend/dev_tests/remote_install.sh user@host [/remote/path]
 ```
 
 Source: `README.md:29-48`, `install.py:38-96`. `--http` and `--domain` are mutually exclusive and both require `--defaults` (`install.py:102-109`).
 
-The remote helper syncs the repo to the VM, installs Docker plus Docker Compose v2, and supports interactive password-based SSH flows. For remote HTTP installs, the installer's final success output uses the public host/IP you entered rather than `localhost`.
+For a remote Ubuntu VM, use the normal user flow: clone the repo on the VM, install Docker plus Docker Compose v2, and run `python3 install.py` from the repository root on that VM. For remote HTTP installs, the installer's final success output uses the public host/IP you entered rather than `localhost`.
 
 The installer automatically:
 
