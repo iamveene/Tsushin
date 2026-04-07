@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### Fresh-Install Dual-Surface Audit Summary — 2026-04-07
+
+- **Disposable fresh-install validation completed:** Ran a real installer + real `/setup` audit in an isolated git-excluded clone of `develop` at `bef22daa0b475c374eb7baa21c8496a7294edfc1`, using browser automation and direct API checks together where they exercised different paths.
+- **Validated working fresh-install surfaces:** Confirmed installer/setup, provider onboarding (Gemini, OpenAI, Anthropic, Ollama, Brave Search), knowledge base upload/use, custom skills create/test, sandboxed tools, slash commands including `/inject`, shell command center, Sentinel baseline protections, programmatic flows, project conversations, and Playground document/image upload-list behavior.
+- **Fresh-install regressions documented in tracker:** Logged/confirmed fresh-install issues around Docker naming and install isolation (`BUG-362`, `BUG-363`), hidden global-admin creation (`BUG-365`), missing `/shell` on fresh PostgreSQL installs (`BUG-371`), Memory Inspector / Watcher mismatches (`BUG-372`, `BUG-377`, `BUG-378`), provider-default drift (`BUG-373`), false-positive stdio MCP health (`BUG-374`), Tavily absence (`BUG-375`), A2A memory loss (`BUG-379`), QA tester shortcut hard-coding (`BUG-380`), and detached Playground file/image context (`BUG-381`).
+- **Environment restore completed:** Removed the disposable fresh-install containers, fresh volumes, fresh images, and the temporary clone folder, then restored the original local Tsushin runtime and its previously running runtime-managed containers. WhatsApp QR/E2E messaging was skipped for this closeout at user request.
+
 #### Installer & QA Hardening — 2026-04-07
 
 - **Installer remote HTTP health checks:** `install.py` now probes backend/frontend health on `127.0.0.1` instead of `localhost`, which avoids false frontend failures when localhost-only redirect logic is active. For HTTP remote installs, the success output now prints the configured public host/IP instead of `localhost`.
