@@ -5,6 +5,14 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.0-patch.2 (2026-04-07)
+
+### Bug Fixes — VM Fresh Install Retest
+
+- BUG-382: detect_only Sentinel mode no longer stores prompt injections in working memory (prevents memory poisoning persistence)
+- BUG-383: Setup wizard now links all seeded agents to the primary provider instance (provider_instance_id was null)
+- BUG-384: Web search skill correctly resolves tenant-scoped Brave Search API keys (fixed null tenant_id injection check)
+
 ## v0.6.0-patch.1 (2026-04-07)
 
 ### Bug Fixes — Full Sprint (41 open → 0 open)
