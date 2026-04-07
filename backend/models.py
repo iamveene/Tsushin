@@ -375,8 +375,8 @@ class Agent(Base):
     enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack, discord, webhook
     whatsapp_integration_id = Column(Integer, ForeignKey("whatsapp_mcp_instance.id", ondelete="SET NULL"), nullable=True)  # Specific MCP instance
     telegram_integration_id = Column(Integer, nullable=True)  # Future: FK to TelegramBotInstance
-    slack_integration_id = Column(Integer, nullable=True)  # v0.6.0 Item 33: FK to SlackIntegration
-    discord_integration_id = Column(Integer, nullable=True)  # v0.6.0 Item 34: FK to DiscordIntegration
+    slack_integration_id = Column(Integer, ForeignKey("slack_integration.id", ondelete="SET NULL"), nullable=True)  # v0.6.0 Item 33: FK to SlackIntegration
+    discord_integration_id = Column(Integer, ForeignKey("discord_integration.id", ondelete="SET NULL"), nullable=True)  # v0.6.0 Item 34: FK to DiscordIntegration
     webhook_integration_id = Column(Integer, ForeignKey("webhook_integration.id", ondelete="SET NULL"), nullable=True)  # v0.6.0: FK to WebhookIntegration
     provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
 
@@ -1820,7 +1820,8 @@ class HubIntegration(Base):
 
     Supported integrations:
     - Asana (task management via MCP)
-    - Slack (future)
+    - Discord (Phase 23: bot with per-integration public_key — BUG-311/313)
+    - Slack (Phase 23: workspace with per-integration signing_secret — BUG-312)
     - Linear (future)
     - GitHub (future)
     """
@@ -2861,6 +2862,7 @@ class SlackIntegration(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     tenant_id = Column(String(100), nullable=False, index=True)
     workspace_id = Column(String(50), nullable=False)       # Slack team_id
+    app_id = Column(String(50), nullable=True, index=True)  # Slack App ID (A0xxxxx) — BUG-312 fix
     workspace_name = Column(String(200))
     bot_token_encrypted = Column(Text, nullable=False)       # xoxb-... (Fernet)
     app_token_encrypted = Column(Text)                       # xapp-... (Socket Mode)
@@ -2903,6 +2905,7 @@ class DiscordIntegration(Base):
     tenant_id = Column(String(100), nullable=False, index=True)
     bot_token_encrypted = Column(Text, nullable=False)          # Bot token (Fernet)
     application_id = Column(String(50), nullable=False)         # Discord Application ID
+    public_key = Column(String(128), nullable=True)             # Ed25519 public key for interaction verification (BUG-311/313 fix)
     bot_user_id = Column(String(50))                            # Bot's Discord user ID
     is_active = Column(Boolean, default=True)
     status = Column(String(20), default="inactive")             # inactive/connected/error
@@ -3621,6 +3624,11 @@ class OKGMemoryAuditLog(Base):
         Index("idx_okg_audit_tenant_agent", "tenant_id", "agent_id"),
         Index("idx_okg_audit_created", "created_at"),
     )
+
+
+
+# BUG-311/312/313: public_key and app_id fields added to existing
+# DiscordIntegration and SlackIntegration models above.
 
 
 # ============================================================================

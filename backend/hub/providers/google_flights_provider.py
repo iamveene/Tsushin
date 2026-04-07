@@ -6,6 +6,7 @@ Implementation of FlightSearchProvider interface for Google Flights.
 import logging
 import httpx
 import json
+import re
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -82,6 +83,50 @@ class GoogleFlightsProvider(FlightSearchProvider):
     def get_provider_name(self) -> str:
         return "google_flights"
 
+    @staticmethod
+    def _normalize_date(date_str: str) -> str:
+        """
+        Normalize a date string to YYYY-MM-DD format.
+
+        SerpApi requires outbound_date/return_date in strict YYYY-MM-DD format.
+        LLM-extracted dates may arrive with surrounding quotes, whitespace, or
+        other non-date characters (e.g. "'2026-04-07'" or '"2026-04-07"').
+
+        Args:
+            date_str: Raw date string to normalize
+
+        Returns:
+            Cleaned date string in YYYY-MM-DD format
+
+        Raises:
+            ValueError: If the date cannot be parsed into YYYY-MM-DD
+        """
+        if not date_str:
+            raise ValueError("Date string is empty or None")
+
+        # Strip whitespace and surrounding quotes (single, double, backticks)
+        cleaned = date_str.strip().strip("'\"`").strip()
+
+        # Try strict YYYY-MM-DD match first (most common case)
+        match = re.search(r'(\d{4}-\d{2}-\d{2})', cleaned)
+        if match:
+            candidate = match.group(1)
+            # Validate it's a real date
+            datetime.strptime(candidate, "%Y-%m-%d")
+            return candidate
+
+        # Try other common date formats
+        for fmt in ("%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y", "%m-%d-%Y", "%m/%d/%Y"):
+            try:
+                parsed = datetime.strptime(cleaned, fmt)
+                return parsed.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+
+        raise ValueError(
+            f"Cannot parse date '{date_str}' (cleaned: '{cleaned}') into YYYY-MM-DD format"
+        )
+
     async def search_flights(self, request: FlightSearchRequest) -> FlightSearchResponse:
         """
         Execute flight search using SerpApi (Google Flights Engine).
@@ -91,12 +136,26 @@ class GoogleFlightsProvider(FlightSearchProvider):
             self.search_request = request
 
             # 1. Prepare Parameters
+            # BUG-316 fix: Normalize dates to strict YYYY-MM-DD before sending to SerpApi.
+            # LLM-extracted dates may arrive with surrounding quotes or extra characters.
+            try:
+                normalized_departure = self._normalize_date(request.departure_date)
+            except ValueError as e:
+                logger.error(f"Invalid departure_date '{request.departure_date}': {e}")
+                return FlightSearchResponse(
+                    success=False,
+                    offers=[],
+                    provider=self.provider_name,
+                    search_request=request,
+                    error=f"Invalid departure date format: {request.departure_date}. Expected YYYY-MM-DD."
+                )
+
             params = {
                 "engine": "google_flights",
                 "api_key": self.api_key,
                 "departure_id": request.origin,
                 "arrival_id": request.destination,
-                "outbound_date": request.departure_date,
+                "outbound_date": normalized_departure,
                 "currency": request.currency or self.currency,
                 "hl": self.hl,
                 "adults": request.adults,
@@ -123,7 +182,19 @@ class GoogleFlightsProvider(FlightSearchProvider):
                 params["stops"] = "1"
 
             if request.return_date:
-                params["return_date"] = request.return_date
+                # BUG-316 fix: Normalize return_date as well
+                try:
+                    normalized_return = self._normalize_date(request.return_date)
+                except ValueError as e:
+                    logger.error(f"Invalid return_date '{request.return_date}': {e}")
+                    return FlightSearchResponse(
+                        success=False,
+                        offers=[],
+                        provider=self.provider_name,
+                        search_request=request,
+                        error=f"Invalid return date format: {request.return_date}. Expected YYYY-MM-DD."
+                    )
+                params["return_date"] = normalized_return
                 params["type"] = "1" # Round trip
             else:
                 params["type"] = "2" # One way
@@ -315,13 +386,14 @@ class GoogleFlightsProvider(FlightSearchProvider):
         try:
             # SerpApi requires base parameters + departure_token for return flights
             sort_map = {"best": "1", "cheapest": "2"}
+            # BUG-316 fix: Normalize dates for return flight lookup as well
             params = {
                 "engine": "google_flights",
                 "api_key": self.api_key,
                 "departure_id": request.origin,
                 "arrival_id": request.destination,
-                "outbound_date": request.departure_date,
-                "return_date": request.return_date,
+                "outbound_date": self._normalize_date(request.departure_date),
+                "return_date": self._normalize_date(request.return_date),
                 "departure_token": departure_token,
                 "currency": request.currency or self.currency,
                 "hl": self.hl,

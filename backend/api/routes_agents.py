@@ -15,7 +15,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import Agent, TonePreset, Contact, ContactAgentMapping, Config, AgentSkill, SandboxedTool, AgentSandboxedTool, Persona
-from models_rbac import User
+from models_rbac import User, Tenant
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from services.audit_service import log_tenant_event, TenantAuditActions
 from services.whatsapp_binding_service import (
@@ -673,6 +673,19 @@ def create_agent(
     ctx: TenantContext = Depends(get_tenant_context)
 ):
     """Create a new agent (requires agents.write permission)"""
+
+    # BUG-314: Enforce tenant agent cap before creating
+    tenant = db.query(Tenant).filter(Tenant.id == ctx.tenant_id).first()
+    if tenant and tenant.max_agents is not None and tenant.max_agents > 0:
+        current_agent_count = db.query(Agent).filter(
+            Agent.tenant_id == ctx.tenant_id,
+            Agent.is_active == True
+        ).count()
+        if current_agent_count >= tenant.max_agents:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Agent limit reached. Your plan allows a maximum of {tenant.max_agents} agents. Please upgrade your plan or delete unused agents."
+            )
 
     # Validate contact exists and is an agent
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()

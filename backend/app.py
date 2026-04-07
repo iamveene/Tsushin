@@ -156,6 +156,8 @@ from api.routes_agent_communication import router as agent_comm_router, set_engi
 from api.v1.router import v1_router
 from middleware.rate_limiter import ApiV1RateLimitMiddleware
 from services.queue_worker import start_queue_worker, stop_queue_worker
+# Phase 23: Channel Inbound Webhooks (BUG-311, BUG-312, BUG-313)
+from api.routes_channel_webhooks import router as channel_webhooks_router
 # MCP Health Monitor Service (auto-recovery for keepalive timeouts)
 from services.mcp_health_monitor import MCPHealthMonitorService
 from services.mcp_container_manager import MCPContainerManager
@@ -1144,22 +1146,12 @@ app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Setti
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
 app.include_router(webhook_inbound_router)  # v0.6.0: Webhook-as-Channel (public, HMAC-gated)
 app.include_router(webhook_instances_router)  # v0.6.0: Webhook-as-Channel (tenant-scoped CRUD)
-app.include_router(slack_router, prefix="/api/integrations/slack")  # v0.6.0 Item 33: Slack Integration
-
-# V060-CHN-002: Public inbound webhooks for Slack Events + Discord Interactions
-try:
-    from api.routes_channel_webhooks import router as channel_webhooks_router
-    app.include_router(channel_webhooks_router, prefix="/api")  # POST /api/slack/events + /api/discord/interactions
-except ImportError as _e:
-    logging.warning(f"Channel webhook routes not available: {_e}")
-
 # v0.6.0 Item 38: Channel Health Monitor
 try:
     from api.routes_channel_health import router as channel_health_router
     app.include_router(channel_health_router)
 except ImportError:
     logging.warning("Channel health routes not available")
-app.include_router(discord_router, prefix="/api/integrations/discord")  # v0.6.0 Item 34: Discord Integration
 app.include_router(system_ai_router)  # Phase 17: System AI Configuration
 app.include_router(integrations_router)  # Integration Test Connection
 app.include_router(sentinel_router, prefix="/api")  # Phase 20: Sentinel Security Agent
@@ -1176,28 +1168,124 @@ app.include_router(audit_router)  # v0.6.0: Tenant-Scoped Audit Logs
 app.include_router(agent_comm_router, prefix="/api")  # v0.6.0 Item 15: Agent-to-Agent Communication
 app.include_router(syslog_config_router)  # v0.6.0: Syslog Forwarding Configuration
 app.include_router(v1_router)  # Public API v1: All /api/v1/ endpoints
+app.include_router(discord_router)  # Phase 23: Discord Bot Integration (BUG-311, BUG-313)
+app.include_router(slack_router)  # Phase 23: Slack Workspace Integration (BUG-312)
+app.include_router(channel_webhooks_router)  # Phase 23: Channel Inbound Webhooks (Discord interactions, Slack events)
 
 # Prometheus metrics endpoint (unauthenticated — scrape target)
 from services.metrics_service import metrics_endpoint
 app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
 
 # Phase 6.11.2: WebSocket endpoint for real-time updates
+# BUG-310: Added JWT authentication and tenant-scoped connection tracking
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time updates"""
-    await ws_manager.connect(websocket)
+    """
+    WebSocket endpoint for real-time updates.
+
+    BUG-310: Requires JWT authentication. Supports two auth modes:
+    1. Query param: /ws?token=<jwt> (legacy, logged as warning)
+    2. First-message auth: send {"type": "auth", "token": "<jwt>"} after connect (preferred)
+
+    Unauthenticated connections are rejected with close code 4001.
+    Connections are scoped to the tenant extracted from the JWT.
+    """
+    import asyncio as _asyncio
+    import json as _json
+    from auth_utils import decode_access_token
+
+    tenant_id = None
+    user_id = None
+
     try:
+        # Accept connection first (required by FastAPI before we can send close frames)
+        await websocket.accept()
+
+        # Check for token in query params (legacy) or wait for first-message auth (secure)
+        query_params = dict(websocket.query_params)
+        token = query_params.get("token")
+
+        if token:
+            logger.warning("WebSocket /ws using legacy query param auth (insecure) - please update client")
+        else:
+            # Secure mode: wait for auth message with token
+            try:
+                auth_data = await _asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+                auth_message = _json.loads(auth_data)
+
+                if auth_message.get("type") != "auth":
+                    logger.error(f"WebSocket /ws rejected: first message must be auth, got: {auth_message.get('type')}")
+                    await websocket.close(code=4001, reason="First message must be auth type")
+                    return
+
+                token = auth_message.get("token")
+                if not token:
+                    logger.error("WebSocket /ws rejected: auth message missing token")
+                    await websocket.close(code=4001, reason="Missing token in auth message")
+                    return
+
+            except _asyncio.TimeoutError:
+                logger.error("WebSocket /ws rejected: auth timeout (10s)")
+                await websocket.close(code=4001, reason="Authentication timeout")
+                return
+            except _json.JSONDecodeError:
+                logger.error("WebSocket /ws rejected: invalid auth message format")
+                await websocket.close(code=4001, reason="Invalid auth message format")
+                return
+
+        # Validate JWT token
+        if not token:
+            logger.error("WebSocket /ws rejected: no authentication token provided")
+            await websocket.close(code=4001, reason="Missing authentication token")
+            return
+
+        payload = decode_access_token(token)
+        if not payload:
+            logger.error("WebSocket /ws rejected: invalid or expired token")
+            await websocket.close(code=4003, reason="Invalid or expired token")
+            return
+
+        user_id = payload.get("sub") or payload.get("user_id")
+        tenant_id = payload.get("tenant_id")
+
+        if not user_id:
+            logger.error(f"WebSocket /ws rejected: no user_id in token payload")
+            await websocket.close(code=4002, reason="Invalid token payload - missing user_id")
+            return
+
+        if not tenant_id:
+            logger.error(f"WebSocket /ws rejected: no tenant_id in token payload for user {user_id}")
+            await websocket.close(code=4002, reason="Invalid token payload - missing tenant_id")
+            return
+
+        user_id = int(user_id) if isinstance(user_id, str) else user_id
+        logger.info(f"WebSocket /ws authenticated: user={user_id}, tenant={tenant_id}")
+
+        # Register with manager (already accepted above, so skip accept in connect)
+        # Manually add to tracking structures instead of calling connect() which calls accept()
+        ws_manager.active_connections.append(websocket)
+        if tenant_id not in ws_manager.tenant_ws_connections:
+            ws_manager.tenant_ws_connections[tenant_id] = []
+        ws_manager.tenant_ws_connections[tenant_id].append(websocket)
+        ws_manager._ws_tenant_map[id(websocket)] = tenant_id
+        if user_id not in ws_manager.user_connections:
+            ws_manager.user_connections[user_id] = []
+        ws_manager.user_connections[user_id].append(websocket)
+
+        # Send auth success confirmation
+        await websocket.send_json({"type": "auth_success", "user_id": user_id, "tenant_id": tenant_id})
+
         # Keep connection alive and handle heartbeats
         while True:
             data = await websocket.receive_text()
-            # Echo back heartbeat
             if data.strip() == "ping":
                 await websocket.send_text("pong")
+
     except WebSocketDisconnect:
-        ws_manager.disconnect(websocket)
+        ws_manager.disconnect(websocket, user_id)
     except Exception as e:
-        logger.error(f"WebSocket error: {e}", exc_info=True)
-        ws_manager.disconnect(websocket)
+        logger.error(f"WebSocket /ws error: {e}", exc_info=True)
+        ws_manager.disconnect(websocket, user_id)
 
 # Phase 14.9: WebSocket endpoint for Playground streaming v4
 # Phase SEC-002: Fixed token exposure in query parameters (HIGH-001)

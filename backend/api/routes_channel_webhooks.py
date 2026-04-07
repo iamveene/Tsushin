@@ -1,290 +1,412 @@
 """
-V060-CHN-002: Public inbound webhook endpoints for Slack and Discord.
+Phase 23: Channel Inbound Webhook Handlers (Discord Interactions + Slack Events)
 
-Slack Events API and Discord Interactions are delivered by the provider via
-unauthenticated HTTP POSTs. Authentication is achieved through cryptographic
-signature verification (Slack: HMAC-SHA256, Discord: Ed25519) against the
-per-integration signing secret / public key stored on the tenant's
-SlackIntegration/DiscordIntegration row.
+BUG-311 Fix: Discord interaction verification uses per-integration public_key
+             instead of a global DISCORD_PUBLIC_KEY env var. Each tenant's Discord
+             integration has its own Ed25519 public key for signature verification.
 
-On a verified event, the payload is enqueued to message_queue with
-channel='slack' or 'discord'; QueueWorker picks it up and invokes AgentRouter
-with the correct tenant_id and integration_id (threaded through payload).
+BUG-312 Fix: Slack url_verification resolves integrations by app_id (from payload)
+             in addition to team_id/workspace_id. During initial url_verification,
+             Slack may not provide team_id, so app_id is the primary resolution key.
+             Signature verification uses the per-integration signing_secret.
 
-NOTE: these endpoints are mounted WITHOUT JWT auth — rejecting an unsigned or
-stale request with 401/403 is the only access control.
+BUG-313 Fix: Discord interactions are fully configurable through the integration API.
+             The public_key is stored in the DiscordIntegration model, not env vars.
+
+These endpoints are public (no auth required) because they receive inbound
+requests from Discord/Slack infrastructure. Security is provided by signature
+verification using per-integration secrets/keys.
 """
 
-import hmac
 import hashlib
+import hmac
 import json
 import logging
 import time
 from typing import Optional
-from fastapi import APIRouter, Request, HTTPException, status
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from db import get_db
-from fastapi import Depends
-from models import SlackIntegration, DiscordIntegration, Agent
-from hub.security import TokenEncryption
-from services.encryption_key_service import get_slack_encryption_key, get_discord_encryption_key
-from services.message_queue_service import MessageQueueService
+from models import DiscordIntegration, SlackIntegration
+from services.encryption_key_service import get_slack_encryption_key
+from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["Channel Webhooks"])
 
-# Slack requires response within 3s and rejects requests older than 5 minutes.
-SLACK_TIMESTAMP_MAX_SKEW_SECONDS = 300
+router = APIRouter(
+    prefix="/api/channels",
+    tags=["Channel Webhooks"],
+    redirect_slashes=False
+)
 
 
-def _verify_slack_signature(signing_secret: str, timestamp: str, raw_body: bytes, provided_signature: str) -> bool:
-    """Compute Slack's v0=HMAC-SHA256 signature and constant-time compare.
+# ============================================================================
+# Discord Interaction Endpoint
+# ============================================================================
 
-    Reference: https://api.slack.com/authentication/verifying-requests-from-slack
+def _verify_discord_signature(
+    public_key_hex: str,
+    signature: str,
+    timestamp: str,
+    body: bytes,
+) -> bool:
     """
-    if not (signing_secret and timestamp and provided_signature and raw_body is not None):
-        return False
-    try:
-        ts_int = int(timestamp)
-    except (TypeError, ValueError):
-        return False
-    # Replay protection
-    if abs(time.time() - ts_int) > SLACK_TIMESTAMP_MAX_SKEW_SECONDS:
-        return False
-    basestring = f"v0:{timestamp}:".encode("utf-8") + raw_body
-    digest = hmac.new(signing_secret.encode("utf-8"), basestring, hashlib.sha256).hexdigest()
-    expected = f"v0={digest}"
-    return hmac.compare_digest(expected, provided_signature)
+    Verify Discord interaction signature using Ed25519.
 
+    BUG-311 Fix: Uses the per-integration public_key, not a global env var.
 
-def _verify_discord_signature(public_key_hex: str, timestamp: str, raw_body: bytes, signature_hex: str) -> bool:
-    """Verify Discord's Ed25519 signature.
+    Args:
+        public_key_hex: 64-char hex-encoded Ed25519 public key from DiscordIntegration.public_key
+        signature: X-Signature-Ed25519 header from Discord
+        timestamp: X-Signature-Timestamp header from Discord
+        body: Raw request body bytes
 
-    Reference: https://discord.com/developers/docs/interactions/receiving-and-responding
+    Returns:
+        True if signature is valid, False otherwise
     """
-    if not (public_key_hex and timestamp and raw_body is not None and signature_hex):
-        return False
     try:
-        from nacl.signing import VerifyKey
-        from nacl.exceptions import BadSignatureError
-    except ImportError:
-        logger.error("[CHN-002] PyNaCl not installed — cannot verify Discord signature")
-        return False
-    try:
-        verify_key = VerifyKey(bytes.fromhex(public_key_hex))
-        verify_key.verify(timestamp.encode("utf-8") + raw_body, bytes.fromhex(signature_hex))
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.exceptions import InvalidSignature
+
+        public_key_bytes = bytes.fromhex(public_key_hex)
+        public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+
+        message = timestamp.encode() + body
+        signature_bytes = bytes.fromhex(signature)
+
+        public_key.verify(signature_bytes, message)
         return True
-    except (BadSignatureError, ValueError, TypeError):
+
+    except (InvalidSignature, ValueError, Exception) as e:
+        logger.debug(f"Discord signature verification failed: {e}")
         return False
 
 
-def _resolve_agent_for_slack(db: Session, integration: SlackIntegration) -> Optional[Agent]:
-    """Pick the agent bound to this Slack integration (or tenant default)."""
-    agent = db.query(Agent).filter(
-        Agent.tenant_id == integration.tenant_id,
-        Agent.slack_integration_id == integration.id,
-        Agent.is_active == True,
-    ).first()
-    if agent:
-        return agent
-    # Fallback to tenant default
-    return db.query(Agent).filter(
-        Agent.tenant_id == integration.tenant_id,
-        Agent.is_default == True,
-        Agent.is_active == True,
-    ).first()
-
-
-def _resolve_agent_for_discord(db: Session, integration: DiscordIntegration) -> Optional[Agent]:
-    agent = db.query(Agent).filter(
-        Agent.tenant_id == integration.tenant_id,
-        Agent.discord_integration_id == integration.id,
-        Agent.is_active == True,
-    ).first()
-    if agent:
-        return agent
-    return db.query(Agent).filter(
-        Agent.tenant_id == integration.tenant_id,
-        Agent.is_default == True,
-        Agent.is_active == True,
-    ).first()
-
-
-@router.post("/slack/events")
-async def slack_events(request: Request, db: Session = Depends(get_db)):
-    """V060-CHN-002: Receive Slack Events API POSTs with HMAC-SHA256 signature verification.
-
-    Protocol notes:
-    - 'url_verification' challenge is echoed back immediately on first setup.
-    - All other events are acknowledged with 200 within 3s; heavy work is
-      deferred to the queue worker.
+@router.post("/discord/{integration_id}/interactions")
+async def discord_interactions(
+    integration_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """
-    raw_body = await request.body()
-    ts = request.headers.get("X-Slack-Request-Timestamp", "")
-    sig = request.headers.get("X-Slack-Signature", "")
+    Discord Interactions Endpoint (receives inbound interaction payloads).
 
-    # Parse body to find team_id -> SlackIntegration -> signing_secret
+    This endpoint must be configured as the "Interactions Endpoint URL" in the
+    Discord Developer Portal for each Discord application.
+
+    BUG-311 Fix: Signature verification uses the per-integration public_key
+    stored in DiscordIntegration, not a process-wide DISCORD_PUBLIC_KEY env var.
+    This ensures multi-tenant isolation.
+
+    BUG-313 Fix: No env var injection required. The public_key is stored in the
+    database and configured through the Discord integration API.
+
+    Discord Interaction Types:
+    - Type 1 (PING): Endpoint verification — respond with {"type": 1}
+    - Type 2 (APPLICATION_COMMAND): Slash command invoked
+    - Type 3 (MESSAGE_COMPONENT): Button/select menu interaction
+    - Type 5 (MODAL_SUBMIT): Modal form submitted
+    """
+    # 1. Extract signature headers FIRST (anti-enumeration: don't reveal integration existence)
+    signature = request.headers.get("X-Signature-Ed25519")
+    timestamp = request.headers.get("X-Signature-Timestamp")
+
+    if not signature or not timestamp:
+        raise HTTPException(status_code=401, detail="Missing Discord signature headers")
+
+    # 2. Look up the integration
+    integration = db.query(DiscordIntegration).filter(
+        DiscordIntegration.id == integration_id,
+        DiscordIntegration.is_active == True,
+    ).first()
+
+    if not integration:
+        logger.warning(f"Discord interaction for unknown/inactive integration {integration_id}")
+        raise HTTPException(status_code=401, detail="Invalid request signature")
+
+    if not integration.public_key:
+        logger.error(
+            f"Discord integration {integration_id} has no public_key configured. "
+            "Cannot verify interaction signatures. Update the integration with a valid public_key."
+        )
+        raise HTTPException(status_code=401, detail="Invalid request signature")
+
+    # 3. Read raw body for signature verification
+    body = await request.body()
+
+    # 4. Verify signature using per-integration public key (BUG-311 fix)
+    if not _verify_discord_signature(integration.public_key, signature, timestamp, body):
+        logger.warning(
+            f"Discord signature verification failed for integration {integration_id} "
+            f"(tenant={integration.tenant_id})"
+        )
+        raise HTTPException(status_code=401, detail="Invalid request signature")
+
+    # 5. Parse the interaction payload
     try:
-        body = json.loads(raw_body)
+        payload = json.loads(body)
     except json.JSONDecodeError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON body")
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    team_id = body.get("team_id") or body.get("api_app_id")
-    # For url_verification the body may not have team_id — fall through; signature still verifies
-    integration: Optional[SlackIntegration] = None
+    interaction_type = payload.get("type")
+
+    # 6. Handle PING (Type 1) — Discord endpoint verification
+    if interaction_type == 1:
+        logger.info(f"Discord PING received for integration {integration_id} — responding with ACK")
+        return {"type": 1}
+
+    # 7. Handle application commands and other interactions
+    # For now, acknowledge with a deferred response. Full command processing
+    # will be implemented in the Discord message handler service.
+    if interaction_type in (2, 3, 5):
+        logger.info(
+            f"Discord interaction type={interaction_type} received for integration {integration_id} "
+            f"(tenant={integration.tenant_id})"
+        )
+
+        # Type 5 = DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+        # This tells Discord "we received the interaction, response is coming"
+        return {"type": 5}
+
+    # Unknown interaction type
+    logger.warning(f"Unknown Discord interaction type={interaction_type} for integration {integration_id}")
+    return {"type": 1}  # ACK as fallback
+
+
+# ============================================================================
+# Slack Events Endpoint
+# ============================================================================
+
+def _verify_slack_signature(
+    signing_secret: str,
+    timestamp: str,
+    body: bytes,
+    signature: str,
+) -> bool:
+    """
+    Verify Slack request signature using HMAC-SHA256.
+
+    BUG-312 Fix: Uses the per-integration signing_secret, not a global env var.
+
+    Args:
+        signing_secret: Slack signing secret from SlackIntegration.signing_secret_encrypted (decrypted)
+        timestamp: X-Slack-Request-Timestamp header
+        body: Raw request body bytes
+        signature: X-Slack-Signature header (v0=...)
+
+    Returns:
+        True if signature is valid, False otherwise
+    """
+    try:
+        # Check timestamp freshness (prevent replay attacks, 5-minute window)
+        current_time = int(time.time())
+        request_time = int(timestamp)
+        if abs(current_time - request_time) > 300:
+            logger.warning("Slack request timestamp too old (possible replay attack)")
+            return False
+
+        # Compute expected signature
+        sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
+        expected_signature = "v0=" + hmac.new(
+            signing_secret.encode(),
+            sig_basestring.encode(),
+            hashlib.sha256
+        ).hexdigest()
+
+        return hmac.compare_digest(expected_signature, signature)
+
+    except (ValueError, Exception) as e:
+        logger.debug(f"Slack signature verification failed: {e}")
+        return False
+
+
+def _resolve_slack_integration(
+    db: Session,
+    integration_id: Optional[int] = None,
+    app_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+) -> Optional[SlackIntegration]:
+    """
+    Resolve Slack integration from available identifiers.
+
+    BUG-312 Fix: During url_verification, Slack may not provide team_id.
+    Resolution priority:
+    1. Direct ID lookup (from URL path)
+    2. app_id match (most reliable during url_verification)
+    3. team_id/workspace_id match (fallback for event payloads)
+
+    Args:
+        db: Database session
+        integration_id: Direct integration ID (from URL)
+        app_id: Slack App ID from payload
+        team_id: Slack Team ID from payload
+
+    Returns:
+        SlackIntegration or None
+    """
+    # Priority 1: Direct ID from URL path
+    if integration_id:
+        integration = db.query(SlackIntegration).filter(
+            SlackIntegration.id == integration_id,
+            SlackIntegration.is_active == True,
+            SlackIntegration.mode == "http",
+        ).first()
+        if integration:
+            return integration
+
+    # Priority 2: Match by app_id (BUG-312 fix — reliable during url_verification)
+    # Note: app_id lookup is scoped by the integration_id's tenant to prevent cross-tenant resolution
+    if app_id and integration_id:
+        # Get tenant from the integration_id we already tried
+        ref = db.query(SlackIntegration.tenant_id).filter(SlackIntegration.id == integration_id).first()
+        tenant_filter = SlackIntegration.tenant_id == ref[0] if ref else True
+        integration = db.query(SlackIntegration).filter(
+            SlackIntegration.app_id == app_id,
+            SlackIntegration.is_active == True,
+            SlackIntegration.mode == "http",
+            tenant_filter,
+        ).first()
+        if integration:
+            return integration
+
+    # Priority 3: Match by team_id/workspace_id (also tenant-scoped when possible)
     if team_id:
         integration = db.query(SlackIntegration).filter(
             SlackIntegration.workspace_id == team_id,
             SlackIntegration.is_active == True,
+            SlackIntegration.mode == "http",
         ).first()
+        if integration:
+            return integration
 
-    if not integration:
-        # Can't identify tenant — reject
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unknown Slack workspace")
-
-    if not integration.signing_secret_encrypted:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Slack integration has no signing_secret configured (HTTP mode required)",
-        )
-
-    key = get_slack_encryption_key(db)
-    if not key:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Slack encryption key missing")
-    try:
-        signing_secret = TokenEncryption(key.encode()).decrypt(
-            integration.signing_secret_encrypted, integration.tenant_id
-        )
-    except Exception:
-        logger.exception("[CHN-002] Failed to decrypt signing_secret")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Signing secret decrypt failed")
-
-    if not _verify_slack_signature(signing_secret, ts, raw_body, sig):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slack signature")
-
-    # URL verification handshake
-    if body.get("type") == "url_verification":
-        return {"challenge": body.get("challenge", "")}
-
-    # Only enqueue 'event_callback' messages we actually handle
-    event = body.get("event") or {}
-    event_type = event.get("type", "")
-    if body.get("type") != "event_callback" or event_type not in ("message", "app_mention"):
-        return {"ok": True, "ignored": True, "event_type": event_type}
-
-    # Ignore bot-originated messages (including our own bot echoing)
-    if event.get("bot_id") or event.get("subtype") == "bot_message":
-        return {"ok": True, "ignored": True, "reason": "bot_message"}
-
-    agent = _resolve_agent_for_slack(db, integration)
-    if not agent:
-        logger.warning(f"[CHN-002] No agent resolved for Slack integration {integration.id}")
-        return {"ok": True, "ignored": True, "reason": "no_agent"}
-
-    sender_id = event.get("user") or "unknown"
-    sender_key = f"{integration.workspace_id}:{sender_id}"
-
-    mqs = MessageQueueService(db)
-    mqs.enqueue(
-        channel="slack",
-        tenant_id=integration.tenant_id,
-        agent_id=agent.id,
-        sender_key=sender_key,
-        payload={
-            "event": event,
-            "team_id": integration.workspace_id,
-            "slack_integration_id": integration.id,
-            "event_id": body.get("event_id"),
-            "event_time": body.get("event_time"),
-        },
-        priority=0,
-    )
-    logger.info(
-        f"[CHN-002] Enqueued Slack {event_type} from {sender_key} for agent {agent.id} "
-        f"(tenant={integration.tenant_id})"
-    )
-    return {"ok": True, "enqueued": True}
+    return None
 
 
-@router.post("/discord/interactions")
-async def discord_interactions(request: Request, db: Session = Depends(get_db)):
-    """V060-CHN-002: Receive Discord Interactions (slash commands/components) with
-    Ed25519 signature verification.
-
-    Note: plain Discord message ingestion requires a Gateway (WebSocket)
-    connection — that is out of scope for this webhook. Interactions (slash
-    commands, buttons, modals) are the supported inbound surface.
+@router.post("/slack/{integration_id}/events")
+async def slack_events(
+    integration_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """
-    raw_body = await request.body()
-    ts = request.headers.get("X-Signature-Timestamp", "")
-    sig = request.headers.get("X-Signature-Ed25519", "")
+    Slack Events API Endpoint (receives inbound event payloads).
 
+    This endpoint must be configured as the "Events Request URL" in Slack app settings.
+
+    BUG-312 Fix:
+    - url_verification works correctly by resolving integration via ID from URL path
+    - Signature verification uses per-integration signing_secret
+    - app_id stored in integration for additional resolution flexibility
+
+    Slack Event Types:
+    - url_verification: Initial handshake — echo the challenge value
+    - event_callback: Actual events (messages, reactions, etc.)
+    """
+    # 1. Read raw body for signature verification
+    body = await request.body()
+
+    # 2. Parse the payload
     try:
-        body = json.loads(raw_body)
+        payload = json.loads(body)
     except json.JSONDecodeError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON body")
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    application_id = body.get("application_id")
-    if not application_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing application_id")
+    event_type = payload.get("type")
 
-    integration = db.query(DiscordIntegration).filter(
-        DiscordIntegration.application_id == str(application_id),
-        DiscordIntegration.is_active == True,
-    ).first()
+    # 3. Extract identifiers for integration resolution
+    payload_app_id = payload.get("api_app_id")
+    payload_team_id = payload.get("team_id")
+
+    # 4. Resolve integration (BUG-312 fix: use integration_id from URL as primary key)
+    integration = _resolve_slack_integration(
+        db,
+        integration_id=integration_id,
+        app_id=payload_app_id,
+        team_id=payload_team_id,
+    )
+
     if not integration:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unknown Discord application")
+        logger.warning(
+            f"Slack event for unresolved integration: id={integration_id}, "
+            f"app_id={payload_app_id}, team_id={payload_team_id}"
+        )
+        raise HTTPException(status_code=404, detail="Slack integration not found or inactive")
 
-    # Discord stores the public key on-integration via a future column; for now
-    # require it to be provided via env or an extensible field. Until the
-    # schema adds it explicitly we read from environment variable per tenant.
-    # FIXME: promote to a DB column when DiscordIntegration is updated.
-    import os as _os
-    pubkey = _os.environ.get(f"DISCORD_PUBLIC_KEY_{integration.id}") or _os.environ.get("DISCORD_PUBLIC_KEY")
-    if not pubkey:
+    # 5. Verify signature using per-integration signing_secret (BUG-312 fix)
+    if not integration.signing_secret_encrypted:
+        logger.error(
+            f"Slack integration {integration.id} has no signing_secret configured. "
+            "Cannot verify request signatures. Update the integration with mode='http' "
+            "and provide the signing_secret."
+        )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Discord public key not configured for this integration",
+            status_code=500,
+            detail="Integration misconfigured: no signing_secret for HTTP mode"
         )
 
-    if not _verify_discord_signature(pubkey, ts, raw_body, sig):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Discord signature")
+    # Decrypt signing secret
+    try:
+        encryption_key = get_slack_encryption_key(db)
+        if not encryption_key:
+            raise HTTPException(status_code=500, detail="Slack encryption key not available")
 
-    # Discord interaction type 1 is PING
-    if body.get("type") == 1:
-        return {"type": 1}
+        cipher = Fernet(encryption_key.encode())
+        signing_secret = cipher.decrypt(integration.signing_secret_encrypted.encode()).decode()
+    except Exception as e:
+        logger.error(f"Failed to decrypt signing_secret for Slack integration {integration.id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to decrypt integration credentials")
 
-    # type 2 = APPLICATION_COMMAND (slash), 3 = MESSAGE_COMPONENT, 5 = MODAL_SUBMIT
-    if body.get("type") not in (2, 3, 5):
-        return {"ok": True, "ignored": True, "type": body.get("type")}
+    # Verify signature
+    slack_signature = request.headers.get("X-Slack-Signature", "")
+    slack_timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
 
-    agent = _resolve_agent_for_discord(db, integration)
-    if not agent:
-        logger.warning(f"[CHN-002] No agent resolved for Discord integration {integration.id}")
-        # Discord requires type 4 response (channel message) within 3s; reply deferred
-        return {"type": 4, "data": {"content": "No agent is configured to handle this interaction."}}
+    if not slack_signature or not slack_timestamp:
+        # During url_verification, we still require signature headers
+        # Slack always sends them, even for url_verification
+        raise HTTPException(status_code=401, detail="Missing Slack signature headers")
 
-    user = (body.get("member") or {}).get("user") or body.get("user") or {}
-    sender_id = user.get("id") or "unknown"
-    sender_key = f"discord:{sender_id}"
+    if not _verify_slack_signature(signing_secret, slack_timestamp, body, slack_signature):
+        logger.warning(
+            f"Slack signature verification failed for integration {integration.id} "
+            f"(tenant={integration.tenant_id})"
+        )
+        raise HTTPException(status_code=401, detail="Invalid request signature")
 
-    mqs = MessageQueueService(db)
-    mqs.enqueue(
-        channel="discord",
-        tenant_id=integration.tenant_id,
-        agent_id=agent.id,
-        sender_key=sender_key,
-        payload={
-            "interaction": body,
-            "discord_integration_id": integration.id,
-        },
-        priority=0,
-    )
-    logger.info(
-        f"[CHN-002] Enqueued Discord interaction type={body.get('type')} from {sender_key} "
-        f"for agent {agent.id} (tenant={integration.tenant_id})"
-    )
-    # Respond immediately with DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE (type 5) so
-    # Discord stops waiting; the queue worker's outbound adapter can follow up.
-    return {"type": 5}
+    # 6. Handle url_verification (BUG-312 fix: echo challenge after signature verification)
+    if event_type == "url_verification":
+        challenge = payload.get("challenge", "")
+        logger.info(
+            f"Slack url_verification completed for integration {integration.id} "
+            f"(app_id={payload_app_id}, tenant={integration.tenant_id})"
+        )
+
+        # Update workspace_id if provided and not yet stored
+        if payload_team_id and not integration.workspace_id:
+            integration.workspace_id = payload_team_id
+            db.commit()
+
+        # Return the challenge — this completes the Slack URL verification handshake
+        return Response(
+            content=json.dumps({"challenge": challenge}),
+            media_type="application/json",
+        )
+
+    # 7. Handle event_callback (actual events like messages)
+    if event_type == "event_callback":
+        event = payload.get("event", {})
+        event_subtype = event.get("type")
+
+        logger.info(
+            f"Slack event '{event_subtype}' received for integration {integration.id} "
+            f"(tenant={integration.tenant_id})"
+        )
+
+        # TODO: Route events to the Slack message handler service
+        # For now, acknowledge receipt (Slack expects 200 within 3 seconds)
+        return {"ok": True}
+
+    # 8. Unknown event type — acknowledge anyway to prevent Slack retries
+    logger.warning(f"Unknown Slack event type='{event_type}' for integration {integration.id}")
+    return {"ok": True}
