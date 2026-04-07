@@ -1045,12 +1045,43 @@ NEXT_PUBLIC_API_URL={backend_url}
         except Exception as e:
             print_warning(f"Could not ensure frontend started: {e}")
 
+    def _get_local_backend_health_url(self) -> str:
+        """Use loopback IP to avoid localhost-only frontend redirect logic during health checks."""
+        return f"http://127.0.0.1:{self.config['TSN_APP_PORT']}/api/health"
+
+    def _get_local_frontend_health_url(self) -> str:
+        """Use loopback IP to avoid localhost-only frontend redirect logic during health checks."""
+        return f"http://127.0.0.1:{self.config['FRONTEND_PORT']}"
+
+    def _get_access_urls(self) -> Dict[str, str]:
+        """Build user-facing access URLs based on SSL mode and access type."""
+        ssl_mode = self.config.get('SSL_MODE', 'disabled')
+        access_type = self.config.get('ACCESS_TYPE', 'localhost')
+        public_host = (self.config.get('PUBLIC_HOST') or '').strip() or "localhost"
+        frontend_port = self.config['FRONTEND_PORT']
+        backend_port = self.config['TSN_APP_PORT']
+
+        if ssl_mode != 'disabled':
+            domain = self.config['SSL_DOMAIN']
+            return {
+                "primary": f"https://{domain}",
+                "frontend": f"http://localhost:{frontend_port}",
+                "backend": f"http://localhost:{backend_port}",
+            }
+
+        display_host = public_host if access_type == "remote" else "localhost"
+        return {
+            "primary": f"http://{display_host}:{frontend_port}",
+            "frontend": f"http://{display_host}:{frontend_port}",
+            "backend": f"http://{display_host}:{backend_port}",
+        }
+
     def health_check(self):
         """Wait for services to be healthy"""
         print_header("Health Checks")
 
-        backend_url = f"http://localhost:{self.config['TSN_APP_PORT']}/api/health"
-        frontend_url = f"http://localhost:{self.config['FRONTEND_PORT']}"
+        backend_url = self._get_local_backend_health_url()
+        frontend_url = self._get_local_frontend_health_url()
 
         # Backend health check
         print_info(f"Waiting for backend at {backend_url}...")
@@ -1075,8 +1106,8 @@ NEXT_PUBLIC_API_URL={backend_url}
         print_info(f"Waiting for frontend at {frontend_url}...")
         for i in range(30):
             try:
-                response = requests.get(frontend_url, timeout=2)
-                if response.status_code in [200, 404]:  # 404 is OK for Next.js root
+                response = requests.get(frontend_url, timeout=2, allow_redirects=False)
+                if response.status_code in [200, 301, 302, 307, 308, 404]:
                     print_success("Frontend is healthy")
                     break
             except:
@@ -1116,14 +1147,14 @@ NEXT_PUBLIC_API_URL={backend_url}
         print_header("Installation Complete!")
 
         ssl_mode = self.config.get('SSL_MODE', 'disabled')
-        frontend_url = f"http://localhost:{self.config['FRONTEND_PORT']}"
-        backend_url = f"http://localhost:{self.config['TSN_APP_PORT']}"
+        access_urls = self._get_access_urls()
+        frontend_url = access_urls["frontend"]
+        backend_url = access_urls["backend"]
 
         print(f"{Colors.GREEN}{Colors.BOLD}Tsushin has been successfully installed!{Colors.ENDC}\n")
 
         if ssl_mode != 'disabled':
-            domain = self.config['SSL_DOMAIN']
-            primary_url = f"https://{domain}"
+            primary_url = access_urls["primary"]
             print(f"{Colors.BOLD}Access URLs:{Colors.ENDC}")
             print(f"  HTTPS:     {Colors.CYAN}{primary_url}{Colors.ENDC}")
             print(f"  Direct:    {Colors.CYAN}{frontend_url}{Colors.ENDC} (HTTP, localhost only)")
@@ -1143,7 +1174,7 @@ NEXT_PUBLIC_API_URL={backend_url}
             print(f"  Backend:   {Colors.CYAN}{backend_url}{Colors.ENDC}")
             print()
 
-        access_url = f"https://{self.config['SSL_DOMAIN']}" if ssl_mode != 'disabled' else frontend_url
+        access_url = access_urls["primary"]
         setup_wizard_url = f"{access_url}/setup"
 
         print(f"{Colors.BOLD}Next Steps:{Colors.ENDC}")
