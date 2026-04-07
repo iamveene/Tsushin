@@ -197,18 +197,15 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   }
 
   const skipTour = () => {
-    const skipConfirm = window.confirm('Are you sure you want to skip the tour? You can restart it anytime by clicking the ? button in the header.')
-    if (skipConfirm) {
-      // BUG-334: Set localStorage before state update
-      localStorage.setItem(STORAGE_KEY, 'true')
-      tourDismissedRef.current = true
-      setState(prev => ({
-        ...prev,
-        isActive: false,
-        hasCompletedOnboarding: true,
-        currentStep: 1
-      }))
-    }
+    // BUG-334: Set localStorage synchronously before state update — no confirm dialog (blocks browser events)
+    localStorage.setItem(STORAGE_KEY, 'true')
+    tourDismissedRef.current = true
+    setState(prev => ({
+      ...prev,
+      isActive: false,
+      hasCompletedOnboarding: true,
+      currentStep: 1
+    }))
   }
 
   const value: OnboardingContextType = {
