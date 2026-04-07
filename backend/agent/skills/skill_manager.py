@@ -557,13 +557,31 @@ class SkillManager:
                 logger.warning(f"Unknown tool: {tool_name}")
                 return f"Error: Unknown tool '{tool_name}'"
 
-            # Get skill config
+            # Get skill config — custom skills use AgentCustomSkill, not AgentSkill
             skill_record = await self._get_skill_record(db, agent_id, skill_class.skill_type)
 
             if not skill_record or not skill_record.is_enabled:
-                return f"Error: Tool '{tool_name}' is not enabled for this agent"
+                # BUG-391 fix: For custom skills, check AgentCustomSkill table
+                if skill_class.skill_type.startswith("custom:"):
+                    from models import AgentCustomSkill, CustomSkill
+                    record = getattr(skill_class, '_custom_skill_record', None)
+                    if record:
+                        assignment = db.query(AgentCustomSkill).filter(
+                            AgentCustomSkill.agent_id == agent_id,
+                            AgentCustomSkill.custom_skill_id == record.id,
+                            AgentCustomSkill.is_enabled == True
+                        ).first()
+                        if assignment:
+                            # Custom skill is assigned and enabled — proceed with empty config
+                            skill_record = None  # Will use empty config below
+                        else:
+                            return f"Error: Tool '{tool_name}' is not enabled for this agent"
+                    else:
+                        return f"Error: Tool '{tool_name}' is not enabled for this agent"
+                else:
+                    return f"Error: Tool '{tool_name}' is not enabled for this agent"
 
-            config = skill_record.config or {}
+            config = (skill_record.config if skill_record else None) or {}
 
             # BUG-384: Inject tenant_id and agent_id — handle None values too
             if not config.get('tenant_id') or 'agent_id' not in config:
