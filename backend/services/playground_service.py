@@ -1498,10 +1498,10 @@ class PlaygroundService:
         from agent.memory.multi_agent_memory import MultiAgentMemoryManager
 
         try:
-            # Resolve user identity
-            sender_key = self.resolve_user_identity(user_id)
-            if not sender_key:
-                return {"success": False, "error": "Failed to resolve user identity"}
+            # BUG-352 FIX: Use the same sender_key format as send_message()
+            # and get_conversation_history() so clear actually removes the
+            # correct memory records.
+            sender_key = f"playground_u{user_id}_a{agent_id}"
 
             # Build a minimal config for memory manager
             from models import Agent

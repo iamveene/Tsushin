@@ -758,7 +758,8 @@ async def beacon_checkin(
         ShellCommand.status == "queued"
     ).order_by(ShellCommand.queued_at).all()
 
-    logger.debug(f"[BEACON-DEBUG] shell_id={shell_id} found {len(pending)} queued commands")
+    if pending:
+        logger.debug(f"Beacon check-in: shell_id={shell_id} found {len(pending)} queued commands")
 
     # Mark commands as sent
     pending_commands = []
