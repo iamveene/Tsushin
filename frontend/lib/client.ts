@@ -4510,13 +4510,13 @@ export const api = {
 
   // v0.6.0: Slack Integration
   async getSlackIntegrations(): Promise<SlackIntegration[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/`)
+    const res = await authenticatedFetch(`${API_URL}/api/slack/integrations/`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch Slack integrations')
     return res.json()
   },
 
   async createSlackIntegration(data: SlackIntegrationCreate): Promise<SlackIntegration> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/`, {
+    const res = await authenticatedFetch(`${API_URL}/api/slack/integrations/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -4529,7 +4529,7 @@ export const api = {
   },
 
   async updateSlackIntegration(id: number, data: Partial<SlackIntegrationCreate>): Promise<SlackIntegration> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/slack/integrations/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -4542,14 +4542,14 @@ export const api = {
   },
 
   async deleteSlackIntegration(id: number): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/slack/integrations/${id}`, {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete Slack integration')
   },
 
   async testSlackConnection(id: number): Promise<{ success: boolean; message: string; details?: any }> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}/test`, {
+    const res = await authenticatedFetch(`${API_URL}/api/slack/integrations/${id}/test`, {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to test Slack connection')
@@ -4557,20 +4557,20 @@ export const api = {
   },
 
   async getSlackChannels(id: number): Promise<any[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/slack/${id}/channels`)
+    const res = await authenticatedFetch(`${API_URL}/api/slack/integrations/${id}/channels`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch Slack channels')
     return res.json()
   },
 
   // v0.6.0: Discord Integration
   async getDiscordIntegrations(): Promise<DiscordIntegration[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/`)
+    const res = await authenticatedFetch(`${API_URL}/api/discord/integrations/`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch Discord integrations')
     return res.json()
   },
 
   async createDiscordIntegration(data: DiscordIntegrationCreate): Promise<DiscordIntegration> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/`, {
+    const res = await authenticatedFetch(`${API_URL}/api/discord/integrations/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -4583,7 +4583,7 @@ export const api = {
   },
 
   async updateDiscordIntegration(id: number, data: Partial<DiscordIntegrationCreate>): Promise<DiscordIntegration> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/discord/integrations/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -4596,14 +4596,14 @@ export const api = {
   },
 
   async deleteDiscordIntegration(id: number): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/discord/integrations/${id}`, {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete Discord integration')
   },
 
   async testDiscordConnection(id: number): Promise<{ success: boolean; bot_user?: string; guilds?: number; error?: string }> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}/test`, {
+    const res = await authenticatedFetch(`${API_URL}/api/discord/integrations/${id}/test`, {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to test Discord connection')
@@ -4611,7 +4611,7 @@ export const api = {
   },
 
   async getDiscordGuilds(id: number): Promise<any[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/integrations/discord/${id}/guilds`)
+    const res = await authenticatedFetch(`${API_URL}/api/discord/integrations/${id}/guilds`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch Discord guilds')
     return res.json()
   },
