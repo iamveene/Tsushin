@@ -302,17 +302,29 @@ class PlaygroundService:
                                 "threat_type": sentinel_result.detection_type,
                                 "timestamp": datetime.utcnow().isoformat() + "Z"
                             }
-                        # detect_only mode: threat detected but allowed - will proceed to store message
-                        self.logger.info(
-                            f"🛡️ SENTINEL (detect_only): Threat detected but allowing - "
-                            f"{sentinel_result.detection_type}"
+                        # BUG-382: detect_only mode — allow response but skip memory storage
+                        # for injection/poisoning threats to prevent working memory contamination.
+                        skip_memory_storage = sentinel_result.detection_type in (
+                            'prompt_injection', 'memory_poisoning', 'instruction_injection',
+                            'jailbreak', 'system_prompt_override'
                         )
+                        if skip_memory_storage:
+                            skip_user_message = True  # Prevent storing poisoned message
+                            self.logger.warning(
+                                f"🛡️ SENTINEL (detect_only): Skipping memory storage for "
+                                f"{sentinel_result.detection_type} — response still allowed"
+                            )
+                        else:
+                            self.logger.info(
+                                f"🛡️ SENTINEL (detect_only): Threat detected but allowing - "
+                                f"{sentinel_result.detection_type}"
+                            )
                 except Exception as e:
                     self.logger.warning(f"Sentinel pre-check failed, allowing message: {e}")
 
             # STEP 1: Add user message to memory FIRST (WhatsApp consistency)
             # This ensures the message is in context for agent processing
-            # Skip if skip_user_message=True (for regeneration after edit)
+            # Skip if skip_user_message=True (for regeneration after edit or sentinel detect_only)
             message_id = f"msg_user_{user_id}_{int(datetime.utcnow().timestamp() * 1000)}"
             if not skip_user_message:
                 await memory_manager.add_message(

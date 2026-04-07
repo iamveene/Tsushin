@@ -562,12 +562,12 @@ class SkillManager:
 
             config = skill_record.config or {}
 
-            # Inject tenant_id and agent_id into config (same as process_message path)
-            if 'tenant_id' not in config or 'agent_id' not in config:
+            # BUG-384: Inject tenant_id and agent_id — handle None values too
+            if not config.get('tenant_id') or 'agent_id' not in config:
                 from models import Agent as AgentModel
                 agent_obj = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
                 if agent_obj:
-                    config['tenant_id'] = config.get('tenant_id') or agent_obj.tenant_id
+                    config['tenant_id'] = agent_obj.tenant_id
             config['agent_id'] = agent_id
 
             # BUG-LOG-006 FIX: Propagate A2A comm_depth and parent_session_id from message
@@ -1075,8 +1075,8 @@ class SkillManager:
                     config = skill_record.config or {}
                     config['agent_id'] = agent_id
 
-                    # Phase 4 fix: Get tenant_id from agent for skills like AutomationSkill
-                    if 'tenant_id' not in config:
+                    # BUG-384: Get tenant_id from agent — also handle config with tenant_id=None
+                    if not config.get('tenant_id'):
                         from models import Agent
                         agent = db.query(Agent).filter(Agent.id == agent_id).first()
                         if agent:
