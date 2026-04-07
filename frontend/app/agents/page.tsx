@@ -5,7 +5,7 @@
  * Agent list with sub-navigation to Contacts and Personas
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import StudioTabs from '@/components/studio/StudioTabs'
@@ -123,11 +123,23 @@ export default function AgentsPage() {
     }).catch(() => {})
   }, [])
 
-  // BUG-346: Apply smart defaults once provider instances are loaded
+  // BUG-346: Apply smart defaults once provider instances are loaded (useRef avoids stale closure)
+  const defaultsAppliedRef = useRef(false)
   useEffect(() => {
-    if (providerInstances.length > 0 && !formData.model_provider) {
-      const defaults = getSmartDefaults()
-      setFormData(prev => ({ ...prev, model_provider: defaults.model_provider, model_name: defaults.model_name }))
+    if (providerInstances.length > 0 && !defaultsAppliedRef.current) {
+      defaultsAppliedRef.current = true
+      const vendorMap: Record<string, string> = {
+        anthropic: 'anthropic', openai: 'openai', gemini: 'gemini',
+        google: 'gemini', ollama: 'ollama', openrouter: 'openrouter'
+      }
+      const defaultInstance = providerInstances.find(p => p.is_default) || providerInstances[0]
+      const vendor = defaultInstance.vendor?.toLowerCase() || ''
+      const mappedProvider = vendorMap[vendor]
+      if (mappedProvider) {
+        const instanceModel = defaultInstance.available_models?.[0]
+        const model = instanceModel || MODEL_PROVIDERS.find(p => p.value === mappedProvider)?.models[0] || ''
+        setFormData(prev => ({ ...prev, model_provider: mappedProvider, model_name: model }))
+      }
     }
   }, [providerInstances])
 
