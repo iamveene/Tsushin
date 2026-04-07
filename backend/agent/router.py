@@ -2659,13 +2659,14 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             self.db.add(agent_run)
             self.db.commit()
 
-        # Phase 6.11.2: Broadcast agent run completion via WebSocket (fire-and-forget)
+        # Phase 6.11.2 + BUG-310: Broadcast agent run completion via tenant-scoped WebSocket
         try:
             import asyncio
             from app import app
             if hasattr(app.state, 'ws_manager'):
-                # Use create_task for fire-and-forget broadcast (don't block commit)
-                asyncio.create_task(app.state.ws_manager.broadcast({
+                # BUG-310: Resolve tenant_id so broadcast only reaches the owning tenant
+                run_tenant_id = self._get_agent_tenant_id(agent_id)
+                broadcast_data = {
                     "type": "agent_run_complete",
                     "data": {
                         "agent_id": agent_id,
@@ -2673,7 +2674,19 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         "status": agent_run.status,
                         "timestamp": datetime.utcnow().isoformat() + 'Z'
                     }
-                }))
+                }
+                if run_tenant_id:
+                    # Tenant-scoped delivery (secure)
+                    asyncio.create_task(
+                        app.state.ws_manager.broadcast_to_tenant(broadcast_data, run_tenant_id)
+                    )
+                else:
+                    # Fallback: agent has no tenant_id (legacy/orphan agent)
+                    # Log warning but do NOT broadcast globally to avoid cross-tenant leak
+                    self.logger.warning(
+                        f"Agent {agent_id} has no tenant_id — skipping WebSocket broadcast "
+                        f"to prevent cross-tenant data leakage (BUG-310)"
+                    )
         except Exception as e:
             self.logger.error(f"Error broadcasting agent run: {e}", exc_info=True)
 

@@ -22,7 +22,7 @@ from models import (
     Contact, WhatsAppMCPInstance, TelegramBotInstance, SentinelAgentConfig,
     AgentCommunicationPermission,
 )
-from models_rbac import User
+from models_rbac import User, Tenant
 from auth_dependencies import (
     get_current_user_required,
     get_tenant_context,
@@ -450,7 +450,21 @@ async def create_agent_protected(
 
     - Requires: agents.write permission
     - Automatically sets tenant_id and user_id from context
+    - BUG-314: Enforces tenant agent cap before creation
     """
+    # BUG-314: Enforce tenant agent cap before creating
+    tenant = ctx.db.query(Tenant).filter(Tenant.id == ctx.tenant_id).first()
+    if tenant and tenant.max_agents is not None and tenant.max_agents > 0:
+        current_agent_count = ctx.db.query(Agent).filter(
+            Agent.tenant_id == ctx.tenant_id,
+            Agent.is_active == True
+        ).count()
+        if current_agent_count >= tenant.max_agents:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Agent limit reached. Your plan allows a maximum of {tenant.max_agents} agents. Please upgrade your plan or delete unused agents."
+            )
+
     # In real implementation, would accept agent data from request body
     # For now, just demonstrate the pattern
 

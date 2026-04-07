@@ -120,10 +120,12 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # Install Playwright browser (Chromium only for smaller image size)
-# Must run as root before switching to non-root user
+# BUG-315 fix: Use shared path so non-root tsushin user can find browsers at runtime
 # Gated by INSTALL_PLAYWRIGHT ARG — Chromium binary is ~1.1GB
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
-        playwright install chromium && playwright install-deps chromium; \
+        playwright install chromium && playwright install-deps chromium && \
+        chmod -R 755 /opt/playwright-browsers; \
     fi
 
 # Set working directory

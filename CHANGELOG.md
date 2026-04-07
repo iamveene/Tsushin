@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-04-06
 
+### Bug Fixes (BUG-309 through BUG-317 — Ship-Gate + Security Audit Sprint)
+
+- **BUG-309:** Added RBAC permission checks (`hub.read`/`hub.write`) to all 14 Google integration routes, preventing privilege escalation from member to integration admin.
+- **BUG-310:** Secured legacy `/ws` WebSocket endpoint with JWT authentication and tenant-scoped connection tracking. Replaced global `broadcast()` with `broadcast_to_tenant()` to eliminate cross-tenant information disclosure.
+- **BUG-311:** Discord interaction signature verification now uses per-integration `public_key` stored in the database instead of a global environment variable, ensuring multi-tenant isolation.
+- **BUG-312:** Slack HTTP Events `url_verification` handshake now works correctly — `app_id` stored per-integration for reliable resolution, `signing_secret` required when `mode="http"`. New CRUD API at `/api/slack/integrations/`.
+- **BUG-313:** Discord inbound interactions are now fully configurable via the integration API — `public_key` is a required field on create. New CRUD API at `/api/discord/integrations/` and inbound webhook at `/api/channels/discord/{id}/interactions`.
+- **BUG-314:** Tenant `max_agents` plan limits are now enforced on agent creation in both standard and v2 API routes, returning HTTP 409 when the limit is reached.
+- **BUG-315:** Fixed Playwright browser path in Docker container — set `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers` so the non-root `tsushin` user can find Chromium at runtime.
+- **BUG-316:** Normalized Google Flights date parameters with 3-layer defense (dataclass stripping, provider regex+validation, format fallback parsing) to prevent SerpApi 400 errors from quoted date strings.
+- **BUG-317:** Fixed skill test endpoint to apply persisted config, database session, and agent context to skill instances before calling `can_handle()`, eliminating false-negatives for config-driven skills like `web_search`.
+
 ### Security
 
 - **Next.js 16 upgrade (PR [#5](https://github.com/iamveene/Tsushin/pull/5) revival, originally by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Upgraded frontend from Next.js 14.2.33 to 16.2.2, React 18.2.0 to 19.2.0, ESLint 8 to 9 (flat config). Resolves CVE-2025-29927, CVE-2024-34351, CVE-2024-46982, CVE-2024-51479. Applied fixes for Google Fonts Docker build failure (--webpack flag), removed unnecessary monorepo boilerplate from next.config.mjs, migrated ESLint to flat config (eslint.config.mjs), updated TypeScript JSX mode to react-jsx. Removed stale pnpm-lock.yaml and added it to .dockerignore.

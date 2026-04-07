@@ -1369,6 +1369,13 @@ def init_database(engine):
         except Exception as e:
             print(f"[MCP Auth Migration] Warning: {e}")
 
+    # Phase 23: Discord & Slack channel integration tables (BUG-311, BUG-312, BUG-313)
+    try:
+        from migrations.add_discord_slack_integrations import upgrade_from_engine as upgrade_discord_slack
+        upgrade_discord_slack(engine)
+    except Exception as e:
+        print(f"[Discord/Slack Migration] Warning: {e}")
+
     # Create default config if not exists
     SessionLocal = sessionmaker(bind=engine)
     session = SessionLocal()

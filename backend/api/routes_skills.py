@@ -417,9 +417,19 @@ async def test_skill(
             channel="test"  # Skills-as-Tools: skill testing endpoint
         )
 
-        # Get skill instance
+        # BUG-317 fix: Create skill instance using the same initialization path
+        # as the normal execution flow (process_message_with_skills). The bare
+        # `skill_class()` call was missing _config, _db_session, and _agent_id,
+        # causing config-driven skills (web_search, weather, etc.) to false-negative
+        # on can_handle() because they couldn't read their persisted config.
         skill_class = skill_manager.registry[skill_type]
-        skill_instance = skill_class()
+        skill_instance = skill_manager._create_skill_instance(skill_class, db, agent_id)
+
+        # Apply saved config, db session, and agent context (mirrors process_message_with_skills)
+        skill_instance._config = config
+        if hasattr(skill_instance, 'set_db_session'):
+            skill_instance.set_db_session(db)
+        skill_instance._agent_id = agent_id
 
         # Check if can handle
         can_handle = await skill_instance.can_handle(test_message)
@@ -430,6 +440,14 @@ async def test_skill(
                 "message": f"Skill '{skill_type}' cannot handle this message type",
                 "can_handle": False
             }
+
+        # Inject agent_id and tenant_id into config for process() (mirrors process_message_with_skills)
+        config['agent_id'] = agent_id
+        if 'tenant_id' not in config:
+            from models import Agent as AgentModel
+            agent_obj = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
+            if agent_obj:
+                config['tenant_id'] = agent_obj.tenant_id
 
         # Execute skill
         result = await skill_instance.process(test_message, config)

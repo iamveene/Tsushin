@@ -30,7 +30,7 @@ class FlightSearchRequest:
     sort_by: str = "best"          # "best" (Google algorithm) or "cheapest" (price ascending)
 
     def __post_init__(self):
-        """Validate request parameters"""
+        """Validate and normalize request parameters."""
         self.origin = self.origin.upper()
         self.destination = self.destination.upper()
 
@@ -45,6 +45,13 @@ class FlightSearchRequest:
 
         if self.sort_by not in ("best", "cheapest"):
             raise ValueError("sort_by must be 'best' or 'cheapest'")
+
+        # BUG-316: Defensively strip quotes/whitespace from date strings.
+        # LLM-extracted dates may arrive as "'2026-04-07'" or '"2026-04-07"'.
+        if self.departure_date:
+            self.departure_date = self.departure_date.strip().strip("'\"`").strip()
+        if self.return_date:
+            self.return_date = self.return_date.strip().strip("'\"`").strip()
 
 
 @dataclass

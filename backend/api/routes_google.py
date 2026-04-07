@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 
 import settings
 from db import get_db as get_session
-from auth_dependencies import TenantContext, get_tenant_context as get_current_tenant_context
+from auth_dependencies import TenantContext, get_tenant_context as get_current_tenant_context, require_permission
+from models_rbac import User
 from models import (
     GoogleOAuthCredentials,
     GmailIntegration,
@@ -119,7 +120,8 @@ def get_encryption_key(db: Session) -> str:
 @router.get("/credentials", response_model=GoogleCredentialsResponse)
 async def get_credentials(
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """
     Get Google OAuth credentials for the tenant.
@@ -144,7 +146,8 @@ async def get_credentials(
 async def create_or_update_credentials(
     data: GoogleCredentialsCreate,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Create or update Google OAuth credentials for the tenant.
@@ -200,7 +203,8 @@ async def create_or_update_credentials(
 @router.delete("/credentials")
 async def delete_credentials(
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Delete Google OAuth credentials for the tenant.
@@ -229,7 +233,8 @@ async def delete_credentials(
 @router.get("/gmail/integrations", response_model=IntegrationListResponse)
 async def list_gmail_integrations(
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """
     List all Gmail integrations for the tenant.
@@ -265,7 +270,8 @@ async def gmail_oauth_authorize(
     login_hint: Optional[str] = Query(None, description="Email hint for account selector"),
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Start Gmail OAuth flow.
@@ -292,7 +298,8 @@ async def gmail_oauth_authorize(
 async def gmail_oauth_disconnect(
     integration_id: int,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Disconnect a Gmail integration.
@@ -324,7 +331,8 @@ async def update_gmail_integration(
     integration_id: int,
     data: IntegrationUpdateRequest,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Update Gmail integration settings.
@@ -358,7 +366,8 @@ async def update_gmail_integration(
 @router.get("/calendar/integrations", response_model=IntegrationListResponse)
 async def list_calendar_integrations(
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """
     List all Calendar integrations for the tenant.
@@ -394,7 +403,8 @@ async def calendar_oauth_authorize(
     login_hint: Optional[str] = Query(None, description="Email hint for account selector"),
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Start Calendar OAuth flow.
@@ -421,7 +431,8 @@ async def calendar_oauth_authorize(
 async def calendar_oauth_disconnect(
     integration_id: int,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Disconnect a Calendar integration.
@@ -453,7 +464,8 @@ async def update_calendar_integration(
     integration_id: int,
     data: IntegrationUpdateRequest,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Update Calendar integration settings.
@@ -578,7 +590,8 @@ async def oauth_callback(
 async def check_gmail_health(
     integration_id: int,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """Check health of a Gmail integration."""
     # Verify ownership
@@ -610,7 +623,8 @@ async def check_gmail_health(
 async def check_calendar_health(
     integration_id: int,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """Check health of a Calendar integration."""
     # Verify ownership
@@ -646,6 +660,7 @@ async def check_calendar_health(
 async def reauthorize_integration(
     integration_id: int,
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
+    current_user: User = Depends(require_permission("hub.write")),
     ctx: TenantContext = Depends(get_current_tenant_context),
     db: Session = Depends(get_session)
 ):
