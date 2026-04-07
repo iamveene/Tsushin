@@ -364,7 +364,7 @@ async def search_memory(
             persist_dir = f"./data/chroma/agent_{agent_id}"
 
         vector_store = get_vector_store(persist_dir, embedding_model="all-MiniLM-L6-v2")
-        raw_results = vector_store.search_similar(
+        raw_results = await vector_store.search_similar(
             query_text=query,
             sender_key=sender_key,
             limit=limit,
