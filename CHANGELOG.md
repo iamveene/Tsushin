@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### VM Retest Bug Sprint (BUG-348, BUG-349, BUG-350, BUG-352, BUG-353, BUG-356, BUG-360, BUG-361) — 2026-04-07
+
+- **BUG-348 — HTTP redirect breaks remote installs (CRITICAL):** Middleware now only redirects `localhost` HTTP to HTTPS, preserving remote HTTP access for IP-based installs.
+- **BUG-349 — ops/ excluded from Docker image (MEDIUM):** Removed `ops/` exclusion from `.dockerignore` so test-user helpers are available inside the container.
+- **BUG-350 — create_test_users.py stale against RBAC schema (MEDIUM):** Added required `tenant_id` and `assigned_by` to `UserRole` creation.
+- **BUG-352 — Memory Inspector still failed without manual key (HIGH):** Moved `playground_u{uid}_a{aid}` to FIRST position in memory inspector `possible_keys` list.
+- **BUG-353 — Custom skills still failed with Tool not found (HIGH):** Root cause was `register_custom_skills()` was never called. Added call in `agent_service.py` before custom tool def collection.
+- **BUG-356 — Flows reminders failed with invalid recipient (HIGH):** Added playground recipient detection in scheduler — `playground_u*_a*` recipients are treated as delivered without WhatsApp routing.
+- **BUG-360 — Thread list showed message_count=0 (MEDIUM):** Fixed sender_key lookup in `list_threads` to strip thread suffix before querying Memory table.
+- **BUG-361 — Image uploads could abort connection (HIGH):** Image processing now inlines text generation, uses `try/finally` for `db.commit()`, prevents documents stuck in "processing".
+
 #### Fresh-Install QA Bug Sprint (BUG-351 through BUG-359) — 2026-04-07
 
 - **BUG-351 — `PUT /api/agents/{id}` silently dropped `provider_instance_id` (HIGH):** Added `provider_instance_id` to `UPDATABLE_AGENT_FIELDS` allowlist, `AgentUpdate`/`AgentResponse` Pydantic schemas, and both GET/list response dicts so the field persists and is returned in API responses.

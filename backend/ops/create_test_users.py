@@ -102,10 +102,13 @@ def create_test_users(db: Session):
         db.flush()  # Get user ID
 
         # Assign role if not global admin
-        if user_data["role"] is not None:
+        # BUG-350 FIX: Include required tenant_id in UserRole creation
+        if user_data["role"] is not None and user_data["tenant_id"] is not None:
             user_role = UserRole(
                 user_id=user.id,
-                role_id=user_data["role"].id
+                role_id=user_data["role"].id,
+                tenant_id=user_data["tenant_id"],
+                assigned_by=user.id
             )
             db.add(user_role)
 

@@ -36,10 +36,12 @@ export function middleware(request: NextRequest) {
       return NextResponse.next()
     }
 
-    // Detect direct Next.js port access from external browser (e.g. http://10.x.x.x:3030)
+    // BUG-348 FIX: Only redirect localhost direct-port access to HTTPS.
+    // Remote HTTP installs (e.g. http://10.x.x.x:3030) must be preserved
+    // so users without a TLS proxy can still access the app.
     const directPortPattern = /:(3030|3000|3001)$/
-    if (directPortPattern.test(host)) {
-      // Redirect to https://localhost preserving path and query
+    if (directPortPattern.test(host) && host.startsWith('localhost')) {
+      // Redirect localhost HTTP to https://localhost preserving path and query
       const httpsUrl = new URL(request.url)
       httpsUrl.protocol = 'https:'
       httpsUrl.host = 'localhost'

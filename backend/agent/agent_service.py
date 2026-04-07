@@ -839,6 +839,16 @@ IMPORTANT: When the user asks for system information, server status, file listin
         except Exception as e:
             self.logger.warning(f"Error loading custom skill instructions: {e}")
 
+        # BUG-353 FIX: Register custom skills in the skill_manager registry
+        # so that _find_skill_by_tool_name() can resolve custom_ prefixed tools.
+        # Previously, register_custom_skills() was never called, so custom skills
+        # were added to skill_tools but couldn't be found during execution.
+        try:
+            if self.tenant_id:
+                skill_manager.register_custom_skills(self.db, self.tenant_id)
+        except Exception as e:
+            self.logger.warning(f"[CUSTOM SKILLS] Error registering custom skills: {e}")
+
         # Phase 24: Custom Skills - Collect custom skill tool definitions
         try:
             custom_tool_defs = skill_manager.get_custom_skill_tool_definitions(self.db, self.agent_id)

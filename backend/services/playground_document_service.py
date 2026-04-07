@@ -143,14 +143,23 @@ class PlaygroundDocumentService:
             self.db.commit()
             self.db.refresh(doc)
 
-            # Process document asynchronously
+            # Process document — images use a lightweight path, documents use full chunking+embedding
+            # BUG-361 FIX: Wrap in try/finally to ensure status is always updated,
+            # preventing documents from getting stuck in "processing" if an error occurs.
             try:
                 if self.SUPPORTED_EXTENSIONS.get(ext) == 'image':
                     # BUG-359: Images store a metadata reference without heavy
                     # embedding.  The ImageAnalysisSkill handles real analysis
                     # when the agent processes the conversation.
-                    text = await self._extract_text(doc.file_path, 'image')
                     from models import PlaygroundDocumentChunk
+                    img_filename = os.path.basename(file_path)
+                    img_size = len(file_data)
+                    text = (
+                        f"[Image uploaded: {img_filename}]\n"
+                        f"File size: {img_size} bytes\n"
+                        f"File path: {file_path}\n"
+                        f"This image has been uploaded and is available for analysis."
+                    )
                     chunk = PlaygroundDocumentChunk(
                         document_id=doc.id,
                         chunk_index=0,
@@ -160,16 +169,18 @@ class PlaygroundDocumentService:
                     )
                     self.db.add(chunk)
                     doc.num_chunks = 1
+                    doc.status = "completed"
+                    doc.processed_date = datetime.utcnow()
                 else:
                     await self._process_document(doc, chunk_size, chunk_overlap, embedding_model)
-                doc.status = "completed"
-                doc.processed_date = datetime.utcnow()
+                    doc.status = "completed"
+                    doc.processed_date = datetime.utcnow()
             except Exception as e:
                 self.logger.error(f"Document processing failed: {e}", exc_info=True)
                 doc.status = "failed"
                 doc.error_message = str(e)
-
-            self.db.commit()
+            finally:
+                self.db.commit()
 
             return {
                 "status": "success",
