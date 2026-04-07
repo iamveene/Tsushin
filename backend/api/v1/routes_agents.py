@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from models import Agent, Contact, AgentSkill, AgentSandboxedTool, SandboxedTool, Persona, TonePreset
+from models_rbac import Tenant
 from api.api_auth import ApiCaller, require_api_permission
 from api.sanitizers import strip_html_tags, sanitize_text_field
 from api.v1.schemas import (
@@ -396,6 +397,19 @@ async def create_agent(
     Accepts agent configuration including name, model provider, system prompt,
     skills, and sandboxed tools. Requires `agents.write` permission.
     """
+    # BUG-345 / BUG-314: Enforce tenant agent cap before creating
+    tenant = db.query(Tenant).filter(Tenant.id == caller.tenant_id).first()
+    if tenant and tenant.max_agents is not None and tenant.max_agents > 0:
+        current_agent_count = db.query(Agent).filter(
+            Agent.tenant_id == caller.tenant_id,
+            Agent.is_active == True,
+        ).count()
+        if current_agent_count >= tenant.max_agents:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Agent limit reached. Your plan allows a maximum of {tenant.max_agents} agents. Please upgrade your plan or delete unused agents.",
+            )
+
     # Auto-create contact for the agent
     contact = Contact(
         friendly_name=request.name,

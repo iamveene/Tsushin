@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### Release Re-Validation Fixes (BUG-345, BUG-346, BUG-347) — 2026-04-07
+
+- **BUG-345 — API v1 agent creation bypassed tenant `max_agents` cap (HIGH):** The `POST /api/v1/agents` endpoint did not enforce the tenant agent cap, allowing unlimited agent creation through the public API while the standard route correctly returned 409. Added the same `Tenant.max_agents` enforcement from the standard route to the v1 route before contact/agent creation.
+- **BUG-346 — Create Agent modal defaulted to Anthropic instead of tenant's default provider (MEDIUM):** The `getSmartDefaults()` function used `providerInstances[0]` (first in list) instead of the instance marked `is_default=true`. Updated to find the default provider instance and use its `available_models[0]` for the model name, with a useEffect to apply defaults when instances load.
+- **BUG-347 — Hub API v1 tooling surface non-functional for Gmail/Calendar/Flights (HIGH):** Added `INTEGRATION_CAPABILITIES` matrix to define per-type support for health_check, tools, and tool_execution. Integration summaries and provider listings now include a `capabilities` dict. Health, tool listing, and execution endpoints check capabilities upfront with clear error messages. Added `google_flights` to the providers list. The service factory now handles `google_flights` with an informative error instead of a generic "unsupported type".
+
 #### Post-Sprint Regression Fixes — 2026-04-07
 
 - **BUG-334 follow-up — `skipTour` used `window.confirm()` blocking browser events:** The "Skip Tour" button called `window.confirm()` which blocks all browser events, preventing programmatic dismissal and breaking automated tests. Replaced with direct localStorage persist matching the same pattern used by `dismissTour()` and the Escape key handler. Tour is now immediately dismissed without a confirmation dialog.
