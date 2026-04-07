@@ -24,6 +24,34 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _tag_thread_with_api_client(db, thread_id: int, caller) -> None:
+    """BUG-367: Tag newly created thread with API client ID for isolation."""
+    if thread_id and caller.is_api_client and caller.client_id:
+        try:
+            thread_record = db.query(ConversationThread).filter(
+                ConversationThread.id == thread_id
+            ).first()
+            if thread_record:
+                thread_record.api_client_id = caller.client_id
+                db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to set api_client_id on thread: {e}")
+
+
+def _validate_thread_access(db, thread_id: int, caller) -> None:
+    """BUG-367: Validate thread belongs to caller's tenant AND API client."""
+    query = db.query(ConversationThread).filter(
+        ConversationThread.id == thread_id,
+        ConversationThread.tenant_id == caller.tenant_id,
+    )
+    # API clients can only see their own threads
+    if caller.is_api_client and caller.client_id:
+        query = query.filter(ConversationThread.api_client_id == caller.client_id)
+    thread = query.first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+
 # ============================================================================
 # Schemas
 # ============================================================================
@@ -157,13 +185,7 @@ async def _process_sync(agent, agent_name, request, caller, db):
     # Handle thread — create new if not specified
     thread_id = request.thread_id
     if thread_id:
-        # Validate thread belongs to caller's tenant
-        thread = db.query(ConversationThread).filter(
-            ConversationThread.id == thread_id,
-            ConversationThread.tenant_id == caller.tenant_id,
-        ).first()
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
+        _validate_thread_access(db, thread_id, caller)
     if not thread_id:
         thread_service = PlaygroundThreadService(db)
         thread_data = await thread_service.create_thread(
@@ -174,6 +196,7 @@ async def _process_sync(agent, agent_name, request, caller, db):
         )
         thread_obj = thread_data.get("thread", {})
         thread_id = thread_obj.get("id") if thread_obj else None
+        _tag_thread_with_api_client(db, thread_id, caller)
 
     try:
         result = await service.send_message(
@@ -247,13 +270,7 @@ async def _process_stream_sse(agent, agent_name, request, caller, db):
     # Handle thread
     thread_id = request.thread_id
     if thread_id:
-        # Validate thread belongs to caller's tenant
-        thread = db.query(ConversationThread).filter(
-            ConversationThread.id == thread_id,
-            ConversationThread.tenant_id == caller.tenant_id,
-        ).first()
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
+        _validate_thread_access(db, thread_id, caller)
     if not thread_id:
         thread_service = PlaygroundThreadService(db)
         thread_data = await thread_service.create_thread(
@@ -264,6 +281,7 @@ async def _process_stream_sse(agent, agent_name, request, caller, db):
         )
         thread_obj = thread_data.get("thread", {})
         thread_id = thread_obj.get("id") if thread_obj else None
+        _tag_thread_with_api_client(db, thread_id, caller)
 
     async def event_generator():
         try:
@@ -404,10 +422,16 @@ async def list_threads(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    threads = db.query(ConversationThread).filter(
+    # BUG-367: Scope threads by API client to prevent cross-client access
+    thread_query = db.query(ConversationThread).filter(
         ConversationThread.agent_id == agent_id,
         ConversationThread.tenant_id == caller.tenant_id,
-    ).order_by(ConversationThread.updated_at.desc()).offset(offset).limit(limit).all()
+    )
+    if caller.is_api_client and caller.client_id:
+        thread_query = thread_query.filter(
+            ConversationThread.api_client_id == caller.client_id
+        )
+    threads = thread_query.order_by(ConversationThread.updated_at.desc()).offset(offset).limit(limit).all()
 
     return {
         "data": [
@@ -448,11 +472,17 @@ async def get_thread_messages(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    thread = db.query(ConversationThread).filter(
+    # BUG-367: Scope by API client
+    thread_query = db.query(ConversationThread).filter(
         ConversationThread.id == thread_id,
         ConversationThread.agent_id == agent_id,
         ConversationThread.tenant_id == caller.tenant_id,
-    ).first()
+    )
+    if caller.is_api_client and caller.client_id:
+        thread_query = thread_query.filter(
+            ConversationThread.api_client_id == caller.client_id
+        )
+    thread = thread_query.first()
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -493,11 +523,17 @@ async def delete_thread(
     Permanently removes the thread and all associated messages.
     Requires `agents.write` permission.
     """
-    thread = db.query(ConversationThread).filter(
+    # BUG-367: Scope by API client
+    thread_query = db.query(ConversationThread).filter(
         ConversationThread.id == thread_id,
         ConversationThread.agent_id == agent_id,
         ConversationThread.tenant_id == caller.tenant_id,
-    ).first()
+    )
+    if caller.is_api_client and caller.client_id:
+        thread_query = thread_query.filter(
+            ConversationThread.api_client_id == caller.client_id
+        )
+    thread = thread_query.first()
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 

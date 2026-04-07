@@ -21,7 +21,11 @@ services:
   # ==========================================================================
   postgres:
     image: postgres:16-alpine
-    container_name: tsushin-postgres
+    container_name: ${TSN_STACK_NAME:-tsushin}-postgres
+    labels:
+      tsushin.managed: "true"
+      tsushin.lifecycle: "compose"
+      tsushin.service: "postgres"
     environment:
       POSTGRES_DB: tsushin
       POSTGRES_USER: tsushin
@@ -42,7 +46,11 @@ services:
   # ==========================================================================
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:latest
-    container_name: tsushin-docker-proxy
+    container_name: ${TSN_STACK_NAME:-tsushin}-docker-proxy
+    labels:
+      tsushin.managed: "true"
+      tsushin.lifecycle: "compose"
+      tsushin.service: "docker-proxy"
     restart: unless-stopped
     environment:
       # Allow only the operations the backend needs
@@ -81,7 +89,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: tsushin-backend
+    container_name: ${TSN_STACK_NAME:-tsushin}-backend
+    labels:
+      tsushin.managed: "true"
+      tsushin.lifecycle: "compose"
+      tsushin.service: "backend"
     # SECURITY: Docker socket access is now proxied via docker-socket-proxy (BUG-135).
     # No longer needs root or direct socket mount.
     ports:
@@ -178,7 +190,11 @@ services:
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8081}
-    container_name: tsushin-frontend
+    container_name: ${TSN_STACK_NAME:-tsushin}-frontend
+    labels:
+      tsushin.managed: "true"
+      tsushin.lifecycle: "compose"
+      tsushin.service: "frontend"
     ports:
       - "${FRONTEND_PORT:-3030}:3030"
     environment:
@@ -242,23 +258,25 @@ networks:
 # Volumes
 # ==========================================================================
 volumes:
+  # BUG-363: Volume names are parameterized via TSN_STACK_NAME for multi-install coexistence.
+  # Default: tsushin (unchanged for existing installs)
   # Shared audio directory for TTS between backend and MCP containers
   tsushin-audio:
-    name: tsushin-audio
+    name: ${TSN_STACK_NAME:-tsushin}-audio
   # Shared screenshots directory for browser automation between backend and MCP containers
   tsushin-screenshots:
-    name: tsushin-screenshots
+    name: ${TSN_STACK_NAME:-tsushin}-screenshots
   # Shared images directory for ImageSkill between backend and MCP containers
   tsushin-images:
-    name: tsushin-images
+    name: ${TSN_STACK_NAME:-tsushin}-images
   # Kokoro TTS volumes (used with --profile tts)
   kokoro-models:
     name: kokoro-models
   kokoro-audio:
     name: kokoro-audio
-  # PostgreSQL persistent data
+  # PostgreSQL persistent data — CRITICAL: contains all tenant data
   tsushin-postgres-data:
-    name: tsushin-postgres-data
+    name: ${TSN_STACK_NAME:-tsushin}-postgres-data
 
 # ==========================================================================
 # Optional: Additional volumes if you prefer Docker-managed volumes

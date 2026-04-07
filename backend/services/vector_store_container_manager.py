@@ -5,6 +5,7 @@ Manages Docker container lifecycle for auto-provisioned vector store instances.
 Follows the same patterns as MCPContainerManager and ToolboxContainerService.
 """
 
+import hashlib
 import logging
 import re
 import time
@@ -89,15 +90,25 @@ class VectorStoreContainerManager:
 
         config = VENDOR_CONFIGS[vendor]
         tenant_id = instance.tenant_id
-        safe_tenant = re.sub(r'[^a-zA-Z0-9_.-]', '-', tenant_id)
+
+        # Build a short, DNS-safe hash of the tenant ID to avoid exceeding
+        # the 63-character DNS label limit.  Full tenant IDs can be very long
+        # (e.g. "tenant_20251202232822_1766790203") and combining them with
+        # the prefix, vendor, and timestamp easily overflows.
+        tenant_hash = hashlib.md5(tenant_id.encode()).hexdigest()[:8]
 
         # Lock to prevent port allocation race condition
         with _provision_lock:
             port = self._allocate_port(db)
 
-            # Generate names
-            container_name = f"{CONTAINER_PREFIX}{vendor}-{safe_tenant}_{int(time.time())}"
-            volume_name = f"tsushin-vs-{vendor}-{safe_tenant}-{instance.id}"
+            # Generate names — keep container_name under 63 chars for DNS
+            # Format: tsushin-vs-{vendor}-{hash8}-{instance_id}
+            container_name = f"{CONTAINER_PREFIX}{vendor}-{tenant_hash}-{instance.id}"
+            # Defensive truncation: ensure <= 63 characters
+            if len(container_name) > 63:
+                container_name = container_name[:63].rstrip("-")
+
+            volume_name = f"tsushin-vs-{vendor}-{tenant_hash}-{instance.id}"
 
         # Resolve network
         network_name = resolve_tsushin_network_name(self.runtime.raw_client)
@@ -114,6 +125,9 @@ class VectorStoreContainerManager:
         instance.volume_name = volume_name
         instance.is_auto_provisioned = True
         db.commit()
+
+        # Build a short network alias for DNS resolution (guaranteed <= 63 chars)
+        dns_alias = f"vs-{vendor}-{tenant_hash}-{instance.id}"
 
         try:
             container = self.runtime.create_container(
@@ -136,11 +150,24 @@ class VectorStoreContainerManager:
 
             instance.container_id = container.id if hasattr(container, 'id') else str(container)
 
-            # Build base_url using container DNS name
+            # Add a short DNS alias to the container on the network.
+            # The container_name is already the DNS name, but since it is
+            # kept short (<=63 chars) this alias serves as an explicit
+            # guarantee for DNS-label compliance.
+            try:
+                raw = self.runtime.raw_client
+                if raw and hasattr(raw, 'networks'):
+                    net = raw.networks.get(network_name)
+                    net.disconnect(container_name)
+                    net.connect(container_name, aliases=[dns_alias])
+            except Exception as alias_err:
+                logger.warning(f"Could not set DNS alias '{dns_alias}': {alias_err}")
+
+            # Build base_url using the short DNS alias (safe for DNS labels)
             if vendor == "qdrant":
-                instance.base_url = f"http://{container_name}:{config['internal_port']}"
+                instance.base_url = f"http://{dns_alias}:{config['internal_port']}"
             elif vendor == "mongodb":
-                instance.base_url = f"mongodb://{container_name}:{config['internal_port']}"
+                instance.base_url = f"mongodb://{dns_alias}:{config['internal_port']}"
                 # Set local mode for MongoDB (no Atlas Vector Search)
                 extra = instance.extra_config or {}
                 extra["use_native_search"] = False

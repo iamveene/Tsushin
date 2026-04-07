@@ -186,6 +186,7 @@ def migrate_sentinel_config_columns(db: Session) -> bool:
     """
     columns_to_add = [
         ("detection_mode", "VARCHAR(20) DEFAULT 'block' NOT NULL"),
+        ("okg_detection_mode", "VARCHAR(20) DEFAULT 'block' NOT NULL"),
         ("enable_slash_command_analysis", "BOOLEAN DEFAULT 1 NOT NULL"),
         # Notification settings
         ("enable_notifications", "BOOLEAN DEFAULT 1 NOT NULL"),

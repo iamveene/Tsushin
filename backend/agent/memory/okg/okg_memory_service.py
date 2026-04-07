@@ -101,6 +101,16 @@ class OKGMemoryService:
         self._provider = vector_store_provider  # ProviderBridgeStore or ChromaDB
         self._persist_dir = persist_directory
 
+        # V060-MEM-024: Load agent-configured decay lambda instead of hardcoding 0.005
+        self.decay_lambda = 0.005  # default fallback
+        try:
+            from models import Agent as AgentModel
+            agent = db_session.query(AgentModel).filter(AgentModel.id == agent_id).first()
+            if agent and getattr(agent, 'memory_decay_lambda', None):
+                self.decay_lambda = agent.memory_decay_lambda
+        except Exception:
+            pass
+
     async def store(
         self,
         text: str,
@@ -295,7 +305,7 @@ class OKGMemoryService:
 
             # Apply temporal decay to score
             created_at = meta.get("created_at", "")
-            decay_factor = self._compute_decay(created_at)
+            decay_factor = self._compute_decay(created_at, decay_lambda=self.decay_lambda)
             original_distance = record.get("distance", 0.5)
             # Lower distance = more similar (ChromaDB convention)
             adjusted_score = (1.0 - original_distance) * decay_factor

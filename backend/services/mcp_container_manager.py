@@ -956,10 +956,38 @@ class MCPContainerManager:
         return self._extract_container_env(container)
 
     def _get_tester_container(self) -> Optional[Any]:
+        """BUG-380: Try compose-managed tester first, then fall back to runtime tester instances."""
+        # Try compose-managed tester
         try:
             return self.runtime.get_container(self.TESTER_CONTAINER_NAME)
         except ContainerNotFoundError:
-            return None
+            pass
+
+        # Fall back to runtime-created tester instances (type=tester)
+        try:
+            from models import WhatsAppMCPInstance
+            from db import get_db
+            db = next(get_db())
+            try:
+                tester_instance = db.query(WhatsAppMCPInstance).filter(
+                    WhatsAppMCPInstance.instance_type == "tester",
+                    WhatsAppMCPInstance.is_active == True
+                ).order_by(WhatsAppMCPInstance.id.desc()).first()
+                if tester_instance and tester_instance.container_name:
+                    try:
+                        container = self.runtime.get_container(tester_instance.container_name)
+                        # Update class-level references to use the runtime tester
+                        self._runtime_tester_name = tester_instance.container_name
+                        self._runtime_tester_api_url = f"http://{tester_instance.container_name}:8080/api"
+                        return container
+                    except ContainerNotFoundError:
+                        pass
+            finally:
+                db.close()
+        except Exception as e:
+            logger.debug(f"Runtime tester lookup failed: {e}")
+
+        return None
 
     def _get_tester_headers(self) -> Dict[str, str]:
         tester_container = self._get_tester_container()
@@ -974,9 +1002,14 @@ class MCPContainerManager:
         return get_auth_headers(tester_secret)
 
     def get_tester_status(self) -> Dict[str, Any]:
+        # BUG-380: Resolve tester name/URL from runtime instance if available
+        self._runtime_tester_name = None
+        self._runtime_tester_api_url = None
+        tester_name = self.TESTER_CONTAINER_NAME
+        tester_api_url = self.TESTER_API_URL
         tester_status = {
-            "name": self.TESTER_CONTAINER_NAME,
-            "api_url": self.TESTER_API_URL,
+            "name": tester_name,
+            "api_url": tester_api_url,
             "status": "unavailable",
             "container_state": "not_found",
             "api_reachable": False,
@@ -994,17 +1027,27 @@ class MCPContainerManager:
         }
 
         tester_container = self._get_tester_container()
+        # BUG-380: Update status dict with resolved runtime tester info
+        if self._runtime_tester_name:
+            tester_name = self._runtime_tester_name
+            tester_api_url = self._runtime_tester_api_url or tester_api_url
+            tester_status["name"] = tester_name
+            tester_status["api_url"] = tester_api_url
+            tester_status["source"] = "runtime"
+        else:
+            tester_status["source"] = "compose"
+
         if tester_container is None:
             tester_status["error"] = "Tester container not found"
             return tester_status
 
         try:
-            self._ensure_container_on_tsushin_network(self.TESTER_CONTAINER_NAME)
+            self._ensure_container_on_tsushin_network(tester_name)
         except Exception:
             pass
 
         try:
-            attrs = self.runtime.get_container_attrs(self.TESTER_CONTAINER_NAME)
+            attrs = self.runtime.get_container_attrs(tester_name)
             tester_status["container_state"] = attrs.get("status", "unknown")
             tester_status["container_id"] = attrs.get("id")
             image_tags = attrs.get("image_tags") or []
@@ -1020,7 +1063,7 @@ class MCPContainerManager:
         headers = self._get_tester_headers()
 
         try:
-            response = requests.get(f"{self.TESTER_API_URL}/health", headers=headers, timeout=5)
+            response = requests.get(f"{tester_api_url}/health", headers=headers, timeout=5)
             if response.status_code != 200:
                 tester_status["status"] = "degraded"
                 tester_status["error"] = f"Tester health returned HTTP {response.status_code}"

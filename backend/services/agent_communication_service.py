@@ -699,45 +699,52 @@ class AgentCommunicationService:
         source_contact = self.db.query(Contact).filter(Contact.id == source_agent.contact_id).first()
         source_name = source_contact.friendly_name if source_contact else f"Agent {source_agent.id}"
 
-        # Enrich with memory context from target agent's vector store
-        # A2A searches across ALL the agent's memories (no sender filter)
+        # BUG-379: Enrich with target agent's FULL memory stack (not just vector store).
+        # The original code only did vector store search, missing working memory and facts.
+        # Now we use the same MultiAgentMemoryManager that direct messages use.
         memory_context = ""
-        if target_agent.enable_semantic_search:
+        try:
+            from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+
+            memory_manager = MultiAgentMemoryManager(self.db, agent_config)
+            # Use 'shared' key to access agent's shared memory (facts from all users)
+            a2a_sender_key = "shared"
+            a2a_memory_context = await memory_manager.get_context(
+                agent_id=target_agent.id,
+                sender_key=a2a_sender_key,
+                current_message=message,
+                max_semantic_results=5,
+                similarity_threshold=0.3,
+                include_knowledge=True,
+                include_shared=False,
+                use_contact_mapping=False,
+            )
+
+            # Format the memory context
+            agent_memory = memory_manager.get_agent_memory(target_agent.id)
+            context_str = agent_memory.format_context_for_prompt(
+                a2a_memory_context, user_id=a2a_sender_key
+            )
+            if context_str and context_str != "[No previous context]":
+                memory_context = context_str
+                logger.info(f"BUG-379: A2A enriched with full memory context ({len(context_str)} chars) for agent {target_agent.id}")
+        except Exception as e:
+            logger.warning(f"A2A full memory enrichment failed for agent {target_agent.id}: {e}", exc_info=True)
+            # Fallback to original vector store search
             try:
-                from agent.memory.providers.registry import VectorStoreRegistry
-                from agent.memory.embedding_service import get_shared_embedding_service
-
-                embedder = get_shared_embedding_service()
-                query_embedding = embedder.embed_text(message)
-
-                if target_agent.vector_store_instance_id:
-                    registry = VectorStoreRegistry()
-                    provider = registry.get_provider(
-                        target_agent.vector_store_instance_id,
-                        self.db,
-                        tenant_id=self.tenant_id,
-                    )
-                    results = await provider.search_similar(
-                        query_embedding=query_embedding,
-                        limit=5,
-                        sender_key=None,
-                    )
-                    if results:
-                        memory_parts = [f"- {r.text[:300]}" for r in results if r.text]
-                        if memory_parts:
-                            memory_context = "Relevant memories:\n" + "\n".join(memory_parts)
-                            logger.info(f"A2A memory enrichment: found {len(memory_parts)} results for agent {target_agent.id}")
-                else:
-                    persist_dir = target_agent.chroma_db_path or f"./data/chroma_db/agent_{target_agent.id}"
-                    from agent.memory.vector_store import VectorStore
-                    vs = VectorStore(persist_dir, embedder)
+                if target_agent.enable_semantic_search:
+                    from agent.memory.embedding_service import get_shared_embedding_service
+                    embedder = get_shared_embedding_service()
+                    persist_dir = f"./data/chroma/agent_{target_agent.id}"
+                    from agent.memory.vector_store_manager import get_vector_store
+                    vs = get_vector_store(persist_directory=persist_dir)
                     results = await vs.search_similar(message, limit=5)
                     if results:
-                        memory_parts = [f"- {r['text'][:300]}" for r in results if r.get('text')]
+                        memory_parts = [f"- {r.get('text', '')[:300]}" for r in results if r.get('text')]
                         if memory_parts:
                             memory_context = "Relevant memories:\n" + "\n".join(memory_parts)
-            except Exception as e:
-                logger.warning(f"A2A memory enrichment failed for agent {target_agent.id}: {e}", exc_info=True)
+            except Exception as fallback_e:
+                logger.warning(f"A2A vector store fallback also failed: {fallback_e}")
 
         # Build the prompt with context
         prompt_parts = [

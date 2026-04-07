@@ -29,6 +29,14 @@ export function usePlaygroundWebSocket(
   const streamingMetadataRef = useRef<any>(null)
   const streamStartTimeRef = useRef<number>(0)
 
+  // BUG-376: Use refs for callbacks to avoid stale closures in WebSocket event handlers.
+  // The useEffect that registers ws.on() handlers runs only when options.enabled changes,
+  // but the callbacks passed in options change on every parent render. Without refs,
+  // the event handlers capture the initial callback references and never see updates,
+  // causing setMessages to operate on stale state snapshots.
+  const optionsRef = useRef(options)
+  useEffect(() => { optionsRef.current = options }, [options])
+
   // Initialize WebSocket connection
   useEffect(() => {
     if (!options.enabled) {
@@ -58,7 +66,7 @@ export function usePlaygroundWebSocket(
       streamStartTimeRef.current = Date.now()
 
       // Notify parent with thinking indicator
-      options.onStreamingMessage({
+      optionsRef.current.onStreamingMessage({
         role: 'assistant',
         content: '',
         timestamp: new Date().toISOString(),
@@ -67,8 +75,8 @@ export function usePlaygroundWebSocket(
 
     ws.on('thread_created', (message) => {
       console.log('[WebSocket Hook] Thread created:', message)
-      if (options.onThreadCreated && message.thread_id) {
-        options.onThreadCreated(message.thread_id, message.title)
+      if (optionsRef.current.onThreadCreated && message.thread_id) {
+        optionsRef.current.onThreadCreated(message.thread_id, message.title)
       }
     })
 
@@ -77,7 +85,7 @@ export function usePlaygroundWebSocket(
         streamingMessageRef.current += message.content
 
         // Notify parent with accumulated content
-        options.onStreamingMessage({
+        optionsRef.current.onStreamingMessage({
           role: 'assistant',
           content: streamingMessageRef.current,
           timestamp: new Date().toISOString(),
@@ -111,7 +119,7 @@ export function usePlaygroundWebSocket(
       }
 
       // Notify parent of complete message
-      options.onMessageComplete(completedMessage)
+      optionsRef.current.onMessageComplete(completedMessage)
 
       // Reset streaming state
       streamingMessageRef.current = ''
@@ -121,7 +129,7 @@ export function usePlaygroundWebSocket(
     ws.on('error', (message) => {
       console.error('[WebSocket Hook] Error:', message)
       setIsStreaming(false)
-      options.onError(message.error || 'WebSocket error')
+      optionsRef.current.onError(message.error || 'WebSocket error')
 
       // Reset streaming state
       streamingMessageRef.current = ''
@@ -134,15 +142,15 @@ export function usePlaygroundWebSocket(
     // Message Queue events
     ws.on('queue_processing_started', (message: any) => {
       console.log('[WebSocket Hook] Queue processing started:', message.queue_id)
-      if (options.onQueueProcessingStarted) {
-        options.onQueueProcessingStarted(message.queue_id)
+      if (optionsRef.current.onQueueProcessingStarted) {
+        optionsRef.current.onQueueProcessingStarted(message.queue_id)
       }
     })
 
     ws.on('queue_message_completed', (message: any) => {
       console.log('[WebSocket Hook] Queue message completed:', message.queue_id)
-      if (options.onQueueMessageCompleted) {
-        options.onQueueMessageCompleted(message.queue_id, message.result)
+      if (optionsRef.current.onQueueMessageCompleted) {
+        optionsRef.current.onQueueMessageCompleted(message.queue_id, message.result)
       }
     })
 

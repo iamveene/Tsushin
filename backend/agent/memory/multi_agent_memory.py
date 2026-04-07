@@ -91,6 +91,14 @@ class MultiAgentMemoryManager:
                     'memory_decay_lambda': getattr(agent, 'memory_decay_lambda', None),
                     'memory_decay_archive_threshold': getattr(agent, 'memory_decay_archive_threshold', None),
                     'memory_decay_mmr_lambda': getattr(agent, 'memory_decay_mmr_lambda', None),
+                    # BUG V060-MEM-021: Semantic search fields must be passed from agent model
+                    # Without these, AgentMemorySystem defaults enable_semantic to False,
+                    # breaking ChromaDB indexing for all queue-processed channels
+                    'enable_semantic_search': getattr(agent, 'enable_semantic_search', True),
+                    'semantic_search_results': getattr(agent, 'semantic_search_results', 10),
+                    'semantic_similarity_threshold': getattr(agent, 'semantic_similarity_threshold', 0.5),
+                    'memory_size': getattr(agent, 'memory_size', None) or agent_config.get('memory_size', 10),
+                    'memory_isolation_mode': getattr(agent, 'memory_isolation_mode', 'isolated'),
                 })
                 self.logger.info(f"Fetched agent {agent_id} LLM config: provider={agent.model_provider}, model={agent.model_name}")
                 return agent_config

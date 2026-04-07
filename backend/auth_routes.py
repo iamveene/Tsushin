@@ -673,6 +673,14 @@ async def setup_wizard(
                 "is_global_admin": tenant_owner.is_global_admin,
                 "permissions": tenant_admin_permissions,
             },
+            # BUG-365: Surface global admin credentials so the setup UI can display them.
+            # This is a one-time reveal — the password is hashed and cannot be recovered.
+            "global_admin": {
+                "email": global_admin_email,
+                "password": global_admin_password,
+                "full_name": global_admin_full_name,
+                "is_auto_generated": not setup_request.global_admin_password,
+            },
             "api_keys_stored": api_keys_stored,
             "agents_created": agents_created,
             "tools_created": tools_created,

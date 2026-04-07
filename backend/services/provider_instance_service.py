@@ -122,13 +122,16 @@ class ProviderInstanceService:
         if api_key:
             api_key_encrypted = ProviderInstanceService._encrypt_key(api_key, tenant_id, db)
 
-        # 4. Enforce single default per (tenant_id, vendor)
+        # 4. Enforce single default per (tenant_id, vendor) — clear BEFORE
+        #    creating the new instance and flush to prevent race conditions
+        #    where two concurrent creates both end up as default.
         if is_default:
             db.query(ProviderInstance).filter(
                 ProviderInstance.tenant_id == tenant_id,
                 ProviderInstance.vendor == vendor,
-                ProviderInstance.is_default == True
-            ).update({"is_default": False})
+                ProviderInstance.is_default == True,
+            ).update({"is_default": False}, synchronize_session="fetch")
+            db.flush()
 
         instance = ProviderInstance(
             tenant_id=tenant_id,
@@ -168,12 +171,14 @@ class ProviderInstanceService:
             # Empty/None = keep existing
 
         if kwargs.get("is_default"):
+            # Clear other defaults BEFORE setting new one and flush
             db.query(ProviderInstance).filter(
                 ProviderInstance.tenant_id == tenant_id,
                 ProviderInstance.vendor == instance.vendor,
                 ProviderInstance.id != instance_id,
-                ProviderInstance.is_default == True
-            ).update({"is_default": False})
+                ProviderInstance.is_default == True,
+            ).update({"is_default": False}, synchronize_session="fetch")
+            db.flush()
 
         for key, value in kwargs.items():
             if value is not None and hasattr(instance, key):

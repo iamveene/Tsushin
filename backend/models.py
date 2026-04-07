@@ -1766,6 +1766,7 @@ class ConversationThread(Base):
     # Phase 14.1: Playground-specific fields
     tenant_id = Column(String(50), nullable=True, index=True)  # FK to tenant (for playground)
     user_id = Column(Integer, nullable=True, index=True)  # FK to user (for playground)
+    api_client_id = Column(String(100), nullable=True, index=True)  # BUG-367: API v1 client isolation
     thread_type = Column(String(20), default='flow', index=True)  # 'flow' or 'playground'
     title = Column(String(200), nullable=True)  # Thread name (auto-generated or user-set)
     folder = Column(String(100), nullable=True)  # Organization folder (e.g., "Work", "Personal")
@@ -2496,6 +2497,7 @@ class SentinelProfile(Base):
     # Global settings
     is_enabled = Column(Boolean, default=True, nullable=False)
     detection_mode = Column(String(20), default="block", nullable=False)  # 'block' | 'detect_only' | 'off'
+    okg_detection_mode = Column(String(20), default="block", nullable=False)  # V060-MEM-025: OKG-specific detection mode
     aggressiveness_level = Column(Integer, default=1, nullable=False)  # 0=Off, 1=Moderate, 2=Aggressive, 3=Extra
 
     # Component toggles

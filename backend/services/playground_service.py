@@ -376,6 +376,12 @@ class PlaygroundService:
             # Layer 2: Episodic memory (semantic search of past conversations)
             # Layer 3: Semantic knowledge (learned facts about user)
             # Layer 4: Shared memory (cross-agent knowledge pool)
+            # BUG-366: Respect memory_isolation_mode for shared memory inclusion.
+            # In 'isolated' mode, cross-agent shared knowledge should NOT be included
+            # to prevent data leakage between different API clients/users.
+            isolation_mode = config_dict.get("memory_isolation_mode", "isolated")
+            include_shared_memory = isolation_mode == "shared"
+
             memory_context = await memory_manager.get_context(
                 agent_id=agent_id,
                 sender_key=sender_key,
@@ -383,7 +389,7 @@ class PlaygroundService:
                 max_semantic_results=config_dict.get("semantic_search_results", 5),
                 similarity_threshold=config_dict.get("semantic_similarity_threshold", 0.3),
                 include_knowledge=True,  # Layer 3: Include learned facts about user
-                include_shared=True,  # Layer 4: Include cross-agent shared knowledge
+                include_shared=include_shared_memory,  # BUG-366: Only share in shared mode
                 chat_id=f"playground_{user_id}",
                 use_contact_mapping=True
             )
@@ -408,6 +414,34 @@ class PlaygroundService:
                         for msg in memory_context["working_memory"][-5:]
                     ])
                     full_message = f"Recent conversation:\n{context_str}\n\n[Current message]: {message_text}"
+
+            # BUG-381: Layer 4.5 — Inject uploaded Playground documents into chat context.
+            # PlaygroundDocumentService stores uploaded files, but send_message() never
+            # consulted them. Search for relevant document content to include in context.
+            try:
+                from services.playground_document_service import PlaygroundDocumentService
+                doc_service = PlaygroundDocumentService(self.db)
+                doc_results = await doc_service.search_documents(
+                    tenant_id=agent.tenant_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    query=message_text,
+                    max_results=3
+                )
+                if doc_results:
+                    doc_context_parts = []
+                    for dr in doc_results:
+                        sim = dr.get("similarity", 0)
+                        if sim > 0.3:  # Only include reasonably relevant results
+                            content = dr.get("content", "")[:1000]
+                            source = dr.get("metadata", {}).get("document_name", "uploaded file")
+                            doc_context_parts.append(f"[From {source}]: {content}")
+                    if doc_context_parts:
+                        doc_context = "[Uploaded Documents Context]\n" + "\n\n".join(doc_context_parts)
+                        full_message = f"{doc_context}\n\n{full_message}"
+                        self.logger.info(f"BUG-381: Injected {len(doc_context_parts)} document chunks into context")
+            except Exception as doc_err:
+                self.logger.warning(f"BUG-381: Document context retrieval failed: {doc_err}")
 
             # Layer 5: Selective tool output injection
             # - Always show lightweight reference (what tools are available)
@@ -601,11 +635,44 @@ class PlaygroundService:
                 channel="playground"
             )
 
+            # BUG-378: Create AgentRun record BEFORE processing (same as router.py)
+            # This ensures Watcher dashboard and Conversations tab show Playground activity
+            from models import AgentRun as AgentRunModel
+            import time as _time
+            _run_start = _time.time()
+            agent_run = AgentRunModel(
+                agent_id=agent_id,
+                triggered_by="playground",
+                sender_key=sender_key,
+                input_preview=message_text[:200],
+                status="processing"
+            )
+            self.db.add(agent_run)
+            self.db.commit()
+            self.db.refresh(agent_run)
+            agent_run_id = agent_run.id
+
             result = await agent_service.process_message(
                 sender_key=sender_key,
                 message_text=full_message,
                 original_query=message_text
             )
+
+            # BUG-378: Update AgentRun with result
+            try:
+                _run_end = _time.time()
+                agent_run.status = "error" if result.get("error") else "success"
+                agent_run.output_preview = (result.get("answer") or result.get("error") or "")[:500]
+                agent_run.model_used = effective_model
+                agent_run.execution_time_ms = int((_run_end - _run_start) * 1000)
+                agent_run.tool_used = result.get("tool_used")
+                if result.get("tokens"):
+                    agent_run.token_usage_json = result["tokens"]
+                if result.get("error"):
+                    agent_run.error_text = str(result["error"])[:500]
+                self.db.commit()
+            except Exception as run_err:
+                self.logger.warning(f"Failed to update agent_run {agent_run_id}: {run_err}")
 
             # Phase 8: Emit activity end event (non-blocking)
             emit_agent_processing_async(

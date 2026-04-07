@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 import logging
 
 from agent.memory.memory_management_service import MemoryManagementService
+from agent.memory.vector_store_manager import get_vector_store
 from models import Agent, Contact
 from models_rbac import User
 from auth_dependencies import (
@@ -52,7 +53,7 @@ def verify_agent_access(agent_id: int, db: Session, ctx: TenantContext) -> Agent
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
 
     return agent
 
@@ -90,49 +91,19 @@ async def get_memory_stats(
         - total_messages: Total messages across all conversations
         - total_embeddings: Number of vector embeddings
         - storage_size_mb: Estimated storage size
-        - decay_config: Temporal decay configuration (Item 37)
-        - freshness_distribution: Counts per freshness label (when decay enabled)
 
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    agent = verify_agent_access(agent_id, db, ctx)
+    verify_agent_access(agent_id, db, ctx)
 
     try:
         service = MemoryManagementService(db, agent_id)
         stats = await service.get_memory_stats()
-        result = stats.to_dict()
-
-        # Item 37: Add decay config and freshness distribution
-        from agent.memory.temporal_decay import DecayConfig, compute_freshness_label
-        decay_config = DecayConfig.from_agent(agent)
-        result['decay_config'] = {
-            'enabled': decay_config.enabled,
-            'decay_lambda': decay_config.decay_lambda,
-            'archive_threshold': decay_config.archive_threshold,
-            'mmr_lambda': decay_config.mmr_lambda,
-        }
-
-        if decay_config.enabled:
-            from models import SemanticKnowledge
-            from datetime import datetime
-            now = datetime.utcnow()
-            facts = db.query(SemanticKnowledge).filter(
-                SemanticKnowledge.agent_id == agent_id
-            ).all()
-            freshness_dist = {'fresh': 0, 'fading': 0, 'stale': 0, 'archived': 0}
-            for fact in facts:
-                last_accessed = getattr(fact, 'last_accessed_at', None)
-                label = compute_freshness_label(
-                    last_accessed, now, decay_config.decay_lambda, decay_config.archive_threshold
-                )
-                freshness_dist[label['freshness']] += 1
-            result['freshness_distribution'] = freshness_dist
-
-        return result
+        return stats.to_dict()
     except Exception as e:
         logger.error(f"Error getting memory stats for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Memory operation failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/agents/{agent_id}/memory/conversations")
@@ -162,7 +133,7 @@ async def list_conversations(
         return [conv.to_dict() for conv in conversations]
     except Exception as e:
         logger.error(f"Error listing conversations for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Memory operation failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/agents/{agent_id}/memory/conversation/{sender_key}")
@@ -192,7 +163,7 @@ async def get_conversation(
         return details.to_dict()
     except Exception as e:
         logger.error(f"Error getting conversation {sender_key} for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Memory operation failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/agents/{agent_id}/memory/conversation/{sender_key}")
@@ -229,7 +200,7 @@ async def delete_conversation(
 
     except Exception as e:
         logger.error(f"Error deleting conversation {sender_key} for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Memory operation failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/agents/{agent_id}/memory/clean")
@@ -264,7 +235,7 @@ async def clean_old_messages(
         return report.to_dict()
     except Exception as e:
         logger.error(f"Error cleaning old messages for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Memory operation failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/agents/{agent_id}/memory/reset")
@@ -329,20 +300,7 @@ async def archive_decayed_facts(
     current_user: User = Depends(require_permission("agents.write")),
     ctx: TenantContext = Depends(get_tenant_context)
 ):
-    """
-    Archive (delete) facts whose decayed confidence falls below the agent's archive threshold.
-
-    Item 37: Temporal Memory Decay.
-
-    Use dry_run=true (default) to preview what would be archived.
-    Use dry_run=false to actually delete.
-
-    Returns:
-        - total_facts: Total facts for this agent
-        - archived_count: Number of facts archived (or would be)
-        - archived_facts: List of archived fact details
-        - dry_run: Whether this was a preview
-    """
+    """Archive (delete) facts whose decayed confidence falls below the agent's archive threshold."""
     agent = verify_agent_access(agent_id, db, ctx)
 
     try:
@@ -371,3 +329,59 @@ async def archive_decayed_facts(
     except Exception as e:
         logger.error(f"Error archiving decayed facts for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Memory operation failed")
+
+
+# V060-MEM-022: Memory search endpoint (was returning 404)
+@router.get("/agents/{agent_id}/memory/search")
+async def search_memory(
+    agent_id: int,
+    query: str = Query(..., description="Search query text"),
+    sender_key: Optional[str] = Query(None, description="Optional sender key filter"),
+    limit: int = Query(10, ge=1, le=100, description="Max results to return"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("agents.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Search agent memory by semantic similarity.
+
+    Returns a list of matching memory entries ranked by similarity score.
+
+    Query Parameters:
+        - query (required): The search text to find similar memories
+        - sender_key (optional): Filter results to a specific sender
+        - limit (optional, default 10): Maximum number of results
+
+    Phase 7.9.2: Verifies user can access this agent (tenant check).
+    """
+    agent = verify_agent_access(agent_id, db, ctx)
+
+    try:
+        # Determine persist directory for this agent
+        if agent.chroma_db_path:
+            persist_dir = agent.chroma_db_path
+        else:
+            persist_dir = f"./data/chroma/agent_{agent_id}"
+
+        vector_store = get_vector_store(persist_dir, embedding_model="all-MiniLM-L6-v2")
+        raw_results = vector_store.search_similar(
+            query_text=query,
+            sender_key=sender_key,
+            limit=limit,
+        )
+
+        # Format results with consistent field names
+        results = []
+        for r in raw_results:
+            results.append({
+                "content": r.get("text", ""),
+                "similarity": round(1.0 - r.get("distance", 1.0), 4),
+                "message_id": r.get("message_id", ""),
+                "role": r.get("role", r.get("sender_key", "")),
+            })
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Error searching memory for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
