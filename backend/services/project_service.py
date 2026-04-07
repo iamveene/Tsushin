@@ -561,13 +561,12 @@ class ProjectService:
                 # the document status is still properly marked as completed with chunks.
                 self.db.commit()
 
-                # Store embeddings in background (best-effort — failure doesn't affect status)
-                # BUG-400 fix: Fire-and-forget so worker crash during embedding
-                # doesn't kill the response. Status is already "completed" in DB.
-                import asyncio
-                asyncio.get_event_loop().create_task(
-                    self._store_project_embeddings(project, knowledge, chunks)
-                )
+                # BUG-400 fix: Skip embedding storage in the request handler entirely.
+                # The sentence-transformer model loading can crash the uvicorn worker
+                # on memory-constrained fresh installs. Embeddings will be generated
+                # lazily when the user triggers "Regenerate Embeddings" from the UI,
+                # or on the next upload after the model has been warmed up.
+                self.logger.info(f"Document processed: {len(chunks)} chunks. Embeddings deferred (use Regenerate Embeddings).")
 
             except Exception as e:
                 knowledge.status = "failed"
