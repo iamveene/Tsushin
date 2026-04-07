@@ -187,11 +187,14 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 1. Create admin account + organization.
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
 3. The wizard automatically creates a **ProviderInstance** for the primary provider and assigns it as the **System AI** — no manual configuration needed.
-4. On first login an **onboarding tour** (9 steps) walks through all platform areas: Watcher, Studio, Hub, Channels, Flows, Playground, Security, and a final setup checklist.
-5. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp/Telegram) via the Hub to enable agent messaging.
-6. The **User Guide** is accessible anytime via the **?** button in the header.
+4. At completion, the wizard reveals an auto-generated **global admin** email/password pair. Record these credentials before leaving the completion screen; they are required for `/system/*` validation and system-level administration.
+5. On first login an **onboarding tour** (9 steps) walks through all platform areas: Watcher, Studio, Hub, Channels, Flows, Playground, Security, and a final setup checklist.
+6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp/Telegram) via the Hub to enable agent messaging.
+7. The **User Guide** is accessible anytime via the **?** button in the header.
 
 **LLM provider keys are configured per-tenant through the Hub UI — not in environment variables.** This enables multi-tenant isolation. Source: `README.md:398`.
+
+For remote Ubuntu VM installs that use a host-level Ollama daemon, start with `http://host.docker.internal:11434` inside Tsushin. If the Docker engine on that host does not resolve `host.docker.internal`, use the container bridge gateway instead (for example `http://172.18.0.1:11434`) and re-test the provider instance from the Hub.
 
 ### 3.4 Verify health
 
@@ -1749,7 +1752,7 @@ From `backend/services/provider_instance_service.py:20-32`:
 | `vertex_ai` | None | Region-resolved from credentials |
 | `custom` | Free-form (SSRF-validated) | Any OpenAI-compatible endpoint |
 
-An Ollama default is auto-provisioned per tenant on demand via `ensure_ollama_instance()` (`provider_instance_service.py:37-65`), seeded from `Config.ollama_base_url` or the default.
+An Ollama default is auto-provisioned per tenant on demand via `ensure_ollama_instance()` (`provider_instance_service.py:37-65`), seeded from `Config.ollama_base_url` or the default. In Docker-on-Linux VM setups, `host.docker.internal` is the preferred endpoint; if that hostname is unavailable on the target host, point the provider instance at the Docker bridge gateway IP instead and retest from the Hub UI.
 
 ### 19.3 Model Discovery
 
@@ -2202,6 +2205,8 @@ In Kubernetes, wire these to `livenessProbe` and `readinessProbe` respectively.
 ## 25. Public API v1
 
 All Public API v1 endpoints are mounted under `/api/v1/` via the aggregator router at `backend/api/v1/router.py`. OpenAPI/Swagger UI is available at `/docs`. Source: `backend/api/v1/router.py:1-23`, `README.md:228-236`.
+
+If you generate an external client/SDK, fetch `http://<host>:8081/openapi.json` to a local file first and generate from that file. During the 2026-04-07 Ubuntu VM audit, file-based generation was more reliable than pointing code generators directly at the live URL.
 
 ### 25.1 Authentication
 

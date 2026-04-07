@@ -5,6 +5,20 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### QA Audit — Ubuntu VM Fresh Install (`develop`, 2026-04-07)
+
+- Completed a real-user fresh-install audit on `root@10.211.55.5` using the interactive installer (`python3 install.py`) on `develop` HEAD with backend `8081`, frontend `3030`, remote access, and HTTP-only setup.
+- Completed `/setup` through browser automation at `http://10.211.55.5:3030/setup`, created the tenant admin, captured the auto-generated global-admin credentials, and validated both tenant and global admin login paths.
+- Re-validated the major release-0.6.0 surfaces that now work on a fresh VM: hosted provider setup (Gemini/OpenAI/Anthropic), local Ollama connectivity, A2A delegation + Graph View visibility, Qdrant auto-provisioning as tenant default, Sentinel/MemGuard detections, shell beacon + sandbox tooling, direct project chat, API v1 direct-key and OAuth auth, sync/async chat, and generated-client communication against the live `/openapi.json`.
+- Expanded `deployment-test-playbook.md` with the Ubuntu VM audit profile plus new cases for setup/onboarding, provider matrix, memory-mode validation, vector-store coverage, Sentinel/MemGuard, MCP/custom skills, shell/sandbox/slash commands, API v1/generated clients, flows, projects, and A2A graph monitoring.
+- Logged newly confirmed fresh-install regressions in the bug tracker for follow-up:
+  - Setup and onboarding: `BUG-402`, `BUG-403`, `BUG-404`, `BUG-405`, `BUG-406`
+  - Agent/chat/memory: `BUG-407`, `BUG-408`, `BUG-409`, `BUG-417`, `BUG-418`, `BUG-419`
+  - Skills, search, vector-store, and tooling: `BUG-410`, `BUG-411`, `BUG-412`, `BUG-413`, `BUG-414`, `BUG-415`, `BUG-416`, `BUG-420`
+  - Projects and flows: `BUG-421`, `BUG-422`
+
 ## v0.6.0-patch.3 (2026-04-07)
 
 ### Bug Fixes — Fresh Install QA Sprint (15 open → 0 open)
