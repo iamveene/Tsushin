@@ -5,6 +5,52 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.0-patch.1 (2026-04-07)
+
+### Bug Fixes — Full Sprint (41 open → 0 open)
+
+**Critical Memory Pipeline**
+- V060-MEM-021: WhatsApp/Telegram/Slack/Discord messages now properly indexed in ChromaDB
+
+**Playground Core UX**
+- BUG-376: WebSocket streaming replies now appear without page refresh (stale closure fix)
+- BUG-378: Playground chats now create agent_run records for Watcher dashboard
+- BUG-372/377: Memory Inspector correctly queries shared memory for shared-mode agents
+- BUG-381: Uploaded documents/images now injected into chat context via document search
+
+**API v1 Isolation**
+- BUG-366: Isolated-mode agents no longer leak memory across API clients
+- BUG-367: API v1 threads scoped per API client (api_client_id column)
+
+**Backend Logic & Tenant Context**
+- BUG-370: Flow skill steps now inject tenant_id for provider resolution
+- BUG-371: /shell slash command seeded on fresh installs (idempotent seeding)
+- BUG-379: A2A communication inherits target agent's full memory recall stack
+
+**MCP & Infrastructure**
+- BUG-374/368: Invalid stdio MCP servers properly fail connection/health checks
+- BUG-369: Vector store container names capped at 63 chars (DNS label fix)
+- BUG-373: Provider instance defaults atomically cleared on create/update
+
+**Memory/OKG Subsystem**
+- V060-MEM-022: Added GET /agents/{id}/memory/search endpoint
+- V060-MEM-023: Port allocator checks running Docker containers
+- V060-MEM-024: OKG decay uses agent-configured lambda
+- V060-MEM-025: OKG MemGuard defaults to block mode (okg_detection_mode)
+
+**Install/Setup/Config**
+- BUG-365: Setup wizard reveals global admin credentials on completion
+- BUG-362: Docker compose services labeled (tsushin.managed, lifecycle, service)
+- BUG-363: Container/volume names parameterized via TSN_STACK_NAME
+- BUG-380: QA Tester shortcuts resolve runtime instances as fallback
+
+**Documentation**
+- BUG-375: Tavily documented as unsupported in v0.6.0
+
+### Database Migrations
+- 0029: Add api_client_id column to conversation_thread
+- 0030: Add okg_detection_mode column to sentinel_profile
+
 ## [0.6.0] - 2026-04-07
 
 ### Bug Fixes
