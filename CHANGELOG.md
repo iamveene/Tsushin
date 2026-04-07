@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### Post-Sprint Regression Fixes — 2026-04-07
+
+- **BUG-334 follow-up — `skipTour` used `window.confirm()` blocking browser events:** The "Skip Tour" button called `window.confirm()` which blocks all browser events, preventing programmatic dismissal and breaking automated tests. Replaced with direct localStorage persist matching the same pattern used by `dismissTour()` and the Escape key handler. Tour is now immediately dismissed without a confirmation dialog.
+- **Perfection audit fixes:** (1) `client.ts` 409 error guard changed from message-string comparison (`!== 'Unexpected end of JSON input'`) to `!(jsonErr instanceof SyntaxError)` — prevents HTML error bodies from surfacing raw SyntaxError text to users; (2) `agent_switcher_skill.py` `_find_agent_by_name()` and `_get_available_agents()` now apply `tenant_id` filter to prevent cross-tenant agent resolution in multi-tenant deployments; (3) `routes_flows.py` `create_flow_v2` endpoint now re-raises `HTTPException` before the generic `except Exception` catch (matching `create_flow` pattern); (4) `GoogleCredentials` TypeScript interface in `settings/integrations/page.tsx` and `settings/security/page.tsx` now includes `configured?: boolean` for type safety.
+
 #### Playground & Flows Bug Fixes (BUG-331, BUG-335, BUG-336, BUG-344) — 2026-04-07
 
 - **BUG-344 — `/api/health` reported stale version v0.5.0 while frontend showed v0.6.0 (LOW):** Changed `SERVICE_VERSION = "0.5.0"` to `SERVICE_VERSION = "0.6.0"` in `backend/settings.py`. The health and readiness endpoints now correctly return `"version": "0.6.0"`, matching the frontend footer.
