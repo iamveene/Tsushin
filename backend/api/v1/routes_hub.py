@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import HubIntegration, AsanaIntegration, CalendarIntegration, GmailIntegration, GoogleFlightsIntegration
+from models import HubIntegration, AsanaIntegration, CalendarIntegration, GmailIntegration
 from api.api_auth import ApiCaller, require_api_permission
 from api.v1.schemas import COMMON_RESPONSES, NOT_FOUND_RESPONSE
 
@@ -24,6 +24,9 @@ INTEGRATION_CAPABILITIES: Dict[str, Dict[str, bool]] = {
     "gmail": {"health_check": True, "tools": False, "tool_execution": False},
     "calendar": {"health_check": True, "tools": False, "tool_execution": False},
     "google_flights": {"health_check": False, "tools": False, "tool_execution": False},
+    "amadeus": {"health_check": False, "tools": False, "tool_execution": False},
+    "shell": {"health_check": False, "tools": False, "tool_execution": False},
+    "browser_automation": {"health_check": False, "tools": False, "tool_execution": False},
 }
 
 logger = logging.getLogger(__name__)

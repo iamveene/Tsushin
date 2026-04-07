@@ -410,6 +410,15 @@ async def create_agent(
                 detail=f"Agent limit reached. Your plan allows a maximum of {tenant.max_agents} agents. Please upgrade your plan or delete unused agents.",
             )
 
+    # Validate persona_id before any writes to avoid orphaned Contact rows
+    if request.persona_id is not None:
+        persona = db.query(Persona).filter(
+            Persona.id == request.persona_id,
+            (Persona.is_system == True) | (Persona.tenant_id == caller.tenant_id) | (Persona.tenant_id.is_(None)),
+        ).first()
+        if not persona:
+            raise HTTPException(status_code=404, detail="Persona not found")
+
     # Auto-create contact for the agent
     contact = Contact(
         friendly_name=request.name,
@@ -427,15 +436,6 @@ async def create_agent(
             Agent.is_default == True,
         ).update({"is_default": False})
         db.commit()
-
-    # Validate persona_id if provided (tenant isolation)
-    if request.persona_id is not None:
-        persona = db.query(Persona).filter(
-            Persona.id == request.persona_id,
-            (Persona.is_system == True) | (Persona.tenant_id == caller.tenant_id) | (Persona.tenant_id.is_(None)),
-        ).first()
-        if not persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
 
     agent = Agent(
         contact_id=contact.id,
