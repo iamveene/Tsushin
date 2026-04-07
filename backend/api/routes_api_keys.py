@@ -93,6 +93,7 @@ SUPPORTED_SERVICES = {
     'vertex_ai_project_id': 'Vertex AI Project ID',
     'vertex_ai_region': 'Vertex AI Region',
     'vertex_ai_sa_email': 'Vertex AI Service Account Email',
+    'tavily': 'Tavily (Web Search)',
 }
 
 

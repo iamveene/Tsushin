@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BUG-386: Setup wizard persists selected model on provider instance (`available_models` no longer empty)
 - BUG-397: Memory Inspector senderKey stripped of thread suffix to match memory storage key
 - BUG-399: Shared Knowledge stat cards show correct counts (query accessible-to, not shared-by)
+- BUG-400: Fresh install KB document upload no longer OOM-crashes — sentence-transformer model pre-downloaded in Docker image + graceful fallback if model unavailable
 
 ### QA Validation
 - Fresh install end-to-end: setup wizard, provider config, playground chat, memory recall, sandboxed tools, custom skills, knowledge base, flows — all passing

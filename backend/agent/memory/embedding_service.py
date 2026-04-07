@@ -73,8 +73,16 @@ class EmbeddingService:
             self.model = SentenceTransformer(model_name)
             self.logger.info(f"Model loaded successfully. Embedding dimension: {self.model.get_sentence_embedding_dimension()}")
         except Exception as e:
-            self.logger.error(f"Failed to load embedding model: {e}")
-            raise
+            # BUG-400 graceful fallback: if the model fails to load (e.g. OOM
+            # during first-time download on constrained containers), set model
+            # to None so callers get empty embeddings instead of a crash.
+            self.model = None
+            self.logger.error(
+                f"Failed to load embedding model '{model_name}': {e}. "
+                "Embedding requests will return empty vectors until the model "
+                "is available. Pre-download the model in the Docker image to "
+                "avoid this."
+            )
 
     def embed_text(self, text: str) -> List[float]:
         """
@@ -90,6 +98,12 @@ class EmbeddingService:
 
     def _embed_text_sync(self, text: str) -> List[float]:
         """Synchronous embedding — use embed_text_async in async contexts."""
+        if self.model is None:
+            self.logger.warning(
+                "Embedding model not loaded — returning empty vector. "
+                "KB search quality will be degraded until the model is available."
+            )
+            return []
         try:
             if not text:
                 text = " "
@@ -117,11 +131,17 @@ class EmbeddingService:
         Returns:
             List of embedding vectors
         """
-        try:
-            # Handle empty list
-            if not texts:
-                return []
+        if not texts:
+            return []
 
+        if self.model is None:
+            self.logger.warning(
+                "Embedding model not loaded — returning empty vectors for batch of %d texts.",
+                len(texts),
+            )
+            return [[] for _ in texts]
+
+        try:
             # Handle empty strings in batch
             processed_texts = [text if text else " " for text in texts]
 
@@ -157,6 +177,14 @@ class EmbeddingService:
         """
         if not texts:
             return []
+
+        if self.model is None:
+            self.logger.warning(
+                "Embedding model not loaded — returning empty vectors for %d chunks. "
+                "KB document will complete but without semantic embeddings.",
+                len(texts),
+            )
+            return [[] for _ in texts]
 
         all_embeddings = []
         total_texts = len(texts)
@@ -247,4 +275,6 @@ class EmbeddingService:
         Returns:
             Embedding dimension (384 for all-MiniLM-L6-v2)
         """
+        if self.model is None:
+            return 384  # Default dimension for all-MiniLM-L6-v2
         return self.model.get_sentence_embedding_dimension()

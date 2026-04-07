@@ -140,6 +140,15 @@ RUN mkdir -p /app/data /app/data/chroma /app/data/backups /app/logs \
     chown -R tsushin:tsushin /app/data /app/logs \
     /tmp/tsushin_images /tmp/tsushin_screenshots /tmp/tsushin_audio
 
+# BUG-400 fix: Pre-download the sentence-transformer embedding model during
+# image build so it is cached in the image layer.  Without this, the first KB
+# document upload triggers a ~80 MB download at runtime which can OOM-crash
+# memory-constrained containers.
+# Run as root so the model cache directory (/root/.cache or site-packages) is
+# writable; after USER switch the model files are already on the read-only
+# image layer accessible to any user.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
 # Switch to non-root user
 USER tsushin
 
