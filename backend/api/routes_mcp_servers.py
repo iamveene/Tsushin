@@ -632,6 +632,17 @@ async def test_mcp_server(
 
     latency_ms = int((time.time() - start_time) * 1000)
 
+    # Fail-closed: for stdio transport, if we connected but found 0 tools,
+    # the server binary is likely invalid or non-functional.  Report failure
+    # instead of a misleading success with 0 tools.
+    if success and tools_found == 0 and config.transport_type == "stdio":
+        success = False
+        error_msg = (
+            "Stdio server connected but discovered 0 tools. "
+            "The configured binary/args may be invalid or the MCP server "
+            "does not implement tools/list."
+        )
+
     # Log health check
     health = MCPServerHealth(
         server_id=server_id,

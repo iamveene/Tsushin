@@ -467,13 +467,18 @@ def create_provider_instance(
             raise HTTPException(status_code=500, detail="Failed to encrypt API key")
         instance.api_key_encrypted = encrypted
 
-    # If setting as default, unset other defaults for this vendor
+    # If setting as default, clear ALL other defaults for this vendor FIRST,
+    # then flush to ensure the clear takes effect before the new default is
+    # committed.  This prevents races where two concurrent creates could both
+    # end up with is_default=True.
     if data.is_default:
         db.query(ProviderInstance).filter(
             ProviderInstance.tenant_id == ctx.tenant_id,
             ProviderInstance.vendor == vendor,
             ProviderInstance.id != instance.id,
-        ).update({"is_default": False})
+            ProviderInstance.is_default == True,
+        ).update({"is_default": False}, synchronize_session="fetch")
+        db.flush()
 
     db.commit()
     db.refresh(instance)
@@ -585,14 +590,17 @@ def update_provider_instance(
         instance.available_models = data.available_models
 
     if data.is_default is not None:
-        instance.is_default = data.is_default
         if data.is_default:
-            # Unset other defaults for this vendor
+            # Clear other defaults BEFORE setting the new one, and flush
+            # to ensure the clear is visible within this transaction.
             db.query(ProviderInstance).filter(
                 ProviderInstance.tenant_id == instance.tenant_id,
                 ProviderInstance.vendor == instance.vendor,
                 ProviderInstance.id != instance.id,
-            ).update({"is_default": False})
+                ProviderInstance.is_default == True,
+            ).update({"is_default": False}, synchronize_session="fetch")
+            db.flush()
+        instance.is_default = data.is_default
 
     if data.is_active is not None:
         instance.is_active = data.is_active

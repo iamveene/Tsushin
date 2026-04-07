@@ -1802,9 +1802,10 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
 
 **Sources:** `backend/hub/providers/brave_search_provider.py`, `backend/hub/providers/serpapi_search_provider.py`, `backend/hub/providers/google_flights_provider.py`, `backend/hub/providers/search_registry.py`, `backend/hub/providers/flight_search_provider.py`
 
-- Brave Search: API key based web search provider.
+- Brave Search: API key based web search provider (primary supported search provider in v0.6.0).
 - SerpAPI: used for both generic web search and Google Flights (Google Flights falls back to env var `SERPAPI_KEY` or `GOOGLE_FLIGHTS_API_KEY` — `google_flights_provider.py:71-74`).
 - All search providers register with `SearchRegistry` and are configured through the Hub page (`GoogleFlightsIntegration` — `models.py:3108`).
+- **Tavily:** Not supported in v0.6.0. Planned for a future release. If you need a search provider, use Brave Search.
 
 ### 20.5 Browser Automation (Playwright, CDP)
 

@@ -861,12 +861,10 @@ def seed_slash_commands(session):
     Commands are seeded with tenant_id="_system" to be available to all tenants.
     Tenant-specific commands can override these.
     """
-    # Check if commands already exist
-    existing = session.query(SlashCommand).filter(SlashCommand.tenant_id == "_system").first()
-    if existing:
-        return  # Already seeded
-
-    print("[Commands] Seeding default slash commands...")
+    # BUG-371: Idempotent seeding — insert any missing commands instead of
+    # returning early when *any* _system command exists.  This ensures
+    # later-added commands (e.g., /shell) are inserted on upgrade.
+    print("[Commands] Ensuring default slash commands are seeded...")
 
     # Define default commands
     commands_data = [
@@ -1300,15 +1298,39 @@ def seed_slash_commands(session):
             "handler_type": "built-in",
             "sort_order": 64
         },
+        # Shell command (Phase 19: Playground shell execution)
+        {
+            "tenant_id": "_system",
+            "category": "system",
+            "command_name": "shell",
+            "language_code": "en",
+            "pattern": r"^/shell\s+(.+)$",
+            "aliases": json.dumps([]),
+            "description": "Execute shell commands via the shell skill",
+            "help_text": "Usage: /shell <command>\nExample: /shell whoami\nExample: /shell ls -la /tmp\n\nRequires: Shell skill enabled and an active beacon connection.",
+            "handler_type": "built-in",
+            "sort_order": 70
+        },
     ]
 
-    # Create commands
+    # Create commands (idempotent — skip if already exists by name+language)
+    inserted = 0
     for cmd_data in commands_data:
-        cmd = SlashCommand(**cmd_data)
-        session.add(cmd)
+        existing = session.query(SlashCommand).filter(
+            SlashCommand.tenant_id == "_system",
+            SlashCommand.command_name == cmd_data["command_name"],
+            SlashCommand.language_code == cmd_data["language_code"],
+        ).first()
+        if not existing:
+            cmd = SlashCommand(**cmd_data)
+            session.add(cmd)
+            inserted += 1
 
-    session.commit()
-    print(f"[Commands] Seeded {len(commands_data)} default slash commands")
+    if inserted:
+        session.commit()
+        print(f"[Commands] Seeded {inserted} new slash commands (total defined: {len(commands_data)})")
+    else:
+        print(f"[Commands] All {len(commands_data)} slash commands already present")
 
 
 def init_database(engine):

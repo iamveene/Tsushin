@@ -1088,6 +1088,13 @@ async def get_memory_layers(
     # MUST be first — this is where playground messages are actually stored.
     possible_keys = [f"playground_u{current_user.id}_a{agent_id}"]
 
+    # BUG-372/377: For shared-memory agents, also query the shared memory store.
+    # Shared memory stores facts/semantic data under 'shared' key, not per-user key.
+    agent_memory_mode = getattr(agent, 'memory_isolation_mode', 'isolated') or 'isolated'
+    if agent_memory_mode == 'shared':
+        possible_keys.insert(0, 'shared')
+        possible_keys.insert(1, f"agent_{agent_id}:shared")
+
     # User-provided sender_key (from thread.recipient) as second priority
     if sender_key:
         possible_keys.append(f"sender_{sender_key}")
@@ -1187,9 +1194,11 @@ async def get_memory_layers(
         except Exception:
             pass
 
+        # BUG-372/377: For shared memory agents, query facts with 'shared' user_id
+        facts_user_id = 'shared' if agent_memory_mode == 'shared' else sender_key
         user_facts = knowledge_service.get_user_facts(
             agent_id=agent_id,
-            user_id=sender_key,
+            user_id=facts_user_id,
             decay_config=decay_config
         )
         for fact in user_facts:
@@ -1256,6 +1265,7 @@ async def get_memory_layers(
         "semantic_count": len(semantic_results),
         "facts_count": len(facts),
         "sender_key": sender_key,
+        "memory_mode": agent_memory_mode,  # BUG-372/377: Show memory isolation mode
         "project_id": project_id  # Include project context for fact management
     }
 

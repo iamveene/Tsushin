@@ -73,6 +73,8 @@ export default function SetupPage() {
   const [createDefaultAgents, setCreateDefaultAgents] = useState(true)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // BUG-365: Global admin credential reveal after setup
+  const [globalAdminCreds, setGlobalAdminCreds] = useState<{email: string, password: string, full_name: string} | null>(null)
 
   useEffect(() => {
     api.getSetupStatus().then(({ needs_setup }) => {
@@ -146,9 +148,13 @@ export default function SetupPage() {
       })
 
       if (result.success) {
-        // Redirect to login — the account is ready, user just needs to sign in.
-        // Trying to auto-login causes AuthContext race conditions on full page reload.
-        router.replace('/auth/login')
+        // BUG-365: Show global admin credentials before redirecting
+        if (result.global_admin) {
+          setGlobalAdminCreds(result.global_admin)
+          // Don't redirect yet — user needs to see and save credentials
+        } else {
+          router.replace('/auth/login')
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Setup failed')
@@ -169,6 +175,42 @@ export default function SetupPage() {
             </div>
           </div>
           <p className="text-gray-400 font-medium">Checking system status...</p>
+        </div>
+      </div>
+    )
+  }
+
+  {/* BUG-365: Global admin credential reveal screen */}
+  if (globalAdminCreds) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center py-12 px-4">
+        <div className="max-w-lg w-full space-y-6">
+          <div className="bg-gray-900 border border-gray-700 rounded-lg p-6">
+            <h2 className="text-xl font-bold text-white mb-2">Setup Complete</h2>
+            <p className="text-gray-400 mb-6">
+              Save these global administrator credentials. They will not be shown again.
+            </p>
+            <div className="space-y-4 bg-gray-800 rounded-lg p-4 mb-6">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Email</label>
+                <div className="font-mono text-white bg-gray-900 px-3 py-2 rounded border border-gray-600 select-all">
+                  {globalAdminCreds.email}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Password</label>
+                <div className="font-mono text-white bg-gray-900 px-3 py-2 rounded border border-gray-600 select-all">
+                  {globalAdminCreds.password}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => router.replace('/auth/login')}
+              className="w-full btn-primary py-3 rounded-lg font-semibold"
+            >
+              Continue to Login
+            </button>
+          </div>
         </div>
       </div>
     )

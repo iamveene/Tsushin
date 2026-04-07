@@ -1010,10 +1010,13 @@ class SkillStepHandler(FlowStepHandler):
 
             # Get skill config from agent settings, with overrides
             agent_skill_config = await skill_manager.get_skill_config(self.db, agent_id, skill_type)
+            # BUG-370: Resolve tenant_id from the agent so tenant-scoped API keys work
+            agent_obj = self.db.query(Agent).filter(Agent.id == agent_id).first()
             final_config = {
                 **(agent_skill_config or skill_class.get_default_config()),
                 **skill_config_override,
-                "agent_id": agent_id
+                "agent_id": agent_id,
+                "tenant_id": agent_obj.tenant_id if agent_obj else None
             }
 
             # Inject config for can_handle
