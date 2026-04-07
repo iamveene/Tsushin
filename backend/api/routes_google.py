@@ -53,11 +53,12 @@ class GoogleCredentialsCreate(BaseModel):
 
 class GoogleCredentialsResponse(BaseModel):
     """Response for Google OAuth credentials."""
-    id: int
-    tenant_id: str
-    client_id: str
-    redirect_uri: Optional[str]
-    created_at: datetime
+    configured: bool = True
+    id: Optional[int] = None
+    tenant_id: Optional[str] = None
+    client_id: Optional[str] = None
+    redirect_uri: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -128,18 +129,26 @@ async def get_credentials(
 
     Returns the configured Google Cloud OAuth app credentials.
     The client_secret is not returned for security.
+
+    BUG-343 fix: Returns 200 with configured=False instead of 404 when no
+    credentials are set up. This prevents noisy 404 console errors on fresh
+    installs where Google integration has not yet been configured.
     """
     credentials = db.query(GoogleOAuthCredentials).filter(
         GoogleOAuthCredentials.tenant_id == ctx.tenant_id
     ).first()
 
     if not credentials:
-        raise HTTPException(
-            status_code=404,
-            detail="Google credentials not configured. Please configure in Hub settings."
-        )
+        return GoogleCredentialsResponse(configured=False)
 
-    return credentials
+    return GoogleCredentialsResponse(
+        configured=True,
+        id=credentials.id,
+        tenant_id=credentials.tenant_id,
+        client_id=credentials.client_id,
+        redirect_uri=credentials.redirect_uri,
+        created_at=credentials.created_at,
+    )
 
 
 @router.post("/credentials", response_model=GoogleCredentialsResponse)
