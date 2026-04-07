@@ -5,6 +5,39 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.0-patch.3 (2026-04-07)
+
+### Bug Fixes — Fresh Install QA Sprint (15 open → 0 open)
+
+**Critical**
+- BUG-391: Custom skill registry no longer poisons unrelated agent chats — all `get_mcp_tool_definition()` call sites now use skill instances instead of classes
+
+**High — Playground & Memory**
+- BUG-387: Playground chat now passes `provider_instance_id` so instance-scoped credentials work
+- BUG-388: Shared-memory agents use stable `"shared"` sender_key for cross-thread recall
+- BUG-392: `/inject` now applies to next message (fixed sender_key mismatch between commands API and playground)
+- BUG-398: New thread creation no longer leaks prior thread data (immediate ref update + cross-thread guard)
+
+**High — Flows**
+- BUG-393: Flow skill nodes respect explicit `use_tool_mode: true` even when agent config says legacy
+- BUG-394: Keyword-triggered flows no longer get stuck in "running" (robust commit/retry on finalization)
+
+**High — Platform**
+- BUG-389: KB document uploads properly reach "completed" status (commit before embeddings)
+- BUG-390: Toolbox Dockerfile now includes `uv` package for `uvx` MCP server support
+- BUG-395: Hub Communication tab surfaces runtime tester instances with source badge
+- BUG-396: Project detail page no longer crashes (replaced undefined `PROJECT_ICONS` with `PROJECT_ICON_MAP`)
+
+**Medium**
+- BUG-385: Installer frontend recovery uses `TSN_STACK_NAME` for custom stack names
+- BUG-386: Setup wizard persists selected model on provider instance (`available_models` no longer empty)
+- BUG-397: Memory Inspector senderKey stripped of thread suffix to match memory storage key
+- BUG-399: Shared Knowledge stat cards show correct counts (query accessible-to, not shared-by)
+
+### QA Validation
+- Fresh install end-to-end: setup wizard, provider config, playground chat, memory recall, sandboxed tools, custom skills, knowledge base, flows — all passing
+- Dual-surface coverage: API tests + browser automation
+
 ## v0.6.0-patch.2 (2026-04-07)
 
 ### Bug Fixes — VM Fresh Install Retest
