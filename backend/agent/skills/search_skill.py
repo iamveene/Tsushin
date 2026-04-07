@@ -142,7 +142,25 @@ class SearchSkill(BaseSkill):
 
             # Get provider from config (default to brave)
             provider_name = config.get("provider", "brave").lower()
+
+            # BUG-341: Normalize provider alias — "serpapi" is served by the "google" registry key
+            PROVIDER_ALIASES = {"serpapi": "google"}
+            provider_name = PROVIDER_ALIASES.get(provider_name, provider_name)
+
             tenant_id = config.get("tenant_id")
+
+            # BUG-333: Check if any search provider integration is configured at all
+            available = SearchProviderRegistry.get_available_providers()
+            if not available:
+                return SkillResult(
+                    success=False,
+                    output=(
+                        "Web search is not configured for this agent. "
+                        "Please set up a search provider in the Hub (Settings > Hub > Web Search) "
+                        "and link it to this agent's skill integrations."
+                    ),
+                    metadata={'error': 'no_providers_available'}
+                )
 
             # Get provider instance from registry (with tenant_id for API key lookup)
             provider = SearchProviderRegistry.get_provider(
@@ -153,18 +171,16 @@ class SearchSkill(BaseSkill):
             )
 
             if not provider:
-                # Try to give helpful error message
-                available = SearchProviderRegistry.get_available_providers()
-                if available:
-                    return SkillResult(
-                        success=False,
-                        output=f"❌ Search provider '{provider_name}' not available. Available providers: {', '.join(available)}",
-                        metadata={'error': 'provider_not_found', 'available_providers': available}
-                    )
+                # BUG-333: Friendly message when provider exists in registry but not linked/configured
                 return SkillResult(
                     success=False,
-                    output="❌ No search providers are configured. Please configure a search API key in Studio → API Keys.",
-                    metadata={'error': 'no_providers_available'}
+                    output=(
+                        f"Web search is not configured for this agent. "
+                        f"Please set up a search provider in the Hub (Settings > Hub > Web Search) "
+                        f"and link it to this agent's skill integrations. "
+                        f"Available providers: {', '.join(available)}"
+                    ),
+                    metadata={'error': 'provider_not_found', 'available_providers': available}
                 )
 
             # Extract search query using AI
@@ -194,6 +210,18 @@ class SearchSkill(BaseSkill):
             response = await provider.search(request)
 
             if not response.success:
+                # BUG-333: Detect unconfigured API key scenario and surface a helpful message
+                error_lower = (response.error or "").lower()
+                if "api key not configured" in error_lower or "not configured" in error_lower:
+                    return SkillResult(
+                        success=False,
+                        output=(
+                            "Web search is not configured for this agent. "
+                            "Please set up a search provider in the Hub (Settings > Hub > Web Search) "
+                            "and link it to this agent's skill integrations."
+                        ),
+                        metadata={'error': 'api_key_not_configured', 'provider': provider_name}
+                    )
                 return SkillResult(
                     success=False,
                     output=f"❌ Search failed: {response.error}",
@@ -515,7 +543,25 @@ Search query:"""
 
             # Get provider from config (default to brave)
             provider_name = config.get("provider", "brave").lower()
+
+            # BUG-341: Normalize provider alias — "serpapi" is served by the "google" registry key
+            PROVIDER_ALIASES = {"serpapi": "google"}
+            provider_name = PROVIDER_ALIASES.get(provider_name, provider_name)
+
             tenant_id = config.get("tenant_id")
+
+            # BUG-333: Check if any search provider integration is configured at all
+            available = SearchProviderRegistry.get_available_providers()
+            if not available:
+                return SkillResult(
+                    success=False,
+                    output=(
+                        "Web search is not configured for this agent. "
+                        "Please set up a search provider in the Hub (Settings > Hub > Web Search) "
+                        "and link it to this agent's skill integrations."
+                    ),
+                    metadata={"error": "no_providers_available"}
+                )
 
             # Get provider instance from registry (with tenant_id for API key lookup)
             provider = SearchProviderRegistry.get_provider(
@@ -526,17 +572,16 @@ Search query:"""
             )
 
             if not provider:
-                available = SearchProviderRegistry.get_available_providers()
-                if available:
-                    return SkillResult(
-                        success=False,
-                        output=f"Search provider '{provider_name}' not available. Available: {', '.join(available)}",
-                        metadata={"error": "provider_not_found", "available_providers": available}
-                    )
+                # BUG-333: Friendly message when provider not found
                 return SkillResult(
                     success=False,
-                    output="No search providers configured. Configure a search API key in Studio → API Keys.",
-                    metadata={"error": "no_providers_available"}
+                    output=(
+                        "Web search is not configured for this agent. "
+                        "Please set up a search provider in the Hub (Settings > Hub > Web Search) "
+                        "and link it to this agent's skill integrations. "
+                        f"Available providers: {', '.join(available)}"
+                    ),
+                    metadata={"error": "provider_not_found", "available_providers": available}
                 )
 
             # Create search request
@@ -555,6 +600,18 @@ Search query:"""
             response = await provider.search(request)
 
             if not response.success:
+                # BUG-333: Detect unconfigured API key scenario and surface a helpful message
+                error_lower = (response.error or "").lower()
+                if "api key not configured" in error_lower or "not configured" in error_lower:
+                    return SkillResult(
+                        success=False,
+                        output=(
+                            "Web search is not configured for this agent. "
+                            "Please set up a search provider in the Hub (Settings > Hub > Web Search) "
+                            "and link it to this agent's skill integrations."
+                        ),
+                        metadata={"error": "api_key_not_configured", "provider": provider_name}
+                    )
                 return SkillResult(
                     success=False,
                     output=f"Search failed: {response.error}",

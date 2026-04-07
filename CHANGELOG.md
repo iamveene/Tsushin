@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### Skills, Memory & Sentinel Bug Fixes (BUG-328, BUG-329, BUG-332, BUG-333, BUG-341) — 2026-04-07
+
+- **BUG-341 — Web search `serpapi` provider key rejected at runtime (MEDIUM):** The skill registry registers SerpAPI under the key `"google"`, but users who configured the skill with `"serpapi"` got a silent failure. Added `PROVIDER_ALIASES = {"serpapi": "google"}` normalization at the start of both `process()` and `execute_tool()` in `search_skill.py` so both provider names work identically at runtime.
+
+- **BUG-333 — Web search skill silently fails with no user guidance when unconfigured (LOW):** When `web_search` skill was enabled but no search API key was configured, the LLM fabricated a misleading "I can't directly search" response. Added three detection points in `search_skill.py` (both `process()` and `execute_tool()`): no available providers, provider not found, or API key not configured — all now return: "Web search is not configured for this agent. Please set up a search provider in the Hub (Settings > Hub > Web Search) and link it to this agent's skill integrations."
+
+- **BUG-329 — Cross-thread memory recall fails in Playground — new thread sees empty memory (MEDIUM):** Each playground thread used a thread-specific sender key (`playground_u{uid}_a{aid}_t{tid}`), so new threads started with empty memory and couldn't recall facts from previous threads. Changed `playground_service.py` to use a stable per-user-per-agent sender key (`playground_u{user_id}_a{agent_id}`) for all threads. Verified: told agent "my favorite number is 42" in thread 26, then started thread 27 and confirmed agent recalled "Yes, I remember! Your favorite number is 42."
+
+- **BUG-328 — Sentinel falsely flags "remember this" as memory poisoning (MEDIUM):** Benign user preference requests ("please remember I prefer dark mode") triggered `memory_poisoning` detection, flooding logs with false-positive warnings. Rewrote all three aggressiveness-level `memory_poisoning` prompts in `sentinel_detections.py` to explicitly distinguish adversarial attacks (credential injection, AI identity override, jailbreak persistence, security bypass) from legitimate user preference storage. Updated unified classification prompts at all levels. Changed detect-only mode threat log from `WARNING` to `DEBUG` in `agent_service.py` to reduce noise.
+
+- **BUG-332 — `CombinedKnowledgeService NOT initialized` WARN fires on every message (LOW):** The `[KB FIX] ❌ CombinedKnowledgeService NOT initialized` log was emitted at `WARN` level on every single agent message for agents without a linked project (the default). Changed `agent_service.py` to log at `DEBUG` when `project_id=None` (expected case) and only log at `WARN` when `project_id` is set but initialization fails.
+
 #### A2A Playground Agent Switching & Flow Type Assignment (BUG-338, BUG-342) — 2026-04-07
 
 - **BUG-338 — A2A agent switching fails in Playground with contact profile error (HIGH):** `AgentSwitcherSkill` required a Contact DB record to complete agent switching but Playground users have no such record (their sender is `playground_user_{id}`). Added `_is_playground_context(message)` helper that detects playground sessions via sender prefix or channel field. Both `process()` and `execute_tool()` now bypass the contact-required check for playground sessions and persist the switch via `UserAgentSession` using the sender_key directly (same approach as slash command service). `ContactAgentMapping` is only updated when a real Contact exists. Verified: `execute_tool()` returns `success=True, "Successfully switched to agent Kokoro"` for playground users.

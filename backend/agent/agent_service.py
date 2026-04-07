@@ -81,7 +81,12 @@ class AgentService:
             self.combined_knowledge_service = CombinedKnowledgeService(db)
             self.logger.info(f"[KB FIX] ✅ CombinedKnowledgeService INITIALIZED for project {project_id}")
         else:
-            self.logger.warning(f"[KB FIX] ❌ CombinedKnowledgeService NOT initialized: db={db is not None}, project_id={project_id}")
+            # BUG-332: project_id=None is expected for agents not in a project — log at DEBUG
+            # Only warn if project_id is set but the service failed to initialize
+            if project_id:
+                self.logger.warning(f"[KB FIX] ❌ CombinedKnowledgeService NOT initialized: db={db is not None}, project_id={project_id}")
+            else:
+                self.logger.debug(f"[KB FIX] CombinedKnowledgeService not initialized (no project context): db={db is not None}")
 
         # Phase 6.1: Initialize sandboxed tools wrapper if db provided
         # Phase: Custom Tools Hub - Added tenant_id and callback for container/long-running support
@@ -529,8 +534,9 @@ class AgentService:
                     # Continue processing but log the warning
                 elif sentinel_result.is_threat_detected and sentinel_result.action == "allowed":
                     # detect_only mode: threat detected but allowed through
-                    self.logger.warning(
-                        f"⚠️ SENTINEL: Threat detected (detect-only) - {sentinel_result.detection_type}: {sentinel_result.threat_reason}"
+                    # BUG-328: Log at DEBUG to reduce noise from false positives in detect-only mode
+                    self.logger.debug(
+                        f"SENTINEL: Threat detected (detect-only) - {sentinel_result.detection_type}: {sentinel_result.threat_reason}"
                     )
                     # Send notification for detected-but-allowed message
                     try:

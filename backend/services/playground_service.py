@@ -137,16 +137,18 @@ class PlaygroundService:
         from agent.memory.multi_agent_memory import MultiAgentMemoryManager
 
         try:
-            # FIX 2026-01-30: Thread isolation takes priority for Playground
-            # Previously, contact-based sender_key took priority which caused ALL threads
-            # to share the same memory (breaking thread isolation)
-            # Now: explicit sender_key > thread_id > contact-based > generic user key
+            # BUG-329 FIX: Use stable per-user-per-agent key for cross-thread memory recall.
+            # Previously, thread-specific keys (playground_u{uid}_a{aid}_t{tid}) caused new threads
+            # to start with empty memory because memories were stored under the old thread's key.
+            # Using a stable key ensures memory is recalled correctly across all threads for the
+            # same user+agent combination. Conversation history isolation is handled separately
+            # by the thread_id scope in the ConversationThread / Memory tables.
             if sender_key:
                 self.logger.info(f"Using explicit sender_key: {sender_key}")
             elif thread_id:
-                # Phase 14.1: Use thread-specific sender_key for thread isolation
-                sender_key = f"playground_u{user_id}_a{agent_id}_t{thread_id}"
-                self.logger.info(f"Using thread-specific sender_key: {sender_key}")
+                # BUG-329: Use stable per-user-per-agent key (no thread suffix) for memory continuity
+                sender_key = f"playground_u{user_id}_a{agent_id}"
+                self.logger.info(f"Using stable per-user-per-agent sender_key: {sender_key}")
             else:
                 # Fallback for backward compatibility - check contact mapping
                 user_contact_mapping = self.db.query(UserContactMapping).filter(
@@ -416,6 +418,21 @@ class PlaygroundService:
             if tool_context:
                 full_message = f"{tool_context}\n\n{full_message}"
                 self.logger.info(f"Injected Layer 5 tool context ({len(tool_context)} chars)")
+
+            # STEP 2.5: BUG-336 — Check keyword-triggered flows BEFORE skill/AI processing
+            # If the message matches a keyword for an active keyword-triggered flow,
+            # execute that flow and return its result instead of passing to AI.
+            flow_result = await self._check_keyword_flow_triggers(
+                agent=agent,
+                message_text=message_text,
+                sender_key=sender_key,
+                user_id=user_id,
+                thread_id=thread_id,
+                memory_manager=memory_manager,
+            )
+            if flow_result:
+                self.logger.info(f"[BUG-336] Flow keyword trigger matched — returning flow result")
+                return flow_result
 
             # STEP 3: Process with skills FIRST (if agent has skills enabled)
             from agent.skills.skill_manager import SkillManager
@@ -1833,3 +1850,162 @@ class PlaygroundService:
                 "has_tts": False,
                 "transcript_mode": "conversational"
             }
+
+    # -----------------------------------------------------------------------
+    # BUG-336: Keyword-triggered flow evaluation for Playground channel
+    # -----------------------------------------------------------------------
+
+    async def _check_keyword_flow_triggers(
+        self,
+        agent,
+        message_text: str,
+        sender_key: str,
+        user_id: int,
+        thread_id: Optional[int],
+        memory_manager,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check if the incoming playground message matches any active keyword-triggered flow.
+
+        Flows with execution_method='keyword' and non-empty trigger_keywords are evaluated
+        here so the Playground experiences the same flow-interception behaviour as channel
+        messages (WhatsApp, Telegram).
+
+        Args:
+            agent: Agent ORM object
+            message_text: The user's raw message
+            sender_key: Thread-isolated sender key
+            user_id: RBAC user ID
+            thread_id: Active thread ID (may be None)
+            memory_manager: MultiAgentMemoryManager instance for storing the response
+
+        Returns:
+            Playground response dict if a flow was triggered, None otherwise.
+        """
+        try:
+            from models import FlowDefinition
+            from flows.flow_engine import FlowEngine
+
+            # Query all active keyword flows for this tenant
+            keyword_flows = self.db.query(FlowDefinition).filter(
+                FlowDefinition.tenant_id == agent.tenant_id,
+                FlowDefinition.is_active == True,
+                FlowDefinition.execution_method == 'keyword',
+            ).all()
+
+            if not keyword_flows:
+                return None
+
+            message_lower = message_text.lower().strip()
+
+            matched_flow = None
+            for flow in keyword_flows:
+                keywords = flow.trigger_keywords or []
+                if not keywords:
+                    continue
+                for kw in keywords:
+                    # Match exact command (e.g. "/testflow") or keyword anywhere in message
+                    kw_lower = kw.lower().strip()
+                    if not kw_lower:
+                        continue
+                    if kw_lower.startswith('/'):
+                        # Slash commands: match only if message starts with the keyword
+                        if message_lower == kw_lower or message_lower.startswith(kw_lower + ' '):
+                            matched_flow = flow
+                            break
+                    else:
+                        # Regular keywords: match if keyword appears anywhere in the message
+                        if kw_lower in message_lower:
+                            matched_flow = flow
+                            break
+                if matched_flow:
+                    break
+
+            if not matched_flow:
+                return None
+
+            self.logger.info(
+                f"[BUG-336] Keyword flow match: flow_id={matched_flow.id} "
+                f"'{matched_flow.name}' triggered by '{message_text[:60]}'"
+            )
+
+            # Execute the flow asynchronously (non-blocking background task)
+            engine = FlowEngine(self.db)
+            try:
+                flow_run = await engine.run_flow(
+                    flow_definition_id=matched_flow.id,
+                    trigger_context={
+                        "triggered_by_keyword": True,
+                        "sender_key": sender_key,
+                        "agent_id": agent.id,
+                        "trigger_source": "playground",
+                        "original_message": message_text,
+                        "user_id": user_id,
+                        "thread_id": thread_id,
+                    },
+                    initiator="playground_keyword",
+                    trigger_type="keyword",
+                    triggered_by=sender_key
+                )
+            except Exception as engine_err:
+                self.logger.error(
+                    f"[BUG-336] Flow engine error for flow {matched_flow.id}: {engine_err}",
+                    exc_info=True
+                )
+                # Return a friendly error rather than falling through to AI
+                return {
+                    "status": "error",
+                    "message": f"Flow '{matched_flow.name}' failed to execute: {engine_err}",
+                    "agent_name": getattr(agent, '_name', f"Agent {agent.id}"),
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                }
+
+            # Build acknowledgement message for the playground UI
+            status_emoji = {
+                "running": "🚀",
+                "completed": "✅",
+                "failed": "❌",
+                "pending": "⏳",
+            }.get(flow_run.status, "▶️")
+
+            ack_message = (
+                f"{status_emoji} **Flow triggered: {matched_flow.name}**\n\n"
+                f"Run ID: {flow_run.id} · Status: {flow_run.status} · "
+                f"Steps: {flow_run.total_steps}"
+            )
+            if flow_run.status == "failed" and flow_run.error_text:
+                ack_message += f"\n\n❌ Error: {flow_run.error_text}"
+            elif flow_run.status == "completed":
+                ack_message += "\n\n✅ Completed successfully."
+
+            # Store the ack in memory so conversation history is consistent
+            await memory_manager.add_message(
+                agent_id=agent.id,
+                sender_key=sender_key,
+                role="assistant",
+                content=ack_message,
+                chat_id=f"playground_{user_id}",
+                message_id=f"msg_flow_{matched_flow.id}_{int(datetime.utcnow().timestamp() * 1000)}",
+                metadata={"flow_run_id": flow_run.id, "triggered_by_keyword": True}
+            )
+
+            # Resolve agent name for response
+            from models import Contact
+            contact = self.db.query(Contact).filter(Contact.id == agent.contact_id).first()
+            agent_name = contact.friendly_name if contact else f"Agent {agent.id}"
+
+            return {
+                "status": "success",
+                "message": ack_message,
+                "agent_name": agent_name,
+                "tool_used": f"flow:keyword:{matched_flow.id}",
+                "execution_time": None,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+
+        except Exception as e:
+            self.logger.error(
+                f"[BUG-336] Error checking keyword flow triggers: {e}", exc_info=True
+            )
+            # Silently ignore errors — fall through to normal processing
+            return None
