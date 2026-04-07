@@ -60,6 +60,8 @@ class FlowDefinitionCreate(BaseModel):
     name: str
     description: Optional[str] = None
     is_active: bool = True
+    flow_type: Optional[str] = None  # BUG-342: was ignored, now passed through
+    execution_method: Optional[str] = None  # BUG-342: was ignored, now passed through
 
 
 class FlowDefinitionUpdate(BaseModel):
@@ -814,6 +816,10 @@ def get_run_nodes(
 
 # ============= FLOW DEFINITION ENDPOINTS =============
 
+VALID_FLOW_TYPES = {"notification", "conversation", "workflow", "task"}
+VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring"}
+
+
 @router.post("/", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))])
 def create_flow(
     flow: FlowDefinitionCreate,
@@ -823,13 +829,27 @@ def create_flow(
 ):
     """Create a new flow definition."""
     try:
+        # BUG-342: Validate and apply flow_type / execution_method from request
+        resolved_flow_type = (flow.flow_type or "workflow").lower()
+        if resolved_flow_type not in VALID_FLOW_TYPES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid flow_type '{resolved_flow_type}'. Must be one of: {sorted(VALID_FLOW_TYPES)}"
+            )
+        resolved_execution_method = (flow.execution_method or "immediate").lower()
+        if resolved_execution_method not in VALID_EXECUTION_METHODS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid execution_method '{resolved_execution_method}'. Must be one of: {sorted(VALID_EXECUTION_METHODS)}"
+            )
+
         db_flow = FlowDefinition(
             name=flow.name,
             description=flow.description,
             is_active=flow.is_active,
             tenant_id=tenant_context.tenant_id,
-            execution_method="immediate",
-            flow_type="workflow"
+            execution_method=resolved_execution_method,
+            flow_type=resolved_flow_type
         )
         db.add(db_flow)
         db.commit()
@@ -840,6 +860,8 @@ def create_flow(
 
         return flow_to_response(db_flow, db)
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         logger.exception("Error creating flow definition")

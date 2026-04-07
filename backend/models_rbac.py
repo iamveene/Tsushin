@@ -22,9 +22,9 @@ class Tenant(Base):
     slug = Column(String(100), unique=True, nullable=False, index=True)
     plan = Column(String(50), default='free')  # Legacy: plan name string
     plan_id = Column(Integer, ForeignKey('subscription_plan.id'), nullable=True)  # New: FK to subscription_plan
-    max_users = Column(Integer, default=1)
-    max_agents = Column(Integer, default=1)
-    max_monthly_requests = Column(Integer, default=1000)
+    max_users = Column(Integer, default=5)
+    max_agents = Column(Integer, default=10)
+    max_monthly_requests = Column(Integer, default=10000)
     is_active = Column(Boolean, default=True)
     status = Column(String(20), default='active')  # active, suspended, trial
     created_by_global_admin = Column(Integer, ForeignKey('user.id'), nullable=True)

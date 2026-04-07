@@ -91,6 +91,7 @@ export default function AgentsPage() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [expandedAgent, setExpandedAgent] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [createError, setCreateError] = useState<string>('')
   const [editingAgentId, setEditingAgentId] = useState<number | null>(null)
   const [editingAgentName, setEditingAgentName] = useState('')
 
@@ -177,6 +178,7 @@ export default function AgentsPage() {
     setUseCustomTone(false)
     setUseCustomModel(false)
     setCustomModelName('')
+    setCreateError('')
   }
 
   const getAvailableModels = () => {
@@ -327,6 +329,7 @@ export default function AgentsPage() {
     }
 
     setSaving(true)
+    setCreateError('')
     try {
       let contactId = formData.contact_id
       const existingContact = contacts.find(c => c.friendly_name.toLowerCase() === formData.agent_name.toLowerCase())
@@ -366,10 +369,13 @@ export default function AgentsPage() {
 
       await api.createAgent(payload)
       setShowCreateModal(false)
+      setCreateError('')
       resetForm()
       await loadData()
     } catch (err: any) {
-      toast.error('Creation Failed', err.message || 'Failed to create agent')
+      const errMsg = err.message || 'Failed to create agent'
+      setCreateError(errMsg)
+      toast.error('Creation Failed', errMsg)
     } finally {
       setSaving(false)
     }
@@ -1039,10 +1045,19 @@ export default function AgentsPage() {
                 </label>
               </div>
 
+              {createError && (
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+                  <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                  </svg>
+                  <span>{createError}</span>
+                </div>
+              )}
+
               <div className="flex justify-end gap-3 pt-6 border-t border-tsushin-border/30">
                 <button
                   type="button"
-                  onClick={() => { setShowCreateModal(false); resetForm() }}
+                  onClick={() => { setShowCreateModal(false); setCreateError(''); resetForm() }}
                   className="btn-ghost"
                   disabled={saving}
                 >

@@ -23,6 +23,18 @@ async function handleApiError(res: Response, defaultMessage: string): Promise<ne
     throw new Error('Resource not found.')
   }
   if (res.status === 409) {
+    // Try to extract specific error message (e.g., plan limit reached) before falling back to generic
+    try {
+      const data = await res.json()
+      if (data.detail && typeof data.detail === 'string') {
+        throw new Error(data.detail)
+      }
+    } catch (jsonErr) {
+      // If it's our thrown error, re-throw it
+      if (jsonErr instanceof Error && jsonErr.message !== 'Unexpected end of JSON input') {
+        throw jsonErr
+      }
+    }
     throw new Error('Conflict: This resource already exists or cannot be modified.')
   }
   // Try to extract error message from response body

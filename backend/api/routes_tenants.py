@@ -37,7 +37,7 @@ class TenantCreate(BaseModel):
     owner_name: str
     plan: str = "free"
     max_users: int = 5
-    max_agents: int = 5
+    max_agents: int = 10
     max_monthly_requests: int = 10000
 
 

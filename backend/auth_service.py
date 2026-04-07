@@ -138,7 +138,7 @@ class AuthService:
             slug=slug,
             plan='free',  # Default plan
             max_users=5,
-            max_agents=5,
+            max_agents=10,
             max_monthly_requests=10000,
             is_active=True,
             status='active'
