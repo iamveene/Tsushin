@@ -30,8 +30,8 @@ async function handleApiError(res: Response, defaultMessage: string): Promise<ne
         throw new Error(data.detail)
       }
     } catch (jsonErr) {
-      // If it's our thrown error, re-throw it
-      if (jsonErr instanceof Error && jsonErr.message !== 'Unexpected end of JSON input') {
+      // Re-throw our own error (thrown from data.detail check above); swallow SyntaxErrors (non-JSON body)
+      if (!(jsonErr instanceof SyntaxError)) {
         throw jsonErr
       }
     }

@@ -251,12 +251,16 @@ class AgentSwitcherSkill(BaseSkill):
         Returns:
             Agent object if found, None otherwise
         """
-        # Search contacts with role="agent" (case-insensitive)
-        contact = self.db_session.query(Contact).filter(
+        # Search contacts with role="agent" (case-insensitive), scoped to tenant
+        _tenant_id = (self._config or {}).get("tenant_id")
+        q = self.db_session.query(Contact).filter(
             Contact.role == "agent",
             Contact.is_active == True,
             Contact.friendly_name.ilike(agent_name)  # Case-insensitive LIKE
-        ).first()
+        )
+        if _tenant_id:
+            q = q.filter(Contact.tenant_id == _tenant_id)
+        contact = q.first()
 
         if not contact:
             return None
@@ -275,10 +279,14 @@ class AgentSwitcherSkill(BaseSkill):
         Returns:
             List of Contact objects with role="agent" and is_active=True
         """
-        return self.db_session.query(Contact).filter(
+        _tenant_id = (self._config or {}).get("tenant_id")
+        q = self.db_session.query(Contact).filter(
             Contact.role == "agent",
             Contact.is_active == True
-        ).all()
+        )
+        if _tenant_id:
+            q = q.filter(Contact.tenant_id == _tenant_id)
+        return q.all()
 
     def _identify_sender(
         self,

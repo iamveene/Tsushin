@@ -926,6 +926,8 @@ def create_flow_v2(
 
         return flow_to_response(db_flow, db)
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         logger.exception("Error creating flow definition v2")

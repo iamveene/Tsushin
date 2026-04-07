@@ -17,6 +17,7 @@ interface GoogleCredentials {
   client_id: string
   redirect_uri: string | null
   created_at: string
+  configured?: boolean
 }
 
 
