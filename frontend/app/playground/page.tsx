@@ -892,42 +892,31 @@ export default function PlaygroundPage() {
 
         setThreads(agentThreads)
 
-        // Check if the most recent thread is empty (message_count === 0)
-        // Sort threads by updated_at to find the most recent one
-        const sortedThreads = [...agentThreads].sort((a, b) => {
-          const dateA = a.updated_at ? new Date(a.updated_at).getTime() : 0
-          const dateB = b.updated_at ? new Date(b.updated_at).getTime() : 0
+        // BUG-335 Fix: Look for ANY empty thread (message_count === 0 or undefined),
+        // not just the most recent one. This prevents creating a new orphan thread on
+        // every page load when the most recent thread already has messages.
+        // Sort all threads by created_at desc to find the most recently created empty one.
+        const sortedByCreated = [...agentThreads].sort((a, b) => {
+          const dateA = a.created_at ? new Date(a.created_at).getTime() : 0
+          const dateB = b.created_at ? new Date(b.created_at).getTime() : 0
           return dateB - dateA
         })
 
-        const mostRecentThread = sortedThreads[0]
+        // Find the most recently created thread with 0 messages
+        const emptyThread = sortedByCreated.find(t =>
+          t.message_count === 0 || t.message_count === undefined
+        )
 
-        if (mostRecentThread && mostRecentThread.message_count === 0) {
-          // Reuse the empty thread but update its title to default
-          console.log('[Phase 14.1] Reusing empty thread:', mostRecentThread.id)
+        if (emptyThread) {
+          // Reuse the empty thread — no need to create another orphan
+          console.log('[Phase 14.1] Reusing empty thread:', emptyThread.id, '(BUG-335 fix)')
 
-          // Get agent name for thread title
-          const agent = agents.find(a => a.id === selectedAgentId)
-          const agentNameSuffix = agent ? ` (${agent.name})` : ''
-          const defaultTitle = `General Conversation${agentNameSuffix}`
-
-          // Update thread title to default if it's different
-          if (mostRecentThread.title !== defaultTitle) {
-            try {
-              await api.updateThread(mostRecentThread.id, { title: defaultTitle })
-              // Update local thread object with new title
-              mostRecentThread.title = defaultTitle
-            } catch (err) {
-              console.warn('Failed to update thread title:', err)
-            }
-          }
-
-          setActiveThreadId(mostRecentThread.id)
-          setActiveThread(mostRecentThread)
+          setActiveThreadId(emptyThread.id)
+          setActiveThread(emptyThread)
           setMessages([])
         } else {
-          // Create a new thread if no empty thread exists
-          console.log('[Phase 14.1] Creating new thread for fresh conversation')
+          // Only create a new thread when ALL existing threads have messages
+          console.log('[Phase 14.1] All threads have messages — creating new thread for fresh conversation')
 
           // Get agent name for thread title
           const agent = agents.find(a => a.id === selectedAgentId)

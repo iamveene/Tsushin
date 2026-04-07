@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### Playground & Flows Bug Fixes (BUG-331, BUG-335, BUG-336, BUG-344) — 2026-04-07
+
+- **BUG-344 — `/api/health` reported stale version v0.5.0 while frontend showed v0.6.0 (LOW):** Changed `SERVICE_VERSION = "0.5.0"` to `SERVICE_VERSION = "0.6.0"` in `backend/settings.py`. The health and readiness endpoints now correctly return `"version": "0.6.0"`, matching the frontend footer.
+
+- **BUG-335 — Playground created a new empty thread on every page load (LOW):** `initializeThreads()` in `frontend/app/playground/page.tsx` only checked if the most-recent thread was empty. If the most-recent thread had messages (normal after any use), a new thread was created on every subsequent page load, accumulating orphan threads. Fixed by searching ALL threads for any with `message_count === 0` (or undefined). A new thread is now only created when every existing thread already has messages. Verified: navigating to Playground 3 times kept the thread count stable.
+
+- **BUG-336 — Flow keyword triggers did not intercept messages in the Playground channel (MEDIUM):** Flows with `execution_method='keyword'` only fired on external channel messages (WhatsApp, Telegram); Playground messages were routed directly to the AI instead. Implemented full end-to-end keyword-trigger support: (1) Added `KEYWORD = "keyword"` to `ExecutionMethod` enum in `schemas.py`; (2) Added `trigger_keywords` JSON column to `FlowDefinition` model with Alembic migration `0028`; (3) Updated `routes_flows.py` to accept/store/return `trigger_keywords` in all create, patch, and response paths; (4) Added `_check_keyword_flow_triggers()` method in `PlaygroundService` — queries active keyword flows for the tenant, matches message text against configured keywords (slash-command prefix match or substring match), and fires matching flows via `FlowEngine.run_flow()`; (5) Injected keyword-trigger check at "STEP 2.5" in both `send_message()` (sync) and `process_message_streaming()` (streaming) paths, returning/yielding a flow acknowledgement before any AI processing; (6) Added keyword UI in Flows page — list badge with hash icon, and keyword textarea in create/edit modals.
+
+- **BUG-331 — Ollama unreachable from Docker backend (binds to 127.0.0.1 by default) (MEDIUM):** Users connecting Ollama to Tsushin got "Cannot connect to Ollama" because the Ollama service binds to `127.0.0.1:11434` by default, which is unreachable from the Docker container. Added a persistent "Docker Networking Note" guidance block in `frontend/app/hub/page.tsx` in the Ollama section, showing the correct Docker gateway URL (`http://172.18.0.1:11434`) and the `OLLAMA_HOST=0.0.0.0:11434` systemd override command. Also added an "Local Ollama (optional)" section to the installer success output in `install.py` with the same step-by-step instructions.
+
 #### Onboarding UX Overhaul — Fragmented Experiences Unified (BUG-318, 319, 320, 321, 322, 323, 325, 334) — 2026-04-07
 
 Eight overlapping onboarding UX bugs resolved in a coordinated fix across `OnboardingContext.tsx`, `OnboardingWizard.tsx`, `WhatsAppWizardContext.tsx`, `GettingStartedChecklist.tsx`, and `LayoutContent.tsx`:

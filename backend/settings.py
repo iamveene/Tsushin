@@ -133,7 +133,7 @@ STALE_CONVERSATION_THRESHOLD_SECONDS = int(
 
 # Service Identification (Phase 3)
 SERVICE_NAME = "tsn-core"
-SERVICE_VERSION = "0.5.0"
+SERVICE_VERSION = "0.6.0"
 
 # Observability — Prometheus
 METRICS_ENABLED = get_env("TSN_METRICS_ENABLED", None, "true").lower() in ("true", "1", "yes")

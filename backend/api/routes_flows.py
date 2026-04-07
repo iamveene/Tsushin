@@ -86,6 +86,8 @@ class FlowDefinitionResponse(BaseModel):
     scheduled_at: Optional[datetime] = None
     flow_type: Optional[str] = "workflow"
     default_agent_id: Optional[int] = None
+    # BUG-336: Keyword triggers
+    trigger_keywords: Optional[List] = None
 
     class Config:
         from_attributes = True
@@ -251,7 +253,8 @@ def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionRespons
         execution_method=flow.execution_method or "immediate",
         scheduled_at=flow.scheduled_at,
         flow_type=flow.flow_type or "workflow",
-        default_agent_id=flow.default_agent_id
+        default_agent_id=flow.default_agent_id,
+        trigger_keywords=flow.trigger_keywords or []  # BUG-336
     )
 
 
@@ -817,7 +820,7 @@ def get_run_nodes(
 # ============= FLOW DEFINITION ENDPOINTS =============
 
 VALID_FLOW_TYPES = {"notification", "conversation", "workflow", "task"}
-VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring"}
+VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring", "keyword"}  # BUG-336: added keyword
 
 
 @router.post("/", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))])
@@ -889,6 +892,7 @@ def create_flow_v2(
             recurrence_rule=flow.recurrence_rule.model_dump() if flow.recurrence_rule else None,
             flow_type=flow.flow_type.value,
             default_agent_id=flow.default_agent_id,
+            trigger_keywords=flow.trigger_keywords or [],  # BUG-336: keyword triggers
             is_active=True
         )
         db.add(db_flow)
@@ -1516,6 +1520,8 @@ def patch_flow(
         if flow.default_agent_id is not None:
             # 0 or negative means "clear the default agent"
             db_flow.default_agent_id = flow.default_agent_id if flow.default_agent_id > 0 else None
+        if flow.trigger_keywords is not None:  # BUG-336: update keyword triggers
+            db_flow.trigger_keywords = flow.trigger_keywords
         if flow.is_active is not None:
             # CRITICAL FIX 2026-01-08: Close active conversation threads when flow is deactivated
             if flow.is_active == False and db_flow.is_active == True:

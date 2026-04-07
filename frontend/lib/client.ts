@@ -1288,7 +1288,7 @@ export interface FlowDefinition {
   updated_at: string
   node_count?: number
   // Phase 8.0 fields
-  execution_method?: 'immediate' | 'scheduled' | 'recurring'
+  execution_method?: 'immediate' | 'scheduled' | 'recurring' | 'keyword'
   scheduled_at?: string | null
   recurrence_rule?: Record<string, any> | null
   flow_type?: 'notification' | 'conversation' | 'workflow' | 'task'
@@ -1296,6 +1296,8 @@ export interface FlowDefinition {
   last_executed_at?: string | null
   next_execution_at?: string | null
   execution_count?: number
+  // BUG-336: Keyword triggers
+  trigger_keywords?: string[] | null
 }
 
 export interface FlowNode {
@@ -1350,7 +1352,7 @@ export interface ConversationThread {
 }
 
 // Phase 8.0: Flow creation types
-export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring'
+export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring' | 'keyword'  // BUG-336: added keyword
 export type FlowType = 'notification' | 'conversation' | 'workflow' | 'task'
 export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate'
 
@@ -1422,6 +1424,7 @@ export interface CreateFlowData {
   flow_type?: FlowType
   default_agent_id?: number
   steps?: CreateFlowStepData[]
+  trigger_keywords?: string[]  // BUG-336: Keyword trigger support
 }
 
 // Unified type for editing steps (both new and existing)
@@ -3944,6 +3947,7 @@ export const api = {
     flow_type: FlowType
     default_agent_id: number
     is_active: boolean
+    trigger_keywords: string[]  // BUG-336
   }>): Promise<FlowDefinition> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/${flowId}`, {
       method: 'PATCH',

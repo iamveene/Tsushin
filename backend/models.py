@@ -1556,9 +1556,13 @@ class FlowDefinition(Base):
     description = Column(Text)
 
     # Phase 8.0: Execution Configuration (adapted from asm-platform)
-    execution_method = Column(String(20), default='immediate')  # 'immediate' | 'scheduled' | 'recurring'
+    execution_method = Column(String(20), default='immediate')  # 'immediate' | 'scheduled' | 'recurring' | 'keyword'
     scheduled_at = Column(DateTime, nullable=True)  # For scheduled execution
     recurrence_rule = Column(JSON, nullable=True)  # Cron-like config: {frequency, interval, days_of_week, timezone}
+
+    # BUG-336: Keyword trigger support — list of keywords/commands that fire this flow
+    # e.g. ["/testflow", "start report", "run workflow"]
+    trigger_keywords = Column(JSON, default=list, nullable=True)
 
     # Phase 8.0: Default agent for the flow (can be overridden per step)
     default_agent_id = Column(Integer, nullable=True)  # FK to Agent

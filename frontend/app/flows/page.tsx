@@ -46,6 +46,7 @@ import {
   PlayIcon,
   CalendarIcon,
   RefreshIcon,
+  HashIcon,
   EnvelopeIcon,
   BrainIcon,
   DocumentIcon,
@@ -84,6 +85,7 @@ const EXECUTION_METHODS: { value: ExecutionMethod; label: string; Icon: React.FC
   { value: 'immediate', label: 'Immediate', Icon: PlayIcon },
   { value: 'scheduled', label: 'Scheduled', Icon: CalendarIcon },
   { value: 'recurring', label: 'Recurring', Icon: RefreshIcon },
+  { value: 'keyword', label: 'Keyword', Icon: HashIcon },  // BUG-336
 ]
 
 const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string }[] = [
@@ -1147,6 +1149,11 @@ function ExecutionBadge({ method }: { method: ExecutionMethod }) {
       color: 'text-violet-400',
       icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
     },
+    keyword: {
+      label: 'Keyword',
+      color: 'text-cyan-400',
+      icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" /></svg>
+    },
   }
 
   const { label, color, icon } = config[method] || config.immediate
@@ -1497,6 +1504,27 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                   <RecurrenceConfigPanel
                     value={flowData.recurrence_rule}
                     onChange={(rule) => setFlowData(prev => ({ ...prev, recurrence_rule: rule }))}
+                  />
+                </div>
+              )}
+
+              {/* BUG-336: Keyword trigger configuration */}
+              {flowData.execution_method === 'keyword' && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1.5">Trigger Keywords</label>
+                  <p className="text-xs text-slate-500 mb-2">
+                    Enter one keyword or command per line. Messages matching any of these trigger this flow (e.g. <code className="bg-slate-800 px-1 rounded">/testflow</code> or <code className="bg-slate-800 px-1 rounded">start report</code>).
+                  </p>
+                  <textarea
+                    value={(flowData.trigger_keywords || []).join('\n')}
+                    onChange={(e) => setFlowData(prev => ({
+                      ...prev,
+                      trigger_keywords: e.target.value.split('\n').map(k => k.trim()).filter(Boolean)
+                    }))}
+                    rows={4}
+                    placeholder="/testflow&#10;run report&#10;start workflow"
+                    className="w-full px-4 py-2.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white font-mono text-sm
+                               focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
                   />
                 </div>
               )}
@@ -4379,6 +4407,7 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
         scheduled_at: flow.scheduled_at,
         recurrence_rule: flow.recurrence_rule as any,
         default_agent_id: flow.default_agent_id ?? 0,
+        trigger_keywords: flow.trigger_keywords ?? [],  // BUG-336
       })
 
       // 4. Explicitly save all steps using the latest ref (updated after flush)
@@ -4523,6 +4552,27 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
                   <RecurrenceConfigPanel
                     value={flow.recurrence_rule as any}
                     onChange={(rule) => setFlow(prev => prev ? { ...prev, recurrence_rule: rule as any } : null)}
+                  />
+                </div>
+              )}
+
+              {/* BUG-336: Keyword trigger configuration in edit mode */}
+              {flow.execution_method === 'keyword' && (
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-slate-300 mb-1.5">Trigger Keywords</label>
+                  <p className="text-xs text-slate-500 mb-2">
+                    One keyword or command per line. Matching messages in Playground or channels will trigger this flow instead of the AI (e.g. <code className="bg-slate-800 px-1 rounded">/testflow</code>).
+                  </p>
+                  <textarea
+                    value={(flow.trigger_keywords || []).join('\n')}
+                    onChange={(e) => setFlow(prev => prev ? {
+                      ...prev,
+                      trigger_keywords: e.target.value.split('\n').map(k => k.trim()).filter(Boolean)
+                    } : null)}
+                    rows={4}
+                    placeholder="/testflow&#10;run report&#10;start workflow"
+                    className="w-full px-4 py-2.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white font-mono text-sm
+                               focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
                   />
                 </div>
               )}

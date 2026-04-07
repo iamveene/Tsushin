@@ -143,6 +143,7 @@ class ExecutionMethod(str, Enum):
     IMMEDIATE = "immediate"
     SCHEDULED = "scheduled"
     RECURRING = "recurring"
+    KEYWORD = "keyword"  # BUG-336: Fired when a message matches trigger_keywords
 
 
 class FlowType(str, Enum):
@@ -355,6 +356,9 @@ class FlowCreate(BaseModel):
     scheduled_at: Optional[datetime] = None
     recurrence_rule: Optional[RecurrenceRule] = None
 
+    # BUG-336: Keyword triggers (for execution_method='keyword')
+    trigger_keywords: Optional[List[str]] = None
+
     # Flow configuration
     flow_type: FlowType = FlowType.WORKFLOW
     default_agent_id: Optional[int] = None
@@ -372,6 +376,9 @@ class FlowUpdate(BaseModel):
     scheduled_at: Optional[datetime] = None
     recurrence_rule: Optional[RecurrenceRule] = None
 
+    # BUG-336: Keyword triggers (for execution_method='keyword')
+    trigger_keywords: Optional[List[str]] = None
+
     flow_type: Optional[FlowType] = None
     default_agent_id: Optional[int] = None
     is_active: Optional[bool] = None
@@ -387,6 +394,9 @@ class FlowResponse(BaseModel):
     execution_method: str
     scheduled_at: Optional[datetime]
     recurrence_rule: Optional[Dict[str, Any]]
+
+    # BUG-336: Keyword triggers
+    trigger_keywords: Optional[List[str]] = None
 
     flow_type: str
     default_agent_id: Optional[int]

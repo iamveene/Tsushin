@@ -1026,6 +1026,35 @@ class PlaygroundService:
             if tool_context:
                 full_message = f"{tool_context}\n\n{full_message}"
 
+            # STEP 2.5: BUG-336 — Check keyword-triggered flows (streaming path)
+            flow_result = await self._check_keyword_flow_triggers(
+                agent=agent,
+                message_text=message_text,
+                sender_key=sender_key,
+                user_id=user_id,
+                thread_id=thread_id,
+                memory_manager=memory_manager,
+            )
+            if flow_result:
+                self.logger.info(f"[BUG-336] Flow keyword trigger matched (streaming) — yielding flow result")
+                # Yield the message as a token chunk so the frontend streaming view receives it
+                yield {
+                    "type": "token",
+                    "content": flow_result.get("message", ""),
+                }
+                yield {
+                    "type": "done",
+                    "message_id": None,
+                    "thread_id": thread_id,
+                    "agent_id": agent_id,
+                    "token_usage": None,
+                    "timestamp": flow_result.get("timestamp"),
+                    "thread_renamed": False,
+                    "new_thread_title": None,
+                    "image_url": None,
+                }
+                return
+
             # STEP 3: Try to process with skills FIRST (before AI)
             # Phase 8: Emit activity start event for streaming
             emit_agent_processing_async(
