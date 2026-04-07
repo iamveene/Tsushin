@@ -302,15 +302,17 @@ class SkillManager:
                         tool_def = None
 
                         # Phase 4: Try new MCP format first (get_mcp_tool_definition)
-                        has_mcp = hasattr(skill_class, 'get_mcp_tool_definition')
+                        # BUG-391 fix: Use skill_instance (not skill_class) so custom skills
+                        # have access to self._record for tool definition generation
+                        has_mcp = hasattr(skill_instance, 'get_mcp_tool_definition')
                         logger.info(f"[SKILL TOOLS] Skill '{skill_type}' has get_mcp_tool_definition={has_mcp}")
                         if has_mcp:
-                            mcp_def = skill_class.get_mcp_tool_definition()
+                            mcp_def = skill_instance.get_mcp_tool_definition()
                             logger.info(f"[SKILL TOOLS] Skill '{skill_type}' MCP definition name: {mcp_def.get('name') if mcp_def else None}")
                             if mcp_def:
                                 # Convert MCP to OpenAI format using to_openai_tool()
-                                if hasattr(skill_class, 'to_openai_tool'):
-                                    tool_def = skill_class.to_openai_tool()
+                                if hasattr(skill_instance, 'to_openai_tool'):
+                                    tool_def = skill_instance.to_openai_tool()
                                 else:
                                     # Manual conversion if to_openai_tool not available
                                     tool_def = {
@@ -489,11 +491,12 @@ class SkillManager:
                     continue
 
                 # v0.6.0: Multi-tool skills
-                if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
-                    for mcp_def in skill_class.get_all_mcp_tool_definitions():
+                # BUG-391 fix: Use skill_instance instead of skill_class
+                if hasattr(skill_instance, 'get_all_mcp_tool_definitions'):
+                    for mcp_def in skill_instance.get_all_mcp_tool_definitions():
                         tools.append(mcp_def)
                 else:
-                    mcp_def = skill_class.get_mcp_tool_definition()
+                    mcp_def = skill_instance.get_mcp_tool_definition()
                     if mcp_def:
                         tools.append(mcp_def)
 
@@ -579,23 +582,24 @@ class SkillManager:
                     if 'comm_parent_session_id' in message.metadata:
                         config['comm_parent_session_id'] = message.metadata['comm_parent_session_id']
 
+            # Create skill instance (before schema validation so custom skills have self._record)
+            skill_instance = self._create_skill_instance(skill_class, db, agent_id)
+
             # Validate arguments against input schema
             # v0.6.0: Multi-tool skills — find the right schema by tool_name
+            # BUG-391 fix: Use skill_instance instead of skill_class
             mcp_def = None
-            if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
-                for d in skill_class.get_all_mcp_tool_definitions():
+            if hasattr(skill_instance, 'get_all_mcp_tool_definitions'):
+                for d in skill_instance.get_all_mcp_tool_definitions():
                     if d.get("name") == tool_name:
                         mcp_def = d
                         break
             if not mcp_def:
-                mcp_def = skill_class.get_mcp_tool_definition()
+                mcp_def = skill_instance.get_mcp_tool_definition()
             if mcp_def and mcp_def.get("inputSchema"):
                 validation_error = self._validate_arguments(arguments, mcp_def["inputSchema"])
                 if validation_error:
                     return f"Error: Invalid arguments - {validation_error}"
-
-            # Create skill instance
-            skill_instance = self._create_skill_instance(skill_class, db, agent_id)
             skill_instance._config = config
             skill_instance.set_db_session(db)
             skill_instance._agent_id = agent_id
@@ -663,19 +667,30 @@ class SkillManager:
             Skill class or None if not found
         """
         for skill_class in self.registry.values():
-            # Check multi-tool definitions first (v0.6.0: OKG Term Memory)
-            if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
-                all_defs = skill_class.get_all_mcp_tool_definitions()
-                if any(d.get("name") == tool_name for d in all_defs):
+            try:
+                # BUG-391 fix: For custom skills, instantiate to get tool definitions
+                if getattr(skill_class, 'skill_type', '').startswith('custom:'):
+                    record = getattr(skill_class, '_custom_skill_record', None)
+                    inst = skill_class(skill_record=record)
+                else:
+                    inst = skill_class
+
+                # Check multi-tool definitions first (v0.6.0: OKG Term Memory)
+                if hasattr(inst, 'get_all_mcp_tool_definitions'):
+                    all_defs = inst.get_all_mcp_tool_definitions()
+                    if any(d.get("name") == tool_name for d in all_defs):
+                        return skill_class
+
+                # Check single MCP definition
+                mcp_def = inst.get_mcp_tool_definition()
+                if mcp_def and mcp_def.get("name") == tool_name:
                     return skill_class
 
-            # Check single MCP definition
-            mcp_def = skill_class.get_mcp_tool_definition()
-            if mcp_def and mcp_def.get("name") == tool_name:
-                return skill_class
+                # Fallback: Check legacy get_tool_definition
+                tool_def = inst.get_tool_definition() if hasattr(inst, 'get_tool_definition') else skill_class.get_tool_definition()
+            except Exception:
+                continue
 
-            # Fallback: Check legacy get_tool_definition
-            tool_def = skill_class.get_tool_definition()
             if tool_def:
                 # Handle both wrapped and unwrapped formats
                 if tool_def.get("type") == "function":
