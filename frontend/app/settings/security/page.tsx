@@ -66,8 +66,10 @@ export default function SecuritySettingsPage() {
 
       if (response.ok) {
         const data = await response.json()
-        setGoogleCredentials(data)
+        // BUG-343 fix: backend returns 200 with configured=false on fresh install
+        setGoogleCredentials(data && data.configured === false ? null : data)
       } else if (response.status === 404) {
+        // Legacy fallback: old backend versions still return 404
         setGoogleCredentials(null)
       }
     } catch (err) {

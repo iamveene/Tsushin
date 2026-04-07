@@ -1819,12 +1819,18 @@ export default function HubPage() {
       const response = await authenticatedFetch(`${apiUrl}/api/hub/google/credentials`)
       if (response.ok) {
         const data = await response.json()
-        setGoogleCredentials(data)
+        // BUG-343 fix: backend now returns 200 with configured=false instead of 404
+        // when Google credentials are not set up on a fresh install.
+        if (data && data.configured === false) {
+          setGoogleCredentials(null)
+        } else {
+          setGoogleCredentials(data)
+        }
       } else {
         setGoogleCredentials(null)
       }
     } catch (error) {
-      console.error('Failed to load Google credentials:', error)
+      // Silently set null — Google integration is optional
       setGoogleCredentials(null)
     }
   }

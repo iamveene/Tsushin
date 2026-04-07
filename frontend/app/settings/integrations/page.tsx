@@ -43,8 +43,11 @@ export default function IntegrationsSettingsPage() {
     try {
       const response = await authenticatedFetch(`${apiUrl}/api/hub/google/credentials`)
       if (response.ok) {
-        setGoogleCredentials(await response.json())
+        const data = await response.json()
+        // BUG-343 fix: backend returns 200 with configured=false on fresh install
+        setGoogleCredentials(data && data.configured === false ? null : data)
       } else if (response.status === 404) {
+        // Legacy fallback: old backend versions still return 404
         setGoogleCredentials(null)
       }
     } catch (err) {
