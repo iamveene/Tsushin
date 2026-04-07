@@ -5,11 +5,10 @@
  * Phase 3: Frontend Onboarding Wizard
  *
  * Manages onboarding tour state, persistence, and navigation.
- * Tour only starts when the user explicitly triggers it (no auto-start).
+ * The tour is a non-blocking helper — it never redirects users away from pages they navigate to.
  */
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-import { useRouter } from 'next/navigation'
 import { useAuth } from './AuthContext'
 
 interface OnboardingState {
@@ -39,7 +38,6 @@ const STORAGE_KEY = 'tsushin_onboarding_completed'
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
-  const router = useRouter()
 
   const [state, setState] = useState<OnboardingState>({
     isActive: false,
@@ -76,10 +74,6 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const nextStep = () => {
     setState(prev => {
       const newStep = Math.min(prev.currentStep + 1, prev.totalSteps)
-
-      // Auto-navigate to pages based on step
-      navigateToStep(newStep)
-
       return {
         ...prev,
         currentStep: newStep
@@ -90,10 +84,6 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const previousStep = () => {
     setState(prev => {
       const newStep = Math.max(prev.currentStep - 1, 1)
-
-      // Auto-navigate to pages based on step
-      navigateToStep(newStep)
-
       return {
         ...prev,
         currentStep: newStep
@@ -103,42 +93,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   const goToStep = (step: number) => {
     if (step < 1 || step > TOTAL_STEPS) return
-
     setState(prev => ({ ...prev, currentStep: step }))
-    navigateToStep(step)
-  }
-
-  const navigateToStep = (step: number) => {
-    // Navigate to appropriate page based on step
-    switch (step) {
-      case 1: // Welcome
-        // Stay on current page
-        break
-      case 2: // Watcher
-        router.push('/')
-        break
-      case 3: // Studio
-        router.push('/agents')
-        break
-      case 4: // Hub - AI Providers & System AI
-        router.push('/hub')
-        break
-      case 5: // Communication Channels (Required)
-        router.push('/hub')
-        break
-      case 6: // Flows
-        router.push('/flows')
-        break
-      case 7: // Playground
-        router.push('/playground')
-        break
-      case 8: // Security & API Access
-        // Stay on current page
-        break
-      case 9: // Setup Checklist
-        // Stay on current page
-        break
-    }
   }
 
   const minimize = () => {
