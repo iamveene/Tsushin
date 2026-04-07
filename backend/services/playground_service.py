@@ -814,9 +814,10 @@ class PlaygroundService:
             if sender_key:
                 self.logger.info(f"Using explicit sender_key: {sender_key}")
             elif thread_id:
-                # Phase 14.1: Use thread-specific sender_key for thread isolation
-                sender_key = f"playground_u{user_id}_a{agent_id}_t{thread_id}"
-                self.logger.info(f"[STREAMING] Using thread-specific sender_key: {sender_key}")
+                # BUG-352 FIX: Use stable per-user-per-agent key (no thread suffix)
+                # to match send_message() and Memory Inspector lookup.
+                sender_key = f"playground_u{user_id}_a{agent_id}"
+                self.logger.info(f"[STREAMING] Using stable per-user-per-agent sender_key: {sender_key}")
             else:
                 # Fallback for backward compatibility - check contact mapping
                 user_contact_mapping = self.db.query(UserContactMapping).filter(

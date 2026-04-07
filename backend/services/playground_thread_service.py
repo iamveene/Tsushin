@@ -303,21 +303,23 @@ class PlaygroundThreadService:
                         messages = all_shared
                         self.logger.warning(f"[get_thread] No thread_id metadata in shared memory, returning all {len(all_shared)} messages")
             else:
-                # FIX 2026-01-31: Enhanced sender_key lookup with comprehensive fallbacks
-                # Build comprehensive list of possible sender_keys
+                # BUG-360 FIX: Use same stable-key extraction as list_threads().
+                # Messages are stored under playground_u{uid}_a{aid} (no thread suffix).
+                recipient = thread.recipient
+                if recipient and '_t' in recipient:
+                    parts = recipient.rsplit('_t', 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        stable_key = parts[0]
+                    else:
+                        stable_key = recipient
+                else:
+                    stable_key = recipient
+
                 memory_sender_keys = [
-                    f"sender_{thread.recipient}",  # Primary format: sender_playground_u{id}_a{id}_t{id}
+                    stable_key,  # Primary: stable key playground_u{uid}_a{aid}
+                    f"sender_{thread.recipient}",  # Legacy: sender_playground_u{id}_a{id}_t{id}
                     thread.recipient,  # Fallback: without sender_ prefix
                 ]
-
-                # Add legacy/alternative formats
-                if "_" in thread.recipient:
-                    # Try without last segment: playground_u4_a3_t17 → playground_u4_a3
-                    parts = thread.recipient.split("_")
-                    if len(parts) > 2:
-                        truncated_key = "_".join(parts[:-1])
-                        memory_sender_keys.append(f"sender_{truncated_key}")
-                        memory_sender_keys.append(truncated_key)
 
                 # Check if user has a contact mapping (cross-channel memory)
                 # If so, messages might be stored under phone number or contact-based key

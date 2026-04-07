@@ -346,7 +346,7 @@ class SchedulerService:
         # BUG-356 FIX: Detect playground recipients (format playground_u{id}_a{id})
         # Playground self-reminders don't have phone numbers and can't be sent via WhatsApp.
         # Log the reminder as delivered — the user will see it in their next playground session.
-        if re.match(r'^playground_u\d+_a\d+', recipient):
+        if re.match(r'^playground_u\d+_a\d+(_t\d+)?$', recipient):
             logger.info(f"[NOTIFICATION] Playground self-reminder delivered: {content} (recipient={recipient})")
             return  # Successfully "delivered" — no WhatsApp send needed
 

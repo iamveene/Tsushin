@@ -108,7 +108,7 @@ def create_test_users(db: Session):
                 user_id=user.id,
                 role_id=user_data["role"].id,
                 tenant_id=user_data["tenant_id"],
-                assigned_by=user.id
+                assigned_by=None
             )
             db.add(user_role)
 
