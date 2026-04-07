@@ -107,18 +107,23 @@ class AudioTranscriptSkill(BaseSkill):
             SkillResult with transcription text or error
         """
         try:
-            # Get database session to retrieve API key
-            from sqlalchemy.orm import sessionmaker
-            from db import get_engine
-            import settings
-
-            engine = get_engine(settings.DATABASE_URL)
-            SessionLocal = sessionmaker(bind=engine)
-            db = SessionLocal()
+            # BUG-357 FIX: Prefer the caller-provided DB session (set_db_session)
+            # over creating a new one, and pass tenant_id for tenant-scoped keys.
+            db = self._db_session
+            own_session = False
+            if not db:
+                from sqlalchemy.orm import sessionmaker
+                from db import get_engine
+                import settings
+                engine = get_engine(settings.DATABASE_URL)
+                SessionLocal = sessionmaker(bind=engine)
+                db = SessionLocal()
+                own_session = True
 
             try:
                 # Validate configuration - check database first, then config
-                api_key = get_api_key("openai", db) or config.get("api_key")
+                tenant_id = config.get("tenant_id")
+                api_key = get_api_key("openai", db, tenant_id=tenant_id) or config.get("api_key")
                 if not api_key:
                     return SkillResult(
                         success=False,
@@ -126,7 +131,8 @@ class AudioTranscriptSkill(BaseSkill):
                         metadata={"error": "missing_api_key"}
                     )
             finally:
-                db.close()
+                if own_session:
+                    db.close()
 
             # Initialize OpenAI client
             if not self.client:

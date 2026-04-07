@@ -232,6 +232,7 @@ class FlowsProvider(SchedulerProviderBase):
                 'recipient_raw': recipient,
                 'reminder_text': title,
                 'message_template': kwargs.get('message_template', 'Reminder: {reminder_text}'),
+                'sender_key': kwargs.get('sender_key', ''),  # BUG-356 FIX: pass sender_key for recipient resolution
             }
             if description:
                 payload['reminder_text'] = f"{title} - {description}"

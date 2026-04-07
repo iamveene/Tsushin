@@ -1424,10 +1424,10 @@ class PlaygroundService:
         from agent.memory.multi_agent_memory import MultiAgentMemoryManager
 
         try:
-            # Resolve user identity
-            sender_key = self.resolve_user_identity(user_id)
-            if not sender_key:
-                return []
+            # BUG-352 FIX: Use the same sender_key format as send_message()
+            # Messages are stored under playground_u{user_id}_a{agent_id}, not
+            # the legacy playground_user_{user_id} from resolve_user_identity().
+            sender_key = f"playground_u{user_id}_a{agent_id}"
 
             # Build a minimal config for memory manager
             from models import Agent
@@ -1577,7 +1577,8 @@ class PlaygroundService:
             if not sender_key:
                 return {
                     "status": "error",
-                    "error": "Failed to resolve user identity"
+                    "error": "Failed to resolve user identity",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             # Get agent and check if it exists and is active (HIGH-011 defense-in-depth)
@@ -1588,7 +1589,8 @@ class PlaygroundService:
             if not agent or not agent.is_active:
                 return {
                     "status": "error",
-                    "error": f"Agent {agent_id} not found or inactive"
+                    "error": f"Agent {agent_id} not found or inactive",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             # Check if agent has audio_transcript skill enabled
@@ -1601,7 +1603,8 @@ class PlaygroundService:
             if not audio_skill:
                 return {
                     "status": "error",
-                    "error": "This agent does not have audio transcription enabled"
+                    "error": "This agent does not have audio transcription enabled",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             # Save audio to temp file
@@ -1635,8 +1638,10 @@ class PlaygroundService:
 
             # Initialize and run transcription skill
             skill_instance = AudioTranscriptSkill()
+            skill_instance.set_db_session(self.db)  # BUG-357 FIX: reuse caller's session
             skill_config = audio_skill.config or {}
             skill_config['agent_id'] = agent_id
+            skill_config['tenant_id'] = agent.tenant_id  # BUG-357 FIX: tenant-scoped key lookup
 
             transcript_result = await skill_instance.process(inbound_msg, skill_config)
 
@@ -1648,7 +1653,8 @@ class PlaygroundService:
                     pass
                 return {
                     "status": "error",
-                    "error": transcript_result.output or "Transcription failed"
+                    "error": transcript_result.output or "Transcription failed",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             # Get transcript text
@@ -1665,7 +1671,8 @@ class PlaygroundService:
                     pass
                 return {
                     "status": "error",
-                    "error": "Transcription returned empty text"
+                    "error": "Transcription returned empty text",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             self.logger.info(f"Transcript: {transcript[:100]}...")

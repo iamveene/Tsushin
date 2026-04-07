@@ -478,6 +478,7 @@ Answer:"""
                     recurrence_rrule = 'RRULE:FREQ=MONTHLY;INTERVAL=1'
 
             # Create the event via the provider
+            # BUG-356 FIX: Pass sender_key so scheduler can resolve notification recipient
             event = await provider.create_event(
                 title=parsed['title'],
                 start=parsed['start'],
@@ -485,7 +486,8 @@ Answer:"""
                 description=parsed.get('description'),
                 location=parsed.get('location'),
                 recurrence=recurrence_rrule,
-                reminder_minutes=parsed.get('reminder_minutes', 30)
+                reminder_minutes=parsed.get('reminder_minutes', 30),
+                sender_key=message.sender_key
             )
 
             # #region agent log
@@ -1892,6 +1894,7 @@ Return ONLY a valid JSON object, no other text."""
         provider_type = provider.provider_type.value
         provider_name = provider.provider_name
 
+        # BUG-356 FIX: Pass sender_key so scheduler can resolve notification recipient
         event = await provider.create_event(
             title=title,
             start=start_dt,
@@ -1899,7 +1902,8 @@ Return ONLY a valid JSON object, no other text."""
             description=arguments.get("description"),
             location=arguments.get("location"),
             recurrence=recurrence_rrule,
-            reminder_minutes=30
+            reminder_minutes=30,
+            sender_key=message.sender_key
         )
 
         # Format confirmation

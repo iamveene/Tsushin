@@ -508,6 +508,18 @@ Return JSON array only:"""
             )
 
             if result.is_threat_detected and result.action == "blocked":
+                # BUG-354 FIX: When Sentinel's LLM is unavailable it returns a
+                # fail-closed block with "Security analysis unavailable".  For
+                # browser navigation this is too aggressive — allow navigation
+                # and let the pattern-based ssrf_validator in PlaywrightProvider
+                # still protect against real SSRF.
+                if "Security analysis unavailable" in (result.threat_reason or ""):
+                    logger.warning(
+                        f"Sentinel browser_ssrf LLM unavailable for {url}, "
+                        f"allowing navigation (pattern-based SSRF validator still active)"
+                    )
+                    return True
+
                 logger.warning(
                     f"Sentinel browser_ssrf blocked navigation to {url}: "
                     f"score={result.threat_score}, reason={result.threat_reason}"

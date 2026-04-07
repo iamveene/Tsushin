@@ -142,6 +142,9 @@ class AgentResponse(BaseModel):
     memory_decay_archive_threshold: Optional[float] = None
     memory_decay_mmr_lambda: Optional[float] = None
 
+    # Provider Instance (BUG-351)
+    provider_instance_id: Optional[int] = None
+
     # v0.6.0: Vector Store Configuration
     vector_store_instance_id: Optional[int] = None
     vector_store_mode: Optional[str] = None  # override | complement | shadow
@@ -234,6 +237,9 @@ class AgentUpdate(BaseModel):
     memory_decay_lambda: Optional[float] = Field(None, ge=0.001, le=1.0, description="Decay rate")
     memory_decay_archive_threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Auto-archive threshold")
     memory_decay_mmr_lambda: Optional[float] = Field(None, ge=0.0, le=1.0, description="MMR diversity weight")
+
+    # Provider Instance (BUG-351 FIX)
+    provider_instance_id: Optional[int] = Field(None, description="Provider instance ID for custom model provider configuration")
 
     # v0.6.0: Vector Store Configuration
     vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
@@ -523,6 +529,8 @@ def list_agents(
             "slack_integration_id": agent.slack_integration_id,
             "discord_integration_id": agent.discord_integration_id,
             "webhook_integration_id": getattr(agent, "webhook_integration_id", None),
+            # Provider Instance (BUG-351 FIX)
+            "provider_instance_id": getattr(agent, 'provider_instance_id', None),
             # v0.6.0: Vector Store Configuration
             "vector_store_instance_id": getattr(agent, 'vector_store_instance_id', None),
             "vector_store_mode": getattr(agent, 'vector_store_mode', None),
@@ -642,6 +650,9 @@ def get_agent(
         "memory_decay_lambda": getattr(agent, 'memory_decay_lambda', None),
         "memory_decay_archive_threshold": getattr(agent, 'memory_decay_archive_threshold', None),
         "memory_decay_mmr_lambda": getattr(agent, 'memory_decay_mmr_lambda', None),
+
+        # Provider Instance (BUG-351 FIX)
+        "provider_instance_id": getattr(agent, 'provider_instance_id', None),
 
         # v0.6.0: Vector Store Configuration
         "vector_store_instance_id": getattr(agent, 'vector_store_instance_id', None),
@@ -867,6 +878,7 @@ def update_agent(
         "context_message_count", "context_char_limit", "enabled_channels",
         "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id", "discord_integration_id", "webhook_integration_id",
         "memory_decay_enabled", "memory_decay_lambda", "memory_decay_archive_threshold", "memory_decay_mmr_lambda",
+        "provider_instance_id",
         "vector_store_instance_id", "vector_store_mode",
         "is_active", "is_default",
     }

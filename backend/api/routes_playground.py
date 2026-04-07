@@ -1114,6 +1114,9 @@ async def get_memory_layers(
                 possible_keys.append(f"sender_{contact.whatsapp_id}")
                 possible_keys.append(contact.whatsapp_id)
 
+    # BUG-352 FIX: Include the stable per-user-per-agent key used by send_message()
+    possible_keys.append(f"playground_u{current_user.id}_a{agent_id}")
+
     # Playground-specific formats (fallback)
     possible_keys.append(f"sender_playground_user_{current_user.id}")
     possible_keys.append(f"playground_user_{current_user.id}")

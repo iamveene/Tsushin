@@ -40,6 +40,12 @@ class PlaygroundDocumentService:
         '.md': 'md',
         '.markdown': 'md',
         '.rtf': 'rtf',
+        # BUG-359 FIX: Image types for image_analysis skill
+        '.jpg': 'image',
+        '.jpeg': 'image',
+        '.png': 'image',
+        '.webp': 'image',
+        '.gif': 'image',
     }
 
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
@@ -139,7 +145,23 @@ class PlaygroundDocumentService:
 
             # Process document asynchronously
             try:
-                await self._process_document(doc, chunk_size, chunk_overlap, embedding_model)
+                if self.SUPPORTED_EXTENSIONS.get(ext) == 'image':
+                    # BUG-359: Images store a metadata reference without heavy
+                    # embedding.  The ImageAnalysisSkill handles real analysis
+                    # when the agent processes the conversation.
+                    text = await self._extract_text(doc.file_path, 'image')
+                    from models import PlaygroundDocumentChunk
+                    chunk = PlaygroundDocumentChunk(
+                        document_id=doc.id,
+                        chunk_index=0,
+                        content=text,
+                        char_count=len(text),
+                        metadata_json={"document_name": doc.document_name, "chunk_index": 0, "total_chunks": 1, "type": "image"}
+                    )
+                    self.db.add(chunk)
+                    doc.num_chunks = 1
+                else:
+                    await self._process_document(doc, chunk_size, chunk_overlap, embedding_model)
                 doc.status = "completed"
                 doc.processed_date = datetime.utcnow()
             except Exception as e:
@@ -284,6 +306,19 @@ class PlaygroundDocumentService:
                         return rtf_to_text(rtf_content)
                 except ImportError:
                     raise ImportError("Install striprtf for RTF support")
+
+            elif doc_type == 'image':
+                # BUG-359 FIX: For images, store a reference description.
+                # The actual image analysis is handled by the ImageAnalysisSkill
+                # when the agent processes the conversation with the image context.
+                filename = os.path.basename(file_path)
+                file_size = os.path.getsize(file_path)
+                return (
+                    f"[Image uploaded: {filename}]\n"
+                    f"File size: {file_size} bytes\n"
+                    f"File path: {file_path}\n"
+                    f"This image has been uploaded and is available for analysis."
+                )
 
             else:
                 # Try to read as plain text

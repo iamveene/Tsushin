@@ -982,7 +982,7 @@ export default function ExpertMode({
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept=".pdf,.txt,.csv,.json,.xlsx,.xls,.docx,.doc,.md,.markdown,.rtf"
+                    accept=".pdf,.txt,.csv,.json,.xlsx,.xls,.docx,.doc,.md,.markdown,.rtf,.jpg,.jpeg,.png,.webp,.gif"
                     onChange={(e) => e.target.files && onFileUpload(e.target.files)}
                     className="hidden"
                   />

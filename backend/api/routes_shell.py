@@ -746,82 +746,32 @@ async def beacon_checkin(
     shell_id = integration.id  # Store ID before commit to use in logs
     db.commit()
 
-    # FIX (2026-01-30): Use a FRESH session from db._global_engine to query commands
-    # This ensures we're using the exact same engine as shell_command_service.py
-    # and guarantees we see the committed commands
-    from sqlalchemy.orm import sessionmaker
-    import db as db_module
+    # BUG-355 FIX: Use the injected session with expire_all() instead of creating
+    # fresh sessions.  The checkin update was already committed (line above), so
+    # expire_all() lets us see commands committed by shell_command_service.
+    # Previously, creating a fresh sessionmaker on every check-in contributed to
+    # connection pool exhaustion under load.
+    db.expire_all()
 
-    logger.debug(f"[BEACON-DEBUG] beacon_checkin: shell_id={shell_id}")
-    logger.debug(f"[BEACON-DEBUG] routes_shell._engine = {_engine}")
-    logger.debug(f"[BEACON-DEBUG] db._global_engine = {db_module._global_engine}")
+    pending = db.query(ShellCommand).filter(
+        ShellCommand.shell_id == shell_id,
+        ShellCommand.status == "queued"
+    ).order_by(ShellCommand.queued_at).all()
 
-    if db_module._global_engine:
-        # Use fresh session from the global engine for querying commands
-        FreshSession = sessionmaker(bind=db_module._global_engine)
-        fresh_db = FreshSession()
-        try:
-            pending = fresh_db.query(ShellCommand).filter(
-                ShellCommand.shell_id == shell_id,
-                ShellCommand.status == "queued"
-            ).order_by(ShellCommand.queued_at).all()
+    logger.debug(f"[BEACON-DEBUG] shell_id={shell_id} found {len(pending)} queued commands")
 
-            logger.debug(f"[BEACON-DEBUG] shell_id={shell_id} found {len(pending)} queued commands (fresh session)")
+    # Mark commands as sent
+    pending_commands = []
+    for cmd in pending:
+        cmd.status = "sent"
+        cmd.sent_at = datetime.utcnow()
+        pending_commands.append({
+            "id": cmd.id,
+            "commands": cmd.commands,
+            "timeout": cmd.timeout_seconds
+        })
 
-            if pending:
-                logger.debug(f"[BEACON-DEBUG] commands: {[p.id for p in pending]}")
-            else:
-                # Check if there are any commands at all for this shell
-                all_commands = fresh_db.query(ShellCommand).filter(
-                    ShellCommand.shell_id == shell_id
-                ).order_by(ShellCommand.queued_at.desc()).limit(3).all()
-                if all_commands:
-                    logger.debug(f"[BEACON-DEBUG] no queued, recent: {[(c.id[:8], c.status) for c in all_commands]}")
-
-            # Mark commands as sent using fresh session
-            pending_commands = []
-            for cmd in pending:
-                cmd.status = "sent"
-                cmd.sent_at = datetime.utcnow()
-                pending_commands.append({
-                    "id": cmd.id,
-                    "commands": cmd.commands,
-                    "timeout": cmd.timeout_seconds
-                })
-
-            fresh_db.commit()
-        finally:
-            fresh_db.close()
-    else:
-        # Fallback to original session with expire_all
-        logger.debug(f"[BEACON-DEBUG] FALLBACK: db._global_engine is None, using original session")
-        db.expire_all()
-
-        pending = db.query(ShellCommand).filter(
-            ShellCommand.shell_id == shell_id,
-            ShellCommand.status == "queued"
-        ).order_by(ShellCommand.queued_at).all()
-
-        if pending:
-            logger.debug(f"[BEACON-DEBUG] shell_id={shell_id} found {len(pending)} queued commands (fallback)")
-        else:
-            all_commands = db.query(ShellCommand).filter(
-                ShellCommand.shell_id == shell_id
-            ).order_by(ShellCommand.queued_at.desc()).limit(3).all()
-            if all_commands:
-                logger.debug(f"[BEACON-DEBUG] no queued, recent: {[(c.id[:8], c.status) for c in all_commands]}")
-
-        # Mark commands as sent
-        pending_commands = []
-        for cmd in pending:
-            cmd.status = "sent"
-            cmd.sent_at = datetime.utcnow()
-            pending_commands.append({
-                "id": cmd.id,
-                "commands": cmd.commands,
-                "timeout": cmd.timeout_seconds
-            })
-
+    if pending_commands:
         db.commit()
 
     return BeaconCheckinResponse(

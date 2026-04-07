@@ -740,11 +740,18 @@ class ShellCommandService:
         start_time = time.time()
         deadline = start_time + timeout_seconds
 
+        # BUG-355 FIX: Create the sessionmaker ONCE outside the loop to avoid
+        # creating a new connection pool entry on every poll iteration.
+        # Previously, creating FreshSession inside the loop could exhaust the
+        # connection pool, causing health/readiness endpoints to hang.
+        FreshSessionFactory = None
+        if db._global_engine:
+            FreshSessionFactory = sessionmaker(bind=db._global_engine)
+
         while time.time() < deadline:
             # Use a fresh session for each poll to see beacon's commits
-            if db._global_engine:
-                FreshSession = sessionmaker(bind=db._global_engine)
-                poll_db = FreshSession()
+            if FreshSessionFactory:
+                poll_db = FreshSessionFactory()
                 try:
                     command = poll_db.query(ShellCommand).filter(
                         ShellCommand.id == command_id
@@ -792,9 +799,8 @@ class ShellCommandService:
 
         # Mark command as timed out and detect delivery failure
         was_delivered = False
-        if db._global_engine:
-            FreshSession = sessionmaker(bind=db._global_engine)
-            timeout_db = FreshSession()
+        if FreshSessionFactory:
+            timeout_db = FreshSessionFactory()
             try:
                 command = timeout_db.query(ShellCommand).filter(
                     ShellCommand.id == command_id
@@ -903,10 +909,14 @@ class ShellCommandService:
         start_time = time.time()
         deadline = start_time + timeout_seconds
 
+        # BUG-355 FIX: Create sessionmaker once outside the loop (same as async version)
+        SyncSessionFactory = None
+        if db._global_engine:
+            SyncSessionFactory = sessionmaker(bind=db._global_engine)
+
         while time.time() < deadline:
-            if db._global_engine:
-                FreshSession = sessionmaker(bind=db._global_engine)
-                poll_db = FreshSession()
+            if SyncSessionFactory:
+                poll_db = SyncSessionFactory()
                 try:
                     command = poll_db.query(ShellCommand).filter(
                         ShellCommand.id == command_id
@@ -949,9 +959,8 @@ class ShellCommandService:
 
         # Mark command as timed out and detect delivery failure
         was_delivered = False
-        if db._global_engine:
-            FreshSession = sessionmaker(bind=db._global_engine)
-            timeout_db = FreshSession()
+        if SyncSessionFactory:
+            timeout_db = SyncSessionFactory()
             try:
                 command = timeout_db.query(ShellCommand).filter(
                     ShellCommand.id == command_id

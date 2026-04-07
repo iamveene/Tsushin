@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+#### Fresh-Install QA Bug Sprint (BUG-351 through BUG-359) — 2026-04-07
+
+- **BUG-351 — `PUT /api/agents/{id}` silently dropped `provider_instance_id` (HIGH):** Added `provider_instance_id` to `UPDATABLE_AGENT_FIELDS` allowlist, `AgentUpdate`/`AgentResponse` Pydantic schemas, and both GET/list response dicts so the field persists and is returned in API responses.
+- **BUG-352 — Playground History/Memory Inspector returned empty results (HIGH):** `get_conversation_history()` used `playground_user_{id}` while messages were stored under `playground_u{uid}_a{aid}`. Aligned history and memory inspector to use the same sender_key format as `send_message()`.
+- **BUG-353 — Instruction-style custom skills failed with `Tool not found` (HIGH):** Custom skill tool names (`custom_{slug}`) weren't resolved through the skill manager because dynamically created subclasses lack the `_record` for `get_mcp_tool_definition()`. Added fallback in `_find_skill_by_tool_name()` to resolve `custom_` prefixed names via registry key.
+- **BUG-354 — Browser automation blocked benign URLs on Sentinel LLM failure (HIGH):** When Sentinel's LLM is unavailable, it returned fail-closed blocks for all URLs. Browser automation now fails-open when Sentinel returns "Security analysis unavailable", relying on pattern-based SSRF validator as fallback.
+- **BUG-355 — Shell beacon check-ins stalled backend health checks (CRITICAL):** `wait_for_completion_async()` created a new `sessionmaker` on every poll iteration (up to 120x), exhausting the connection pool. Moved `sessionmaker` creation outside the loop and simplified beacon check-in to reuse the injected session with `expire_all()`.
+- **BUG-356 — Flows reminder creation resolved to failed notifications (HIGH):** The flows provider built NOTIFICATION payloads without `sender_key`, so the scheduler couldn't resolve the recipient. Passed `sender_key=message.sender_key` through both `create_event()` call sites and added it to the notification payload.
+- **BUG-357 — Audio transcription ignored tenant-scoped OpenAI keys (HIGH):** `AudioTranscriptSkill` created its own DB session and called `get_api_key("openai", db)` without `tenant_id`. Now uses the caller-provided session and passes `tenant_id` from config.
+- **BUG-358 — Audio errors wrapped in Pydantic validation instead of real cause (MEDIUM):** Error return paths in `process_audio()` were missing `timestamp` field, causing `PlaygroundAudioResponse(**result)` to raise a Pydantic validation error. Added timestamp to all 5 error return paths.
+- **BUG-359 — Playground had no image upload path (MEDIUM):** Added image extensions (.jpg/.jpeg/.png/.webp/.gif) to `SUPPORTED_EXTENSIONS` in document service, added image-specific processing that skips heavy embedding, and updated frontend file input accept list.
+
 #### Release Re-Validation Fixes (BUG-345, BUG-346, BUG-347) — 2026-04-07
 
 - **BUG-345 — API v1 agent creation bypassed tenant `max_agents` cap (HIGH):** The `POST /api/v1/agents` endpoint did not enforce the tenant agent cap, allowing unlimited agent creation through the public API while the standard route correctly returned 409. Added the same `Tenant.max_agents` enforcement from the standard route to the v1 route before contact/agent creation.

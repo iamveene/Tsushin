@@ -684,6 +684,15 @@ class SkillManager:
                 elif tool_def.get("name") == tool_name:
                     return skill_class
 
+        # BUG-353 FIX: Custom skills are registered under "custom:{slug}" keys but
+        # their tool definitions use "custom_{slug}" names.  The dynamic subclass
+        # created in register_custom_skills() has no _record, so
+        # get_mcp_tool_definition() returns None.  Resolve via registry key.
+        if tool_name.startswith("custom_"):
+            custom_key = f"custom:{tool_name[7:]}"
+            if custom_key in self.registry:
+                return self.registry[custom_key]
+
         return None
 
     def _validate_arguments(
