@@ -13,9 +13,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import HubIntegration, AsanaIntegration, CalendarIntegration, GmailIntegration
+from models import HubIntegration, AsanaIntegration, CalendarIntegration, GmailIntegration, GoogleFlightsIntegration
 from api.api_auth import ApiCaller, require_api_permission
 from api.v1.schemas import COMMON_RESPONSES, NOT_FOUND_RESPONSE
+
+
+# BUG-347: Capability matrix — defines what each integration type actually supports
+INTEGRATION_CAPABILITIES: Dict[str, Dict[str, bool]] = {
+    "asana": {"health_check": True, "tools": True, "tool_execution": True},
+    "gmail": {"health_check": True, "tools": False, "tool_execution": False},
+    "calendar": {"health_check": True, "tools": False, "tool_execution": False},
+    "google_flights": {"health_check": False, "tools": False, "tool_execution": False},
+}
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -118,6 +127,11 @@ def _create_service_for_integration(integration: HubIntegration, db: Session):
     elif integration.type == "gmail":
         from hub.google.gmail_service import GmailService
         return GmailService(db, integration.id)
+    elif integration.type == "google_flights":
+        raise HTTPException(
+            status_code=400,
+            detail="Google Flights integration does not support service operations through the Hub API. It is available as an agent skill only.",
+        )
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported integration type: {integration.type}")
 
@@ -154,6 +168,7 @@ def _create_asana_service(integration_id: int, db: Session):
 
 def _integration_to_summary(hub: HubIntegration) -> dict:
     """Convert HubIntegration to a summary dict."""
+    caps = INTEGRATION_CAPABILITIES.get(hub.type, {"health_check": False, "tools": False, "tool_execution": False})
     return {
         "id": hub.id,
         "type": hub.type,
@@ -164,6 +179,7 @@ def _integration_to_summary(hub: HubIntegration) -> dict:
         "health_status_reason": getattr(hub, "health_status_reason", None),
         "tenant_id": hub.tenant_id,
         "created_at": hub.created_at.isoformat() if hasattr(hub, "created_at") and hub.created_at else None,
+        "capabilities": caps,
     }
 
 
@@ -282,6 +298,14 @@ async def check_integration_health(
     """
     hub = _get_integration_or_404(db, integration_id, caller.tenant_id)
 
+    # BUG-347: Check capability before attempting health check
+    caps = INTEGRATION_CAPABILITIES.get(hub.type, {})
+    if not caps.get("health_check"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Integration type '{hub.type}' does not support health checks.",
+        )
+
     service = None
     try:
         service = _create_service_for_integration(hub, db)
@@ -335,6 +359,14 @@ async def list_integration_tools(
     does not exist or belongs to another tenant.
     """
     hub = _get_integration_or_404(db, integration_id, caller.tenant_id)
+
+    # BUG-347: Check capability before attempting tool listing
+    caps = INTEGRATION_CAPABILITIES.get(hub.type, {})
+    if not caps.get("tools"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Integration type '{hub.type}' does not support tool listing. Check the 'capabilities' field in the integration listing.",
+        )
 
     service = None
     try:
@@ -396,6 +428,14 @@ async def execute_integration_tool(
     if not hub.is_active:
         raise HTTPException(status_code=400, detail="Integration is not active")
 
+    # BUG-347: Check capability before attempting tool execution
+    caps = INTEGRATION_CAPABILITIES.get(hub.type, {})
+    if not caps.get("tool_execution"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Integration type '{hub.type}' does not support tool execution. Check the 'capabilities' field in the integration listing.",
+        )
+
     service = None
     try:
         service = _create_service_for_integration(hub, db)
@@ -446,18 +486,28 @@ async def list_providers(
             "name": "Asana",
             "description": "Project and task management. Create, update, and track tasks and projects.",
             "supports_oauth": True,
+            "capabilities": INTEGRATION_CAPABILITIES["asana"],
         },
         {
             "type": "gmail",
             "name": "Gmail",
-            "description": "Email integration. Read, search, and draft emails.",
+            "description": "Email integration. Read, search, and draft emails. Tool execution available via agent skills only.",
             "supports_oauth": True,
+            "capabilities": INTEGRATION_CAPABILITIES["gmail"],
         },
         {
             "type": "calendar",
             "name": "Google Calendar",
-            "description": "Calendar management. List, create, and manage calendar events.",
+            "description": "Calendar management. List, create, and manage calendar events. Tool execution available via agent skills only.",
             "supports_oauth": True,
+            "capabilities": INTEGRATION_CAPABILITIES["calendar"],
+        },
+        {
+            "type": "google_flights",
+            "name": "Google Flights",
+            "description": "Flight search via SerpApi. Available as an agent skill only — not manageable through the Hub tool API.",
+            "supports_oauth": False,
+            "capabilities": INTEGRATION_CAPABILITIES["google_flights"],
         },
     ]
 

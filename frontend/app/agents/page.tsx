@@ -105,8 +105,9 @@ export default function AgentsPage() {
     custom_tone: '',
     keywords: [],
     // enabled_tools removed - use Skills system
-    model_provider: 'anthropic',
-    model_name: 'claude-sonnet-4-6',
+    // BUG-346: These are overridden by getSmartDefaults() in resetForm() and useEffect
+    model_provider: '',
+    model_name: '',
     is_active: true,
     is_default: false
   })
@@ -122,6 +123,14 @@ export default function AgentsPage() {
     }).catch(() => {})
   }, [])
 
+  // BUG-346: Apply smart defaults once provider instances are loaded
+  useEffect(() => {
+    if (providerInstances.length > 0 && !formData.model_provider) {
+      const defaults = getSmartDefaults()
+      setFormData(prev => ({ ...prev, model_provider: defaults.model_provider, model_name: defaults.model_name }))
+    }
+  }, [providerInstances])
+
   useEffect(() => {
     loadData()
     checkOllamaHealth()
@@ -135,18 +144,25 @@ export default function AgentsPage() {
 
   useGlobalRefresh(() => { loadData(); checkOllamaHealth() })
 
-  // Map provider instance vendor to MODEL_PROVIDERS value
+  // BUG-346: Use the tenant's default provider instance (is_default=true) instead of [0]
   const getSmartDefaults = () => {
     if (providerInstances.length > 0) {
       const vendorMap: Record<string, string> = {
         anthropic: 'anthropic', openai: 'openai', gemini: 'gemini',
         google: 'gemini', ollama: 'ollama', openrouter: 'openrouter'
       }
-      const firstVendor = providerInstances[0].vendor?.toLowerCase() || ''
-      const mappedProvider = vendorMap[firstVendor]
+      // Prefer the tenant's default provider instance, fall back to first
+      const defaultInstance = providerInstances.find(p => p.is_default) || providerInstances[0]
+      const vendor = defaultInstance.vendor?.toLowerCase() || ''
+      const mappedProvider = vendorMap[vendor]
       if (mappedProvider) {
         if (mappedProvider === 'ollama') {
           return { model_provider: 'ollama', model_name: ollamaModels[0] || '' }
+        }
+        // Use the instance's own available_models first, then fall back to static catalog
+        const instanceModel = defaultInstance.available_models?.[0]
+        if (instanceModel) {
+          return { model_provider: mappedProvider, model_name: instanceModel }
         }
         const provider = MODEL_PROVIDERS.find(p => p.value === mappedProvider)
         if (provider) {
