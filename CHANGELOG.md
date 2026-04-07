@@ -5,7 +5,13 @@ All notable changes to the Tsushin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2026-04-06
+## [0.6.0] - 2026-04-07
+
+### Bug Fixes
+
+#### Onboarding Tour Navigation Takeover (BUG-337) — 2026-04-07
+
+- **BUG-337 — Onboarding tour redirects Watcher/Flows/Settings on fresh install (CRITICAL):** The onboarding `navigateToStep()` function in `OnboardingContext.tsx` called `router.push()` automatically whenever the user clicked Next/Previous in the wizard, forcibly navigating away from pages the user had intentionally opened. This made `/` (Watcher/Dashboard), `/flows`, and `/settings/integrations` inaccessible on fresh installs where the tour was active. Removed the entire `navigateToStep()` function and all `router.push()` calls from `nextStep()`, `previousStep()`, and `goToStep()`. Wizard step advancement now only increments the step counter. Action buttons within individual steps (e.g., "Set Up Channels in Hub") remain as opt-in navigation, giving users full control. Also removed the now-unused `useRouter` import.
 
 ### Bug Fixes (BUG-309 through BUG-317 — Ship-Gate + Security Audit Sprint)
 
