@@ -604,6 +604,18 @@ async def setup_wizard(
             agents_created = [agent["name"] for agent in agents]
             logger.info(f"Setup wizard: Created {len(agents_created)} default agents")
 
+            # BUG-383: Link seeded agents to the primary provider instance
+            if first_provider_instance and agents:
+                from models import Agent as AgentModel
+                for agent_info in agents:
+                    aid = agent_info.get("agent_id")
+                    if aid:
+                        agent_obj = db.query(AgentModel).filter(AgentModel.id == aid).first()
+                        if agent_obj:
+                            agent_obj.provider_instance_id = first_provider_instance.id
+                db.commit()
+                logger.info(f"Setup wizard: Linked {len(agents)} agents to provider instance {first_provider_instance.id}")
+
         # Step 5: Seed tenant Sentinel config with the chosen provider
         try:
             from models import SentinelConfig
