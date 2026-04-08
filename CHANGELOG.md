@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### macOS Fresh Install QA (`develop`, 2026-04-08)
+
+- Completed a 33+ test-case fresh-install QA on macOS (Darwin) using `TSN_STACK_NAME=tsushin-fresh` with `install.py --defaults --http` on `develop` HEAD, with isolated containers/volumes while original install was stopped.
+- **Installation:** Installer ran fully unattended with `--defaults --http`, built all images (backend, frontend, WhatsApp MCP, Toolbox), passed health checks. `TSN_STACK_NAME=tsushin-fresh` correctly prefixed all containers and volumes.
+- **Setup Wizard:** Completed via Playwright browser automation with 3 LLM providers (Gemini, OpenAI, Anthropic), global admin credentials captured. 6 default agents seeded.
+- **Provider Matrix:** All 3 SaaS providers connected successfully. Ollama auto-detected with 9 local models. Brave/Tavily not configured during this run (reserved for post-setup).
+- **Core Features Validated:** Playground chat (Gemini 2.5 Flash — correct response), Memory Inspector (fact CRUD — create/verify/delete), Knowledge Base (ACME Sales CSV upload + price retrieval with SKU), Sentinel/MemGuard (injection 90%, poisoning 90%, benign 0%), A2A communication permission (Tsushin→ACME Sales), slash commands (/status, /memory status), vector store config (ChromaDB default), flow creation (notification type), project creation, API v1 (client creation, API-key auth, OAuth token exchange, sync chat "2+2"→"4", async chat + queue poll → completed), 22 UI pages (all passed), RBAC (tenant admin 403 on /system/*, global admin 200), WhatsApp instances (bot authenticated, tester QR not visible in UI), log review (0 backend errors).
+- **New Bugs Found (7):** BUG-437 (CORS mismatch localhost — Medium), BUG-438 (HTTP redirect on localhost — Medium), BUG-439 (tester not visible in Hub UI — Medium), BUG-440 (API v1 agents empty — Low), BUG-441 (Sentinel enabled=None — Low), BUG-442 (POST /api/flows 307 — Low), BUG-443 (login rate limit 5/min — Low).
+- **Environment Revert:** Fresh install cleaned up (containers, volumes, images, .fresh-install/ folder removed), original containers restored and verified healthy.
+
 ### Ubuntu VM Fresh Install Full QA (`develop`, 2026-04-08)
 
 - Completed a 45-test-case fresh-install QA on Ubuntu VM (10.211.55.5) using `install.py --defaults --http` on `develop` HEAD, covering all v0.6.0 features via both browser automation and API curl.
