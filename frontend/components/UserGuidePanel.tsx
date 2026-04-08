@@ -17,30 +17,45 @@ interface TocEntry {
 
 export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps) {
   const [content, setContent] = useState<string>('')
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<string>('')
   const contentRef = useRef<HTMLDivElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
-    if (isOpen && !content) {
-      setLoading(true)
+    if (!isOpen || content) return
+
+    let isCancelled = false
+
+    const loadGuide = async () => {
+      await Promise.resolve()
+      if (isCancelled) return
+
       setError(null)
-      fetch('/api/user-guide', { credentials: 'include' })
-        .then(res => {
-          if (!res.ok) throw new Error('Failed to load user guide')
-          return res.text()
-        })
-        .then(md => {
+
+      try {
+        const res = await fetch('/api/user-guide', { credentials: 'include' })
+        if (!res.ok) throw new Error('Failed to load user guide')
+
+        const md = await res.text()
+        if (!isCancelled) {
           setContent(md)
-          setLoading(false)
-        })
-        .catch(err => {
-          setError(err.message)
-          setLoading(false)
-        })
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to load user guide')
+        }
+      }
+    }
+
+    void loadGuide()
+    return () => {
+      isCancelled = true
     }
   }, [isOpen, content])
+
+  const loading = isOpen && !content && !error
 
   const toc = useMemo<TocEntry[]>(() => {
     if (!content) return []
@@ -73,11 +88,25 @@ export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps)
 
   useEffect(() => {
     if (!isOpen) return
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+
+    const focusTimer = window.setTimeout(() => {
+      closeButtonRef.current?.focus()
+    }, 50)
+
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        onClose()
+      }
     }
-    document.addEventListener('keydown', handleEscape)
-    return () => document.removeEventListener('keydown', handleEscape)
+    window.addEventListener('keydown', handleEscape, true)
+    return () => {
+      window.clearTimeout(focusTimer)
+      window.removeEventListener('keydown', handleEscape, true)
+      previousFocusRef.current?.focus()
+    }
   }, [isOpen, onClose])
 
   // Track active section on scroll
@@ -104,34 +133,44 @@ export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps)
       {/* Backdrop */}
       <div
         className={`fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm transition-opacity duration-300 ${
-          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
         onClick={onClose}
       />
 
       {/* Slide-over panel */}
       <div
-        className={`fixed top-0 right-0 z-[101] h-full w-full max-w-4xl transform transition-transform duration-300 ease-in-out ${
-          isOpen ? 'translate-x-0' : 'translate-x-full'
+        className={`fixed top-0 right-0 z-[101] h-full w-full sm:max-w-2xl xl:max-w-3xl transform transition-transform duration-300 ease-in-out ${
+          isOpen ? 'translate-x-0 pointer-events-auto' : 'translate-x-full pointer-events-none'
         }`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="user-guide-title"
       >
         <div className="h-full flex flex-col bg-tsushin-surface border-l border-tsushin-border shadow-2xl">
           {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-tsushin-border bg-tsushin-surface/80 backdrop-blur-sm">
+          <div className="flex items-center justify-between gap-3 px-6 py-4 border-b border-tsushin-border bg-tsushin-surface/95 backdrop-blur-sm">
             <div className="flex items-center gap-3">
               <svg className="w-5 h-5 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
               </svg>
-              <h2 className="text-lg font-semibold text-white">User Guide</h2>
+              <div>
+                <h2 id="user-guide-title" className="text-lg font-semibold text-white">User Guide</h2>
+                <p className="text-xs text-tsushin-slate">Press Escape or use the close button to return to the dashboard.</p>
+              </div>
             </div>
             <button
+              ref={closeButtonRef}
+              type="button"
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-tsushin-hover transition-colors text-tsushin-slate hover:text-white"
+              className="inline-flex items-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-hover px-3 py-2 text-sm font-medium text-white hover:bg-tsushin-border/70 transition-colors"
               title="Close (Esc)"
+              aria-label="Close User Guide"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
+              <span>Close Guide</span>
             </button>
           </div>
 
@@ -261,6 +300,16 @@ export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps)
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="border-t border-tsushin-border bg-tsushin-surface/95 px-6 py-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full rounded-lg border border-tsushin-border bg-tsushin-hover px-4 py-3 text-sm font-medium text-white hover:bg-tsushin-border/70 transition-colors"
+            >
+              Return to Dashboard
+            </button>
           </div>
         </div>
       </div>

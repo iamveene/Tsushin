@@ -7,12 +7,13 @@
  * Minimalist design without axes or labels.
  */
 
+import { useId } from 'react'
 import {
   AreaChart,
   Area,
-  ResponsiveContainer,
 } from 'recharts'
 import { CHART_COLORS, CHART_GRADIENTS } from './chartTheme'
+import ResponsiveChartFrame from './ResponsiveChartFrame'
 
 interface SparklineChartProps {
   data: number[]
@@ -31,6 +32,8 @@ export default function SparklineChart({
   showGradient = true,
   className = '',
 }: SparklineChartProps) {
+  const gradientId = `sparkline-gradient-${useId().replace(/:/g, '')}`
+
   if (!data || data.length === 0) {
     return (
       <div
@@ -52,13 +55,13 @@ export default function SparklineChart({
       ? CHART_COLORS[color as keyof typeof CHART_COLORS]
       : color
 
-  const gradientId = `sparkline-gradient-${Math.random().toString(36).substr(2, 9)}`
-
   return (
-    <div className={className} style={{ width, height }}>
-      <ResponsiveContainer width="100%" height="100%">
+    <ResponsiveChartFrame className={className} width={width} height={height}>
+      {({ height: chartHeight, width: chartWidth }) => (
         <AreaChart
           data={chartData}
+          width={chartWidth}
+          height={chartHeight}
           margin={{ top: 2, right: 2, left: 2, bottom: 2 }}
         >
           {showGradient && (
@@ -80,8 +83,8 @@ export default function SparklineChart({
             activeDot={false}
           />
         </AreaChart>
-      </ResponsiveContainer>
-    </div>
+      )}
+    </ResponsiveChartFrame>
   )
 }
 

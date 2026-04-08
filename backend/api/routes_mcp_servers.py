@@ -540,7 +540,15 @@ async def connect_mcp_server(
         db.commit()
 
         await manager.get_or_connect(server_id, db)
+        try:
+            await manager.refresh_tools(server_id, db)
+        except Exception as refresh_error:
+            logger.warning(f"MCP tool refresh failed during connect for server {server_id}: {refresh_error}")
         latency_ms = int((time.time() - start_time) * 1000)
+        tool_count = db.query(MCPDiscoveredTool).filter(
+            MCPDiscoveredTool.server_id == server_id,
+            MCPDiscoveredTool.tenant_id == ctx.tenant_id,
+        ).count()
 
         # Log health check
         health = MCPServerHealth(
@@ -554,7 +562,7 @@ async def connect_mcp_server(
 
         log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.MCP_CONNECT, "mcp_server", str(server_id), {"name": config.server_name}, request)
 
-        return {"status": "connected", "latency_ms": latency_ms}
+        return {"status": "connected", "latency_ms": latency_ms, "tool_count": tool_count}
 
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
@@ -619,9 +627,12 @@ async def test_mcp_server(
     success = False
 
     try:
-        transport = await manager.get_or_connect(server_id, db)
-        tools = await transport.list_tools()
-        tools_found = len(tools)
+        await manager.get_or_connect(server_id, db)
+        await manager.refresh_tools(server_id, db)
+        tools_found = db.query(MCPDiscoveredTool).filter(
+            MCPDiscoveredTool.server_id == server_id,
+            MCPDiscoveredTool.tenant_id == ctx.tenant_id,
+        ).count()
         success = True
     except Exception as e:
         error_msg = str(e)

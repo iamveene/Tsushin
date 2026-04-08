@@ -158,41 +158,10 @@ class StdioTransport(MCPTransport):
         if not self._connected:
             return []
 
-        binary = self.server_config.stdio_binary
-        args = self.server_config.stdio_args or []
-
-        tool_list_input = json.dumps({
-            "jsonrpc": "2.0",
-            "method": "tools/list",
-            "params": {},
-            "id": 1,
-        })
-
         try:
-            from services.toolbox_container_service import ToolboxContainerService
-            svc = ToolboxContainerService()
-
-            cmd_parts = [binary] + [str(a) for a in args]
-            cmd = f"printf '%s' {_shell_escape(tool_list_input)} | {' '.join(cmd_parts)}"
-
-            result = await svc.execute_command(
-                tenant_id=self.server_config.tenant_id,
-                command=cmd,
-                timeout=self.server_config.timeout_seconds or 30,
-            )
-
-            exit_code = result.get("exit_code", -1)
-            stdout = result.get("stdout", "")
-
-            if exit_code != 0:
-                logger.warning(
-                    f"Stdio list_tools failed (exit={exit_code}) for "
-                    f"{self.server_config.server_name}"
-                )
-                return []
-
-            parsed = json.loads(stdout)
-            tools = parsed.get("result", {}).get("tools", [])
+            self._last_activity = time.time()
+            parsed = await self._send_json_rpc_request("tools/list", {})
+            tools = parsed.get("tools", []) if isinstance(parsed, dict) else []
             return tools
 
         except Exception as e:
@@ -203,53 +172,126 @@ class StdioTransport(MCPTransport):
         """Execute tool via container command."""
         self._last_activity = time.time()
 
-        binary = self.server_config.stdio_binary
-        args = self.server_config.stdio_args or []
-
-        # Build command with resource limits
-        cmd_parts = [
-            "ulimit -v 1048576 -t 60;",  # 1GB vmem, 60s CPU
-            binary,
-        ] + [str(a) for a in args]
-
-        # Pass tool call as JSON-RPC to stdin
-        tool_input = json.dumps({
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-            "id": 1,
-        })
-
-        # Execute in tenant container
-        from services.toolbox_container_service import ToolboxContainerService
-
-        container_service = ToolboxContainerService()
-
         try:
-            # Use printf to safely pipe JSON without shell interpretation issues
-            cmd = f"printf '%s' {_shell_escape(tool_input)} | {' '.join(cmd_parts)}"
-            result = await container_service.execute_command(
-                tenant_id=self.server_config.tenant_id,
-                command=cmd,
-                timeout=self.server_config.timeout_seconds or 30,
+            return await self._send_json_rpc_request(
+                "tools/call",
+                {"name": tool_name, "arguments": arguments or {}},
             )
-
-            exit_code = result.get("exit_code", -1)
-            stdout = result.get("stdout", "")
-            stderr = result.get("stderr", "")
-
-            if exit_code != 0:
-                return {"error": stderr or f"Process exited with code {exit_code}"}
-
-            # Parse MCP response
-            try:
-                parsed = json.loads(stdout)
-                return parsed.get("result", parsed)
-            except json.JSONDecodeError:
-                return {"output": stdout}
         except Exception as e:
             logger.error(f"Stdio tool execution failed: {e}")
             return {"error": str(e)}
+
+    async def _send_json_rpc_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """Run a short-lived stdio MCP session for a single request."""
+        from mcp.types import LATEST_PROTOCOL_VERSION
+        from services.toolbox_container_service import ToolboxContainerService
+
+        binary = self.server_config.stdio_binary
+        args = self.server_config.stdio_args or []
+        request_id = 1
+
+        requests = [
+            {
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "tsushin-stdio-client",
+                        "version": "0.6.0",
+                    },
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": params or {},
+            },
+        ]
+
+        cmd = self._build_stdio_command(binary, args, requests)
+        svc = ToolboxContainerService()
+        result = await svc.execute_command(
+            tenant_id=self.server_config.tenant_id,
+            command=cmd,
+            timeout=self.server_config.timeout_seconds or 30,
+        )
+
+        exit_code = result.get("exit_code", -1)
+        stdout = result.get("stdout", "")
+        stderr = result.get("stderr", "")
+
+        if exit_code != 0:
+            raise RuntimeError(stderr or f"Process exited with code {exit_code}")
+
+        return self._extract_json_rpc_result(stdout, request_id)
+
+    def _build_stdio_command(self, binary: str, args: List[str], requests: List[Dict[str, Any]]) -> str:
+        """Build a shell command that pipes newline-delimited JSON-RPC into the MCP process."""
+        message_args = " ".join(
+            _shell_escape(json.dumps(message, separators=(",", ":")))
+            for message in requests
+        )
+        command_parts = " ".join(
+            _shell_escape(str(part))
+            for part in [binary, *args]
+        )
+        # Some stdio MCP servers need stdin to remain open for a beat after the
+        # request is written, otherwise `tools/call` can terminate before the
+        # server flushes its response. `tools/list` works without the keepalive.
+        has_tool_call = any(message.get("method") == "tools/call" for message in requests)
+        stdin_writer = f"printf '%s\\n' {message_args}"
+        if has_tool_call:
+            stdin_writer = f"{{ {stdin_writer}; sleep 1; }}"
+
+        return f"{stdin_writer} | {command_parts}"
+
+    def _extract_json_rpc_result(self, stdout: str, request_id: int) -> Any:
+        """Parse newline-delimited JSON-RPC output and return the target response result."""
+        target_response = None
+
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                logger.debug(
+                    f"Ignoring non-JSON stdio output from {self.server_config.server_name}: {line[:200]}"
+                )
+                continue
+
+            if not isinstance(parsed, dict):
+                continue
+
+            if parsed.get("id") != request_id:
+                continue
+
+            target_response = parsed
+            break
+
+        if not target_response:
+            raise RuntimeError("No JSON-RPC response received from stdio MCP server")
+
+        if "error" in target_response:
+            error = target_response["error"]
+            if isinstance(error, dict):
+                message = error.get("message") or json.dumps(error)
+            else:
+                message = str(error)
+            return {"error": message}
+
+        return target_response.get("result", {})
 
     async def _idle_watchdog(self, timeout_seconds: int):
         """Kill process after idle timeout."""

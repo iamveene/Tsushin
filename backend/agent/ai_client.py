@@ -388,7 +388,7 @@ class AIClient:
             elif self.provider == "openrouter":
                 # OpenRouter uses OpenAI-compatible API
                 result = await self._call_openai(system_prompt, user_message)
-            elif self.provider in ("groq", "grok", "deepseek"):
+            elif self.provider in ("groq", "grok", "deepseek", "custom"):
                 # Groq, Grok, and DeepSeek use OpenAI-compatible API
                 result = await self._call_openai(system_prompt, user_message)
             elif self.provider == "vertex_ai":
@@ -464,7 +464,14 @@ class AIClient:
 
     async def _call_openai(self, system_prompt: str, user_message: str) -> Dict:
         """Call OpenAI GPT API"""
-        provider_name = "OpenRouter" if self.provider == "openrouter" else "OpenAI"
+        if self.provider == "openrouter":
+            provider_name = "OpenRouter"
+        elif self.provider == "vertex_ai":
+            provider_name = "Vertex AI"
+        elif self.provider == "custom":
+            provider_name = "Custom OpenAI-compatible"
+        else:
+            provider_name = "OpenAI"
         print(f"  📡 Calling {provider_name} API: model={self.model_name}")
 
         response = await self.client.chat.completions.create(
@@ -477,12 +484,15 @@ class AIClient:
             temperature=self.temperature
         )
 
-        answer = response.choices[0].message.content if response.choices else ""
+        answer = self._extract_openai_response_text(response)
 
         token_usage = {
-            "prompt": response.usage.prompt_tokens,
-            "completion": response.usage.completion_tokens,
-            "total": response.usage.total_tokens
+            "prompt": getattr(response.usage, "prompt_tokens", 0) or 0,
+            "completion": getattr(response.usage, "completion_tokens", 0) or 0,
+            "total": getattr(response.usage, "total_tokens", 0) or (
+                (getattr(response.usage, "prompt_tokens", 0) or 0) +
+                (getattr(response.usage, "completion_tokens", 0) or 0)
+            )
         } if response.usage else None
 
         return {
@@ -771,7 +781,7 @@ class AIClient:
             elif self.provider == "openrouter":
                 # OpenRouter uses OpenAI-compatible streaming API
                 stream_gen = self._stream_openai(system_prompt, user_message)
-            elif self.provider in ("groq", "grok", "deepseek"):
+            elif self.provider in ("groq", "grok", "deepseek", "custom"):
                 # Groq, Grok, and DeepSeek use OpenAI-compatible streaming API
                 stream_gen = self._stream_openai(system_prompt, user_message)
             elif self.provider == "vertex_ai":
@@ -1125,6 +1135,62 @@ class AIClient:
             if hasattr(self, 'client') and isinstance(self.client, AsyncOpenAI):
                 self.client.api_key = self._vertex_credentials.token
             self.logger.debug("Refreshed Vertex AI access token")
+
+    def _extract_openai_response_text(self, response) -> str:
+        """Extract text from OpenAI-compatible chat completion responses."""
+        if not getattr(response, "choices", None):
+            return ""
+
+        message = getattr(response.choices[0], "message", None)
+        if message is None:
+            return ""
+
+        answer = self._coerce_openai_content_to_text(getattr(message, "content", None))
+        if answer:
+            return answer
+
+        refusal = getattr(message, "refusal", None)
+        if isinstance(refusal, str):
+            return refusal
+        return ""
+
+    def _coerce_openai_content_to_text(self, content) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(self._coerce_openai_content_to_text(part) for part in content)
+        if isinstance(content, dict):
+            text = content.get("text")
+            if isinstance(text, str):
+                return text
+            if isinstance(text, dict):
+                nested_text = text.get("value")
+                if isinstance(nested_text, str):
+                    return nested_text
+            nested_content = content.get("content")
+            if nested_content is not None:
+                return self._coerce_openai_content_to_text(nested_content)
+            return ""
+
+        text_attr = getattr(content, "text", None)
+        if isinstance(text_attr, str):
+            return text_attr
+        if isinstance(text_attr, dict):
+            nested_text = text_attr.get("value")
+            if isinstance(nested_text, str):
+                return nested_text
+
+        nested_content = getattr(content, "content", None)
+        if nested_content is not None:
+            return self._coerce_openai_content_to_text(nested_content)
+
+        model_dump = getattr(content, "model_dump", None)
+        if callable(model_dump):
+            return self._coerce_openai_content_to_text(model_dump())
+
+        return ""
 
     async def _call_vertex_anthropic(self, system_prompt: str, user_message: str) -> Dict:
         """Call Anthropic Claude via Vertex AI rawPredict endpoint."""

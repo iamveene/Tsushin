@@ -16,6 +16,34 @@ from models_rbac import User
 logger = logging.getLogger(__name__)
 
 
+def build_playground_thread_recipient(user_id: int, agent_id: int, thread_id: int) -> str:
+    """Canonical playground thread recipient key."""
+    return f"playground_u{user_id}_a{agent_id}_t{thread_id}"
+
+
+def build_api_thread_recipient(thread_id: int, api_client_id: Optional[str] = None, user_id: Optional[int] = None) -> str:
+    """Canonical API v1 thread recipient key."""
+    if api_client_id:
+        return f"api_client_{api_client_id}_thread_{thread_id}"
+    if user_id is not None:
+        return f"api_user_{user_id}_thread_{thread_id}"
+    return f"api_thread_{thread_id}"
+
+
+def build_playground_channel_id(user_id: int) -> str:
+    """Canonical shared channel ID for Playground conversations."""
+    return f"playground_{user_id}"
+
+
+def build_api_channel_id(api_client_id: Optional[str] = None, user_id: Optional[int] = None) -> str:
+    """Canonical shared channel ID for API conversations."""
+    if api_client_id:
+        return f"api_client_{api_client_id}"
+    if user_id is not None:
+        return f"api_user_{user_id}"
+    return "api"
+
+
 class PlaygroundThreadService:
     """
     Service for managing playground conversation threads.
@@ -42,7 +70,74 @@ class PlaygroundThreadService:
         Returns:
             Unique sender key for this thread
         """
-        return f"playground_u{user_id}_a{agent_id}_t{thread_id}"
+        return build_playground_thread_recipient(user_id, agent_id, thread_id)
+
+    def _get_thread_channel_id(self, thread: ConversationThread) -> str:
+        """Resolve the channel-scoped memory identifier for a thread."""
+        if thread.api_client_id:
+            return build_api_channel_id(api_client_id=thread.api_client_id)
+        if thread.user_id is not None:
+            return build_playground_channel_id(thread.user_id)
+        return thread.recipient
+
+    def _filter_messages_for_thread(self, messages: List[Dict[str, Any]], thread_id: int) -> List[Dict[str, Any]]:
+        """Keep only messages that belong to a specific thread when metadata is present."""
+        filtered = [
+            msg for msg in messages
+            if not isinstance(msg.get("metadata"), dict)
+            or msg["metadata"].get("thread_id") is None
+            or msg["metadata"].get("thread_id") == thread_id
+        ]
+        return filtered or messages
+
+    def _find_memory_record(self, thread: ConversationThread, isolation_mode: str) -> Optional[Memory]:
+        """Locate the underlying memory record for a thread."""
+        candidate_keys: List[str] = []
+
+        if isolation_mode == "shared":
+            candidate_keys = ["shared", f"agent_{thread.agent_id}:shared"]
+        elif isolation_mode == "channel_isolated":
+            channel_id = self._get_thread_channel_id(thread)
+            candidate_keys = [f"channel_{channel_id}"]
+        else:
+            candidate_keys = [
+                f"sender_{thread.recipient}",
+                thread.recipient,
+            ]
+
+        for key in candidate_keys:
+            memory = self.db.query(Memory).filter(
+                Memory.agent_id == thread.agent_id,
+                Memory.sender_key == key,
+            ).first()
+            if memory:
+                return memory
+
+        if isolation_mode == "isolated":
+            return (
+                self.db.query(Memory)
+                .filter(
+                    Memory.agent_id == thread.agent_id,
+                    Memory.sender_key.like(f"%{thread.recipient}%"),
+                )
+                .first()
+            )
+
+        return None
+
+    def _get_thread_messages_from_memory(self, thread: ConversationThread) -> List[Dict[str, Any]]:
+        """Load thread messages with the correct isolation semantics."""
+        agent = self.db.query(Agent).filter(Agent.id == thread.agent_id).first()
+        isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
+
+        memory = self._find_memory_record(thread, isolation_mode)
+        if not memory or not memory.messages_json:
+            return []
+
+        raw_messages = memory.messages_json or []
+        if isolation_mode in ("shared", "channel_isolated"):
+            return self._filter_messages_for_thread(raw_messages, thread.id)
+        return raw_messages
 
     def _generate_thread_title(self, message: str, max_length: int = 50) -> str:
         """Generate a clean thread title from the first user message."""
@@ -191,32 +286,12 @@ class PlaygroundThreadService:
 
             result = []
             for thread in threads:
-                # BUG-360 FIX: Messages are stored under the stable key
-                # playground_u{uid}_a{aid} (without thread suffix _t{tid}).
-                # Extract the stable key from the thread recipient.
-                recipient = thread.recipient
-                if recipient and '_t' in recipient:
-                    # Remove thread suffix: playground_u1_a1_t1 -> playground_u1_a1
-                    parts = recipient.rsplit('_t', 1)
-                    if len(parts) == 2 and parts[1].isdigit():
-                        stable_key = parts[0]
-                    else:
-                        stable_key = recipient
-                else:
-                    stable_key = recipient
+                thread_messages = self._get_thread_messages_from_memory(thread)
+                message_count = len(thread_messages)
 
-                memory = self.db.query(Memory).filter(
-                    Memory.agent_id == thread.agent_id,
-                    Memory.sender_key == stable_key
-                ).first()
-
-                message_count = len(memory.messages_json) if memory and memory.messages_json else 0
-                self.logger.info(f"[DEBUG] Thread {thread.id}: memory={memory is not None}, message_count={message_count}")
-
-                # Get last message preview
                 last_message = ""
-                if memory and memory.messages_json and len(memory.messages_json) > 0:
-                    last_msg = memory.messages_json[-1]
+                if thread_messages:
+                    last_msg = thread_messages[-1]
                     last_message = last_msg.get("content", "")[:100]
 
                 result.append({
@@ -269,179 +344,10 @@ class PlaygroundThreadService:
                 return None
 
             self.logger.info(f"[get_thread] Loading thread {thread_id}: recipient={thread.recipient}, agent_id={thread.agent_id}")
-
-            # IMPORTANT: Playground stores messages in the Memory table
-            # The recipient field contains the sender_key (e.g., "playground_u4_a3_t17")
-            # BUT Memory table stores it with "sender_" prefix (e.g., "sender_playground_u4_a3_t17")
-            # This is because MultiAgentMemoryManager prepends "sender_" to all sender_keys
-
-            # Get agent to check memory_isolation_mode
-            agent = self.db.query(Agent).filter(Agent.id == thread.agent_id).first()
-
-            messages = []
-
-            # If agent has "shared" memory mode, all messages are in one shared memory pool
-            if agent and agent.memory_isolation_mode == "shared":
-                memory = self.db.query(Memory).filter(
-                    Memory.agent_id == thread.agent_id,
-                    Memory.sender_key == "shared"
-                ).first()
-
-                if memory and memory.messages_json:
-                    # Shared memory contains ALL messages — filter by thread_id metadata
-                    all_shared = memory.messages_json
-                    thread_messages = [
-                        msg for msg in all_shared
-                        if isinstance(msg.get("metadata"), dict)
-                        and msg["metadata"].get("thread_id") == thread_id
-                    ]
-                    if thread_messages:
-                        messages = thread_messages
-                        self.logger.info(f"[get_thread] Filtered shared memory: {len(all_shared)} → {len(thread_messages)} messages for thread {thread_id}")
-                    else:
-                        # Fallback: if no messages have thread_id metadata (legacy), return all
-                        messages = all_shared
-                        self.logger.warning(f"[get_thread] No thread_id metadata in shared memory, returning all {len(all_shared)} messages")
-            else:
-                # BUG-360 FIX: Use same stable-key extraction as list_threads().
-                # Messages are stored under playground_u{uid}_a{aid} (no thread suffix).
-                recipient = thread.recipient
-                if recipient and '_t' in recipient:
-                    parts = recipient.rsplit('_t', 1)
-                    if len(parts) == 2 and parts[1].isdigit():
-                        stable_key = parts[0]
-                    else:
-                        stable_key = recipient
-                else:
-                    stable_key = recipient
-
-                memory_sender_keys = [
-                    stable_key,  # Primary: stable key playground_u{uid}_a{aid}
-                    f"sender_{thread.recipient}",  # Legacy: sender_playground_u{id}_a{id}_t{id}
-                    thread.recipient,  # Fallback: without sender_ prefix
-                ]
-
-                # Check if user has a contact mapping (cross-channel memory)
-                # If so, messages might be stored under phone number or contact-based key
-                from models import UserContactMapping, Contact
-                user_contact_mapping = self.db.query(UserContactMapping).filter(
-                    UserContactMapping.user_id == user_id
-                ).first()
-
-                if user_contact_mapping:
-                    contact = self.db.query(Contact).filter(
-                        Contact.id == user_contact_mapping.contact_id
-                    ).first()
-
-                    if contact:
-                        # Add contact-based sender_keys (lower priority for playground threads)
-                        if contact.phone_number:
-                            memory_sender_keys.append(f"sender_{contact.phone_number}")
-                            memory_sender_keys.append(contact.phone_number)
-                        if contact.whatsapp_id:
-                            memory_sender_keys.append(f"sender_{contact.whatsapp_id}")
-                            memory_sender_keys.append(contact.whatsapp_id)
-                        # Also try contact_id format
-                        memory_sender_keys.append(f"sender_contact_{contact.id}")
-                        memory_sender_keys.append(f"contact_{contact.id}")
-                        self.logger.info(f"[get_thread] User has contact mapping, added keys for contact {contact.id}")
-
-                self.logger.info(f"[get_thread] Trying {len(memory_sender_keys)} sender_keys: {memory_sender_keys}")
-
-                memory = None
-                for idx, key in enumerate(memory_sender_keys):
-                    self.logger.debug(f"[get_thread] Attempt {idx+1}/{len(memory_sender_keys)}: {key}")
-                    memory = self.db.query(Memory).filter(
-                        Memory.agent_id == thread.agent_id,
-                        Memory.sender_key == key
-                    ).first()
-                    if memory and memory.messages_json:
-                        self.logger.info(f"✓ Found {len(memory.messages_json)} messages with key: {key}")
-                        break
-                    else:
-                        self.logger.debug(f"✗ No messages with key: {key}")
-
-                # LIKE-based fallback: try partial matches on sender_key
-                # IMPORTANT: Include thread_id in patterns first to avoid cross-thread contamination
-                if not memory or not memory.messages_json:
-                    self.logger.info(f"[get_thread] Exact keys failed, trying LIKE patterns for agent {thread.agent_id}")
-                    like_patterns = [
-                        # Thread-specific patterns FIRST (prevents cross-thread message loading)
-                        f"sender_playground%u{user_id}%a{thread.agent_id}%t{thread_id}%",
-                        f"playground%u{user_id}%a{thread.agent_id}%t{thread_id}%",
-                        # Broad patterns LAST (only if thread-specific fails)
-                        f"sender_playground%u{user_id}%a{thread.agent_id}%",
-                        f"sender_playground_user_{user_id}",
-                        f"playground_user_{user_id}",
-                    ]
-                    for pattern in like_patterns:
-                        memory = self.db.query(Memory).filter(
-                            Memory.agent_id == thread.agent_id,
-                            Memory.sender_key.like(pattern)
-                        ).first()
-                        if memory and memory.messages_json:
-                            self.logger.info(f"✓ Found {len(memory.messages_json)} messages via LIKE pattern: {pattern}")
-                            break
-
-                # Ultimate fallback: scan all Memory records for this agent
-                if not memory or not memory.messages_json:
-                    self.logger.warning(f"[get_thread] All sender_keys failed, scanning all Memory for agent {thread.agent_id}")
-
-                    all_memories = self.db.query(Memory).filter(
-                        Memory.agent_id == thread.agent_id
-                    ).all()
-
-                    for mem in all_memories:
-                        if mem.messages_json:
-                            # Check if any message has metadata.thread_id matching our thread
-                            for msg in mem.messages_json:
-                                metadata = msg.get("metadata", {})
-                                if isinstance(metadata, dict) and metadata.get("thread_id") == thread_id:
-                                    memory = mem
-                                    self.logger.info(f"✓ Found messages via full scan in sender_key: {mem.sender_key}")
-                                    break
-                            if memory:
-                                break
-
-                if memory and memory.messages_json:
-                    # Filter messages by thread_id metadata if available
-                    # This prevents cross-thread contamination when broad LIKE patterns matched
-                    raw_messages = memory.messages_json
-                    thread_filtered = [
-                        msg for msg in raw_messages
-                        if not isinstance(msg.get("metadata"), dict)
-                        or msg["metadata"].get("thread_id") is None
-                        or msg["metadata"].get("thread_id") == thread_id
-                    ]
-                    # Use filtered if it found thread-specific messages, otherwise fall back to all
-                    # (handles legacy messages without thread_id metadata)
-                    if thread_filtered:
-                        messages = thread_filtered
-                        if len(thread_filtered) < len(raw_messages):
-                            self.logger.info(f"[get_thread] Filtered {len(raw_messages)} → {len(thread_filtered)} messages by thread_id={thread_id}")
-                    else:
-                        messages = raw_messages
-                elif thread.conversation_history:
-                    # Fallback to thread's conversation_history if Memory is empty
-                    # This handles older threads or threads created differently
-                    messages = thread.conversation_history
-                    self.logger.info(f"[get_thread] Using conversation_history fallback: {len(messages)} messages")
-                else:
-                    # No messages found - return empty thread with warning instead of error
-                    self.logger.warning(f"[get_thread] No messages found for thread {thread_id} after all fallbacks")
-
-                    return {
-                        "id": thread.id,
-                        "title": thread.title,
-                        "folder": thread.folder,
-                        "status": thread.status,
-                        "is_archived": thread.is_archived,
-                        "agent_id": thread.agent_id,
-                        "messages": [],
-                        "warning": "This conversation has no message history. It may have been created before the current storage format.",
-                        "created_at": thread.created_at.isoformat() if thread.created_at else None,
-                        "updated_at": thread.updated_at.isoformat() if thread.updated_at else None
-                    }
+            messages = self._get_thread_messages_from_memory(thread)
+            if not messages and thread.conversation_history:
+                messages = thread.conversation_history
+                self.logger.info(f"[get_thread] Using conversation_history fallback: {len(messages)} messages")
 
             # Format messages to match PlaygroundMessage interface
             formatted_messages = []
@@ -669,22 +575,23 @@ class PlaygroundThreadService:
                     "error": "Thread not found"
                 }
 
-            # Delete associated memory - try both with and without sender_ prefix
-            # Memory is stored with sender_ prefix (e.g., "sender_playground_u4_a3_t17")
-            # but thread.recipient doesn't have the prefix
-            possible_sender_keys = [
-                f"sender_{thread.recipient}",  # Primary format
-                thread.recipient,  # Fallback
-            ]
-            for sender_key in possible_sender_keys:
-                memory = self.db.query(Memory).filter(
-                    Memory.agent_id == thread.agent_id,
-                    Memory.sender_key == sender_key
-                ).first()
-                if memory:
+            agent = self.db.query(Agent).filter(Agent.id == thread.agent_id).first()
+            isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
+            memory = self._find_memory_record(thread, isolation_mode)
+
+            if memory:
+                if isolation_mode in ("shared", "channel_isolated") and memory.messages_json:
+                    retained_messages = [
+                        msg for msg in (memory.messages_json or [])
+                        if not isinstance(msg.get("metadata"), dict)
+                        or msg["metadata"].get("thread_id") != thread_id
+                    ]
+                    if retained_messages:
+                        memory.messages_json = retained_messages
+                    else:
+                        self.db.delete(memory)
+                else:
                     self.db.delete(memory)
-                    self.logger.info(f"Deleted memory with sender_key: {sender_key}")
-                    break
 
             # Delete thread
             self.db.delete(thread)

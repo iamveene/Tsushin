@@ -5,7 +5,6 @@ Provides web search capabilities with result summarization.
 """
 
 import requests
-import os
 import logging
 from typing import Dict, Optional
 from sqlalchemy.orm import Session
@@ -15,19 +14,25 @@ from services.api_key_service import get_api_key
 class SearchTool:
     """Tool for web search using Brave Search API"""
 
-    def __init__(self, api_key: Optional[str] = None, db: Optional[Session] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        db: Optional[Session] = None,
+        tenant_id: Optional[str] = None,
+    ):
         """
         Initialize Search Tool
 
         Args:
             api_key: Brave Search API key (optional, overrides database/env)
             db: Database session for loading API key (Phase 4.6)
+            tenant_id: Optional tenant scope for tenant-specific API key lookup
         """
         # Priority: explicit api_key > database (env var fallback removed)
         if api_key:
             self.api_key = api_key
         elif db:
-            self.api_key = get_api_key('brave_search', db)
+            self.api_key = get_api_key('brave_search', db, tenant_id=tenant_id)
         else:
             self.api_key = None
 

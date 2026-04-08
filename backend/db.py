@@ -1301,10 +1301,10 @@ def seed_slash_commands(session):
         # Shell command (Phase 19: Playground shell execution)
         {
             "tenant_id": "_system",
-            "category": "system",
+            "category": "tool",
             "command_name": "shell",
             "language_code": "en",
-            "pattern": r"^/shell\s+(.+)$",
+            "pattern": r"^/shell\s+(?:([\w\-@]+):)?(.+)$",
             "aliases": json.dumps([]),
             "description": "Execute shell commands via the shell skill",
             "help_text": "Usage: /shell <command>\nExample: /shell whoami\nExample: /shell ls -la /tmp\n\nRequires: Shell skill enabled and an active beacon connection.",

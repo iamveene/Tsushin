@@ -761,14 +761,15 @@ async def test_provider_connection(
     if not ctx.can_access_resource(instance.tenant_id):
         raise HTTPException(status_code=404, detail="Provider instance not found")
 
-    # Resolve API key: instance-specific first, then fall back to tenant/system key
-    api_key = _decrypt_provider_key(instance, db)
-    if not api_key:
-        # Fall back to tenant-level API key for this vendor
+    # Ensure credentials exist before testing. Actual invocation still goes
+    # through provider_instance_id so saved-instance tests match runtime.
+    has_instance_key = bool(_decrypt_provider_key(instance, db))
+    has_tenant_key = False
+    if not has_instance_key:
         from services.api_key_service import get_api_key
-        api_key = get_api_key(instance.vendor, db, tenant_id=instance.tenant_id)
+        has_tenant_key = bool(get_api_key(instance.vendor, db, tenant_id=instance.tenant_id))
 
-    if not api_key and instance.vendor not in ("ollama",):
+    if not has_instance_key and not has_tenant_key and instance.vendor not in ("ollama",):
         # Ollama may not need an API key
         audit = ProviderConnectionAudit(
             tenant_id=instance.tenant_id,
@@ -814,19 +815,12 @@ async def test_provider_connection(
             db=db,
             token_tracker=tracker,
             tenant_id=instance.tenant_id,
+            provider_instance_id=instance.id,
             max_tokens=20,
-            api_key=api_key,  # V060-PRV-002: exercise instance's own key (falls back to tenant key only when instance has none)
         )
 
         # Disable SDK retries for connection tests — fail fast instead of hanging
         _disable_sdk_retries(client)
-
-        # Override base_url if instance has custom values
-        if instance.base_url:
-            if hasattr(client, 'client') and client.client:
-                client.client.base_url = instance.base_url
-            if instance.vendor == "ollama":
-                client.ollama_base_url = instance.base_url
 
         result = await client.generate(
             system_prompt="You are a test assistant. Respond with exactly: OK",

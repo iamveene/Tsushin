@@ -70,6 +70,8 @@ class CustomSkillAdapter(BaseSkill):
             return self._execute_instruction(arguments)
         elif self._record.skill_type_variant == 'script':
             return await self._execute_script(arguments, config)
+        elif self._record.skill_type_variant == 'mcp_server':
+            return await self._execute_mcp_server(arguments, config)
         else:
             return SkillResult(success=False, output=f"Unknown skill type: {self._record.skill_type_variant}", metadata={})
 
@@ -194,6 +196,126 @@ class CustomSkillAdapter(BaseSkill):
         except (json.JSONDecodeError, AttributeError):
             # Return raw stdout as plain text
             return SkillResult(success=True, output=stdout, metadata=metadata)
+
+    async def _execute_mcp_server(self, arguments: Dict, config: Dict = None) -> SkillResult:
+        """Execute an MCP-backed custom skill through the configured MCP server."""
+        from hub.mcp.connection_manager import MCPConnectionManager
+        from models import MCPServerConfig
+
+        db = config.get('db') if config else None
+        tenant_id = config.get('tenant_id') if config else None
+        if not db:
+            return SkillResult(
+                success=False,
+                output="No database context for MCP skill execution",
+                metadata={"skill_type": "mcp_server", "skill_name": self._record.name},
+            )
+
+        if not self._record.mcp_server_id or not self._record.mcp_tool_name:
+            return SkillResult(
+                success=False,
+                output="MCP custom skill is missing server or tool configuration",
+                metadata={"skill_type": "mcp_server", "skill_name": self._record.name},
+            )
+
+        server = db.query(MCPServerConfig).filter(
+            MCPServerConfig.id == self._record.mcp_server_id,
+        ).first()
+        if not server or (tenant_id and server.tenant_id != tenant_id):
+            return SkillResult(
+                success=False,
+                output="Configured MCP server is not accessible for this tenant",
+                metadata={"skill_type": "mcp_server", "skill_name": self._record.name},
+            )
+
+        manager = MCPConnectionManager.get_instance()
+        start_time = time.time()
+
+        try:
+            transport = await manager.get_or_connect(self._record.mcp_server_id, db)
+            raw_result = await transport.call_tool(self._record.mcp_tool_name, arguments or {})
+            output, metadata = self._normalize_mcp_result(raw_result)
+            metadata.update(
+                {
+                    "skill_type": "mcp_server",
+                    "skill_name": self._record.name,
+                    "mcp_server_id": self._record.mcp_server_id,
+                    "mcp_tool_name": self._record.mcp_tool_name,
+                    "execution_time_ms": int((time.time() - start_time) * 1000),
+                }
+            )
+
+            if metadata.get("is_error"):
+                return SkillResult(success=False, output=output, metadata=metadata)
+
+            return SkillResult(success=True, output=output, metadata=metadata)
+        except Exception as e:
+            logger.error(f"MCP skill execution failed for {self._record.name}: {e}", exc_info=True)
+            return SkillResult(
+                success=False,
+                output=f"MCP execution error: {e}",
+                metadata={
+                    "skill_type": "mcp_server",
+                    "skill_name": self._record.name,
+                    "mcp_server_id": self._record.mcp_server_id,
+                    "mcp_tool_name": self._record.mcp_tool_name,
+                    "execution_time_ms": int((time.time() - start_time) * 1000),
+                },
+            )
+
+    def _normalize_mcp_result(self, raw_result: Any) -> tuple[str, Dict[str, Any]]:
+        """Normalize MCP SDK and stdio JSON-RPC results into text + metadata."""
+        metadata: Dict[str, Any] = {}
+
+        if isinstance(raw_result, dict) and raw_result.get("error"):
+            metadata["is_error"] = True
+            return str(raw_result["error"]), metadata
+
+        is_error = getattr(raw_result, "isError", None)
+        if is_error is None and isinstance(raw_result, dict):
+            is_error = raw_result.get("isError", False)
+        metadata["is_error"] = bool(is_error)
+
+        structured_payload = None
+        content = getattr(raw_result, "content", None)
+        if content is None and isinstance(raw_result, dict):
+            content = raw_result.get("content")
+
+        text_parts = []
+        if isinstance(content, list):
+            for item in content:
+                item_type = getattr(item, "type", None)
+                if item_type is None and isinstance(item, dict):
+                    item_type = item.get("type")
+
+                if item_type == "text":
+                    text_value = getattr(item, "text", None)
+                    if text_value is None and isinstance(item, dict):
+                        text_value = item.get("text")
+                    if text_value:
+                        text_parts.append(str(text_value))
+                    continue
+
+                if isinstance(item, dict):
+                    text_parts.append(json.dumps(item))
+                else:
+                    text_parts.append(str(item))
+
+        if not text_parts:
+            if isinstance(raw_result, dict):
+                structured_payload = raw_result
+            elif hasattr(raw_result, "model_dump"):
+                structured_payload = raw_result.model_dump(mode="json")
+            elif hasattr(raw_result, "__dict__"):
+                structured_payload = {
+                    k: v for k, v in vars(raw_result).items() if not k.startswith("_")
+                }
+
+        output = "\n".join(part for part in text_parts if part).strip()
+        if not output and structured_payload is not None:
+            output = json.dumps(structured_payload, default=str)
+
+        return output or "MCP tool completed", metadata
 
     def get_instructions_for_prompt(self) -> Optional[str]:
         if self._record and self._record.instructions_md:

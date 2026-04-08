@@ -6,8 +6,8 @@
  * Phase 7.6.3 - Real Backend Authentication
  */
 
-import React, { createContext, useContext, useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 
 // User type matching backend response
@@ -58,29 +58,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
+  const pathname = usePathname()
+  const skipNextSessionBootstrapRef = useRef(false)
 
   // Load user from httpOnly cookie on mount
   useEffect(() => {
+    const isPublicPage = pathname?.startsWith('/auth') || pathname?.startsWith('/setup')
+    if (isPublicPage) {
+      _cleanupLegacyToken()
+      setLoading(false)
+      return
+    }
+
+    if (skipNextSessionBootstrapRef.current && user) {
+      skipNextSessionBootstrapRef.current = false
+      setLoading(false)
+      return
+    }
+
+    let isCancelled = false
+
     const loadUser = async () => {
       // Clean up legacy localStorage token from previous versions
       _cleanupLegacyToken()
+      setLoading(true)
       try {
         const userData = await api.getCurrentUser()
-        setUser(userData)
+        if (!isCancelled) {
+          setUser(userData)
+        }
       } catch (error) {
         // No valid session cookie — user is not authenticated
-        console.debug('No active session:', error)
-        setUser(null)
+        if (!isCancelled) {
+          console.debug('No active session:', error)
+          setUser(null)
+        }
+      } finally {
+        if (!isCancelled) {
+          setLoading(false)
+        }
       }
-      setLoading(false)
     }
+
     loadUser()
-  }, [])
+    return () => {
+      isCancelled = true
+    }
+  }, [pathname])
 
   const login = async (email: string, password: string) => {
     const response = await api.login(email, password)
     // SEC-005: Cookie is set by backend response — no localStorage needed
+    skipNextSessionBootstrapRef.current = true
     setUser(response.user)
+    setLoading(false)
 
     // Redirect based on user type
     if (response.user.is_global_admin) {
@@ -106,11 +137,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const setAuthFromToken = async (_token: string) => {
+    void _token
     // SEC-005: The httpOnly cookie was already set by the backend response
     // that returned this token. We just need to load the user profile via cookie.
     try {
       const userData = await api.getCurrentUser()
+      skipNextSessionBootstrapRef.current = true
       setUser(userData)
+      setLoading(false)
       // Note: Redirect is handled by the SSO callback page
     } catch (error) {
       throw error
@@ -130,7 +164,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       org_name: data.orgName,
     })
     // SEC-005: Cookie is set by backend response — no localStorage needed
+    skipNextSessionBootstrapRef.current = true
     setUser(response.user)
+    setLoading(false)
     router.push('/')
   }
 

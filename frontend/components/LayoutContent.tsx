@@ -72,6 +72,12 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
     return () => window.removeEventListener('tsushin:open-user-guide', handleOpenGuide)
   }, [])
 
+  const openUserGuideFromShell = useCallback(() => {
+    setIsUserGuideOpen(true)
+    setIsHelpMenuOpen(false)
+    window.dispatchEvent(new CustomEvent('tsushin:open-user-guide'))
+  }, [])
+
   // BUG-325: Dispatch close event when User Guide panel closes so OnboardingContext
   // can defer auto-start of the tour until after the guide is closed.
   const handleUserGuideClose = () => {
@@ -118,6 +124,9 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
 
   // Emergency stop status polling
   const checkEmergencyStopStatus = useCallback(async () => {
+    if (isAuthPage || !user) {
+      return
+    }
     try {
       const response = await authenticatedFetch(`${API_URL}/api/system/status`)
       if (response.ok) {
@@ -125,13 +134,16 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
         setEmergencyStop(data.emergency_stop || false)
       }
     } catch { /* silent */ }
-  }, [])
+  }, [isAuthPage, user])
 
   useEffect(() => {
+    if (isAuthPage || !user) {
+      return
+    }
     checkEmergencyStopStatus()
     const interval = setInterval(checkEmergencyStopStatus, 10000)
     return () => clearInterval(interval)
-  }, [checkEmergencyStopStatus])
+  }, [checkEmergencyStopStatus, isAuthPage, user])
 
   async function handleEmergencyToggle() {
     if (!emergencyStop) {
@@ -372,7 +384,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                         Take Tour
                       </button>
                       <button
-                        onClick={() => { setIsUserGuideOpen(true); setIsHelpMenuOpen(false) }}
+                        onClick={openUserGuideFromShell}
                         className="flex items-center gap-2.5 w-full text-left px-4 py-2.5 text-sm text-tsushin-slate hover:text-white hover:bg-tsushin-hover transition-colors"
                       >
                         <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">

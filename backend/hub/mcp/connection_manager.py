@@ -10,6 +10,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Dict, Set, Optional, Any
 from sqlalchemy.orm import Session
 
@@ -119,12 +120,31 @@ class MCPConnectionManager:
         Raises:
             ValueError: If transport type is unsupported.
         """
+        # Cache a plain snapshot instead of a live ORM object so reused MCP
+        # connections do not fail after the originating SQLAlchemy session ends.
+        config_snapshot = SimpleNamespace(
+            id=config.id,
+            tenant_id=config.tenant_id,
+            server_name=config.server_name,
+            transport_type=config.transport_type,
+            server_url=config.server_url,
+            auth_type=config.auth_type,
+            auth_token_encrypted=config.auth_token_encrypted,
+            auth_header_name=config.auth_header_name,
+            stdio_binary=config.stdio_binary,
+            stdio_args=list(config.stdio_args or []),
+            trust_level=config.trust_level,
+            timeout_seconds=config.timeout_seconds,
+            idle_timeout_seconds=config.idle_timeout_seconds,
+            is_active=config.is_active,
+        )
+
         if config.transport_type in ('sse', 'streamable_http'):
             from hub.mcp.sse_transport import SSETransport
-            return SSETransport(config)
+            return SSETransport(config_snapshot)
         elif config.transport_type == 'stdio':
             from hub.mcp.stdio_transport import StdioTransport
-            return StdioTransport(config)
+            return StdioTransport(config_snapshot)
         else:
             raise ValueError(f"Unsupported transport type: {config.transport_type}")
 
@@ -234,13 +254,21 @@ class MCPConnectionManager:
         seen_tool_names = set()
 
         for tool in tools:
-            tool_name = tool.name if hasattr(tool, 'name') else str(tool)
+            tool_name = self._get_tool_value(tool, "name")
+            if not tool_name:
+                logger.warning(f"Skipping MCP tool without a name on server {server_id}: {tool!r}")
+                continue
             seen_tool_names.add(tool_name)
             namespaced = f"{config.server_name}__{tool_name}"
 
             # Security C-3: Truncate description to prevent oversized payloads
-            raw_description = getattr(tool, 'description', '') or ''
+            raw_description = self._get_tool_value(tool, "description", default="") or ""
             description = raw_description[:self.MAX_TOOL_DESCRIPTION_CHARS]
+            input_schema = (
+                self._get_tool_value(tool, "inputSchema")
+                or self._get_tool_value(tool, "input_schema")
+                or {}
+            )
 
             # Security M-4: Sentinel scan for untrusted tool descriptions
             scan_status = await self._scan_tool_description(
@@ -254,7 +282,7 @@ class MCPConnectionManager:
 
             if existing:
                 existing.description = description
-                existing.input_schema = getattr(tool, 'inputSchema', {}) or {}
+                existing.input_schema = input_schema
                 existing.namespaced_name = namespaced
                 existing.scan_status = scan_status
             else:
@@ -264,7 +292,7 @@ class MCPConnectionManager:
                     tool_name=tool_name,
                     namespaced_name=namespaced,
                     description=description,
-                    input_schema=getattr(tool, 'inputSchema', {}) or {},
+                    input_schema=input_schema,
                     is_enabled=True,
                     scan_status=scan_status
                 )
@@ -313,3 +341,10 @@ class MCPConnectionManager:
         if server_id in self._connections and self._connections[server_id].is_connected():
             return 'connected'
         return 'disconnected'
+
+    @staticmethod
+    def _get_tool_value(tool: Any, key: str, default: Any = None) -> Any:
+        """Read a tool field from MCP SDK objects or stdio JSON dictionaries."""
+        if isinstance(tool, dict):
+            return tool.get(key, default)
+        return getattr(tool, key, default)

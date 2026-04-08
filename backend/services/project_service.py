@@ -533,6 +533,7 @@ class ProjectService:
             self.db.refresh(knowledge)
 
             # Process document
+            processing_committed = False
             try:
                 text = await doc_service._extract_text(file_path, knowledge.document_type)
                 chunks = doc_service._chunk_text(text, chunk_size, chunk_overlap)
@@ -567,18 +568,20 @@ class ProjectService:
                 # lazily when the user triggers "Regenerate Embeddings" from the UI,
                 # or on the next upload after the model has been warmed up.
                 self.logger.info(f"Document processed: {len(chunks)} chunks. Embeddings deferred (use Regenerate Embeddings).")
+                processing_committed = True
 
             except Exception as e:
                 knowledge.status = "failed"
                 knowledge.error_message = str(e)
                 self.logger.error(f"Document processing failed: {e}", exc_info=True)
 
-            # BUG-389: Final safety commit to ensure status is persisted
-            try:
-                self.db.commit()
-            except Exception:
-                self.db.rollback()
-                self.db.commit()
+            if not processing_committed:
+                try:
+                    self.db.commit()
+                except Exception as commit_error:
+                    self.db.rollback()
+                    self.logger.error(f"Failed to persist project knowledge status: {commit_error}", exc_info=True)
+                    return {"status": "error", "error": str(commit_error)}
 
             return {
                 "status": "success",

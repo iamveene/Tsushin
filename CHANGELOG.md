@@ -19,6 +19,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Skills, search, vector-store, and tooling: `BUG-410`, `BUG-411`, `BUG-412`, `BUG-413`, `BUG-414`, `BUG-415`, `BUG-416`, `BUG-420`
   - Projects and flows: `BUG-421`, `BUG-422`
 
+### Bug Fixes — Setup / Dashboard / Auth (`develop`, 2026-04-07)
+
+- **BUG-402 / BUG-403 — Public auth/setup pages were noisy before login:** Public setup/login surfaces now suppress unauthenticated bootstrap polling and ship a real favicon, eliminating pre-login `401`/`404` console noise on fresh installs.
+- **BUG-404 — Setup only provisioned the first provider key:** The setup wizard now creates provider instances for every supported provider configured during onboarding instead of silently downgrading secondary providers to service-key-only state.
+- **BUG-405 / BUG-406 — First-login onboarding panel and charts were unstable:** The User Guide panel now dismisses reliably in the default viewport, and dashboard charts mount only after valid dimensions exist, removing the negative-dimension warnings on first login.
+
+### Bug Fixes — Agents / Memory / API Threads (`develop`, 2026-04-07)
+
+- **BUG-407 — Agent contact reassignment could 500:** The protected agent update path now validates tenant ownership and contact uniqueness cleanly instead of crashing during contact swaps.
+- **BUG-408 / BUG-409 — Real Playground traffic could destabilize health and log sender fallback warnings:** Playground/API chat identity is now built from canonical thread/channel keys, which keeps health checks stable under real threaded traffic and removes `Contact not found` fallback noise for normal Playground usage.
+- **BUG-417 / BUG-418 / BUG-419 — Thread retrieval and memory isolation semantics drifted from the product contract:** API v1 now persists canonical thread recipients for message lookup, `isolated` mode is truly per-thread for threaded API chats, and `channel_isolated` Playground memory now carries across threads inside the same channel while preserving per-thread history.
+
+### Bug Fixes — API Clients / MCP / Slash Commands / Search (`develop`, 2026-04-07)
+
+- **BUG-410 — API client create-then-list drift:** Newly created API clients now appear immediately in the list endpoint instead of only through direct lookup.
+- **BUG-411 / BUG-412 / BUG-413 — MCP-backed custom skills were inconsistent across authoring, listing, and discovery:** MCP custom skills now execute correctly, round-trip through the agent assignment APIs, and appear in `/tools` output alongside built-in capabilities.
+- **BUG-414 — `/shell` dispatch mismatched seeded metadata:** Shell slash commands now execute through the seeded `system` category path instead of returning an empty error payload.
+- **BUG-415 / BUG-416 — Tooling metrics and MCP stdio discovery were misleading:** Empty Qdrant stats normalize to `0`, and stdio MCP discovery/test/list/call now works reliably against toolbox-hosted `uvx` servers.
+- **BUG-420 — Legacy `google_search` ignored tenant Brave credentials:** The built-in flow search tool now resolves tenant-scoped Brave keys through the same key service as the newer web-search path.
+
+### Bug Fixes — Projects / Flows / Vertex (`develop`, 2026-04-07)
+
+- **BUG-421 — Small project KB uploads could hang/crash the backend:** Fixed the shared document chunker so trailing chunks always advance even when the remaining text is shorter than the configured overlap. Project KB uploads now reuse the safe chunking path and only do the final status commit when the processing path has not already committed it.
+- **BUG-422 — API v1 notification steps accepted invalid configs that failed at runtime:** Added create/update validation for notification steps so they fail fast unless they include a recipient and message content. Legacy `message` input is normalized to `message_template`, and the local public API regression script now uses a valid notification example.
+- **BUG-423 — Saved Vertex AI provider-instance tests diverged from runtime and crashed on response parsing:** Saved provider-instance connection tests now execute through `provider_instance_id`, matching the real runtime credential/config resolution path. OpenAI-compatible response parsing was hardened so Vertex Gemini responses with non-string or empty `message.content` no longer raise `AttributeError`.
+
 ## v0.6.0-patch.3 (2026-04-07)
 
 ### Bug Fixes — Fresh Install QA Sprint (15 open → 0 open)
