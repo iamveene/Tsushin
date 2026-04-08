@@ -117,7 +117,16 @@ Example responses:
 Conversation to analyze:
 """
 
-    def __init__(self, ai_client=None, provider: str = None, model_name: str = None, db=None, token_tracker=None, tenant_id: str = None):
+    def __init__(
+        self,
+        ai_client=None,
+        provider: str = None,
+        model_name: str = None,
+        db=None,
+        token_tracker=None,
+        tenant_id: str = None,
+        provider_instance_id: int = None,
+    ):
         """
         Initialize fact extractor.
 
@@ -145,6 +154,7 @@ Conversation to analyze:
         self.model_name = model_name if model_name else "gemini-2.5-flash"
         self.db = db
         self.tenant_id = tenant_id
+        self.provider_instance_id = provider_instance_id
 
     def _get_ai_client(self):
         """Lazy load AI client if not provided."""
@@ -156,7 +166,8 @@ Conversation to analyze:
                 model_name=self.model_name,
                 db=self.db,
                 token_tracker=self.token_tracker,
-                tenant_id=self.tenant_id
+                tenant_id=self.tenant_id,
+                provider_instance_id=self.provider_instance_id,
             )
         return self.ai_client
 

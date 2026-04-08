@@ -30,13 +30,26 @@ class ConversationSearchService:
         self.logger = logging.getLogger(__name__)
         self._fts5_available = None
 
+    def _safe_rollback(self) -> None:
+        """Clear aborted DB transactions after a failed search probe."""
+        try:
+            self.db.rollback()
+        except Exception:
+            pass
+
     def _check_fts5_available(self) -> bool:
         """Check if FTS5 is available in SQLite."""
         if self._fts5_available is None:
+            bind = self.db.get_bind()
+            dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
+            if dialect_name != "sqlite":
+                self._fts5_available = False
+                return self._fts5_available
             try:
                 result = self.db.execute(text("PRAGMA compile_options;")).fetchall()
                 self._fts5_available = any('FTS5' in str(row[0]) for row in result)
-            except:
+            except Exception:
+                self._safe_rollback()
                 self._fts5_available = False
         return self._fts5_available
 
@@ -112,6 +125,7 @@ class ConversationSearchService:
 
             return result
         except Exception as e:
+            self._safe_rollback()
             self.logger.error(f"Full-text search failed: {e}")
             return {
                 "status": "error",
@@ -565,6 +579,7 @@ class ConversationSearchService:
             }
 
         except Exception as e:
+            self._safe_rollback()
             self.logger.error(f"Semantic search failed: {e}")
             return {
                 "status": "error",
@@ -629,6 +644,7 @@ class ConversationSearchService:
             }
 
         except Exception as e:
+            self._safe_rollback()
             self.logger.error(f"Combined search failed: {e}")
             return {
                 "status": "error",
@@ -739,6 +755,7 @@ class ConversationSearchService:
             return results[:limit]
 
         except Exception as e:
+            self._safe_rollback()
             self.logger.error(f"Tool execution search failed: {e}")
             return []
 
@@ -769,6 +786,7 @@ class ConversationSearchService:
             suggestions.extend([t[0] for t in tags])
 
         except Exception as e:
+            self._safe_rollback()
             self.logger.warning(f"Failed to get search suggestions: {e}")
 
         return suggestions[:limit]

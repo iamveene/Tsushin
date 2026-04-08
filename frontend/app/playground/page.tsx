@@ -1415,7 +1415,7 @@ export default function PlaygroundPage() {
   // Fetch available tools for the current agent
   const fetchAvailableTools = async (agentId: number) => {
     try {
-      const apiBase = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || '')
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
       const response = await authenticatedFetch(`${apiBase}/api/playground/tools/${agentId}`)
 
       if (response.ok) {

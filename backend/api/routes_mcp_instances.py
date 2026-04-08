@@ -7,6 +7,7 @@ Includes RBAC protection and tenant isolation.
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import List, Optional
 
@@ -104,6 +105,7 @@ class MCPHealthResponse(BaseModel):
     session_age_sec: Optional[int] = 0
     last_activity_sec: Optional[int] = 0
     error: Optional[str]
+    warning: Optional[str] = None
 
 
 class QRCodeResponse(BaseModel):
@@ -138,7 +140,49 @@ class TesterStatusResponse(BaseModel):
     qr_available: bool = False
     qr_message: Optional[str] = None
     error: Optional[str] = None
+    warning: Optional[str] = None
     source: Optional[str] = None  # BUG-395: 'compose' or 'runtime'
+
+
+def _normalize_phone_number(phone_number: Optional[str]) -> str:
+    return re.sub(r"\D+", "", phone_number or "")
+
+
+def _build_tester_phone_conflict_warning(
+    db: Session,
+    tenant_id: str,
+    tester_phone_number: Optional[str],
+    *,
+    exclude_instance_id: Optional[int] = None,
+) -> Optional[str]:
+    normalized_tester_phone = _normalize_phone_number(tester_phone_number)
+    if not normalized_tester_phone:
+        return None
+
+    query = db.query(WhatsAppMCPInstance).filter(
+        WhatsAppMCPInstance.tenant_id == tenant_id,
+        WhatsAppMCPInstance.instance_type == "agent",
+    )
+    if exclude_instance_id is not None:
+        query = query.filter(WhatsAppMCPInstance.id != exclude_instance_id)
+
+    conflicting_instances = [
+        instance
+        for instance in query.all()
+        if _normalize_phone_number(instance.phone_number) == normalized_tester_phone
+    ]
+    if not conflicting_instances:
+        return None
+
+    instance_labels = ", ".join(
+        f"{instance.id}:{instance.display_name or instance.container_name}"
+        for instance in conflicting_instances
+    )
+    return (
+        "Tester and agent WhatsApp sessions share the same phone number. "
+        f"Conflicting agent instance(s): {instance_labels}. "
+        "Use different WhatsApp accounts for tester and agent validation."
+    )
 
 
 # ============================================================================
@@ -149,9 +193,15 @@ class TesterStatusResponse(BaseModel):
 async def get_tester_status(
     current_user: User = Depends(get_current_user_required),
     _: None = Depends(require_permission("mcp.instances.read")),
+    db: Session = Depends(get_db),
 ):
     manager = MCPContainerManager()
     status = manager.get_tester_status()
+    status["warning"] = _build_tester_phone_conflict_warning(
+        db,
+        current_user.tenant_id,
+        manager.get_tester_phone_number(),
+    )
     return TesterStatusResponse(
         **status,
         qr_message="Scan QR code with WhatsApp" if status.get("qr_available") else None,
@@ -226,6 +276,39 @@ async def create_mcp_instance(
     """
     try:
         manager = MCPContainerManager()
+        normalized_requested_phone = _normalize_phone_number(data.phone_number)
+
+        conflicting_instance = next(
+            (
+                instance
+                for instance in db.query(WhatsAppMCPInstance).all()
+                if _normalize_phone_number(instance.phone_number) == normalized_requested_phone
+            ),
+            None,
+        )
+        if conflicting_instance:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "An existing WhatsApp MCP instance already uses this phone number "
+                    f"(instance {conflicting_instance.id})."
+                ),
+            )
+
+        tester_status = manager.get_tester_status()
+        tester_phone_number = manager.get_tester_phone_number()
+        if (
+            tester_status.get("authenticated")
+            and tester_status.get("connected")
+            and _normalize_phone_number(tester_phone_number) == normalized_requested_phone
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The QA tester session is already authenticated with this WhatsApp phone number. "
+                    "Use a different number for tenant agent instances so tester-to-agent E2E validation remains possible."
+                ),
+            )
 
         instance = manager.create_instance(
             tenant_id=current_user.tenant_id,
@@ -274,6 +357,8 @@ async def create_mcp_instance(
 
         return MCPInstanceResponse.model_validate(instance)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create MCP instance: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create MCP instance. Check server logs for details.")
@@ -826,6 +911,21 @@ async def get_mcp_health(
         manager = MCPContainerManager()
         manager.reconcile_instance(instance, db)
         health_data = manager.health_check(instance, db)
+        health_data["warning"] = _build_tester_phone_conflict_warning(
+            db,
+            instance.tenant_id,
+            manager.get_tester_phone_number(),
+            exclude_instance_id=instance.id if instance.instance_type == "agent" else None,
+        )
+        if (
+            instance.instance_type == "agent"
+            and _normalize_phone_number(instance.phone_number)
+            == _normalize_phone_number(manager.get_tester_phone_number())
+        ):
+            health_data["warning"] = (
+                "This agent shares the tester WhatsApp phone number. "
+                "Tester-to-agent round-trip validation requires different WhatsApp accounts."
+            )
 
         # Log health check results for debugging
         logger.info(

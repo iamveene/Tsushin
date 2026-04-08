@@ -4,7 +4,7 @@ from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 import os
 import json
-from models import Base, Config, SlashCommand
+from models import Base, Config, SlashCommand, ProjectCommandPattern
 # Phase 7.6.3: Import RBAC models to register with Base.metadata
 import models_rbac  # noqa: F401
 from models_rbac import Role, Permission, RolePermission
@@ -1333,6 +1333,134 @@ def seed_slash_commands(session):
         print(f"[Commands] All {len(commands_data)} slash commands already present")
 
 
+def seed_project_command_patterns(session):
+    """
+    Seed default project command patterns for all tenants.
+
+    These system patterns power project entry/exit/list/help on fresh installs
+    and provide a visible baseline that tenant-specific patterns can override.
+    """
+    print("[Projects] Ensuring default project command patterns are seeded...")
+
+    patterns_data = [
+        {
+            "tenant_id": "_system",
+            "command_type": "enter",
+            "language_code": "en",
+            "pattern": r"^(?:/enter|enter project)\s+(.+)$",
+            "response_template": '📁 Now working in project "{project_name}". Ask questions or send files to add documents.',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "enter",
+            "language_code": "pt",
+            "pattern": r"^(?:/entrar|entrar(?:\s+no)?\s+projeto)\s+(.+)$",
+            "response_template": '📁 Agora voce esta no projeto "{project_name}". Envie perguntas ou arquivos para adicionar documentos.',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "exit",
+            "language_code": "en",
+            "pattern": r"^(?:/exit|exit project)$",
+            "response_template": '✅ Left project "{project_name}". {summary}',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "exit",
+            "language_code": "pt",
+            "pattern": r"^(?:/sair|sair do projeto)$",
+            "response_template": '✅ Saiu do projeto "{project_name}". {summary}',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "list",
+            "language_code": "en",
+            "pattern": r"^(?:/list|list projects)$",
+            "response_template": "📋 Your projects:\n{project_list}",
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "list",
+            "language_code": "pt",
+            "pattern": r"^(?:/listar|listar projetos)$",
+            "response_template": "📋 Seus projetos:\n{project_list}",
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "upload",
+            "language_code": "en",
+            "pattern": r"^(?:/add\s+to\s+project|add to project)$",
+            "response_template": '📎 Document "{filename}" added to project ({chunks} chunks processed).',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "upload",
+            "language_code": "pt",
+            "pattern": r"^(?:/adicionar\s+ao\s+projeto|adicionar ao projeto)$",
+            "response_template": '📎 Documento "{filename}" adicionado ao projeto ({chunks} chunks processados).',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "help",
+            "language_code": "en",
+            "pattern": r"^(?:/help|project help)$",
+            "response_template": """📚 Project Commands:
+• "enter project [name]" - Enter a project
+• "exit project" - Leave current project
+• "list projects" - See your projects
+• "add to project" - Add document (send with file)
+• "project help" - Show this help""",
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "help",
+            "language_code": "pt",
+            "pattern": r"^(?:/ajuda|ajuda do projeto)$",
+            "response_template": """📚 Comandos de Projeto:
+• "entrar projeto [nome]" - Entrar em um projeto
+• "sair do projeto" - Sair do projeto atual
+• "listar projetos" - Ver seus projetos
+• "adicionar ao projeto" - Adicionar documento (envie com arquivo)
+• "ajuda do projeto" - Mostrar esta ajuda""",
+            "is_active": True,
+        },
+    ]
+
+    existing = {
+        (item.tenant_id, item.command_type, item.language_code)
+        for item in session.query(ProjectCommandPattern).filter(
+            ProjectCommandPattern.tenant_id == "_system"
+        ).all()
+    }
+
+    inserted = 0
+    for pattern_data in patterns_data:
+        key = (
+            pattern_data["tenant_id"],
+            pattern_data["command_type"],
+            pattern_data["language_code"],
+        )
+        if key in existing:
+            continue
+        session.add(ProjectCommandPattern(**pattern_data))
+        inserted += 1
+
+    if inserted:
+        session.commit()
+        print(f"[Projects] Seeded {inserted} new project command patterns")
+    else:
+        print(f"[Projects] All {len(patterns_data)} project command patterns already present")
+
+
 def init_database(engine):
     """Initialize all tables and default config.
 
@@ -1425,6 +1553,7 @@ def init_database(engine):
 
         # Phase 16: Seed default slash commands
         seed_slash_commands(session)
+        seed_project_command_patterns(session)
 
         # Seed default system personas (Persona Template Library)
         seed_default_personas(session)

@@ -201,7 +201,8 @@ class TsushinInstaller:
         self.env_file = self.root_dir / ".env"
         self.backend_data_dir = self.root_dir / "backend" / "data"
         self.database_path = self.backend_data_dir / "agent.db"
-        self.config = {}
+        stack_name = (os.environ.get("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+        self.config = {"TSN_STACK_NAME": stack_name}
         self.interactive = is_interactive()
         self.args = args or argparse.Namespace(defaults=False, http=False, domain=None, port=8081, frontend_port=3030)
 
@@ -223,6 +224,7 @@ class TsushinInstaller:
         # Map .env keys to config keys used by the installer
         self.config['TSN_APP_PORT'] = env_vars.get('TSN_APP_PORT', '8081')
         self.config['FRONTEND_PORT'] = env_vars.get('FRONTEND_PORT', '3030')
+        self.config['TSN_STACK_NAME'] = env_vars.get('TSN_STACK_NAME', self.config.get('TSN_STACK_NAME', 'tsushin'))
         self.config['SSL_MODE'] = env_vars.get('SSL_MODE', 'disabled')
         self.config['SSL_DOMAIN'] = env_vars.get('SSL_DOMAIN', '')
         self.config['SSL_EMAIL'] = env_vars.get('SSL_EMAIL', '')
@@ -813,6 +815,7 @@ class TsushinInstaller:
 TSN_APP_HOST=0.0.0.0
 TSN_APP_PORT={self.config['TSN_APP_PORT']}
 FRONTEND_PORT={self.config['FRONTEND_PORT']}
+TSN_STACK_NAME={self.config.get('TSN_STACK_NAME', 'tsushin')}
 TSN_BACKEND_URL={backend_url}
 TSN_FRONTEND_URL={frontend_url}
 TSN_LOG_LEVEL=INFO

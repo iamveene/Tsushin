@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fresh Install Stabilization Closeout (`develop`, 2026-04-08)
+
+- Hardened fresh-install memory extraction so manual fact extraction can recover conversation history from canonical aliases (`playground`, API user, and API client sender-key variants) while still using the configured provider instance for inference.
+- Added a lexical fallback for project knowledge retrieval when Chroma collections are absent or empty on fresh installs, and seeded built-in English/Portuguese project command patterns so project entry/exit/list/upload/help flows are available without manual setup.
+- Improved stdio MCP resilience by adding a retry path for transient `No JSON-RPC response received` failures and extending the short-lived tool-call keepalive window used by toolbox-hosted servers.
+- Fixed fresh-install frontend/runtime regressions by waiting for a resolved pathname before public auth bootstrap, standardizing Playground tool and custom-tool calls on the backend base URL, and preserving `TSN_STACK_NAME` when the installer writes a new `.env`.
+- Fixed Playground conversation search on Postgres by skipping SQLite-only FTS probes on non-SQLite dialects and rolling back failed probes/searches before falling back to LIKE mode.
+- Added WhatsApp QA guardrails: tester and tenant agent status now warn when they share the same phone number, and MCP instance creation rejects duplicate numbers already owned by another agent instance or by the authenticated tester session.
+- Final audit note: the disposable fresh install completed end-to-end, but a true tester-to-agent WhatsApp round-trip could not be proven in this run because the user authenticated both tester and agent against the same WhatsApp number. The product now warns and blocks that configuration for future validations.
+
 ### QA Audit — Ubuntu VM Fresh Install (`develop`, 2026-04-07)
 
 - Completed a real-user fresh-install audit on `root@10.211.55.5` using the interactive installer (`python3 install.py`) on `develop` HEAD with backend `8081`, frontend `3030`, remote access, and HTTP-only setup.

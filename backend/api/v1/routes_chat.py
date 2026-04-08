@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -380,11 +381,12 @@ async def _enqueue_message(agent, agent_name, request, caller, db):
         },
     )
 
-    return QueuedResponse(
+    payload = QueuedResponse(
         queue_id=queue_item.id,
         estimated_wait_seconds=5,
         poll_url=f"/api/v1/queue/{queue_item.id}",
     )
+    return JSONResponse(status_code=202, content=payload.model_dump())
 
 
 @router.get(

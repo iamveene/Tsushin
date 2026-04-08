@@ -2609,6 +2609,8 @@ The Tester MCP is a containerized Go WhatsApp bridge dedicated to QA. It is conf
 
 **Hub visibility:** the tester is intentionally not listed as a tenant-managed `WhatsAppMCPInstance`. Instead, Hub exposes it as a dedicated **QA Tester** card backed by `/api/mcp/instances/tester/*` endpoints so operators can monitor auth state, fetch QR, restart the tester, and reset auth without confusing it with production tenant instances.
 
+**Tester vs. tenant agent separation:** the tester is a dedicated QA bridge, not a tenant-managed production instance. For meaningful end-to-end validation, the tester and the tenant agent must authenticate with different WhatsApp accounts/phone numbers. If the same phone number is reused, `/api/mcp/instances/tester/status` and `/api/mcp/instances/{id}/health` now surface warning strings, and tenant-agent creation is rejected when the requested number is already in use by an authenticated tester or another WhatsApp MCP instance.
+
 **Send-message example:**
 
 ```bash
@@ -2630,6 +2632,8 @@ curl -X POST http://localhost:8088/api/send \
 3. Wait ~30-60 s for LLM processing + conversation delay.
 4. Tester logs show an inbound arrow from the bot's LID number.
 5. If silent, inspect backend logs for `generate|gemini|send` lines.
+
+**Validation prerequisite:** do not scan the tester QR and the tenant agent QR with the same WhatsApp account. That topology can look healthy in status checks while making tester-to-agent round-trip validation impossible.
 
 ---
 
@@ -2671,6 +2675,8 @@ docker exec -it tsushin-postgres psql -U tsushin -d tsushin              # Inter
 ```
 
 Source: `DOCKER.md:275-282`.
+
+**Playground search note:** Postgres deployments do not use SQLite FTS5. Tsushin now falls back cleanly to LIKE-based conversation search on Postgres and rolls back failed search probes before continuing, so a failed search should not poison the rest of the request transaction.
 
 ### 28.4 Memory / slow model loading
 

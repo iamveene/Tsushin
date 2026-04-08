@@ -63,6 +63,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Load user from httpOnly cookie on mount
   useEffect(() => {
+    if (!pathname) {
+      return
+    }
+
     const isPublicPage = pathname?.startsWith('/auth') || pathname?.startsWith('/setup')
     if (isPublicPage) {
       _cleanupLegacyToken()
@@ -225,7 +229,7 @@ export function useAuth() {
 export function useRequireAuth() {
   const { user, loading, hasPermission } = useAuth()
   const router = useRouter()
-  const pathname = typeof window !== 'undefined' ? window.location.pathname : ''
+  const pathname = usePathname() || ''
 
   useEffect(() => {
     // Skip auth redirect for public pages (login, signup, setup, etc.)

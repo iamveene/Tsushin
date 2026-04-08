@@ -590,6 +590,7 @@ class SkillManager:
                 if agent_obj:
                     config['tenant_id'] = agent_obj.tenant_id
             config['agent_id'] = agent_id
+            config['db'] = db
 
             # BUG-LOG-006 FIX: Propagate A2A comm_depth and parent_session_id from message
             # so agent_communication_skill can enforce depth limits on chained delegations

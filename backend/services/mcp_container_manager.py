@@ -955,6 +955,10 @@ class MCPContainerManager:
             return {}
         return self._extract_container_env(container)
 
+    @staticmethod
+    def normalize_phone_number(phone_number: Optional[str]) -> str:
+        return "".join(ch for ch in (phone_number or "") if ch.isdigit())
+
     def _get_tester_container(self) -> Optional[Any]:
         """BUG-380: Try compose-managed tester first, then fall back to runtime tester instances."""
         # Try compose-managed tester
@@ -1094,6 +1098,14 @@ class MCPContainerManager:
             pass
 
         return tester_status
+
+    def get_tester_phone_number(self) -> Optional[str]:
+        tester_container = self._get_tester_container()
+        if tester_container is None:
+            return None
+        env_map = self._extract_container_env(tester_container)
+        phone_number = (env_map.get("PHONE_NUMBER") or "").strip()
+        return phone_number or None
 
     def get_tester_qr_code(self) -> Optional[str]:
         headers = self._get_tester_headers()

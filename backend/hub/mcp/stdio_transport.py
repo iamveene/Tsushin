@@ -178,8 +178,25 @@ class StdioTransport(MCPTransport):
                 {"name": tool_name, "arguments": arguments or {}},
             )
         except Exception as e:
-            logger.error(f"Stdio tool execution failed: {e}")
-            return {"error": str(e)}
+            error_text = str(e)
+            logger.error(f"Stdio tool execution failed: {error_text}")
+
+            # A small retry smooths over transient short-lived stdio timing races.
+            if "No JSON-RPC response received" in error_text:
+                try:
+                    logger.info(
+                        f"Retrying stdio tool call for {self.server_config.server_name} "
+                        f"after empty JSON-RPC response"
+                    )
+                    return await self._send_json_rpc_request(
+                        "tools/call",
+                        {"name": tool_name, "arguments": arguments or {}},
+                    )
+                except Exception as retry_error:
+                    error_text = str(retry_error)
+                    logger.error(f"Stdio tool execution retry failed: {error_text}")
+
+            return {"error": error_text}
 
     async def _send_json_rpc_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """Run a short-lived stdio MCP session for a single request."""
@@ -250,7 +267,7 @@ class StdioTransport(MCPTransport):
         has_tool_call = any(message.get("method") == "tools/call" for message in requests)
         stdin_writer = f"printf '%s\\n' {message_args}"
         if has_tool_call:
-            stdin_writer = f"{{ {stdin_writer}; sleep 1; }}"
+            stdin_writer = f"{{ {stdin_writer}; sleep 3; }}"
 
         return f"{stdin_writer} | {command_parts}"
 

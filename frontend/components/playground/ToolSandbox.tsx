@@ -65,7 +65,8 @@ export default function ToolSandbox({ agentId, isOpen, onClose }: ToolSandboxPro
     if (!agentId) return
     setLoading(true)
     try {
-      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/tools/${agentId}`)
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
+      const response = await authenticatedFetch(`${apiBase}/api/playground/tools/${agentId}`)
       if (response.ok) {
         const data = await response.json()
         setTools(data)
@@ -110,7 +111,8 @@ export default function ToolSandbox({ agentId, isOpen, onClose }: ToolSandboxPro
         setResult({ output: response.message || 'Tool executed successfully' })
       } else {
         // Custom tool - use the custom tools execute endpoint
-        const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/custom-tools/execute/`, {
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
+        const response = await authenticatedFetch(`${apiBase}/custom-tools/execute/`, {
           method: 'POST',
           body: JSON.stringify({
             tool_id: selectedTool.id,

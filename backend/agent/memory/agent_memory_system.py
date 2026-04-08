@@ -76,7 +76,8 @@ class AgentMemorySystem:
             model_name=config.get("model_name"),
             db=db_session,
             token_tracker=token_tracker,
-            tenant_id=config.get("tenant_id")
+            tenant_id=config.get("tenant_id"),
+            provider_instance_id=config.get("provider_instance_id"),
         )
 
         # Layer 4: Shared Memory Pool (cross-agent knowledge)
@@ -924,29 +925,54 @@ class AgentMemorySystem:
             self.logger.warning(f"MemGuard Layer B validation failed, allowing all facts: {e}")
             return facts
 
-    async def extract_facts_now(self, user_id: str) -> List[Dict]:
+    async def extract_facts_now(
+        self,
+        user_id: str,
+        alternate_user_ids: Optional[List[str]] = None
+    ) -> List[Dict]:
         """
         Manually trigger fact extraction for a user conversation.
 
         Args:
             user_id: User identifier
+            alternate_user_ids: Optional fallback memory keys to probe when
+                recent conversation history is stored under a shared or
+                channel-scoped alias.
 
         Returns:
             List of extracted facts
         """
         try:
-            # Get full conversation from working memory
-            context = await self.semantic_memory.get_context(
-                sender_key=user_id,
-                current_message="",
-                max_semantic_results=0
-            )
+            candidate_user_ids = [user_id]
+            for candidate in alternate_user_ids or []:
+                if candidate and candidate not in candidate_user_ids:
+                    candidate_user_ids.append(candidate)
 
-            conversation = context.get('recent_messages', [])
+            conversation = []
+            resolved_history_key = user_id
+            for candidate_user_id in candidate_user_ids:
+                context = await self.semantic_memory.get_context(
+                    sender_key=candidate_user_id,
+                    current_message="",
+                    max_semantic_results=0
+                )
+                conversation = context.get('recent_messages', [])
+                if conversation:
+                    resolved_history_key = candidate_user_id
+                    break
 
             if not conversation:
-                self.logger.warning(f"No conversation history for {user_id}")
+                self.logger.warning(
+                    f"No conversation history for {user_id}"
+                    f" (checked aliases: {candidate_user_ids})"
+                )
                 return []
+
+            if resolved_history_key != user_id:
+                self.logger.info(
+                    f"Manual extraction for {user_id} resolved conversation history"
+                    f" via alias {resolved_history_key}"
+                )
 
             # Extract facts
             facts = await self.fact_extractor.extract_facts(
