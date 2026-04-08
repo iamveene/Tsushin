@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### v0.6.0 Comprehensive E2E Audit (`develop`, 2026-04-08)
+
+- Completed a full fresh-install E2E audit on Ubuntu VM (10.211.55.5) using `install.py --defaults --http` on `develop` HEAD, covering 37 test cases via both browser automation and API curl.
+- **Installation:** Installer ran unattended, built all 5 Docker images (backend, frontend, WhatsApp MCP, Toolbox) on ARM64, passed health checks within 20 minutes.
+- **Setup Wizard:** Completed via browser with 3 LLM providers (Gemini, OpenAI, Anthropic), captured global admin credentials, created 6 default agents.
+- **Provider Matrix:** Gemini, OpenAI, Anthropic, and local Ollama (llama3.2) all tested and connected successfully. Vertex AI instance created.
+- **Core Features Validated:** Playground chat (text + response streaming), Memory Inspector (fact CRUD), Sentinel/MemGuard (injection detected at 0.9, poisoning at 0.9, benign at 0.0), A2A permissions, 28 slash commands, custom instruction skill creation, flow creation, 28 page routes all returning 200.
+- **New Bugs Found (6):** BUG-428 (API client creation 500), BUG-429 (Ollama systemd override malformed), BUG-430 (setup accordion not scrollable), BUG-431 (project API empty response), BUG-432 (vector store empty response), BUG-433 (queue poll missing response text).
+
 ### Fresh Install Stabilization Closeout (`develop`, 2026-04-08)
 
 - Hardened fresh-install memory extraction so manual fact extraction can recover conversation history from canonical aliases (`playground`, API user, and API client sender-key variants) while still using the configured provider instance for inference.
