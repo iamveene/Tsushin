@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fix — BUG-452 (`develop`, 2026-04-08)
+
+- **BUG-452 (Medium):** Fixed MCP Server creation via Hub UI returning 400 Bad Request for localhost/private URLs. The SSRF validator was blocking private/loopback IPs where MCP servers typically run. Applied `allow_private=True` (matching Ollama pattern) and relaxed HTTPS+auth requirement for local URLs while preserving it for public URLs. Cloud metadata endpoints remain blocked.
+
 ### Bug Sprint — BUG-444 to BUG-450 resolved (`develop`, 2026-04-08)
 
 - **BUG-444 (Medium):** Fixed HTTP-only fresh installs redirecting `localhost` to `https://localhost/setup`. Removed stale `NEXT_PUBLIC_API_URL` build-time check from middleware SSL condition; SSL redirect now depends solely on runtime `TSN_SSL_MODE`.

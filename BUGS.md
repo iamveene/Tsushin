@@ -6342,6 +6342,7 @@
 ### BUG-452: MCP Server creation fails with 400 Bad Request
 - **Severity:** Medium
 - **Category:** MCP / UI
-- **Files:** `frontend/app/hub/page.tsx`
-- **Description:** Creating an MCP server via the Hub UI using SSE transport returns a 400 Bad Request. The UI does not expose the specific backend validation error clearly to the user, blocking MCP creation natively via the UI.
-- **Remediation:** Ensure the `/api/mcp-servers` endpoint accepts valid SSE URLs and surfaces detailed validation errors in the UI response toast.
+- **Files:** `backend/api/routes_mcp_servers.py`
+- **Status:** Resolved (2026-04-08)
+- **Description:** Creating an MCP server via the Hub UI using SSE transport returns a 400 Bad Request. The SSRF validator blocked private/loopback IPs (localhost, 127.0.0.1, LAN IPs), which is where MCP servers typically run in self-hosted deployments. Additionally, the HTTPS requirement for auth credentials was too strict for local servers.
+- **Resolution:** Updated `validate_url()` call to use `allow_private=True` (matching Ollama pattern). Relaxed HTTPS+auth requirement for local/private URLs while maintaining it for public URLs. Cloud metadata endpoints remain blocked. Error messages properly surface in UI toast via existing `handleApiError`. Both create and update endpoints fixed.

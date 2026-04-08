@@ -294,28 +294,42 @@ def create_mcp_server(
                 detail="server_url should not be set for stdio transport"
             )
 
-    # SSRF validate URL
+    # SSRF validate URL — MCP servers legitimately run on private networks
+    # (localhost, Docker containers, LAN), so allow_private=True like Ollama.
     if data.server_url:
         from utils.ssrf_validator import validate_url, SSRFValidationError
         try:
-            validate_url(data.server_url)
+            validate_url(data.server_url, allow_private=True)
         except SSRFValidationError as e:
             raise HTTPException(status_code=400, detail=f"Invalid server URL: {e}")
 
-        # V060-SKL-002 FIX: Require HTTPS whenever an authentication credential
-        # (bearer/header/api_key) is attached — bearer tokens over plaintext HTTP
-        # are vulnerable to MITM interception.
+        # Require HTTPS for auth credentials on public URLs only.
+        # Private/local MCP servers (localhost, Docker, LAN) typically use HTTP
+        # and traffic stays on the local network, so HTTPS is not required.
         if data.auth_type and data.auth_type != "none":
             from urllib.parse import urlparse
-            scheme = (urlparse(data.server_url).scheme or "").lower()
+            from utils.ssrf_validator import is_dangerous_ip
+            import socket
+            parsed_url = urlparse(data.server_url)
+            scheme = (parsed_url.scheme or "").lower()
             if scheme != "https":
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "MCP servers with authentication (bearer/header/api_key) "
-                        "must use HTTPS — plaintext HTTP transmits credentials in the clear."
-                    ),
-                )
+                # Check if the URL resolves to a private/local IP
+                is_local = False
+                try:
+                    hostname = parsed_url.hostname or ""
+                    addr_infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                    is_local = all(is_dangerous_ip(ai[4][0]) for ai in addr_infos)
+                except (socket.gaierror, Exception):
+                    pass
+                if not is_local:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "MCP servers with authentication (bearer/header/api_key) "
+                            "must use HTTPS for public URLs — plaintext HTTP transmits "
+                            "credentials in the clear. Local/private URLs may use HTTP."
+                        ),
+                    )
 
     # Check for duplicate server name within tenant
     existing = db.query(MCPServerConfig).filter(
@@ -410,7 +424,7 @@ def update_mcp_server(
         if data.server_url:
             from utils.ssrf_validator import validate_url, SSRFValidationError
             try:
-                validate_url(data.server_url)
+                validate_url(data.server_url, allow_private=True)
             except SSRFValidationError as e:
                 raise HTTPException(status_code=400, detail=f"Invalid server URL: {e}")
         config.server_url = data.server_url or None
@@ -420,19 +434,31 @@ def update_mcp_server(
             raise HTTPException(status_code=400, detail=f"Invalid auth_type")
         config.auth_type = data.auth_type
 
-    # V060-SKL-002 FIX: After applying server_url/auth_type updates, enforce
-    # HTTPS whenever the server has an authentication credential attached.
+    # Require HTTPS for auth credentials on public URLs only.
+    # Private/local MCP servers (localhost, Docker, LAN) typically use HTTP.
     if config.server_url and config.auth_type and config.auth_type != "none":
         from urllib.parse import urlparse
-        scheme = (urlparse(config.server_url).scheme or "").lower()
+        from utils.ssrf_validator import is_dangerous_ip
+        import socket
+        parsed_url = urlparse(config.server_url)
+        scheme = (parsed_url.scheme or "").lower()
         if scheme != "https":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "MCP servers with authentication (bearer/header/api_key) "
-                    "must use HTTPS — plaintext HTTP transmits credentials in the clear."
-                ),
-            )
+            is_local = False
+            try:
+                hostname = parsed_url.hostname or ""
+                addr_infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                is_local = all(is_dangerous_ip(ai[4][0]) for ai in addr_infos)
+            except (socket.gaierror, Exception):
+                pass
+            if not is_local:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "MCP servers with authentication (bearer/header/api_key) "
+                        "must use HTTPS for public URLs — plaintext HTTP transmits "
+                        "credentials in the clear. Local/private URLs may use HTTP."
+                    ),
+                )
 
     if data.auth_token is not None:
         if data.auth_token:
