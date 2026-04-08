@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BUG-449 (Medium):** Instruction custom-skill test endpoint now executes through the tenant's LLM instead of returning raw instruction text. Added `execute_instruction_with_llm()` to `CustomSkillAdapter`.
 - **BUG-450 (Low):** Watcher dashboard vector store card now shows external store health (Qdrant, MongoDB) instead of “Not configured”. Backend `/api/stats/memory` queries `VectorStoreInstance` table unconditionally.
 
+### E2E Fresh Install Testing & QA Audit (`develop`, 2026-04-08)
+
+- Conducted a comprehensive fresh install audit on Ubuntu VM (10.211.55.5) using `--defaults --http`.
+- Completed setup wizard and initialization successfully via Playwright browser automation.
+- Discovered **BUG-450**: `/api/clients` returning 500 Internal Server Error when creating a new API client, causing the backend worker connection to drop.
+- Discovered **BUG-451**: Sentinel config endpoint `/api/config` returning 404 Not Found, breaking API access to Sentinel settings.
+
 ### Ubuntu VM Interactive Fresh-Install Audit (`develop`, 2026-04-08)
 
 - Completed a real-user interactive installer audit on Ubuntu VM `10.211.55.5` using `python3 install.py` with backend `8081`, frontend `3030`, remote access, HTTP-only mode, and disposable stack `TSN_STACK_NAME=tsushin-fresh-20260408`.
