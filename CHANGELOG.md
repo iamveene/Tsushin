@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Ubuntu VM Interactive Fresh-Install Audit (`develop`, 2026-04-08)
+
+- Completed a real-user interactive installer audit on Ubuntu VM `10.211.55.5` using `python3 install.py` with backend `8081`, frontend `3030`, remote access, HTTP-only mode, and disposable stack `TSN_STACK_NAME=tsushin-fresh-20260408`.
+- **Setup + Auth:** Finished `/setup` through browser automation, captured the generated global-admin credentials privately, and re-verified tenant-admin vs global-admin login/RBAC separation on the fresh tenant.
+- **Provider Matrix:** Validated Gemini, OpenAI, Anthropic, Vertex AI (`us-east5`), and Ollama (`llama3.2`) end to end, along with Brave Search key usage. Tavily is accepted by the backend service list but remains absent from the Hub Tool APIs surface.
+- **Feature Coverage:** Re-validated Qdrant auto-provisioning, long-term memory recall, isolated/shared memory behavior, ACME Sales knowledge-base upload + retrieval, A2A permissions and watcher Graph View, MCP server registration, instruction/script/MCP custom skills, Shell Command Center, sandboxed tools, slash commands including `/inject`, project chat, Public API v1 (API key + OAuth), async queue polling, and generated Python SDK calls against the live `/openapi.json`.
+- **New Bugs Found (10):** `BUG-476` through `BUG-485` covering Tavily Hub visibility, User Guide overlay persistence, shared-memory cross-thread recall, A2A auto-skill wiring, MCP toolbox bootstrap, conversation search drift, `/shell` vs `/inject` inconsistency, KB search UX, project-scoped memory loss, and UI execution of input-dependent flows.
+- **Still Unproven / Follow-up:** Tavily still lacks a first-class Hub validation path, external public-site fetch via the MCP `fetch` server was not proven beyond internal URLs, and the one-click UI Run path for input-dependent flows remains unsuitable for release-quality validation until it can collect trigger context.
+
 ### macOS Fresh Install QA (`develop`, 2026-04-08)
 
 - Completed a 33+ test-case fresh-install QA on macOS (Darwin) using `TSN_STACK_NAME=tsushin-fresh` with `install.py --defaults --http` on `develop` HEAD, with isolated containers/volumes while original install was stopped.

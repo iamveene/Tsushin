@@ -22,7 +22,7 @@
 
 ## Audit Profile — Ubuntu VM (`develop` HEAD)
 
-Use this profile when reproducing the 2026-04-07 Ubuntu VM audit:
+Use this profile when reproducing the 2026-04-08 interactive Ubuntu VM audit:
 
 | Item | Value |
 |------|-------|
@@ -580,24 +580,26 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 
 ## TC-21: Provider Matrix + Local Ollama
 
-**Goal:** Confirm hosted providers and a local Ollama instance can all be configured and tested on a fresh VM install.
+**Goal:** Confirm hosted providers, Tool APIs, and a local Ollama instance can all be configured and tested on a fresh VM install.
 
 ### Steps
 
-1. In `/hub` → **AI Providers**, verify provider instances for Gemini, OpenAI, and Anthropic can be created, tested, and assigned as defaults where needed.
-2. Install Ollama on the VM and pull at least one model such as `llama3.2`.
-3. In `/hub` → **Local Services**, configure Ollama with `http://host.docker.internal:11434`.
-4. If Docker-on-Linux name resolution fails, retry with the bridge fallback (for example `http://172.18.0.1:11434`).
-5. Verify models are discovered and an Ollama provider instance can be tested successfully.
+1. In `/hub` → **AI Providers**, verify provider instances for Gemini, OpenAI, Anthropic, and Vertex AI can be created, tested, and assigned as defaults where needed.
+2. In `/hub` → **Tool APIs**, verify the tenant-facing cards/status for both Brave Search and Tavily are present and match the backend-supported integrations for the release under test.
+3. Install Ollama on the VM and pull at least one model such as `llama3.2`.
+4. In `/hub` → **Local Services**, configure Ollama with `http://host.docker.internal:11434`.
+5. If Docker-on-Linux name resolution fails, retry with the bridge fallback (for example `http://172.18.0.1:11434`).
+6. Verify models are discovered and an Ollama provider instance can be tested successfully.
 
 ### Pass Criteria
 
 | # | Check | Pass? |
 |---|-------|-------|
-| 1 | Gemini, OpenAI, and Anthropic provider instances save and test successfully | |
-| 2 | Ollama health check succeeds from the backend container | |
-| 3 | At least one Ollama model is discovered and selectable | |
-| 4 | A tenant default provider can be changed without breaking existing agents | |
+| 1 | Gemini, OpenAI, Anthropic, and Vertex AI provider instances save and test successfully | |
+| 2 | Brave Search and Tavily are both visible in Hub Tool APIs with accurate configured state | |
+| 3 | Ollama health check succeeds from the backend container | |
+| 4 | At least one Ollama model is discovered and selectable | |
+| 5 | A tenant default provider can be changed without breaking existing agents | |
 
 ---
 
@@ -780,9 +782,10 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 
 1. Create one simple programmatic flow via the API or UI.
 2. Create one flow that includes an agentic node or skill/tool-based node.
-3. Execute both flows from the UI when possible.
-4. Review recent runs on `/flows` and confirm completed vs failed states, logs, and outputs.
-5. If using search or notification steps, verify the configured provider/recipient resolution works in the tenant scope.
+3. If a flow depends on trigger data, execute it from the UI and confirm the UI collects or sends the required trigger context.
+4. Execute both flows from the UI when possible.
+5. Review recent runs on `/flows` and confirm completed vs failed states, logs, and outputs.
+6. If using search or notification steps, verify the configured provider/recipient resolution works in the tenant scope.
 
 ### Pass Criteria
 
@@ -790,8 +793,9 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 |---|-------|-------|
 | 1 | Programmatic flow can be created and executed | |
 | 2 | Agentic flow can be created and executed | |
-| 3 | Run history reflects the true result state | |
-| 4 | Step outputs or errors are inspectable for debugging | |
+| 3 | Input-dependent flows can be launched from the UI with valid trigger context | |
+| 4 | Run history reflects the true result state | |
+| 5 | Step outputs or errors are inspectable for debugging | |
 
 ---
 
@@ -803,9 +807,11 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 
 1. Create a project bound to a specific agent.
 2. Start a direct project conversation and confirm the agent responds using that project context.
-3. Upload a small project knowledge file.
-4. Confirm the upload completes without restarting the backend.
-5. Ask the project a question that should use the uploaded knowledge.
+3. In that same project conversation, store a project-only fact and immediately ask a follow-up question that should recall it.
+4. Verify project memory counters or facts endpoints increase after the stored fact.
+5. Upload a small project knowledge file.
+6. Confirm the upload completes without restarting the backend.
+7. Ask the project a question that should use the uploaded knowledge.
 
 ### Pass Criteria
 
@@ -813,9 +819,11 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 |---|-------|-------|
 | 1 | Project creation succeeds | |
 | 2 | Direct project chat routes to the intended agent | |
-| 3 | Project knowledge upload completes successfully | |
-| 4 | Backend remains healthy after upload | |
-| 5 | Project chat can use uploaded knowledge | |
+| 3 | Project-scoped facts can be recalled inside the same direct project conversation | |
+| 4 | Project memory stats/facts increase after storing a project fact | |
+| 5 | Project knowledge upload completes successfully | |
+| 6 | Backend remains healthy after upload | |
+| 7 | Project chat can use uploaded knowledge | |
 
 ---
 
