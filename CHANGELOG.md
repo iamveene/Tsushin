@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **New Bugs Found (10):** `BUG-476` through `BUG-485` covering Tavily Hub visibility, User Guide overlay persistence, shared-memory cross-thread recall, A2A auto-skill wiring, MCP toolbox bootstrap, conversation search drift, `/shell` vs `/inject` inconsistency, KB search UX, project-scoped memory loss, and UI execution of input-dependent flows.
 - **Still Unproven / Follow-up:** Tavily still lacks a first-class Hub validation path, external public-site fetch via the MCP `fetch` server was not proven beyond internal URLs, and the one-click UI Run path for input-dependent flows remains unsuitable for release-quality validation until it can collect trigger context.
 
+### macOS Loopback & Runtime Isolation Audit (`develop`, 2026-04-08)
+
+- Ran a second macOS fresh-install audit from a disposable clone using `TSN_STACK_NAME=freshinstall-tsushin` and `python3 install.py --defaults --http`, after stopping the original runtime to avoid container/name collisions.
+- Re-validated the release 0.6.0 surface with mixed API and browser coverage across provider setup (Gemini/OpenAI/Anthropic/Ollama/Vertex), auto-provisioned Qdrant vector stores, sandboxed tools, shell beacons, slash commands, API v1 sync/async chat, isolated/shared memory, playground chat + image upload, A2A flows, and MCP-backed custom skills.
+- Logged 7 new fresh-install regressions in the local bug tracker for follow-up: `BUG-444` (HTTP install still redirects `localhost` to HTTPS), `BUG-445` (generated `.env` breaks `127.0.0.1` via LAN-only API/CORS settings), `BUG-446` (project KB falls back to web search instead of uploaded project docs), `BUG-447` (toolbox image lacks `npx`/`node` even though MCP stdio accepts them), `BUG-448` (runtime containers ignore `TSN_STACK_NAME`), `BUG-449` (instruction custom-skill test echoes instructions), and `BUG-450` (Watcher reports vector store “Not configured” despite healthy default Qdrant).
+- Confirmed fresh-install runtime naming remains inconsistent beyond the compose stack: the disposable run created `freshinstall-tsushin-*` core services alongside global `tsushin-*` vector/toolbox resources and `mcp-*` WhatsApp resources, which is why the original install still had to be brought down before realistic side-by-side validation.
+
 ### macOS Fresh Install QA (`develop`, 2026-04-08)
 
 - Completed a 33+ test-case fresh-install QA on macOS (Darwin) using `TSN_STACK_NAME=tsushin-fresh` with `install.py --defaults --http` on `develop` HEAD, with isolated containers/volumes while original install was stopped.
