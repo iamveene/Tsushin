@@ -1,7 +1,17 @@
 'use client'
 
+/**
+ * Communication Tab - A2A Inter-Agent Messaging Monitor
+ *
+ * Observability for agent-to-agent communication:
+ * - Communication session logs with expandable message details
+ * - Permission rules management (CRUD)
+ * - Statistics overview (sessions, success rate, response time, blocked)
+ */
+
 import { useEffect, useState, useCallback } from 'react'
 import { useToast } from '@/contexts/ToastContext'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import {
   api,
   Agent,
@@ -12,17 +22,17 @@ import {
 } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
 
-type TabKey = 'log' | 'permissions' | 'statistics'
+type ViewKey = 'log' | 'permissions' | 'statistics'
 
-export default function AgentCommunicationManager() {
+export default function CommunicationTab() {
   const toast = useToast()
-  const [activeTab, setActiveTab] = useState<TabKey>('log')
+  const [activeView, setActiveView] = useState<ViewKey>('log')
 
   // Shared data
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Communication Log tab
+  // Communication Log view
   const [sessions, setSessions] = useState<AgentCommSession[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [statusFilter, setStatusFilter] = useState<string>('')
@@ -30,7 +40,7 @@ export default function AgentCommunicationManager() {
   const [sessionMessages, setSessionMessages] = useState<AgentCommMessage[]>([])
   const [messagesLoading, setMessagesLoading] = useState(false)
 
-  // Permissions tab
+  // Permissions view
   const [permissions, setPermissions] = useState<AgentCommPermission[]>([])
   const [permissionsLoading, setPermissionsLoading] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -43,34 +53,44 @@ export default function AgentCommunicationManager() {
   const [savingPermission, setSavingPermission] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
-  // Statistics tab
+  // Statistics view
   const [stats, setStats] = useState<AgentCommStats | null>(null)
   const [statsLoading, setStatsLoading] = useState(false)
 
-  // Load agents on mount
-  useEffect(() => {
-    const loadAgents = async () => {
-      try {
-        const data = await api.getAgents()
-        setAgents(data)
-      } catch (err: any) {
-        console.error('Failed to load agents:', err)
-      } finally {
-        setLoading(false)
-      }
+  // Load all data
+  const loadData = useCallback(async () => {
+    try {
+      const agentsData = await api.getAgents()
+      setAgents(agentsData)
+    } catch (err: any) {
+      console.error('Failed to load agents:', err)
+    } finally {
+      setLoading(false)
     }
-    loadAgents()
+    // Reload active view data
+    if (activeView === 'log') loadSessions()
+    else if (activeView === 'permissions') loadPermissions()
+    else if (activeView === 'statistics') loadStats()
+  }, [activeView, statusFilter])
+
+  // Mount + polling
+  useEffect(() => {
+    loadData()
+    const interval = setInterval(loadData, 5000)
+    return () => clearInterval(interval)
   }, [])
 
-  // Load tab data when tab changes
+  // Reload when view or filter changes
   useEffect(() => {
     if (loading) return
-    if (activeTab === 'log') loadSessions()
-    else if (activeTab === 'permissions') loadPermissions()
-    else if (activeTab === 'statistics') loadStats()
-  }, [activeTab, loading, statusFilter])
+    if (activeView === 'log') loadSessions()
+    else if (activeView === 'permissions') loadPermissions()
+    else if (activeView === 'statistics') loadStats()
+  }, [activeView, statusFilter])
 
-  const loadSessions = useCallback(async () => {
+  useGlobalRefresh(() => loadData())
+
+  const loadSessions = async () => {
     setSessionsLoading(true)
     try {
       const params: { limit: number; status?: string } = { limit: 50 }
@@ -82,9 +102,9 @@ export default function AgentCommunicationManager() {
     } finally {
       setSessionsLoading(false)
     }
-  }, [statusFilter])
+  }
 
-  const loadPermissions = useCallback(async () => {
+  const loadPermissions = async () => {
     setPermissionsLoading(true)
     try {
       const data = await api.getAgentCommPermissions()
@@ -94,9 +114,9 @@ export default function AgentCommunicationManager() {
     } finally {
       setPermissionsLoading(false)
     }
-  }, [])
+  }
 
-  const loadStats = useCallback(async () => {
+  const loadStats = async () => {
     setStatsLoading(true)
     try {
       const data = await api.getAgentCommStats()
@@ -106,7 +126,7 @@ export default function AgentCommunicationManager() {
     } finally {
       setStatsLoading(false)
     }
-  }, [])
+  }
 
   const handleExpandSession = async (sessionId: number) => {
     if (expandedSessionId === sessionId) {
@@ -189,7 +209,7 @@ export default function AgentCommunicationManager() {
     )
   }
 
-  const tabs: { key: TabKey; label: string }[] = [
+  const views: { key: ViewKey; label: string }[] = [
     { key: 'log', label: 'Communication Log' },
     { key: 'permissions', label: 'Permissions' },
     { key: 'statistics', label: 'Statistics' },
@@ -211,20 +231,20 @@ export default function AgentCommunicationManager() {
 
   return (
     <div className="space-y-6">
-      {/* Tab Bar */}
+      {/* View Toggle */}
       <div className="glass-card rounded-xl overflow-hidden">
         <div className="border-b border-tsushin-border/50">
           <nav className="flex">
-            {tabs.map((tab) => (
+            {views.map((view) => (
               <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
+                key={view.key}
+                onClick={() => setActiveView(view.key)}
                 className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  activeTab === tab.key ? 'text-white' : 'text-tsushin-slate hover:text-white'
+                  activeView === view.key ? 'text-white' : 'text-tsushin-slate hover:text-white'
                 }`}
               >
-                <span className="relative z-10">{tab.label}</span>
-                {activeTab === tab.key && (
+                <span className="relative z-10">{view.label}</span>
+                {activeView === view.key && (
                   <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-400" />
                 )}
               </button>
@@ -233,8 +253,8 @@ export default function AgentCommunicationManager() {
         </div>
       </div>
 
-      {/* Tab Content */}
-      {activeTab === 'log' && (
+      {/* Communication Log View */}
+      {activeView === 'log' && (
         <div className="glass-card rounded-xl overflow-hidden">
           <div className="p-6 border-b border-tsushin-border/50 flex items-center justify-between">
             <div>
@@ -389,7 +409,8 @@ export default function AgentCommunicationManager() {
         </div>
       )}
 
-      {activeTab === 'permissions' && (
+      {/* Permissions View */}
+      {activeView === 'permissions' && (
         <div className="glass-card rounded-xl overflow-hidden">
           <div className="p-6 border-b border-tsushin-border/50 flex items-center justify-between">
             <div>
@@ -467,7 +488,8 @@ export default function AgentCommunicationManager() {
         </div>
       )}
 
-      {activeTab === 'statistics' && (
+      {/* Statistics View */}
+      {activeView === 'statistics' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="stat-card stat-card-indigo group">
             <div className="flex items-center justify-between">
