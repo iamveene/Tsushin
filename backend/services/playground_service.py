@@ -128,6 +128,7 @@ class PlaygroundService:
         tenant_id: Optional[str] = None,
         sender_key: Optional[str] = None,
         chat_id_override: Optional[str] = None,
+        project_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Send a message to an agent from the playground.
@@ -586,71 +587,52 @@ class PlaygroundService:
             # STEP 4: If no skill handled it, process with AgentService (AI)
             # Phase 9.3: Pass tenant_id and persona_id for custom tool discovery
             # Phase 16: Check if user is in project context and pass project_id
-            project_id = None
-            try:
-                from models import UserProjectSession, AgentProjectAccess
-                # BUGFIX: Project sessions use generic sender_key format (playground_user_{id})
-                # but send_message uses thread-specific format (playground_u{id}_a{id}_t{id})
-                # Need to check using the generic format
-                generic_sender_key = f"playground_user_{user_id}"
+            # BUG-446: If project_id was explicitly provided by caller (e.g.
+            # ProjectService), use it directly — skip the session lookup.
+            if project_id is not None:
+                self.logger.info(f"[KB FIX] BUG-446: Using explicit project_id={project_id} from caller")
+            else:
+                try:
+                    from models import UserProjectSession, AgentProjectAccess
+                    generic_sender_key = f"playground_user_{user_id}"
 
-                # Phase 1: Comprehensive logging for diagnosis
-                self.logger.info(f"[KB FIX] Session lookup parameters:")
-                self.logger.info(f"  - tenant_id: {agent.tenant_id}")
-                self.logger.info(f"  - sender_key: {generic_sender_key}")
-                self.logger.info(f"  - agent_id: {agent_id}")
-                self.logger.info(f"  - channel: playground")
+                    self.logger.info(f"[KB FIX] Session lookup: tenant={agent.tenant_id}, sender={generic_sender_key}, agent={agent_id}")
 
-                # Query all sessions for debugging
-                all_sessions = self.db.query(UserProjectSession).filter(
-                    UserProjectSession.sender_key == generic_sender_key,
-                    UserProjectSession.channel == "playground"
-                ).all()
-                self.logger.info(f"[KB FIX] Found {len(all_sessions)} total sessions for this user/channel")
-                for sess in all_sessions:
-                    self.logger.info(f"  - Session: agent_id={sess.agent_id}, project_id={sess.project_id}, tenant_id={sess.tenant_id}")
-
-                # Phase 2: Fixed logic - try to find session for this specific agent first
-                project_session = self.db.query(UserProjectSession).filter(
-                    UserProjectSession.tenant_id == agent.tenant_id,
-                    UserProjectSession.sender_key == generic_sender_key,
-                    UserProjectSession.agent_id == agent_id,
-                    UserProjectSession.channel == "playground",
-                    UserProjectSession.project_id.isnot(None)  # Only active project sessions
-                ).first()
-
-                # If not found, check if user is in a project with ANY agent (cross-agent access)
-                if not project_session:
-                    self.logger.info(f"[KB FIX] No session found for agent {agent_id}, checking for any project session")
                     project_session = self.db.query(UserProjectSession).filter(
                         UserProjectSession.tenant_id == agent.tenant_id,
                         UserProjectSession.sender_key == generic_sender_key,
+                        UserProjectSession.agent_id == agent_id,
                         UserProjectSession.channel == "playground",
                         UserProjectSession.project_id.isnot(None)
                     ).first()
 
-                    if project_session:
-                        # Verify agent has access to this project
-                        access = self.db.query(AgentProjectAccess).filter(
-                            AgentProjectAccess.agent_id == agent_id,
-                            AgentProjectAccess.project_id == project_session.project_id
+                    if not project_session:
+                        project_session = self.db.query(UserProjectSession).filter(
+                            UserProjectSession.tenant_id == agent.tenant_id,
+                            UserProjectSession.sender_key == generic_sender_key,
+                            UserProjectSession.channel == "playground",
+                            UserProjectSession.project_id.isnot(None)
                         ).first()
 
-                        if not access:
-                            self.logger.warning(f"[KB FIX] Agent {agent_id} doesn't have access to project {project_session.project_id}")
-                            project_session = None
-                        else:
-                            self.logger.info(f"[KB FIX] ✅ Cross-agent access granted: agent {agent_id} can access project {project_session.project_id}")
+                        if project_session:
+                            access = self.db.query(AgentProjectAccess).filter(
+                                AgentProjectAccess.agent_id == agent_id,
+                                AgentProjectAccess.project_id == project_session.project_id
+                            ).first()
 
-                if project_session:
-                    project_id = project_session.project_id
-                    self.logger.info(f"[KB FIX] ✅ User in project context: project_id={project_id}")
-                else:
-                    self.logger.info(f"[KB FIX] ❌ No project session found for user")
-            except Exception as e:
-                import traceback
-                self.logger.error(f"[KB FIX] Error checking project context: {e}")
-                self.logger.error(f"[KB FIX] Traceback: {traceback.format_exc()}")
+                            if not access:
+                                self.logger.warning(f"[KB FIX] Agent {agent_id} doesn't have access to project {project_session.project_id}")
+                                project_session = None
+
+                    if project_session:
+                        project_id = project_session.project_id
+                        self.logger.info(f"[KB FIX] User in project context: project_id={project_id}")
+                    else:
+                        self.logger.info(f"[KB FIX] No project session found for user")
+                except Exception as e:
+                    import traceback
+                    self.logger.error(f"[KB FIX] Error checking project context: {e}")
+                    self.logger.error(f"[KB FIX] Traceback: {traceback.format_exc()}")
 
             agent_service = AgentService(
                 config_dict,

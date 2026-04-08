@@ -7,6 +7,7 @@ Follows the same patterns as MCPContainerManager and ToolboxContainerService.
 
 import hashlib
 import logging
+import os
 import re
 import time
 import threading
@@ -39,8 +40,13 @@ VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
 
 PORT_RANGE_START = 6300
 PORT_RANGE_END = 6399
-CONTAINER_PREFIX = "tsushin-vs-"
 HEALTH_CHECK_TIMEOUT = 90
+
+
+def _get_container_prefix() -> str:
+    """BUG-448: Use TSN_STACK_NAME for runtime container isolation."""
+    stack_name = (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+    return f"{stack_name}-vs-"
 HEALTH_CHECK_INTERVAL = 5
 
 
@@ -102,13 +108,13 @@ class VectorStoreContainerManager:
             port = self._allocate_port(db)
 
             # Generate names — keep container_name under 63 chars for DNS
-            # Format: tsushin-vs-{vendor}-{hash8}-{instance_id}
-            container_name = f"{CONTAINER_PREFIX}{vendor}-{tenant_hash}-{instance.id}"
+            # Format: {stack}-vs-{vendor}-{hash8}-{instance_id}
+            container_name = f"{_get_container_prefix()}{vendor}-{tenant_hash}-{instance.id}"
             # Defensive truncation: ensure <= 63 characters
             if len(container_name) > 63:
                 container_name = container_name[:63].rstrip("-")
 
-            volume_name = f"tsushin-vs-{vendor}-{tenant_hash}-{instance.id}"
+            volume_name = f"{_get_container_prefix()}{vendor}-{tenant_hash}-{instance.id}"
 
         # Resolve network
         network_name = resolve_tsushin_network_name(self.runtime.raw_client)

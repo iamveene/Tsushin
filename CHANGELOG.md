@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Sprint — BUG-444 to BUG-450 resolved (`develop`, 2026-04-08)
+
+- **BUG-444 (Medium):** Fixed HTTP-only fresh installs redirecting `localhost` to `https://localhost/setup`. Removed stale `NEXT_PUBLIC_API_URL` build-time check from middleware SSL condition; SSL redirect now depends solely on runtime `TSN_SSL_MODE`.
+- **BUG-445 (Medium):** Fixed installer CORS generation to always include loopback origins (`localhost`, `127.0.0.1`) for both frontend and backend ports on HTTP installs, preventing CORS failures when accessing via `127.0.0.1`.
+- **BUG-446 (High):** Fixed project knowledge-base lookups falling back to web search. `ProjectService.send_message()` now passes `project_id` through `PlaygroundService` to `AgentService`, ensuring `CombinedKnowledgeService` is initialized with project context.
+- **BUG-447 (Medium):** Restricted MCP stdio allowed binaries to `[“uvx”]` only, matching what ships in the toolbox container. `npx`/`node` were removed from the allowlist since they aren't installed. Improved error message with clear guidance.
+- **BUG-448 (Medium):** Runtime-created containers (MCP, vector store, toolbox) now use `TSN_STACK_NAME` in their naming prefix instead of hardcoded values, enabling full isolation for side-by-side installs.
+- **BUG-449 (Medium):** Instruction custom-skill test endpoint now executes through the tenant's LLM instead of returning raw instruction text. Added `execute_instruction_with_llm()` to `CustomSkillAdapter`.
+- **BUG-450 (Low):** Watcher dashboard vector store card now shows external store health (Qdrant, MongoDB) instead of “Not configured”. Backend `/api/stats/memory` queries `VectorStoreInstance` table unconditionally.
+
 ### Ubuntu VM Interactive Fresh-Install Audit (`develop`, 2026-04-08)
 
 - Completed a real-user interactive installer audit on Ubuntu VM `10.211.55.5` using `python3 install.py` with backend `8081`, frontend `3030`, remote access, HTTP-only mode, and disposable stack `TSN_STACK_NAME=tsushin-fresh-20260408`.
@@ -41,6 +51,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Provider Matrix:** All 4 SaaS providers (Gemini, OpenAI, Anthropic) connected successfully. Ollama local model discovered. Brave Search and Tavily API keys configured.
 - **Core Features Validated:** Playground chat (Gemini 2.5 Flash, correct responses), Memory Inspector (working memory populated), Knowledge Base (ACME Sales CSV upload + price retrieval with SKU), Sandboxed Tools (dig 107ms, nmap 2.6s), MCP Server registration (stdio), Custom Skills (instruction type), API v1 (client creation, API-key auth, OAuth token exchange, sync chat, async chat + queue polling), Vector Store auto-provisioning (Qdrant healthy + container running), Project creation, Flow creation, 28 slash commands seeded, A2A permission creation, all 15 settings pages 200, all 4 system admin pages 200.
 - **New Bugs Found (3):** BUG-434 (setup wizard global admin missing tenant_id/role — Critical), BUG-435 (setup completion button no-op — Low), BUG-436 (A2A delegation not triggered via API chat — Medium).
+
+### Bug Sprint — BUG-434 to BUG-443 resolved (`develop`, 2026-04-08)
+
+- **BUG-434 (Critical):** Fixed setup/auth tenant bootstrap so initial admin creation no longer leaves the account without tenant context/owner role, and tenant-scoped auth-side logging now fails safely instead of cascading into login 500s.
+- **BUG-435 (Low):** Fixed the setup completion CTA so the "Continue to Login" action now performs an explicit redirect to `/auth/login`.
+- **BUG-436 (Medium):** Fixed API v1 A2A delegation by auto-managing the `agent_communication` skill when permissions are created/updated, allowing sync chat to trigger inter-agent tool usage.
+- **BUG-437 (Medium):** Fixed installer-generated CORS defaults for local installs by including localhost/127.0.0.1 origins for HTTP setups and `https://localhost` for SSL setups.
+- **BUG-438 (Medium):** Fixed localhost redirect handling by keeping HTTP-only installs on the non-redirect path while preserving HTTPS redirects only for SSL-enabled deployments.
+- **BUG-439 (Medium):** Fixed Hub Communication so runtime tester instances are visible in the WhatsApp list while compose tester controls remain available for QA.
+- **BUG-440 (Low):** Revalidated the repaired install path so `/api/v1/agents` once again returns the tenant's seeded agents instead of the empty payload seen in the failing fresh-install QA run; no API v1 route contract change was required.
+- **BUG-441 (Low):** Fixed Sentinel config aliasing so the legacy `enabled` field resolves to the effective boolean state alongside `is_enabled`.
+- **BUG-442 (Low):** Fixed flows routing so both `/api/flows` and `/api/flows/` work without 307 redirect surprises, and verified UI flow CRUD against the restored instance.
+- **BUG-443 (Low):** Fixed development auth throttling defaults so `disabled`/`selfsigned` installs use `30/minute` unless an explicit override is provided.
+- Added stack-scoped Caddy upstream generation (`{stack}-frontend` / `{stack}-backend`) plus a live proxy hardening update for the restored HTTPS install, preventing `https://localhost` from drifting onto another running Tsushin stack on the shared Docker network.
+- Preserved-instance revalidation passed after restoring the original stack data: login succeeded for the known accounts, `GET /api/flows` and Sentinel/A2A/API v1 checks passed, Playwright covered Watcher, Hub Communication, Flows CRUD, Sentinel settings, and API Clients, and the restored data baseline remained `users=3`, `agents=22`, `flows=59`, `api_clients=39`.
 
 ### Bug Sprint — 6 bugs resolved (`develop`, 2026-04-08)
 

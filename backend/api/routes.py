@@ -697,4 +697,45 @@ async def get_memory_stats(
         except Exception as e:
             stats["vector_store"] = {"error": str(e)}
 
+    # BUG-450: Also check for external vector store instances (Qdrant, MongoDB, etc.)
+    # Runs unconditionally — a tenant can have an external store without ChromaDB's
+    # enable_semantic_search flag enabled.
+    try:
+        from models import VectorStoreInstance
+
+        vs_query = db.query(VectorStoreInstance).filter(
+            VectorStoreInstance.is_active == True,
+        )
+        if not ctx.is_global_admin:
+            vs_query = vs_query.filter(
+                VectorStoreInstance.tenant_id == ctx.tenant_id
+            )
+
+        active_instances = vs_query.all()
+
+        if active_instances:
+            if "vector_store" not in stats:
+                stats["vector_store"] = {
+                    "total_embeddings": 0,
+                    "per_agent_embeddings": {},
+                }
+
+            external_stores = []
+            for inst in active_instances:
+                external_stores.append({
+                    "id": inst.id,
+                    "vendor": inst.vendor,
+                    "instance_name": inst.instance_name,
+                    "health_status": inst.health_status or "unknown",
+                    "is_default": inst.is_default,
+                    "is_auto_provisioned": getattr(inst, 'is_auto_provisioned', False),
+                })
+
+            stats["vector_store"]["external_stores"] = external_stores
+            stats["vector_store"]["external_store_count"] = len(external_stores)
+            healthy_count = sum(1 for s in external_stores if s["health_status"] == "healthy")
+            stats["vector_store"]["external_healthy_count"] = healthy_count
+    except Exception as e:
+        logger.warning(f"Failed to query external vector stores: {e}")
+
     return stats

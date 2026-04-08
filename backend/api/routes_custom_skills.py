@@ -807,10 +807,18 @@ async def test_custom_skill(
     start_time = time.time()
 
     try:
-        result = await adapter.execute_tool(
-            arguments=payload.arguments or {},
-            config=config,
-        )
+        # BUG-449: For instruction skills, execute through LLM so the test
+        # shows actual skill output rather than the raw instruction template.
+        if skill.skill_type_variant == 'instruction':
+            result = await adapter.execute_instruction_with_llm(
+                arguments=payload.arguments or {},
+                config=config,
+            )
+        else:
+            result = await adapter.execute_tool(
+                arguments=payload.arguments or {},
+                config=config,
+            )
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         # Update execution record

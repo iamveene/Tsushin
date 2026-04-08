@@ -206,8 +206,24 @@ class TsushinInstaller:
         self.interactive = is_interactive()
         self.args = args or argparse.Namespace(defaults=False, http=False, domain=None, port=8081, frontend_port=3030)
 
-    def _load_config_from_env(self):
-        """Load configuration values from an existing .env file for non-interactive mode."""
+    @staticmethod
+    def _normalize_ssl_mode(value: str) -> str:
+        """Normalize legacy SSL mode aliases to the installer-supported set."""
+        normalized = (value or "").strip().lower()
+        if normalized in ("", "off", "none", "disabled"):
+            return "disabled"
+        return normalized
+
+    def _resolve_auth_rate_limit(self) -> str:
+        """
+        Local/dev-friendly installs should not trip the production auth throttle.
+        Public HTTPS installs keep the secure default.
+        """
+        ssl_mode = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
+        return "30/minute" if ssl_mode in ("disabled", "selfsigned") else "5/minute"
+
+    def _read_env_file_vars(self) -> Dict[str, str]:
+        """Parse the current .env file into a key/value dict."""
         env_vars = {}
         try:
             with open(self.env_file, 'r') as f:
@@ -220,17 +236,52 @@ class TsushinInstaller:
                         env_vars[key.strip()] = value.strip()
         except Exception as e:
             print_warning(f"Could not parse .env file: {e}")
+        return env_vars
+
+    def _load_config_from_env(self):
+        """Load configuration values from an existing .env file for non-interactive mode."""
+        env_vars = self._read_env_file_vars()
 
         # Map .env keys to config keys used by the installer
         self.config['TSN_APP_PORT'] = env_vars.get('TSN_APP_PORT', '8081')
         self.config['FRONTEND_PORT'] = env_vars.get('FRONTEND_PORT', '3030')
         self.config['TSN_STACK_NAME'] = env_vars.get('TSN_STACK_NAME', self.config.get('TSN_STACK_NAME', 'tsushin'))
-        self.config['SSL_MODE'] = env_vars.get('SSL_MODE', 'disabled')
+        self.config['SSL_MODE'] = self._normalize_ssl_mode(env_vars.get('SSL_MODE', 'disabled'))
         self.config['SSL_DOMAIN'] = env_vars.get('SSL_DOMAIN', '')
         self.config['SSL_EMAIL'] = env_vars.get('SSL_EMAIL', '')
+        self.config['TSN_AUTH_RATE_LIMIT'] = env_vars.get('TSN_AUTH_RATE_LIMIT', '')
         self.config['NEXT_PUBLIC_API_URL'] = env_vars.get(
             'NEXT_PUBLIC_API_URL',
             f"http://localhost:{self.config['TSN_APP_PORT']}"
+        )
+
+    def _backfill_existing_env_defaults(self):
+        """
+        Older installs may predate newer derived settings. Append only missing
+        runtime defaults so non-interactive updates inherit the current safe/dev
+        behavior without rotating secrets or rewriting the whole file.
+        """
+        env_vars = self._read_env_file_vars()
+        updates: Dict[str, str] = {}
+
+        if not env_vars.get('TSN_AUTH_RATE_LIMIT'):
+            updates['TSN_AUTH_RATE_LIMIT'] = self._resolve_auth_rate_limit()
+            self.config['TSN_AUTH_RATE_LIMIT'] = updates['TSN_AUTH_RATE_LIMIT']
+
+        if not env_vars.get('TSN_SSL_MODE'):
+            updates['TSN_SSL_MODE'] = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
+
+        if not updates:
+            return
+
+        existing_content = self.env_file.read_text() if self.env_file.exists() else ""
+        prefix = "" if not existing_content or existing_content.endswith("\n") else "\n"
+        with open(self.env_file, 'a') as f:
+            f.write(prefix + "\n".join(f"{key}={value}" for key, value in updates.items()) + "\n")
+
+        print_info(
+            "Updated existing .env with missing runtime defaults: "
+            + ", ".join(sorted(updates.keys()))
         )
 
     def check_existing_installation(self) -> str:
@@ -427,7 +478,7 @@ class TsushinInstaller:
 
     def _resolve_urls(self, access_type: str, public_host: str, backend_port: str):
         """Resolve NEXT_PUBLIC_API_URL and frontend_url based on SSL mode and access type."""
-        ssl_mode = self.config.get('SSL_MODE', 'disabled')
+        ssl_mode = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
         if ssl_mode != 'disabled':
             domain = self.config['SSL_DOMAIN']
             self.config['NEXT_PUBLIC_API_URL'] = f"https://{domain}"
@@ -620,6 +671,27 @@ class TsushinInstaller:
         except socket.error:
             return False
 
+    def _get_stack_name(self) -> str:
+        return (self.config.get('TSN_STACK_NAME') or 'tsushin').strip() or 'tsushin'
+
+    def _get_caddy_stack_dir(self) -> Path:
+        return self.root_dir / "caddy" / self._get_stack_name()
+
+    def _get_caddy_legacy_dir(self) -> Path:
+        return self.root_dir / "caddy"
+
+    def _write_caddy_artifact(self, relative_path: str, content: str) -> Path:
+        stack_path = self._get_caddy_stack_dir() / relative_path
+        stack_path.parent.mkdir(parents=True, exist_ok=True)
+        stack_path.write_text(content)
+
+        if self._get_stack_name() == "tsushin":
+            legacy_path = self._get_caddy_legacy_dir() / relative_path
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_path.write_text(content)
+
+        return stack_path
+
     def _validate_domain_dns(self, domain: str):
         """Validate that a domain resolves via DNS"""
         try:
@@ -636,23 +708,26 @@ class TsushinInstaller:
 
     def generate_caddyfile(self):
         """Generate Caddy reverse proxy configuration based on SSL mode"""
-        ssl_mode = self.config.get('SSL_MODE', 'disabled')
+        ssl_mode = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
         if ssl_mode == 'disabled':
             return
 
-        caddyfile_path = self.root_dir / "caddy" / "Caddyfile"
+        caddyfile_path = self._get_caddy_stack_dir() / "Caddyfile"
         domain = self.config.get('SSL_DOMAIN', 'localhost')
+        stack_name = self._get_stack_name()
+        backend_host = f"{stack_name}-backend:8081"
+        frontend_host = f"{stack_name}-frontend:3030"
 
         # Build Caddyfile based on SSL mode
         routing_block = f"""    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
     handle /api/* {{
-        reverse_proxy backend:8081
+        reverse_proxy {backend_host}
     }}
     handle /ws/* {{
-        reverse_proxy backend:8081
+        reverse_proxy {backend_host}
     }}
     handle {{
-        reverse_proxy frontend:3030
+        reverse_proxy {frontend_host}
     }}"""
 
         if ssl_mode == 'letsencrypt':
@@ -671,21 +746,16 @@ class TsushinInstaller:
         else:
             return
 
-        # Ensure caddy directory exists
-        caddyfile_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(caddyfile_path, 'w') as f:
-            f.write(caddyfile_content)
-
-        print_success(f"Caddy configuration generated: {caddyfile_path.relative_to(self.root_dir)}")
+        generated_path = self._write_caddy_artifact("Caddyfile", caddyfile_content)
+        print_success(f"Caddy configuration generated: {generated_path.relative_to(self.root_dir)}")
 
     def generate_self_signed_cert(self):
         """Generate self-signed SSL certificate for development"""
-        ssl_mode = self.config.get('SSL_MODE', 'disabled')
+        ssl_mode = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
         if ssl_mode != 'selfsigned':
             return
 
-        certs_dir = self.root_dir / "caddy" / "certs"
+        certs_dir = self._get_caddy_stack_dir() / "certs"
         cert_path = certs_dir / "selfsigned.crt"
         key_path = certs_dir / "selfsigned.key"
         domain = self.config.get('SSL_DOMAIN', 'localhost')
@@ -716,6 +786,11 @@ class TsushinInstaller:
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
+            if self._get_stack_name() == "tsushin":
+                legacy_certs_dir = self._get_caddy_legacy_dir() / "certs"
+                legacy_certs_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy(cert_path, legacy_certs_dir / "selfsigned.crt")
+                shutil.copy(key_path, legacy_certs_dir / "selfsigned.key")
             print_success("Self-signed certificate generated")
         else:
             print_warning(f"Could not generate certificate: {result.stderr}")
@@ -727,7 +802,7 @@ class TsushinInstaller:
         if ssl_mode != 'manual':
             return
 
-        certs_dir = self.root_dir / "caddy" / "certs"
+        certs_dir = self._get_caddy_stack_dir() / "certs"
         certs_dir.mkdir(parents=True, exist_ok=True)
 
         cert_src = Path(self.config['SSL_CERT_PATH'])
@@ -735,6 +810,11 @@ class TsushinInstaller:
 
         shutil.copy(cert_src, certs_dir / "cert.pem")
         shutil.copy(key_src, certs_dir / "key.pem")
+        if self._get_stack_name() == "tsushin":
+            legacy_certs_dir = self._get_caddy_legacy_dir() / "certs"
+            legacy_certs_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(cert_src, legacy_certs_dir / "cert.pem")
+            shutil.copy(key_src, legacy_certs_dir / "key.pem")
         print_success("SSL certificates copied to caddy/certs/")
 
     def prepare_data_directories(self):
@@ -747,8 +827,11 @@ class TsushinInstaller:
             self.backend_data_dir / "chroma",
             self.backend_data_dir / "backups",
             self.root_dir / "logs" / "backend",
-            self.root_dir / "caddy" / "certs",
+            self._get_caddy_stack_dir() / "certs",
         ]
+
+        if self._get_stack_name() == "tsushin":
+            directories.append(self.root_dir / "caddy" / "certs")
 
         for dir_path in directories:
             try:
@@ -793,9 +876,10 @@ class TsushinInstaller:
         host_backend_data_path = str(self.backend_data_dir.absolute())
 
         # Determine URLs based on SSL mode
-        ssl_mode = self.config.get('SSL_MODE', 'disabled')
+        ssl_mode = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
         access_type = self.config.get('ACCESS_TYPE', 'localhost')
         public_host = self.config.get('PUBLIC_HOST', 'localhost')
+        auth_rate_limit = self._resolve_auth_rate_limit()
 
         if ssl_mode != 'disabled':
             ssl_domain = self.config.get('SSL_DOMAIN', 'localhost')
@@ -808,6 +892,25 @@ class TsushinInstaller:
             backend_url = f"http://localhost:{self.config['TSN_APP_PORT']}"
             frontend_url = f"http://localhost:{self.config['FRONTEND_PORT']}"
 
+        cors_origins = [frontend_url]
+        if ssl_mode != 'disabled':
+            extra_origins = ["https://localhost"]
+        else:
+            # BUG-445: Always include loopback origins for both frontend and
+            # backend ports so localhost/127.0.0.1 browser access passes CORS.
+            frontend_port = self.config['FRONTEND_PORT']
+            backend_port = self.config['TSN_APP_PORT']
+            extra_origins = [
+                f"http://localhost:{frontend_port}",
+                f"http://127.0.0.1:{frontend_port}",
+            ]
+            if str(backend_port) != str(frontend_port):
+                extra_origins.append(f"http://localhost:{backend_port}")
+                extra_origins.append(f"http://127.0.0.1:{backend_port}")
+        for origin in extra_origins:
+            if origin not in cors_origins:
+                cors_origins.append(origin)
+
         env_content = f"""# Tsushin Configuration
 # Generated by installer on {datetime.now().isoformat()}
 
@@ -819,6 +922,7 @@ TSN_STACK_NAME={self.config.get('TSN_STACK_NAME', 'tsushin')}
 TSN_BACKEND_URL={backend_url}
 TSN_FRONTEND_URL={frontend_url}
 TSN_LOG_LEVEL=INFO
+TSN_AUTH_RATE_LIMIT={auth_rate_limit}
 TSN_POLL_INTERVAL_MS=3000
 
 # Database
@@ -848,7 +952,7 @@ SSL_MODE={ssl_mode}
 SSL_DOMAIN={self.config.get('SSL_DOMAIN', '')}
 SSL_EMAIL={self.config.get('SSL_EMAIL', '')}
 TSN_SSL_MODE={ssl_mode}
-TSN_CORS_ORIGINS={frontend_url}
+TSN_CORS_ORIGINS={','.join(cors_origins)}
 HTTP_PORT=80
 HTTPS_PORT=443
 
@@ -1272,6 +1376,7 @@ NEXT_PUBLIC_API_URL={backend_url}
                 print_info("Skipping interactive prompts. Proceeding with existing configuration.")
                 # Load minimal config from .env for downstream steps
                 self._load_config_from_env()
+                self._backfill_existing_env_defaults()
                 # Skip to deployment steps
                 self.check_prerequisites()
                 self.prepare_data_directories()

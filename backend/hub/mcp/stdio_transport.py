@@ -9,7 +9,9 @@ from hub.mcp.transport_base import MCPTransport
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_MCP_STDIO_BINARIES = ["uvx", "npx", "node"]
+# BUG-447: Only uvx ships in the fresh-install toolbox image.
+# npx/node were previously listed but caused confusing runtime failures.
+ALLOWED_MCP_STDIO_BINARIES = ["uvx"]
 
 
 class StdioTransport(MCPTransport):
@@ -38,7 +40,9 @@ class StdioTransport(MCPTransport):
 
         if binary not in ALLOWED_MCP_STDIO_BINARIES:
             raise ValueError(
-                f"Binary '{binary}' not in allowed list: {ALLOWED_MCP_STDIO_BINARIES}"
+                f"Binary '{binary}' is not supported. The toolbox container "
+                f"ships: {', '.join(ALLOWED_MCP_STDIO_BINARIES)}. "
+                f"Use 'uvx' to run Python-based MCP servers (e.g., uvx mcp-server-fetch)."
             )
 
         # Security: Path traversal rejection
@@ -83,36 +87,6 @@ class StdioTransport(MCPTransport):
                 raise ValueError(
                     f"Failed to verify binary '{binary}' in container: {e}"
                 )
-
-        # Validate stdio_args reference a real MCP server package when the
-        # binary is a package runner (npx/uvx).  If the first arg looks like
-        # a clearly-invalid path (e.g. absolute path to a non-existent file),
-        # reject early instead of silently succeeding with no tools.
-        if args and binary in ("npx", "node"):
-            first_arg = str(args[0])
-            if first_arg.startswith("/") and not first_arg.startswith("@"):
-                # Absolute path — check existence inside container
-                try:
-                    from services.toolbox_container_service import ToolboxContainerService
-                    svc = ToolboxContainerService()
-                    result = await svc.execute_command(
-                        tenant_id=self.server_config.tenant_id,
-                        command=f"test -e {_shell_escape(first_arg)}",
-                        timeout=10,
-                    )
-                    if result.get("exit_code", -1) != 0:
-                        raise ValueError(
-                            f"Stdio server path '{first_arg}' does not exist "
-                            "in toolbox container"
-                        )
-                except ImportError:
-                    pass
-                except ValueError:
-                    raise
-                except Exception as e:
-                    raise ValueError(
-                        f"Failed to verify server path '{first_arg}': {e}"
-                    )
 
         self._connected = True
         self._last_activity = time.time()

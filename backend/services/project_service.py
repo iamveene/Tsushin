@@ -874,7 +874,8 @@ class ProjectService:
             response = await playground_service.send_message(
                 user_id=user_id or 0,
                 agent_id=agent_id,
-                message_text=enhanced_message
+                message_text=enhanced_message,
+                project_id=project_id,  # BUG-446: Pass project context for CombinedKnowledgeService
             )
 
             if response.get("status") == "success" and response.get("message"):

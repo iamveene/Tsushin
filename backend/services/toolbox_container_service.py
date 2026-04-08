@@ -40,7 +40,6 @@ class ToolboxContainerService:
     """Manages per-tenant toolbox Docker containers for custom tool execution"""
 
     BASE_IMAGE = "tsushin-toolbox:base"
-    CONTAINER_PREFIX = "tsushin-toolbox-"
     COMMAND_TIMEOUT = 300  # Default 5 minutes
     HEALTH_CHECK_TIMEOUT = 30
 
@@ -55,10 +54,16 @@ class ToolboxContainerService:
             raise ValueError(f"Invalid tenant_id format: {tenant_id!r}")
         return tenant_id
 
+    @property
+    def _container_prefix(self) -> str:
+        """BUG-448: Use TSN_STACK_NAME for runtime container isolation."""
+        stack_name = (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+        return f"{stack_name}-toolbox-"
+
     def _get_container_name(self, tenant_id: str) -> str:
         """Generate container name for tenant"""
         self._validate_tenant_id(tenant_id)
-        return f"{self.CONTAINER_PREFIX}{tenant_id}"
+        return f"{self._container_prefix}{tenant_id}"
 
     def _get_image_tag(self, tenant_id: str) -> str:
         """Get tenant-specific image tag"""

@@ -13,6 +13,7 @@ import requests
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Dict, Tuple
+from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from models import WhatsAppMCPInstance, Agent
@@ -33,16 +34,20 @@ class MCPContainerManager:
     """Manages Docker containers for WhatsApp MCP instances"""
 
     IMAGE_NAME = "tsushin/whatsapp-mcp:latest"
-    CONTAINER_PREFIX = "mcp-"
     HEALTH_CHECK_TIMEOUT = 60  # seconds
     HEALTH_CHECK_INTERVAL = 5  # seconds
     DNS_FALLBACK_ENV = "WHATSAPP_MCP_DNS_SERVERS"
     TESTER_CONTAINER_NAME = "tester-mcp"
     TESTER_API_URL = os.getenv("TESTER_MCP_API_URL", "http://tester-mcp:8080/api")
+    TESTER_CONTAINER_ENV = "TESTER_MCP_CONTAINER_NAME"
 
-    def __init__(self):
+    def __init__(self, tenant_id: Optional[str] = None):
         """Initialize container runtime"""
         self.runtime: ContainerRuntime = get_container_runtime()
+        self.tenant_id = tenant_id
+        self._resolved_tester_name: Optional[str] = None
+        self._resolved_tester_api_url: Optional[str] = None
+        self._resolved_tester_source: Optional[str] = None
         logger.info("MCPContainerManager initialized with container runtime")
 
     def _resolve_network_name(self) -> str:
@@ -87,7 +92,9 @@ class MCPContainerManager:
         logger.info(f"Generated API secret for MCP authentication")
 
         # 2. Generate container name (unique with timestamp, includes type)
-        container_name = f"{self.CONTAINER_PREFIX}{instance_type}-{tenant_id}_{int(time.time())}"
+        # BUG-448: Use TSN_STACK_NAME prefix for runtime container isolation
+        stack_prefix = f"{self._get_stack_name()}-mcp-"
+        container_name = f"{stack_prefix}{instance_type}-{tenant_id}_{int(time.time())}"
 
         # 3. Create volume directories (unique per instance)
         session_dir = self._create_session_directory(tenant_id, container_name)
@@ -959,30 +966,125 @@ class MCPContainerManager:
     def normalize_phone_number(phone_number: Optional[str]) -> str:
         return "".join(ch for ch in (phone_number or "") if ch.isdigit())
 
+    def _reset_tester_target(self) -> None:
+        self._resolved_tester_name = None
+        self._resolved_tester_api_url = None
+        self._resolved_tester_source = None
+
+    def _set_tester_target(self, name: str, api_url: str, source: str) -> None:
+        self._resolved_tester_name = name
+        self._resolved_tester_api_url = api_url.rstrip("/")
+        self._resolved_tester_source = source
+
+    def _get_stack_name(self) -> str:
+        return (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+
+    def _get_explicit_tester_target(self) -> Optional[Tuple[str, str]]:
+        explicit_name = (os.getenv(self.TESTER_CONTAINER_ENV) or "").strip()
+        if explicit_name:
+            return explicit_name, f"http://{explicit_name}:8080/api"
+
+        explicit_api_url = (os.getenv("TESTER_MCP_API_URL") or "").strip()
+        if explicit_api_url:
+            parsed = urlparse(explicit_api_url)
+            if parsed.hostname:
+                return parsed.hostname, explicit_api_url.rstrip("/")
+
+        return None
+
+    def _get_default_tester_target(self) -> Tuple[str, str]:
+        explicit_target = self._get_explicit_tester_target()
+        if explicit_target:
+            return explicit_target
+
+        return self.TESTER_CONTAINER_NAME, self.TESTER_API_URL.rstrip("/")
+
+    def _get_tester_container_candidates(self) -> list[str]:
+        stack_name = self._get_stack_name()
+        stack_alias = stack_name[len("tsushin-"):] if stack_name.startswith("tsushin-") else stack_name
+
+        candidates = []
+        explicit_target = self._get_explicit_tester_target()
+        if explicit_target:
+            candidates.append(explicit_target[0])
+
+        for name in (
+            f"{stack_name}-tester-mcp",
+            f"{stack_name}-ui-tester",
+            f"{stack_alias}-ui-tester",
+            self.TESTER_CONTAINER_NAME,
+        ):
+            if name:
+                candidates.append(name)
+
+        deduped: list[str] = []
+        for name in candidates:
+            if name not in deduped:
+                deduped.append(name)
+        return deduped
+
+    def _compose_tester_api_url_for(self, container_name: str) -> str:
+        explicit_target = self._get_explicit_tester_target()
+        if explicit_target:
+            explicit_name, explicit_api_url = explicit_target
+            if container_name == explicit_name:
+                return explicit_api_url.rstrip("/")
+        return f"http://{container_name}:8080/api"
+
+    def _get_compose_tester_container(self) -> Optional[Any]:
+        for container_name in self._get_tester_container_candidates():
+            try:
+                container = self.runtime.get_container(container_name)
+                self._set_tester_target(
+                    container_name,
+                    self._compose_tester_api_url_for(container_name),
+                    "compose",
+                )
+                return container
+            except ContainerNotFoundError:
+                continue
+        return None
+
+    def _require_tester_target(self) -> Tuple[str, str]:
+        tester_container = self._get_tester_container()
+        if tester_container is None:
+            raise RuntimeError("Tester container not found")
+
+        tester_name = self._resolved_tester_name or self.TESTER_CONTAINER_NAME
+        tester_api_url = self._resolved_tester_api_url or self.TESTER_API_URL.rstrip("/")
+        return tester_name, tester_api_url
+
     def _get_tester_container(self) -> Optional[Any]:
         """BUG-380: Try compose-managed tester first, then fall back to runtime tester instances."""
+        self._reset_tester_target()
+
         # Try compose-managed tester
-        try:
-            return self.runtime.get_container(self.TESTER_CONTAINER_NAME)
-        except ContainerNotFoundError:
-            pass
+        compose_tester = self._get_compose_tester_container()
+        if compose_tester is not None:
+            return compose_tester
 
         # Fall back to runtime-created tester instances (type=tester)
+        if not self.tenant_id:
+            return None
+
         try:
             from models import WhatsAppMCPInstance
             from db import get_db
             db = next(get_db())
             try:
                 tester_instance = db.query(WhatsAppMCPInstance).filter(
+                    WhatsAppMCPInstance.tenant_id == self.tenant_id,
                     WhatsAppMCPInstance.instance_type == "tester",
                     WhatsAppMCPInstance.is_active == True
                 ).order_by(WhatsAppMCPInstance.id.desc()).first()
                 if tester_instance and tester_instance.container_name:
                     try:
                         container = self.runtime.get_container(tester_instance.container_name)
-                        # Update class-level references to use the runtime tester
-                        self._runtime_tester_name = tester_instance.container_name
-                        self._runtime_tester_api_url = f"http://{tester_instance.container_name}:8080/api"
+                        self._set_tester_target(
+                            tester_instance.container_name,
+                            f"http://{tester_instance.container_name}:8080/api",
+                            "runtime",
+                        )
                         return container
                     except ContainerNotFoundError:
                         pass
@@ -1006,11 +1108,7 @@ class MCPContainerManager:
         return get_auth_headers(tester_secret)
 
     def get_tester_status(self) -> Dict[str, Any]:
-        # BUG-380: Resolve tester name/URL from runtime instance if available
-        self._runtime_tester_name = None
-        self._runtime_tester_api_url = None
-        tester_name = self.TESTER_CONTAINER_NAME
-        tester_api_url = self.TESTER_API_URL
+        tester_name, tester_api_url = self._get_default_tester_target()
         tester_status = {
             "name": tester_name,
             "api_url": tester_api_url,
@@ -1031,13 +1129,12 @@ class MCPContainerManager:
         }
 
         tester_container = self._get_tester_container()
-        # BUG-380: Update status dict with resolved runtime tester info
-        if self._runtime_tester_name:
-            tester_name = self._runtime_tester_name
-            tester_api_url = self._runtime_tester_api_url or tester_api_url
+        if self._resolved_tester_name:
+            tester_name = self._resolved_tester_name
+            tester_api_url = self._resolved_tester_api_url or tester_api_url
             tester_status["name"] = tester_name
             tester_status["api_url"] = tester_api_url
-            tester_status["source"] = "runtime"
+            tester_status["source"] = self._resolved_tester_source or "compose"
         else:
             tester_status["source"] = "compose"
 
@@ -1091,7 +1188,7 @@ class MCPContainerManager:
             return tester_status
 
         try:
-            qr_response = requests.get(f"{self.TESTER_API_URL}/qr-code", headers=headers, timeout=5)
+            qr_response = requests.get(f"{tester_api_url}/qr-code", headers=headers, timeout=5)
             if qr_response.status_code == 200:
                 tester_status["qr_available"] = bool(qr_response.json().get("qr_code"))
         except requests.RequestException:
@@ -1108,9 +1205,10 @@ class MCPContainerManager:
         return phone_number or None
 
     def get_tester_qr_code(self) -> Optional[str]:
+        _, tester_api_url = self._require_tester_target()
         headers = self._get_tester_headers()
         try:
-            response = requests.get(f"{self.TESTER_API_URL}/qr-code", headers=headers, timeout=10)
+            response = requests.get(f"{tester_api_url}/qr-code", headers=headers, timeout=10)
             if response.status_code != 200:
                 return None
             return response.json().get("qr_code")
@@ -1118,18 +1216,20 @@ class MCPContainerManager:
             return None
 
     def restart_tester(self) -> Dict[str, Any]:
-        self.runtime.restart_container(self.TESTER_CONTAINER_NAME, timeout=15)
+        tester_name, _ = self._require_tester_target()
+        self.runtime.restart_container(tester_name, timeout=15)
         return {"success": True, "message": "Tester MCP restarting"}
 
     def logout_tester(self) -> Dict[str, Any]:
         return self.reset_tester_auth()
 
     def reset_tester_auth(self) -> Dict[str, Any]:
+        tester_name, tester_api_url = self._require_tester_target()
         headers = self._get_tester_headers()
         logout_error: Optional[str] = None
 
         try:
-            response = requests.post(f"{self.TESTER_API_URL}/logout", headers=headers, timeout=10)
+            response = requests.post(f"{tester_api_url}/logout", headers=headers, timeout=10)
             if response.status_code == 200:
                 return response.json()
             logout_error = f"Tester logout failed with HTTP {response.status_code}"
@@ -1149,14 +1249,14 @@ class MCPContainerManager:
         ]
 
         try:
-            result = self.runtime.exec_run(self.TESTER_CONTAINER_NAME, cleanup_cmd, user="root")
+            result = self.runtime.exec_run(tester_name, cleanup_cmd, user="root")
             exit_code = getattr(result, "exit_code", 0)
             if exit_code not in (0, None):
                 output = getattr(result, "output", b"")
                 if isinstance(output, bytes):
                     output = output.decode("utf-8", errors="ignore")
                 raise RuntimeError(output or "unknown tester cleanup error")
-            self.runtime.restart_container(self.TESTER_CONTAINER_NAME, timeout=15)
+            self.runtime.restart_container(tester_name, timeout=15)
             return {
                 "success": True,
                 "message": "Tester authentication reset via filesystem cleanup",

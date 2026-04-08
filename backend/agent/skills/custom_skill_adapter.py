@@ -87,6 +87,83 @@ class CustomSkillAdapter(BaseSkill):
             metadata={"skill_type": "instruction", "skill_name": self._record.name},
         )
 
+    async def execute_instruction_with_llm(self, arguments: Dict, config: Dict = None) -> SkillResult:
+        """BUG-449: Execute an instruction skill through the tenant's LLM.
+
+        Used by the test endpoint so users see actual LLM output rather than
+        the raw instruction template.
+        """
+        instruction_text = self._record.instructions_md or ""
+        if arguments:
+            for key, value in arguments.items():
+                instruction_text = instruction_text.replace(f"{{{{{key}}}}}", str(value))
+
+        if not instruction_text.strip():
+            return SkillResult(
+                success=False,
+                output="Instruction template is empty after substitution",
+                metadata={"skill_type": "instruction", "skill_name": self._record.name},
+            )
+
+        db = config.get('db') if config else None
+        tenant_id = config.get('tenant_id') if config else None
+        if not db:
+            return SkillResult(
+                success=False,
+                output="No database session available for LLM execution",
+                metadata={"skill_type": "instruction", "skill_name": self._record.name},
+            )
+
+        try:
+            from services.system_ai_config import get_system_ai_config
+            from agent.ai_client import AIClient
+
+            provider, model, provider_instance_id = get_system_ai_config(db)
+            client = AIClient(
+                provider=provider,
+                model_name=model,
+                db=db,
+                tenant_id=tenant_id,
+                provider_instance_id=provider_instance_id,
+            )
+
+            user_message = json.dumps(arguments) if arguments else "(no input provided)"
+
+            result = await client.generate(
+                system_prompt=instruction_text,
+                user_message=f"Execute this skill with the following input:\n{user_message}",
+                operation_type="skill_test",
+            )
+
+            if result.get("error"):
+                return SkillResult(
+                    success=False,
+                    output=f"LLM execution failed: {result['error']}",
+                    metadata={
+                        "skill_type": "instruction",
+                        "skill_name": self._record.name,
+                        "executed_via_llm": True,
+                    },
+                )
+
+            return SkillResult(
+                success=True,
+                output=result.get("answer", ""),
+                metadata={
+                    "skill_type": "instruction",
+                    "skill_name": self._record.name,
+                    "executed_via_llm": True,
+                    "model_used": f"{provider}/{model}",
+                },
+            )
+        except Exception as e:
+            logger.error(f"LLM instruction execution failed for {self._record.name}: {e}")
+            return SkillResult(
+                success=False,
+                output=f"LLM execution error: {e}",
+                metadata={"skill_type": "instruction", "skill_name": self._record.name},
+            )
+
     async def _execute_script(self, arguments: Dict, config: Dict = None) -> SkillResult:
         """
         Execute script in tenant's toolbox container.
