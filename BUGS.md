@@ -6338,3 +6338,10 @@
 - **Files:** `backend/app.py`, `backend/api/routes_sentinel.py`
 - **Description:** The Sentinel configuration endpoint mounted via `app.include_router(sentinel_router, prefix="/api")` with `@router.get("/config")` returns a 404 Not Found. This breaks API access to Sentinel settings.
 - **Remediation:** Verify the router prefix for Sentinel (e.g., should it be `/api/sentinel`?) and update the frontend/API tests accordingly.
+
+### BUG-452: MCP Server creation fails with 400 Bad Request
+- **Severity:** Medium
+- **Category:** MCP / UI
+- **Files:** `frontend/app/hub/page.tsx`
+- **Description:** Creating an MCP server via the Hub UI using SSE transport returns a 400 Bad Request. The UI does not expose the specific backend validation error clearly to the user, blocking MCP creation natively via the UI.
+- **Remediation:** Ensure the `/api/mcp-servers` endpoint accepts valid SSE URLs and surfaces detailed validation errors in the UI response toast.
