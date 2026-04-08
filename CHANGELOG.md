@@ -21,8 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Conducted a comprehensive fresh install audit on Ubuntu VM (10.211.55.5) using `--defaults --http`.
 - Completed setup wizard and initialization successfully via Playwright browser automation.
+- Validated Vector Store provisioning, Flows (Workflow) creation, and Shared Knowledge (A2A) integration natively via Playwright UI automation.
 - Discovered **BUG-450**: `/api/clients` returning 500 Internal Server Error when creating a new API client, causing the backend worker connection to drop.
 - Discovered **BUG-451**: Sentinel config endpoint `/api/config` returning 404 Not Found, breaking API access to Sentinel settings.
+- Discovered **BUG-452**: MCP Server creation via UI returning 400 Bad Request, blocking UI-based SSE server registration.
 
 ### Ubuntu VM Interactive Fresh-Install Audit (`develop`, 2026-04-08)
 
