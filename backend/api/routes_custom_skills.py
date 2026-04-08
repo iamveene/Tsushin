@@ -920,23 +920,25 @@ async def list_agent_custom_skills(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    assignments = db.query(AgentCustomSkill).filter(
+    assignments = db.query(AgentCustomSkill, CustomSkill).join(
+        CustomSkill,
+        AgentCustomSkill.custom_skill_id == CustomSkill.id,
+    ).filter(
         AgentCustomSkill.agent_id == agent_id,
-    ).all()
+        CustomSkill.tenant_id == ctx.tenant_id,
+    ).order_by(AgentCustomSkill.created_at.asc(), AgentCustomSkill.id.asc()).all()
 
-    result = []
-    for assignment in assignments:
-        skill = db.query(CustomSkill).filter(CustomSkill.id == assignment.custom_skill_id).first()
-        if skill:
-            result.append(AgentCustomSkillResponse(
-                id=assignment.id,
-                agent_id=assignment.agent_id,
-                custom_skill_id=assignment.custom_skill_id,
-                is_enabled=assignment.is_enabled,
-                config=assignment.config or {},
-                skill=_to_response(skill),
-            ))
-    return result
+    return [
+        AgentCustomSkillResponse(
+            id=assignment.id,
+            agent_id=assignment.agent_id,
+            custom_skill_id=assignment.custom_skill_id,
+            is_enabled=assignment.is_enabled,
+            config=assignment.config or {},
+            skill=_to_response(skill),
+        )
+        for assignment, skill in assignments
+    ]
 
 
 @router.post("/agents/{agent_id}/custom-skills", response_model=AgentCustomSkillResponse, status_code=status.HTTP_201_CREATED)

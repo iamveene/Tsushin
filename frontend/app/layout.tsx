@@ -1,4 +1,5 @@
 import './globals.css'
+import type { Metadata } from 'next'
 import { DM_Sans, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google'
 import { AuthProvider } from '@/contexts/AuthContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
@@ -30,9 +31,16 @@ const jetbrainsMono = JetBrains_Mono({
   display: 'swap',
 })
 
-export const metadata = {
+export const metadata: Metadata = {
   title: 'Tsushin Beta — Think, Secure, Build',
   description: 'Orchestrate conversations. Automate outcomes.',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: '16x16', type: 'image/x-icon' },
+    ],
+    shortcut: '/favicon.ico',
+    apple: '/favicon.ico',
+  },
 }
 
 export default function RootLayout({

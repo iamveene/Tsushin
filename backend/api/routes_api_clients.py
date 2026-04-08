@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from models_rbac import User
-from auth_dependencies import require_permission
+from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from models import ApiClient
 from services.api_client_service import ApiClientService, VALID_ROLES, API_ROLE_SCOPES
 from services.audit_service import log_tenant_event, TenantAuditActions
 
@@ -104,6 +105,18 @@ def _client_to_response(client) -> dict:
     }
 
 
+def _load_client_or_404(
+    client_id: str,
+    service: ApiClientService,
+    ctx: TenantContext,
+):
+    """Load an API client with tenant-aware access checks."""
+    client = service.get_client_by_id(client_id)
+    if not client or not ctx.can_access_resource(client.tenant_id):
+        raise HTTPException(status_code=404, detail="API client not found")
+    return client
+
+
 # ============================================================================
 # Endpoints
 # ============================================================================
@@ -112,10 +125,12 @@ def _client_to_response(client) -> dict:
 async def list_api_clients(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """List all API clients for the current tenant."""
-    service = ApiClientService(db)
-    clients = service.list_clients(current_user.tenant_id)
+    query = db.query(ApiClient)
+    query = ctx.filter_by_tenant(query, ApiClient.tenant_id)
+    clients = query.order_by(ApiClient.created_at.desc()).all()
     return [_client_to_response(c) for c in clients]
 
 
@@ -125,9 +140,13 @@ async def create_api_client(
     http_request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Create a new API client. Returns the client secret (shown only once)."""
     service = ApiClientService(db)
+
+    if not ctx.tenant_id:
+        raise HTTPException(status_code=400, detail="API clients require a tenant-scoped user")
 
     # BUG-070 FIX: Pass creator permissions for escalation check
     creator_perms = None
@@ -138,7 +157,7 @@ async def create_api_client(
 
     try:
         client, raw_secret = service.create_client(
-            tenant_id=current_user.tenant_id,
+            tenant_id=ctx.tenant_id,
             name=request.name,
             description=request.description,
             role=request.role,
@@ -151,7 +170,7 @@ async def create_api_client(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.API_CLIENT_CREATE, "api_client", client.client_id, {"name": client.name}, http_request)
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.API_CLIENT_CREATE, "api_client", client.client_id, {"name": client.name}, http_request)
 
     scopes = service.resolve_scopes(client)
     response = _client_to_response(client)
@@ -166,12 +185,11 @@ async def get_api_client(
     client_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Get details of a specific API client."""
     service = ApiClientService(db)
-    client = service.get_client_by_id(client_id, tenant_id=current_user.tenant_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="API client not found")
+    client = _load_client_or_404(client_id, service, ctx)
     return _client_to_response(client)
 
 
@@ -181,12 +199,11 @@ async def update_api_client(
     request: ApiClientUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Update an API client's configuration."""
     service = ApiClientService(db)
-    client = service.get_client_by_id(client_id, tenant_id=current_user.tenant_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="API client not found")
+    client = _load_client_or_404(client_id, service, ctx)
 
     # BUG-SEC-008 FIX: Explicit api_owner role escalation check
     # Non-global-admin callers must already hold api_owner role on an existing
@@ -235,16 +252,15 @@ async def rotate_api_client_secret(
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Rotate the secret for an API client. Old secret becomes invalid immediately."""
     service = ApiClientService(db)
-    client = service.get_client_by_id(client_id, tenant_id=current_user.tenant_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="API client not found")
+    client = _load_client_or_404(client_id, service, ctx)
 
     raw_secret = service.rotate_secret(client)
 
-    log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.API_CLIENT_ROTATE, "api_client", client_id, {"name": client.name}, request)
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.API_CLIENT_ROTATE, "api_client", client_id, {"name": client.name}, request)
 
     return {
         "client_id": client.client_id,
@@ -259,17 +275,16 @@ async def revoke_api_client(
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.delete")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Revoke an API client. All issued tokens will fail on next use."""
     service = ApiClientService(db)
-    client = service.get_client_by_id(client_id, tenant_id=current_user.tenant_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="API client not found")
+    client = _load_client_or_404(client_id, service, ctx)
 
     client_name = client.name
     service.revoke_client(client)
 
-    log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.API_CLIENT_REVOKE, "api_client", client_id, {"name": client_name}, request)
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.API_CLIENT_REVOKE, "api_client", client_id, {"name": client_name}, request)
 
 
 @router.get("/api/clients/{client_id}/usage", response_model=ApiClientUsageResponse)
@@ -277,11 +292,10 @@ async def get_api_client_usage(
     client_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("api_clients.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Get usage statistics for an API client."""
     service = ApiClientService(db)
-    client = service.get_client_by_id(client_id, tenant_id=current_user.tenant_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="API client not found")
+    client = _load_client_or_404(client_id, service, ctx)
 
     return service.get_usage_stats(client.id)

@@ -13,6 +13,7 @@ import uuid
 from models import Memory, Agent, ConversationThread
 from agent.agent_service import AgentService
 from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+from services.playground_thread_service import build_api_channel_id, build_playground_channel_id
 
 logger = logging.getLogger(__name__)
 
@@ -49,20 +50,33 @@ class PlaygroundMessageService:
         Returns:
             Memory object or None
         """
-        # Try with "sender_" prefix first (new format)
-        memory = self.db.query(Memory).filter(
-            Memory.agent_id == agent_id,
-            Memory.sender_key == f"sender_{thread.recipient}"
-        ).first()
+        agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+        isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
 
-        if not memory:
-            # Try without prefix (legacy format)
+        candidate_keys: List[str] = []
+        if isolation_mode == "shared":
+            candidate_keys = ["shared", f"agent_{agent_id}:shared"]
+        elif isolation_mode == "channel_isolated":
+            if thread.api_client_id:
+                channel_id = build_api_channel_id(api_client_id=thread.api_client_id)
+            else:
+                channel_id = build_playground_channel_id(thread.user_id or 0)
+            candidate_keys = [f"channel_{channel_id}"]
+        else:
+            candidate_keys = [
+                f"sender_{thread.recipient}",
+                thread.recipient,
+            ]
+
+        for key in candidate_keys:
             memory = self.db.query(Memory).filter(
                 Memory.agent_id == agent_id,
-                Memory.sender_key == thread.recipient
+                Memory.sender_key == key
             ).first()
+            if memory:
+                return memory
 
-        return memory
+        return None
 
     def get_thread_messages(
         self,
@@ -92,6 +106,17 @@ class PlaygroundMessageService:
             return []
 
         messages = memory.messages_json
+        agent = self.db.query(Agent).filter(Agent.id == thread.agent_id).first()
+        isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
+
+        if isolation_mode in ("shared", "channel_isolated"):
+            thread_messages = [
+                msg for msg in messages
+                if not isinstance(msg.get("metadata"), dict)
+                or msg["metadata"].get("thread_id") is None
+                or msg["metadata"].get("thread_id") == thread_id
+            ]
+            messages = thread_messages or messages
 
         # Assign message_ids if not present
         for idx, msg in enumerate(messages):

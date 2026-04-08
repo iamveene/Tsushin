@@ -1442,7 +1442,7 @@ class SkillManager:
         from agent.skills.custom_skill_adapter import CustomSkillAdapter
 
         try:
-            assignments = db.query(AgentCustomSkill).join(
+            assignments = db.query(AgentCustomSkill, CustomSkill).join(
                 CustomSkill, AgentCustomSkill.custom_skill_id == CustomSkill.id
             ).filter(
                 AgentCustomSkill.agent_id == agent_id,
@@ -1453,22 +1453,18 @@ class SkillManager:
             ).all()
 
             tool_defs = []
-            for assignment in assignments:
-                skill = db.query(CustomSkill).filter(
-                    CustomSkill.id == assignment.custom_skill_id
-                ).first()
-                if skill:
-                    adapter = CustomSkillAdapter(skill)
-                    tool_def = adapter.get_mcp_tool_definition()
-                    if tool_def:
-                        tool_defs.append({
-                            "type": "function",
-                            "function": {
-                                "name": tool_def["name"],
-                                "description": tool_def.get("description", ""),
-                                "parameters": tool_def.get("inputSchema", {"type": "object", "properties": {}})
-                            }
-                        })
+            for _assignment, skill in assignments:
+                adapter = CustomSkillAdapter(skill)
+                tool_def = adapter.get_mcp_tool_definition()
+                if tool_def:
+                    tool_defs.append({
+                        "type": "function",
+                        "function": {
+                            "name": tool_def["name"],
+                            "description": tool_def.get("description", ""),
+                            "parameters": tool_def.get("inputSchema", {"type": "object", "properties": {}})
+                        }
+                    })
 
             if tool_defs:
                 logger.info(f"Collected {len(tool_defs)} custom skill tool definitions for agent {agent_id}")

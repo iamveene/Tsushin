@@ -618,12 +618,21 @@ class QueueWorker:
         The result is persisted in the queue item payload for polling.
         """
         from services.playground_service import PlaygroundService
-        from services.playground_thread_service import PlaygroundThreadService
+        from services.playground_thread_service import (
+            PlaygroundThreadService,
+            build_api_channel_id,
+            build_api_thread_recipient,
+        )
+        from models import Agent, ConversationThread
 
         payload = item.payload
         user_id = payload.get("user_id", 0)
         message = payload.get("message", "")
         thread_id = payload.get("thread_id")
+        api_client_id = payload.get("api_client_id")
+
+        agent = db.query(Agent).filter(Agent.id == item.agent_id).first()
+        isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
 
         # Auto-create thread if not specified
         if not thread_id:
@@ -637,6 +646,33 @@ class QueueWorker:
             thread_obj = thread_data.get("thread", {})
             thread_id = thread_obj.get("id") if thread_obj else None
 
+        thread = db.query(ConversationThread).filter(ConversationThread.id == thread_id).first() if thread_id else None
+        if thread:
+            if api_client_id and thread.api_client_id != api_client_id:
+                thread.api_client_id = api_client_id
+            recipient = build_api_thread_recipient(
+                thread_id=thread_id,
+                api_client_id=api_client_id,
+                user_id=user_id if not api_client_id else None,
+            )
+            if thread.recipient != recipient:
+                thread.recipient = recipient
+            db.commit()
+
+        chat_id_override = build_api_channel_id(
+            api_client_id=api_client_id,
+            user_id=user_id if not api_client_id else None,
+        )
+        sender_key = (
+            build_api_thread_recipient(
+                thread_id=thread_id,
+                api_client_id=api_client_id,
+                user_id=user_id if not api_client_id else None,
+            )
+            if isolation_mode == "isolated"
+            else chat_id_override
+        )
+
         service = PlaygroundService(db)
         result = await service.send_message(
             user_id=user_id,
@@ -644,6 +680,8 @@ class QueueWorker:
             message_text=message,
             thread_id=thread_id,
             tenant_id=item.tenant_id,
+            sender_key=sender_key,
+            chat_id_override=chat_id_override,
         )
 
         if result.get("status") == "error":

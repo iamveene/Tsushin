@@ -312,6 +312,7 @@ class SlashCommandService:
             # BUG-014 Fix: Tools listing command
             ("system", "tools"): self._handle_tools_list,
             ("system", "ferramentas"): self._handle_tools_list,
+            ("system", "shell"): self._handle_shell,
 
             # Tool output injection commands
             ("tool", "inject"): self._handle_inject,
@@ -1152,7 +1153,15 @@ Type `/help all` to see syntax for all commands.
         BUG-014 Fix: Added tools listing command.
         """
         try:
-            from models import Agent, SandboxedTool, SandboxedToolCommand, AgentSandboxedTool
+            from models import (
+                Agent,
+                AgentCustomSkill,
+                AgentSandboxedTool,
+                AgentSkill,
+                CustomSkill,
+                SandboxedTool,
+                SandboxedToolCommand,
+            )
 
             agent_id = kwargs.get("agent_id")
             tenant_id = kwargs.get("tenant_id")
@@ -1181,7 +1190,6 @@ Type `/help all` to see syntax for all commands.
             lines = ["🔧 **Available Tools:**\n"]
 
             # Check for enabled skills (new Skills system)
-            from models import AgentSkill
             agent_skills = self.db.query(AgentSkill).filter(
                 AgentSkill.agent_id == agent_id,
                 AgentSkill.is_enabled == True
@@ -1199,6 +1207,33 @@ Type `/help all` to see syntax for all commands.
                 for skill in agent_skills:
                     icon, desc = skill_icons.get(skill.skill_type, ("⚙️", f"{skill.skill_type} skill"))
                     lines.append(f"• {icon} **{skill.skill_type}** - {desc}")
+                lines.append("")
+
+            custom_assignments = self.db.query(AgentCustomSkill, CustomSkill).join(
+                CustomSkill,
+                AgentCustomSkill.custom_skill_id == CustomSkill.id,
+            ).filter(
+                AgentCustomSkill.agent_id == agent_id,
+                AgentCustomSkill.is_enabled == True,
+                CustomSkill.tenant_id == tenant_id,
+                CustomSkill.is_enabled == True,
+                CustomSkill.scan_status == "clean",
+                CustomSkill.execution_mode.in_(["tool", "hybrid"]),
+            ).order_by(CustomSkill.name).all()
+
+            if custom_assignments:
+                lines.append("**Custom Skills:**")
+                variant_icons = {
+                    "instruction": "🧠",
+                    "script": "🧩",
+                    "mcp_server": "🔌",
+                }
+                for _, skill in custom_assignments:
+                    icon = variant_icons.get(skill.skill_type_variant, "⚙️")
+                    desc = skill.description or f"{skill.skill_type_variant} custom skill"
+                    if skill.skill_type_variant == "mcp_server" and skill.mcp_tool_name:
+                        desc = f"{desc} (MCP: {skill.mcp_tool_name})"
+                    lines.append(f"• {icon} **{skill.name}** - {desc}")
                 lines.append("")
 
             # Sandboxed tools assigned to this agent
@@ -1534,7 +1569,7 @@ Type `/help all` to see syntax for all commands.
         try:
             from agent.tools.search_tool import SearchTool
 
-            search_tool = SearchTool(db=self.db)
+            search_tool = SearchTool(db=self.db, tenant_id=tenant_id)
             search_data = search_tool.search(query, count=5)
             result = search_tool.format_search_results(search_data)
 
@@ -1550,6 +1585,27 @@ Type `/help all` to see syntax for all commands.
                 "status": "error",
                 "message": f"❌ Failed to search: {str(e)}"
             }
+
+    def _parse_shell_target_and_command(self, groups: tuple, args: str) -> Tuple[str, str]:
+        """Parse /shell target and command from either legacy or current regex groups."""
+        if groups and len(groups) > 1:
+            target = groups[0].strip() if groups[0] else "default"
+            command = groups[1].strip() if groups[1] else ""
+            return target or "default", command
+
+        raw_command = args.strip() if args else ""
+        if not raw_command and groups and groups[0]:
+            raw_command = groups[0].strip()
+
+        if not raw_command:
+            return "default", ""
+
+        if ":" in raw_command:
+            target, command = raw_command.split(":", 1)
+            if target.strip() and command.strip():
+                return target.strip(), command.strip()
+
+        return "default", raw_command
 
     async def _execute_schedule_tool(
         self,
@@ -2077,6 +2133,7 @@ Type `/help all` to see syntax for all commands.
         from models_rbac import User
 
         groups = kwargs.get("groups", ())
+        args = kwargs.get("args", "")
         tenant_id = kwargs.get("tenant_id")
         agent_id = kwargs.get("agent_id")
         sender_key = kwargs.get("sender_key")
@@ -2114,9 +2171,7 @@ Type `/help all` to see syntax for all commands.
                 )
             }
 
-        # Parse groups - pattern captures (target, command)
-        target = groups[0] if groups and groups[0] else "default"
-        command = groups[1].strip() if groups and len(groups) > 1 and groups[1] else ""
+        target, command = self._parse_shell_target_and_command(groups, args)
 
         if not command:
             return {

@@ -86,7 +86,7 @@ class StepCreateRequest(BaseModel):
     """Request body for adding a step to a flow."""
     type: str = Field(..., description="Step type: notification, message, tool, conversation, Trigger, Message, Tool, Conversation", example="message")
     position: int = Field(..., ge=1, description="Position in the flow (1-based)", example=1)
-    config_json: Dict[str, Any] = Field(..., description="Step configuration (schema depends on step type)", example={"recipient": "+5511999999999", "message": "Hello!"})
+    config_json: Dict[str, Any] = Field(..., description="Step configuration (schema depends on step type)", example={"recipient": "+5511999999999", "message_template": "Hello!"})
     name: Optional[str] = Field(None, description="Human-readable step name", example="Send greeting")
     description: Optional[str] = Field(None, description="Step description")
     next_node_id: Optional[int] = Field(None, description="Next node ID (legacy)")
@@ -215,6 +215,57 @@ class PaginatedFlowsResponse(BaseModel):
 # ============================================================================
 # Helpers
 # ============================================================================
+
+def _normalize_step_type(step_type: Optional[str]) -> str:
+    return (step_type or "").strip().lower()
+
+
+def _normalize_notification_config(config_json: Dict[str, Any]) -> Dict[str, Any]:
+    config = dict(config_json or {})
+
+    recipient = config.get("recipient")
+    if isinstance(recipient, str):
+        config["recipient"] = recipient.strip()
+
+    recipients = config.get("recipients")
+    if isinstance(recipients, str):
+        recipients = [recipients]
+    if isinstance(recipients, list):
+        config["recipients"] = [
+            item.strip() for item in recipients if isinstance(item, str) and item.strip()
+        ]
+
+    if isinstance(config.get("message"), str) and config["message"].strip():
+        config.setdefault("message_template", config["message"].strip())
+
+    return config
+
+
+def _validate_and_normalize_step_config(step_type: Optional[str], config_json: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_type = _normalize_step_type(step_type)
+    config = dict(config_json or {})
+
+    if normalized_type == "notification":
+        config = _normalize_notification_config(config)
+
+        recipient = config.get("recipient")
+        recipients = config.get("recipients", [])
+        has_recipient = isinstance(recipient, str) and bool(recipient.strip())
+        has_recipients = isinstance(recipients, list) and len(recipients) > 0
+        if not has_recipient and not has_recipients:
+            raise HTTPException(
+                status_code=422,
+                detail="Notification steps require a non-empty 'recipient' or 'recipients' value",
+            )
+
+        message_value = config.get("message_template") or config.get("content") or config.get("message")
+        if not isinstance(message_value, str) or not message_value.strip():
+            raise HTTPException(
+                status_code=422,
+                detail="Notification steps require a non-empty 'message_template' or 'content' value",
+            )
+
+    return config
 
 def _count_flow_nodes(db: Session, flow_id: int) -> int:
     """Count nodes/steps in a flow."""
@@ -652,11 +703,13 @@ async def create_step(
         if not ref_persona:
             raise HTTPException(status_code=400, detail="Persona not found")
 
+    normalized_config = _validate_and_normalize_step_config(request.type, request.config_json)
+
     db_step = FlowNode(
         flow_definition_id=flow_id,
         type=request.type,
         position=request.position,
-        config_json=json.dumps(request.config_json),
+        config_json=json.dumps(normalized_config),
         next_node_id=request.next_node_id,
         name=request.name,
         step_description=request.description,
@@ -711,8 +764,13 @@ async def update_step(
         step.type = request.type
     if request.position is not None:
         step.position = request.position
-    if request.config_json is not None:
-        step.config_json = json.dumps(request.config_json)
+    effective_type = request.type if request.type is not None else step.type
+    effective_config = request.config_json
+    if effective_config is None:
+        effective_config = json.loads(step.config_json) if isinstance(step.config_json, str) else (step.config_json or {})
+    normalized_config = _validate_and_normalize_step_config(effective_type, effective_config)
+    if request.config_json is not None or request.type is not None:
+        step.config_json = json.dumps(normalized_config)
     if request.next_node_id is not None:
         step.next_node_id = request.next_node_id
     if request.name is not None:

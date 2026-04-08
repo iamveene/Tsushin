@@ -129,13 +129,18 @@ export default function SetupPage() {
       }
 
       const keyFields: Record<string, string | undefined> = {}
-      for (const { provider, key } of allKeys) {
+      const providerModels: Record<string, string> = {}
+      for (const { provider, key, model } of allKeys) {
         const field = PROVIDERS[provider]?.field
         if (field && key) keyFields[field] = key
+        if (provider) {
+          providerModels[provider] = model
+        }
       }
 
       // Send the primary provider's model as default_model
       const primaryModel = allKeys.length > 0 ? allKeys[0].model : undefined
+      const primaryProvider = allKeys.length > 0 ? allKeys[0].provider : undefined
 
       const result = await api.setupWizard({
         tenant_name: orgName,
@@ -143,6 +148,8 @@ export default function SetupPage() {
         admin_password: password,
         admin_full_name: fullName,
         create_default_agents: createDefaultAgents,
+        primary_provider: primaryProvider,
+        provider_models: providerModels,
         default_model: primaryModel,
         ...keyFields,
       })

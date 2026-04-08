@@ -7,6 +7,7 @@ Provides CRUD operations for agents and tone presets.
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
@@ -43,6 +44,16 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _is_agent_contact_conflict(exc: IntegrityError) -> bool:
+    """Detect unique contact reassignment failures across SQLite/Postgres variants."""
+    error_text = str(getattr(exc, "orig", exc)).lower()
+    return (
+        "contact_id" in error_text
+        and "agent" in error_text
+        and any(marker in error_text for marker in ("unique", "duplicate", "constraint"))
+    )
 
 
 # ==================== Tone Preset Schemas ====================
@@ -820,17 +831,25 @@ def update_agent(
         raise HTTPException(status_code=403, detail="Access denied to this agent")
 
     # Validate contact if being changed
-    if agent.contact_id and agent.contact_id != db_agent.contact_id:
-        contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
+    if agent.contact_id is not None and agent.contact_id != db_agent.contact_id:
+        contact = ctx.filter_by_tenant(
+            db.query(Contact),
+            Contact.tenant_id
+        ).filter(Contact.id == agent.contact_id).first()
         if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")
         if contact.role != "agent":
             raise HTTPException(status_code=400, detail="Contact must have role='agent'")
+        if not ctx.can_access_resource(contact.tenant_id):
+            raise HTTPException(status_code=403, detail="Access denied to this contact")
 
         # Check if another agent already uses this contact
-        existing = db.query(Agent).filter(
+        existing = ctx.filter_by_tenant(
+            db.query(Agent),
+            Agent.tenant_id
+        ).filter(
             Agent.contact_id == agent.contact_id,
-            Agent.id != agent_id
+            Agent.id != agent_id,
         ).first()
         if existing:
             raise HTTPException(status_code=400, detail="Agent for this contact already exists")
@@ -887,14 +906,18 @@ def update_agent(
         if field in UPDATABLE_AGENT_FIELDS:
             setattr(db_agent, field, value)
 
-    apply_agent_whatsapp_binding_policy(db, db_agent)
-
-    db_agent.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(db_agent)
+    try:
+        apply_agent_whatsapp_binding_policy(db, db_agent)
+        db_agent.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(db_agent)
+    except IntegrityError as exc:
+        db.rollback()
+        if _is_agent_contact_conflict(exc):
+            raise HTTPException(status_code=400, detail="Agent for this contact already exists")
+        raise HTTPException(status_code=400, detail="Agent update violates a database constraint")
 
     try:
-        from models import Contact
         contact_name = str(agent_id)
         if db_agent.contact_id:
             contact = db.query(Contact).filter(Contact.id == db_agent.contact_id).first()

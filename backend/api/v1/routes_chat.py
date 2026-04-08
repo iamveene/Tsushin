@@ -18,7 +18,11 @@ from api.api_auth import ApiCaller, require_api_permission
 from api.v1.schemas import COMMON_RESPONSES, NOT_FOUND_RESPONSE
 from services.playground_service import PlaygroundService
 from services.playground_message_service import PlaygroundMessageService
-from services.playground_thread_service import PlaygroundThreadService
+from services.playground_thread_service import (
+    PlaygroundThreadService,
+    build_api_channel_id,
+    build_api_thread_recipient,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -50,6 +54,41 @@ def _validate_thread_access(db, thread_id: int, caller) -> None:
     thread = query.first()
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
+
+
+def _build_api_sender_key(caller, thread_id: int, isolation_mode: str) -> str:
+    """Build the canonical sender key for API chat processing."""
+    if isolation_mode == "isolated":
+        return build_api_thread_recipient(
+            thread_id=thread_id,
+            api_client_id=caller.client_id if caller.is_api_client else None,
+            user_id=caller.user_id if not caller.is_api_client else None,
+        )
+
+    return build_api_channel_id(
+        api_client_id=caller.client_id if caller.is_api_client else None,
+        user_id=caller.user_id if not caller.is_api_client else None,
+    )
+
+
+def _sync_api_thread_recipient(db, thread_id: int, caller) -> Optional[str]:
+    """Persist the API-specific recipient so later message lookup uses the same key."""
+    if not thread_id:
+        return None
+
+    thread = db.query(ConversationThread).filter(ConversationThread.id == thread_id).first()
+    if not thread:
+        return None
+
+    recipient = build_api_thread_recipient(
+        thread_id=thread_id,
+        api_client_id=caller.client_id if caller.is_api_client else None,
+        user_id=caller.user_id if not caller.is_api_client else None,
+    )
+    if thread.recipient != recipient:
+        thread.recipient = recipient
+        db.commit()
+    return recipient
 
 
 # ============================================================================
@@ -176,12 +215,6 @@ async def _process_sync(agent, agent_name, request, caller, db):
 
     service = PlaygroundService(db)
 
-    # Build sender_key for API client
-    if caller.is_api_client:
-        sender_key = f"api_{caller.client_id}"
-    else:
-        sender_key = service.resolve_user_identity(caller.user_id)
-
     # Handle thread — create new if not specified
     thread_id = request.thread_id
     if thread_id:
@@ -197,6 +230,14 @@ async def _process_sync(agent, agent_name, request, caller, db):
         thread_obj = thread_data.get("thread", {})
         thread_id = thread_obj.get("id") if thread_obj else None
         _tag_thread_with_api_client(db, thread_id, caller)
+    _sync_api_thread_recipient(db, thread_id, caller)
+
+    isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
+    sender_key = _build_api_sender_key(caller, thread_id, isolation_mode)
+    chat_id_override = build_api_channel_id(
+        api_client_id=caller.client_id if caller.is_api_client else None,
+        user_id=caller.user_id if not caller.is_api_client else None,
+    )
 
     try:
         result = await service.send_message(
@@ -206,6 +247,7 @@ async def _process_sync(agent, agent_name, request, caller, db):
             thread_id=thread_id,
             tenant_id=caller.tenant_id,
             sender_key=sender_key,
+            chat_id_override=chat_id_override,
         )
     except Exception as e:
         logger.error(f"Chat error for agent {agent.id}: {e}", exc_info=True)
@@ -261,12 +303,6 @@ async def _process_stream_sse(agent, agent_name, request, caller, db):
 
     service = PlaygroundService(db)
 
-    # Build sender_key for API client
-    if caller.is_api_client:
-        sender_key = f"api_{caller.client_id}"
-    else:
-        sender_key = service.resolve_user_identity(caller.user_id)
-
     # Handle thread
     thread_id = request.thread_id
     if thread_id:
@@ -282,6 +318,14 @@ async def _process_stream_sse(agent, agent_name, request, caller, db):
         thread_obj = thread_data.get("thread", {})
         thread_id = thread_obj.get("id") if thread_obj else None
         _tag_thread_with_api_client(db, thread_id, caller)
+    _sync_api_thread_recipient(db, thread_id, caller)
+
+    isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
+    sender_key = _build_api_sender_key(caller, thread_id, isolation_mode)
+    chat_id_override = build_api_channel_id(
+        api_client_id=caller.client_id if caller.is_api_client else None,
+        user_id=caller.user_id if not caller.is_api_client else None,
+    )
 
     async def event_generator():
         try:
@@ -291,6 +335,7 @@ async def _process_stream_sse(agent, agent_name, request, caller, db):
                 message_text=request.message,
                 thread_id=thread_id,
                 sender_key=sender_key,
+                chat_id_override=chat_id_override,
             ):
                 chunk_data = json.dumps(chunk)
                 yield f"data: {chunk_data}\n\n"
@@ -319,14 +364,14 @@ async def _enqueue_message(agent, agent_name, request, caller, db):
 
     queue_service = MessageQueueService(db)
 
-    # Build sender_key
-    sender_key = f"api_{caller.client_id}" if caller.is_api_client else f"playground_user_{caller.user_id}"
-
     queue_item = queue_service.enqueue(
         tenant_id=caller.tenant_id,
         channel="api",
         agent_id=agent.id,
-        sender_key=sender_key,
+        sender_key=build_api_channel_id(
+            api_client_id=caller.client_id if caller.is_api_client else None,
+            user_id=caller.user_id if not caller.is_api_client else None,
+        ),
         payload={
             "message": request.message,
             "thread_id": request.thread_id,

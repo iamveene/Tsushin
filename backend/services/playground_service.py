@@ -14,6 +14,10 @@ from agent.utils import summarize_tool_result
 from agent.memory.tool_output_buffer import get_tool_output_buffer
 # Phase 8: Watcher Activity Events
 from services.watcher_activity_service import emit_agent_processing_async
+from services.playground_thread_service import (
+    build_playground_channel_id,
+    build_playground_thread_recipient,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +99,23 @@ class PlaygroundService:
             self.logger.error(f"Error resolving user identity for user {user_id}: {e}", exc_info=True)
             return f"playground_user_{user_id}"
 
+    def _should_use_contact_mapping(self, sender_key: Optional[str]) -> bool:
+        """Synthetic thread/channel sender keys should bypass contact resolution."""
+        if not sender_key:
+            return True
+
+        synthetic_prefixes = (
+            "playground_u",
+            "api_client_",
+            "api_user_",
+            "api_thread_",
+        )
+        return not sender_key.startswith(synthetic_prefixes)
+
+    def _resolve_chat_id(self, user_id: int, chat_id_override: Optional[str] = None) -> str:
+        """Resolve the logical channel identifier used for channel-scoped memory."""
+        return chat_id_override or build_playground_channel_id(user_id)
+
     async def send_message(
         self,
         user_id: int,
@@ -106,6 +127,7 @@ class PlaygroundService:
         skip_user_message: bool = False,
         tenant_id: Optional[str] = None,
         sender_key: Optional[str] = None,
+        chat_id_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send a message to an agent from the playground.
@@ -137,18 +159,11 @@ class PlaygroundService:
         from agent.memory.multi_agent_memory import MultiAgentMemoryManager
 
         try:
-            # BUG-329 FIX: Use stable per-user-per-agent key for cross-thread memory recall.
-            # Previously, thread-specific keys (playground_u{uid}_a{aid}_t{tid}) caused new threads
-            # to start with empty memory because memories were stored under the old thread's key.
-            # Using a stable key ensures memory is recalled correctly across all threads for the
-            # same user+agent combination. Conversation history isolation is handled separately
-            # by the thread_id scope in the ConversationThread / Memory tables.
             if sender_key:
                 self.logger.info(f"Using explicit sender_key: {sender_key}")
             elif thread_id:
-                # BUG-329: Use stable per-user-per-agent key (no thread suffix) for memory continuity
-                sender_key = f"playground_u{user_id}_a{agent_id}"
-                self.logger.info(f"Using stable per-user-per-agent sender_key: {sender_key}")
+                sender_key = build_playground_thread_recipient(user_id, agent_id, thread_id)
+                self.logger.info(f"Using thread-specific sender_key: {sender_key}")
             else:
                 # Fallback for backward compatibility - check contact mapping
                 user_contact_mapping = self.db.query(UserContactMapping).filter(
@@ -175,6 +190,8 @@ class PlaygroundService:
                     "error": "Failed to resolve user identity",
                     "status": "error"
                 }
+            chat_id = self._resolve_chat_id(user_id, chat_id_override)
+            use_contact_mapping = self._should_use_contact_mapping(sender_key)
 
             # Get agent configuration with optional tenant validation (HIGH-011 defense-in-depth)
             query = self.db.query(Agent).filter(Agent.id == agent_id)
@@ -340,14 +357,15 @@ class PlaygroundService:
                     sender_key=sender_key,
                     role="user",
                     content=message_text,
-                    chat_id=f"playground_{user_id}",
+                    chat_id=chat_id,
                     message_id=message_id,
                     metadata={
                         "source": "playground",
                         "agent_id": agent_id,
                         "user_id": user_id,
                         "thread_id": thread_id
-                    }
+                    },
+                    use_contact_mapping=use_contact_mapping,
                 )
                 self.logger.info(f"Added user message to memory before processing (WhatsApp consistency)")
             else:
@@ -410,8 +428,8 @@ class PlaygroundService:
                 similarity_threshold=config_dict.get("semantic_similarity_threshold", 0.3),
                 include_knowledge=True,  # Layer 3: Include learned facts about user
                 include_shared=include_shared_memory,  # BUG-366: Only share in shared mode
-                chat_id=f"playground_{user_id}",
-                use_contact_mapping=True
+                chat_id=chat_id,
+                use_contact_mapping=use_contact_mapping
             )
 
             # Build full message with context using format_context_for_prompt()
@@ -501,7 +519,7 @@ class PlaygroundService:
                 sender=f"playground_user_{user_id}",
                 sender_key=sender_key,
                 body=message_text,
-                chat_id=f"playground_{user_id}",
+                chat_id=chat_id,
                 chat_name="Playground",
                 is_group=False,
                 timestamp=datetime.utcnow(),
@@ -531,9 +549,10 @@ class PlaygroundService:
                         sender_key=sender_key,
                         role="assistant",
                         content=skill_result.output,
-                        chat_id=f"playground_{user_id}",
+                        chat_id=chat_id,
                         message_id=f"msg_skill_{agent_id}_{int(datetime.utcnow().timestamp() * 1000)}",
-                        metadata=skill_result.metadata
+                        metadata=skill_result.metadata,
+                        use_contact_mapping=use_contact_mapping,
                     )
 
                     # Phase 6: Cache generated images and include URL in response
@@ -760,9 +779,10 @@ class PlaygroundService:
                     sender_key=sender_key,
                     role="assistant",
                     content=memory_content,  # Store FULL content for UI display
-                    chat_id=f"playground_{user_id}",
+                    chat_id=chat_id,
                     message_id=agent_message_id,
-                    metadata=memory_metadata  # Include tool metadata and KB usage
+                    metadata=memory_metadata,  # Include tool metadata and KB usage
+                    use_contact_mapping=use_contact_mapping,
                 )
 
                 # Phase 14.5: Index agent response in FTS5 for conversation search
@@ -811,7 +831,7 @@ class PlaygroundService:
                             "sender_key": sender_key,
                             "sender_name": f"Playground User {user_id}",
                             "is_group": False,
-                            "chat_id": f"playground_{user_id}"
+                            "chat_id": chat_id
                         },
                         ai_client=agent_service.ai_client
                     )
@@ -871,6 +891,7 @@ class PlaygroundService:
         thread_id: Optional[int] = None,
         tenant_id: Optional[str] = None,
         sender_key: Optional[str] = None,
+        chat_id_override: Optional[str] = None,
     ):
         """
         Process message with streaming response (Phase 14.9).
@@ -901,10 +922,8 @@ class PlaygroundService:
             if sender_key:
                 self.logger.info(f"Using explicit sender_key: {sender_key}")
             elif thread_id:
-                # BUG-352 FIX: Use stable per-user-per-agent key (no thread suffix)
-                # to match send_message() and Memory Inspector lookup.
-                sender_key = f"playground_u{user_id}_a{agent_id}"
-                self.logger.info(f"[STREAMING] Using stable per-user-per-agent sender_key: {sender_key}")
+                sender_key = build_playground_thread_recipient(user_id, agent_id, thread_id)
+                self.logger.info(f"[STREAMING] Using thread-specific sender_key: {sender_key}")
             else:
                 # Fallback for backward compatibility - check contact mapping
                 user_contact_mapping = self.db.query(UserContactMapping).filter(
@@ -929,6 +948,8 @@ class PlaygroundService:
             if not sender_key:
                 yield {"type": "error", "error": "Failed to resolve user identity"}
                 return
+            chat_id = self._resolve_chat_id(user_id, chat_id_override)
+            use_contact_mapping = self._should_use_contact_mapping(sender_key)
 
             # Get agent configuration (HIGH-011 defense-in-depth)
             query = self.db.query(Agent).filter(Agent.id == agent_id)
@@ -1062,13 +1083,15 @@ class PlaygroundService:
                 sender_key=sender_key,
                 role="user",
                 content=message_text,
-                chat_id=f"playground_{user_id}",
+                chat_id=chat_id,
                 message_id=message_id,
                 metadata={
                     "source": "playground",
                     "agent_id": agent_id,
-                    "user_id": user_id
-                }
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                },
+                use_contact_mapping=use_contact_mapping,
             )
 
             # Index in FTS5
@@ -1100,8 +1123,8 @@ class PlaygroundService:
                 similarity_threshold=config_dict.get("semantic_similarity_threshold", 0.3),
                 include_knowledge=True,
                 include_shared=True,
-                chat_id=f"playground_{user_id}",
-                use_contact_mapping=True
+                chat_id=chat_id,
+                use_contact_mapping=use_contact_mapping
             )
 
             # Build full message with context
@@ -1169,7 +1192,7 @@ class PlaygroundService:
                 sender=sender_key,
                 sender_key=sender_key,
                 body=message_text,
-                chat_id=f"playground_{user_id}",
+                chat_id=chat_id,
                 chat_name=None,
                 is_group=False,
                 timestamp=datetime.utcnow(),
@@ -1200,9 +1223,10 @@ class PlaygroundService:
                         sender_key=sender_key,
                         role="assistant",
                         content=skill_output,
-                        chat_id=f"playground_{user_id}",
+                        chat_id=chat_id,
                         message_id=f"msg_skill_{agent_id}_{int(datetime.utcnow().timestamp() * 1000)}",
-                        metadata=skill_result.metadata
+                        metadata=skill_result.metadata,
+                        use_contact_mapping=use_contact_mapping,
                     )
 
                     # Index in FTS5
@@ -1275,7 +1299,9 @@ class PlaygroundService:
                 agent_id=agent_id,
                 message_text=message_text,
                 thread_id=thread_id,
-                skip_user_message=True  # Already added user message above
+                skip_user_message=True,  # Already added user message above
+                sender_key=sender_key,
+                chat_id_override=chat_id,
             )
 
             if response.get("status") == "error":

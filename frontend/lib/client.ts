@@ -7195,6 +7195,8 @@ export const api = {
     grok_api_key?: string
     deepseek_api_key?: string
     openrouter_api_key?: string
+    primary_provider?: string
+    provider_models?: Record<string, string>
     default_model?: string
   }): Promise<any> {
     // SEC-005: credentials: 'include' ensures browser stores the httpOnly cookie from response

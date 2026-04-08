@@ -344,14 +344,21 @@ class PlaygroundDocumentService:
         """Split text into overlapping chunks."""
         if not text:
             return []
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than zero")
+        if overlap < 0:
+            raise ValueError("overlap must be zero or greater")
 
         chunks = []
         start = 0
         text_len = len(text)
+        effective_overlap = min(overlap, max(chunk_size - 1, 0))
 
         while start < text_len:
-            end = start + chunk_size
+            end = min(start + chunk_size, text_len)
             chunk = text[start:end]
+            if not chunk:
+                break
 
             # Try to break at sentence or word boundary
             if end < text_len:
@@ -362,12 +369,17 @@ class PlaygroundDocumentService:
                         chunk = chunk[:last_sep + len(sep)]
                         break
 
-            chunks.append(chunk.strip())
-            start = start + len(chunk) - overlap
+            stripped_chunk = chunk.strip()
+            if stripped_chunk:
+                chunks.append(stripped_chunk)
 
-            # Prevent infinite loop
-            if start <= 0 and len(chunks) > 1:
+            if end >= text_len:
                 break
+
+            next_start = start + len(chunk) - effective_overlap
+            if next_start <= start:
+                next_start = end
+            start = next_start
 
         return [c for c in chunks if c]  # Remove empty chunks
 

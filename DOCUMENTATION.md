@@ -186,7 +186,7 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 
 1. Create admin account + organization.
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
-3. The wizard automatically creates a **ProviderInstance** for the primary provider and assigns it as the **System AI** — no manual configuration needed.
+3. The wizard automatically creates **ProviderInstance** records for each supported provider key entered during setup. The selected primary provider is also assigned as the **System AI** — no manual post-setup Hub provisioning is required for the providers entered in the wizard.
 4. At completion, the wizard reveals an auto-generated **global admin** email/password pair. Record these credentials before leaving the completion screen; they are required for `/system/*` validation and system-level administration.
 5. On first login an **onboarding tour** (9 steps) walks through all platform areas: Watcher, Studio, Hub, Channels, Flows, Playground, Security, and a final setup checklist.
 6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp/Telegram) via the Hub to enable agent messaging.
@@ -468,9 +468,9 @@ Fields on the Agent model (Source: `backend/models.py:337-359`):
 | `memory_decay_mmr_lambda` | Float | 0.5 | MMR diversity weight. |
 
 Semantics:
-- **isolated** — each sender key has its own ring buffer.
+- **isolated** — each sender key has its own ring buffer. For threaded Playground/API chats, Tsushin uses a canonical thread-scoped sender key, so one thread cannot recall another thread's isolated memory.
 - **shared** — buffer is shared across senders for the agent.
-- **channel_isolated** — buffer is partitioned per channel (whatsapp/telegram/playground…).
+- **channel_isolated** — buffer is partitioned per channel (whatsapp/telegram/playground…). Separate threads inside the same channel share the channel buffer, but the UI/API still filters message history per thread.
 
 ### 7.3 Per-Agent Trigger & Context Overrides
 
@@ -1071,7 +1071,7 @@ Step handlers registered in `FlowEngine.handlers` (Source: `backend/flows/flow_e
 
 | Type | Handler | Notes |
 |---|---|---|
-| `notification` | `NotificationStepHandler` | Sends a notification message to a recipient. |
+| `notification` | `NotificationStepHandler` | Sends a notification message to a recipient. Requires `recipient` or `recipients`, plus `message_template` or `content` in `config_json`. |
 | `message` | `MessageStepHandler` | Sends a chat message (single-turn). |
 | `tool` | `ToolStepHandler` | Invokes a tool/function. |
 | `conversation` | `ConversationStepHandler` | Multi-turn AI conversation via `ConversationThread` (up to `max_turns`). |
@@ -1735,6 +1735,8 @@ Each tenant may configure **multiple provider instances** (e.g., two OpenAI acco
 
 Encryption uses the same pattern as `api_key_service.py` — `TokenEncryption` keyed by the master encryption key from `services/encryption_key_service.py`.
 
+During first-run setup, the `/setup` wizard can create multiple provider instances in one pass. Every supported provider key entered in the wizard is provisioned as its own tenant-scoped instance, and the selected primary provider is also written to the system-AI configuration.
+
 ### 19.2 Provider Matrix
 
 From `backend/services/provider_instance_service.py:20-32`:
@@ -2302,6 +2304,8 @@ Per-client `rate_limit_rpm` is stored on the `ApiClient` record (default 60 RPM;
 | PUT | `/api/v1/flows/{flow_id}/steps/{step_id}` | Update step. |
 | DELETE | `/api/v1/flows/{flow_id}/steps/{step_id}` | Delete step. |
 | POST | `/api/v1/flows/{flow_id}/execute` | Execute (202 Accepted, returns run_id). |
+
+Notification-step note: API v1 validates notification configs on create and update. They must include a non-empty `recipient` or `recipients` field and a non-empty `message_template` or `content` field. Legacy `message` input is normalized to `message_template` before persistence.
 
 **Hub** (`backend/api/v1/routes_hub.py`)
 

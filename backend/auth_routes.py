@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Dict, Optional
 from datetime import datetime, timedelta
 import logging
 import os
@@ -132,6 +132,8 @@ class SetupWizardRequest(BaseModel):
     grok_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
+    primary_provider: Optional[str] = None
+    provider_models: Optional[Dict[str, str]] = None
     # Optional: override the default model for seeded agents
     default_model: Optional[str] = None
     create_default_agents: bool = True
@@ -479,42 +481,6 @@ async def setup_wizard(
         # Step 3: Store API keys if provided
         from services.api_key_service import store_api_key
 
-        api_keys_stored = []
-        if setup_request.gemini_api_key:
-            store_api_key("gemini", setup_request.gemini_api_key, tenant.id, db)
-            api_keys_stored.append("gemini")
-            logger.info(f"Setup wizard: Stored Gemini API key for tenant {tenant.id}")
-
-        if setup_request.openai_api_key:
-            store_api_key("openai", setup_request.openai_api_key, tenant.id, db)
-            api_keys_stored.append("openai")
-            logger.info(f"Setup wizard: Stored OpenAI API key for tenant {tenant.id}")
-
-        if setup_request.anthropic_api_key:
-            store_api_key("anthropic", setup_request.anthropic_api_key, tenant.id, db)
-            api_keys_stored.append("anthropic")
-            logger.info(f"Setup wizard: Stored Anthropic API key for tenant {tenant.id}")
-
-        if setup_request.groq_api_key:
-            store_api_key("groq", setup_request.groq_api_key, tenant.id, db)
-            api_keys_stored.append("groq")
-            logger.info(f"Setup wizard: Stored Groq API key for tenant {tenant.id}")
-
-        if setup_request.grok_api_key:
-            store_api_key("grok", setup_request.grok_api_key, tenant.id, db)
-            api_keys_stored.append("grok")
-            logger.info(f"Setup wizard: Stored Grok API key for tenant {tenant.id}")
-
-        if setup_request.deepseek_api_key:
-            store_api_key("deepseek", setup_request.deepseek_api_key, tenant.id, db)
-            api_keys_stored.append("deepseek")
-            logger.info(f"Setup wizard: Stored DeepSeek API key for tenant {tenant.id}")
-
-        if setup_request.openrouter_api_key:
-            store_api_key("openrouter", setup_request.openrouter_api_key, tenant.id, db)
-            api_keys_stored.append("openrouter")
-            logger.info(f"Setup wizard: Stored OpenRouter API key for tenant {tenant.id}")
-
         # Default model per provider (shared by Steps 3b and 4)
         provider_defaults = {
             "gemini": "gemini-2.5-flash",
@@ -525,80 +491,100 @@ async def setup_wizard(
             "deepseek": "deepseek-chat",
             "openrouter": "google/gemini-2.5-flash",
         }
-        model_provider = next((p for p in provider_defaults if p in api_keys_stored), "gemini")
+        vendor_labels = {
+            "gemini": "Google Gemini",
+            "openai": "OpenAI",
+            "anthropic": "Anthropic",
+            "groq": "Groq",
+            "grok": "Grok (xAI)",
+            "deepseek": "DeepSeek",
+            "openrouter": "OpenRouter",
+        }
+        provider_key_map = {
+            "gemini": setup_request.gemini_api_key,
+            "openai": setup_request.openai_api_key,
+            "anthropic": setup_request.anthropic_api_key,
+            "groq": setup_request.groq_api_key,
+            "grok": setup_request.grok_api_key,
+            "deepseek": setup_request.deepseek_api_key,
+            "openrouter": setup_request.openrouter_api_key,
+        }
+        configured_providers = [vendor for vendor, api_key in provider_key_map.items() if api_key]
 
-        # Step 3b: Create ProviderInstance for primary provider and auto-assign System AI
+        if setup_request.primary_provider and setup_request.primary_provider not in configured_providers:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Primary provider '{setup_request.primary_provider}' is not configured"
+            )
+
+        api_keys_stored = []
+        for vendor in configured_providers:
+            store_api_key(vendor, provider_key_map[vendor], tenant.id, db)
+            api_keys_stored.append(vendor)
+            logger.info(f"Setup wizard: Stored {vendor_labels.get(vendor, vendor)} API key for tenant {tenant.id}")
+
+        primary_vendor = setup_request.primary_provider or (configured_providers[0] if configured_providers else "gemini")
+        model_provider = primary_vendor if configured_providers else "gemini"
+
+        def _selected_model_for_vendor(vendor: str) -> str:
+            requested_models = setup_request.provider_models or {}
+            selected_model = requested_models.get(vendor)
+            if selected_model:
+                return selected_model
+            if vendor == primary_vendor and setup_request.default_model:
+                return setup_request.default_model
+            return provider_defaults.get(vendor, "gemini-2.5-flash")
+
+        # Step 3b: Create ProviderInstances for configured providers and auto-assign System AI
         first_provider_instance = None
-        if api_keys_stored:
+        provider_instances_created = {}
+        if configured_providers:
             from services.provider_instance_service import ProviderInstanceService
             from models import Config as ConfigModel
 
-            primary_vendor = api_keys_stored[0]  # First added = primary
-            # Retrieve the raw API key for the primary provider
-            provider_key_map = {
-                "gemini": setup_request.gemini_api_key,
-                "openai": setup_request.openai_api_key,
-                "anthropic": setup_request.anthropic_api_key,
-                "groq": setup_request.groq_api_key,
-                "grok": setup_request.grok_api_key,
-                "deepseek": setup_request.deepseek_api_key,
-                "openrouter": setup_request.openrouter_api_key,
-            }
-            primary_key = provider_key_map.get(primary_vendor)
-
-            vendor_labels = {
-                "gemini": "Google Gemini",
-                "openai": "OpenAI",
-                "anthropic": "Anthropic",
-                "groq": "Groq",
-                "grok": "Grok (xAI)",
-                "deepseek": "DeepSeek",
-                "openrouter": "OpenRouter",
-            }
-            instance_name = f"{vendor_labels.get(primary_vendor, primary_vendor)} (Default)"
-
-            try:
-                first_provider_instance = ProviderInstanceService.create_instance(
+            for vendor in configured_providers:
+                model_name = _selected_model_for_vendor(vendor)
+                instance_name = (
+                    f"{vendor_labels.get(vendor, vendor)} (Default)"
+                    if vendor == primary_vendor
+                    else vendor_labels.get(vendor, vendor)
+                )
+                instance = ProviderInstanceService.create_instance(
                     tenant_id=tenant.id,
-                    vendor=primary_vendor,
+                    vendor=vendor,
                     instance_name=instance_name,
                     db=db,
-                    api_key=primary_key,
-                    is_default=True,
+                    api_key=provider_key_map[vendor],
+                    available_models=[model_name] if model_name else None,
+                    is_default=(vendor == primary_vendor),
                 )
+                provider_instances_created[vendor] = instance.id
                 logger.info(
                     f"Setup wizard: Created ProviderInstance '{instance_name}' "
-                    f"(id={first_provider_instance.id}) for tenant {tenant.id}"
+                    f"(id={instance.id}, vendor={vendor}, model={model_name}) for tenant {tenant.id}"
                 )
 
-                # BUG-386 fix: Persist the selected model on the provider instance
-                primary_model = setup_request.default_model or provider_defaults.get(primary_vendor, "gemini-2.5-flash")
-                if not first_provider_instance.available_models:
-                    first_provider_instance.available_models = [primary_model]
-                    db.commit()
-                    logger.info(f"Setup wizard: Set available_models=[{primary_model}] on ProviderInstance {first_provider_instance.id}")
+            first_provider_instance = ProviderInstanceService.get_default_instance(primary_vendor, tenant.id, db)
+            primary_model = _selected_model_for_vendor(primary_vendor)
 
-                # Auto-assign as System AI
-                config_row = db.query(ConfigModel).first()
-                if config_row:
-                    config_row.system_ai_provider_instance_id = first_provider_instance.id
-                    config_row.system_ai_provider = primary_vendor
-                    config_row.system_ai_model = primary_model
-                    db.commit()
-                    logger.info(
-                        f"Setup wizard: Auto-assigned System AI → instance={first_provider_instance.id}, "
-                        f"vendor={primary_vendor}, model={primary_model}"
-                    )
-            except Exception as e:
-                logger.warning(f"Setup wizard: Failed to create ProviderInstance or assign System AI: {e}")
+            # Auto-assign as System AI
+            config_row = db.query(ConfigModel).first()
+            if config_row and first_provider_instance:
+                config_row.system_ai_provider_instance_id = first_provider_instance.id
+                config_row.system_ai_provider = primary_vendor
+                config_row.system_ai_model = primary_model
+                db.commit()
+                logger.info(
+                    f"Setup wizard: Auto-assigned System AI → instance={first_provider_instance.id}, "
+                    f"vendor={primary_vendor}, model={primary_model}"
+                )
 
         # Step 4: Create default agents if requested
         agents_created = []
         if setup_request.create_default_agents:
             from services.agent_seeding import seed_default_agents
 
-            model_provider = next((p for p in provider_defaults if p in api_keys_stored), "gemini")
-            model_name = setup_request.default_model or provider_defaults.get(model_provider, "gemini-2.5-flash")
+            model_name = _selected_model_for_vendor(model_provider)
 
             agents = seed_default_agents(
                 tenant_id=tenant.id,
@@ -704,11 +690,14 @@ async def setup_wizard(
             "tools_created": tools_created,
             "system_ai_configured": first_provider_instance is not None,
             "provider_instance_created": first_provider_instance.id if first_provider_instance else None,
+            "provider_instances_created": provider_instances_created,
             "message": f"Setup complete! Tenant '{tenant.name}' created with {len(agents_created)} agents and {len(tools_created)} sandboxed tools."
         })
         _set_session_cookie(response, tenant_owner_token)
         return response
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Setup wizard failed: {e}", exc_info=True)
         raise HTTPException(

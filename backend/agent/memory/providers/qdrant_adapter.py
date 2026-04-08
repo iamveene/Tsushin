@@ -297,17 +297,22 @@ class QdrantVectorAdapter(VectorStoreProvider):
     async def get_stats(self) -> Dict:
         try:
             info = self._client.get_collection(self._collection_name)
+            total_messages = getattr(info, "points_count", 0) or 0
+            vectors_count = getattr(info, "vectors_count", total_messages)
             return {
-                "total_messages": info.points_count,
+                "total_messages": total_messages,
                 "collection_name": self._collection_name,
-                "vectors_count": info.vectors_count,
+                "vectors_count": vectors_count if vectors_count is not None else total_messages,
                 "indexed_vectors_count": getattr(info, "indexed_vectors_count", None),
                 "provider": "qdrant",
             }
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Qdrant get_stats fallback for {self._collection_name}: {e}")
             return {
-                "total_messages": -1,
+                "total_messages": 0,
                 "collection_name": self._collection_name,
+                "vectors_count": 0,
+                "indexed_vectors_count": 0,
                 "provider": "qdrant",
             }
 

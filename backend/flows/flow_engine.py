@@ -706,7 +706,8 @@ class ToolStepHandler(FlowStepHandler):
             except asyncio.TimeoutError:
                 raise Exception(f"Tool execution timed out after {timeout}s")
         else:
-            result = await self._execute_builtin_tool(tool_name, merged_params)
+            tenant_id = flow_run.tenant_id if flow_run else None
+            result = await self._execute_builtin_tool(tool_name, merged_params, tenant_id=tenant_id)
             return result
 
     async def _execute_sandboxed_tool(self, tool_id: str, parameters: Dict[str, Any], tenant_id: Optional[str] = None) -> Dict[str, Any]:
@@ -754,12 +755,17 @@ class ToolStepHandler(FlowStepHandler):
                 "error": str(e)
             }
 
-    async def _execute_builtin_tool(self, tool_id: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    async def _execute_builtin_tool(
+        self,
+        tool_id: str,
+        parameters: Dict[str, Any],
+        tenant_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Execute built-in tool (google_search, web_scraping)."""
         try:
             if tool_id == "google_search":
                 from agent.tools.search_tool import SearchTool
-                tool = SearchTool(db=self.db)
+                tool = SearchTool(db=self.db, tenant_id=tenant_id)
                 query = parameters.get("query", parameters.get("q", ""))
                 result = tool.search(query)
 
