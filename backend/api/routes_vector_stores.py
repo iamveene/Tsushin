@@ -143,7 +143,7 @@ async def list_vector_store_instances(
 ):
     from services.vector_store_instance_service import VectorStoreInstanceService
     instances = VectorStoreInstanceService.list_instances(ctx.tenant_id, db, vendor=vendor)
-    return [_to_response(inst, db) for inst in instances]
+    return [_to_response(inst, db) for inst in (instances or [])]
 
 
 @router.post("/vector-stores", tags=["Vector Stores"], status_code=status.HTTP_201_CREATED)

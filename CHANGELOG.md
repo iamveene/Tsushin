@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Sprint — 6 bugs resolved (`develop`, 2026-04-08)
+
+- **BUG-433 (High):** Fixed queue item poll (`GET /api/queue/item/{id}`) returning completed status without the agent's response text. Added `result` field extraction from `item.payload` to the response dict.
+- **BUG-428 (High):** Fixed intermittent HTTP 500 on API client creation (`POST /api/clients`). Made `created_at`/`updated_at` Optional in the `ApiClientResponse` Pydantic model to prevent validation failure when datetime is None before DB refresh.
+- **BUG-431 (Medium):** Fixed project creation (`POST /api/projects`) returning empty response. Added defensive error handling around `ProjectResponse` serialization in both create and update endpoints with explicit error messages.
+- **BUG-430 (Medium):** Fixed setup wizard accordion not scrollable. Changed outer container from `flex items-center justify-center` to `flex flex-col items-center` with `my-auto` on inner container for natural browser scrolling.
+- **BUG-429 (Medium):** Fixed Ollama systemd override instructions using non-portable `echo -e`. Replaced with POSIX-compliant `printf` in installer post-install output.
+- **BUG-432 (Low):** Fixed vector store instances endpoint returning empty response on fresh install. Added null guard `(instances or [])` to ensure valid JSON array is always returned.
+
 ### v0.6.0 Comprehensive E2E Audit (`develop`, 2026-04-08)
 
 - Completed a full fresh-install E2E audit on Ubuntu VM (10.211.55.5) using `install.py --defaults --http` on `develop` HEAD, covering 37 test cases via both browser automation and API curl.

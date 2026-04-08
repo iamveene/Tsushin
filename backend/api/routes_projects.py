@@ -341,7 +341,15 @@ async def create_project(
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error"))
 
-    return ProjectResponse(**result["project"])
+    project_data = result.get("project")
+    if not project_data:
+        raise HTTPException(status_code=500, detail="Project created but response data missing")
+
+    try:
+        return ProjectResponse(**project_data)
+    except Exception as e:
+        logger.error(f"Project response serialization failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Response serialization error: {str(e)}")
 
 
 @router.get("/api/projects/{project_id}", response_model=ProjectResponse)
@@ -383,7 +391,15 @@ async def update_project(
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error"))
 
-    return ProjectResponse(**result["project"])
+    project_data = result.get("project")
+    if not project_data:
+        raise HTTPException(status_code=500, detail="Project updated but response data missing")
+
+    try:
+        return ProjectResponse(**project_data)
+    except Exception as e:
+        logger.error(f"Project response serialization failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Response serialization error: {str(e)}")
 
 
 @router.delete("/api/projects/{project_id}")
