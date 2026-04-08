@@ -1192,7 +1192,7 @@ NEXT_PUBLIC_API_URL={backend_url}
         print(f"  To use Ollama with Tsushin:")
         print(f"  a) Make Ollama listen on all interfaces (add systemd override):")
         print(f"       sudo mkdir -p /etc/systemd/system/ollama.service.d/")
-        print(f"       echo -e '[Service]\\nEnvironment=\"OLLAMA_HOST=0.0.0.0:11434\"' | sudo tee /etc/systemd/system/ollama.service.d/override.conf")
+        print(f"       printf '[Service]\\nEnvironment=\"OLLAMA_HOST=0.0.0.0:11434\"\\n' | sudo tee /etc/systemd/system/ollama.service.d/override.conf")
         print(f"       sudo systemctl daemon-reload && sudo systemctl restart ollama")
         print(f"  b) In Hub > Local Services > Ollama, set URL to:")
         print(f"       {Colors.CYAN}http://172.18.0.1:11434{Colors.ENDC}  (Docker gateway IP)")

@@ -62,6 +62,9 @@ async def get_queue_item(
         raise HTTPException(status_code=404, detail="Queue item not found")
 
     position = service.get_position(queue_id)
+    result = None
+    if item.payload and isinstance(item.payload, dict):
+        result = item.payload.get("result")
     return {
         "id": item.id,
         "status": item.status,
@@ -72,6 +75,7 @@ async def get_queue_item(
         "priority": item.priority,
         "retry_count": item.retry_count,
         "error_message": item.error_message,
+        "result": result,
         "queued_at": item.queued_at.isoformat() if item.queued_at else None,
         "processing_started_at": (
             item.processing_started_at.isoformat()

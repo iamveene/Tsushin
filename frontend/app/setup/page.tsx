@@ -224,8 +224,8 @@ export default function SetupPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-lg w-full space-y-6">
+    <div className="min-h-screen bg-gray-950 flex flex-col items-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-lg w-full space-y-6 my-auto">
         {/* Banner */}
         <div className="relative w-full overflow-hidden">
           <Image

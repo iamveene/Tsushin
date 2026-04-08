@@ -58,8 +58,8 @@ class ApiClientResponse(BaseModel):
     rate_limit_rpm: int
     expires_at: Optional[str]
     last_used_at: Optional[str]
-    created_at: str
-    updated_at: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class ApiClientCreateResponse(ApiClientResponse):
