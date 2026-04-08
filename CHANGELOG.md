@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Ubuntu VM Fresh Install Full QA (`develop`, 2026-04-08)
+
+- Completed a 45-test-case fresh-install QA on Ubuntu VM (10.211.55.5) using `install.py --defaults --http` on `develop` HEAD, covering all v0.6.0 features via both browser automation and API curl.
+- **Installation:** Installer ran fully unattended, built all images (backend, frontend, WhatsApp MCP, Toolbox) on ARM64 Ubuntu 24.04, passed health checks. Ollama installed with llama3.2.
+- **Setup Wizard:** Completed via browser with 3 LLM providers (Gemini, OpenAI, Anthropic), global admin credentials captured. 6 default agents seeded.
+- **Provider Matrix:** All 4 SaaS providers (Gemini, OpenAI, Anthropic) connected successfully. Ollama local model discovered. Brave Search and Tavily API keys configured.
+- **Core Features Validated:** Playground chat (Gemini 2.5 Flash, correct responses), Memory Inspector (working memory populated), Knowledge Base (ACME Sales CSV upload + price retrieval with SKU), Sandboxed Tools (dig 107ms, nmap 2.6s), MCP Server registration (stdio), Custom Skills (instruction type), API v1 (client creation, API-key auth, OAuth token exchange, sync chat, async chat + queue polling), Vector Store auto-provisioning (Qdrant healthy + container running), Project creation, Flow creation, 28 slash commands seeded, A2A permission creation, all 15 settings pages 200, all 4 system admin pages 200.
+- **New Bugs Found (3):** BUG-434 (setup wizard global admin missing tenant_id/role — Critical), BUG-435 (setup completion button no-op — Low), BUG-436 (A2A delegation not triggered via API chat — Medium).
+
 ### Bug Sprint — 6 bugs resolved (`develop`, 2026-04-08)
 
 - **BUG-433 (High):** Fixed queue item poll (`GET /api/queue/item/{id}`) returning completed status without the agent's response text. Added `result` field extraction from `item.payload` to the response dict.
