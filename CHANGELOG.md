@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fix Sprint — BUG-495 to BUG-498 (`develop`, 2026-04-09)
+
+- **BUG-495 (Medium):** Fixed flow execution engine rejecting `"AgentNode"` step type. Added `"AgentNode"` as an alias for `ConversationStepHandler` in `flow_engine.py`. Users can now create and run flows with `AgentNode` step types without a "No handler" runtime failure.
+- **BUG-496 (Low):** Fixed `SummarizationStepHandler` silently ignoring `text`/`content` keys in `config_json`. Added inline text extraction before falling back to `source_step`/`previous_step`. Updated fallback error message to mention `text`/`content` as valid config keys. Users can now summarize arbitrary inline text without requiring a preceding conversation step.
+- **BUG-497 (Medium):** Fixed NumPy boolean array ambiguity error in `vector_store.py` `search_similar_with_embeddings`. Replaced bare ndarray boolean check with explicit `is not None and len(...) > 0` guard. Also wrapped `np.linalg.norm()` results with `float()` in `embedding_service.py` and `temporal_decay.py`. Semantic memory recall no longer emits the non-fatal "truth value of an array is ambiguous" error.
+- **BUG-498 (Low):** Fixed `script_entrypoint` validation in `routes_custom_skills.py` rejecting bare function names. Both CREATE and UPDATE now accept function names (e.g., `"run"`) and auto-append the extension based on `script_language` (python→`.py`, bash→`.sh`, nodejs→`.js`).
+
 ### macOS v0.6.0 Full Feature Regression (`develop`, 2026-04-09)
 
 - Executed comprehensive v0.6.0 full feature regression on macOS (fresh install of `develop` branch), covering all 23 test cases (TC-01 to TC-23) via API and Playwright browser automation.

@@ -1448,6 +1448,10 @@ class SummarizationStepHandler(FlowStepHandler):
         source_step = config.get("source_step")
         source_text = None  # Raw text from source step (for tool/skill outputs)
 
+        # BUG-496: Support inline text/content in config_json
+        if not source_text:
+            source_text = config.get("text") or config.get("content")
+
         if not thread_id and source_step:
             # Use proper nested dict access (source_step is a context key like "step_1")
             source_data = input_data.get(source_step, {})
@@ -1489,7 +1493,7 @@ class SummarizationStepHandler(FlowStepHandler):
         if not thread_id and not source_text:
             return {
                 "status": "failed",
-                "error": "No thread_id or source text found. Specify 'thread_id', 'source_step' (with raw_output), or provide text to summarize.",
+                "error": "No thread_id or source text found. Specify 'thread_id', 'source_step' (with raw_output), or supply 'text'/'content' directly in config_json.",
                 "summary": ""
             }
 
@@ -2569,7 +2573,8 @@ class FlowEngine:
             "Subflow": SubflowStepHandler(db, self.mcp_sender, self, self.token_tracker),
             "Summarization": SummarizationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 17: Legacy casing
             "Gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Gate: Legacy casing
-            "BrowserAutomation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker)  # Phase 14.5: Legacy casing
+            "BrowserAutomation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Legacy casing
+            "AgentNode": ConversationStepHandler(db, self.mcp_sender, self.token_tracker),  # BUG-495: alias for agent-based conversation node
         }
 
         # BUG-LOG-007: Clean up any globally stale runs at engine init

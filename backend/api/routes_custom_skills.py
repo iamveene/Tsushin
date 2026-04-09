@@ -409,12 +409,17 @@ async def create_custom_skill(
         raise HTTPException(status_code=400, detail="script_language must be one of: python, bash, nodejs")
 
     # Validate script_entrypoint (prevent path traversal / injection)
+    # BUG-498: Accept both filenames (main.py) and bare function names (main)
     if payload.script_entrypoint:
-        if not re.fullmatch(r'[\w.-]+\.(py|sh|js)', payload.script_entrypoint):
+        if not re.fullmatch(r'[\w.-]+(\.(py|sh|js))?', payload.script_entrypoint):
             raise HTTPException(
                 status_code=400,
-                detail="script_entrypoint must be a simple filename ending in .py, .sh, or .js"
+                detail="script_entrypoint must be a simple filename (e.g., 'main.py') or function name (e.g., 'main')"
             )
+        # Auto-append extension based on language if not already present
+        if '.' not in payload.script_entrypoint:
+            ext_map = {'python': '.py', 'bash': '.sh', 'nodejs': '.js'}
+            payload.script_entrypoint = payload.script_entrypoint + ext_map.get(payload.script_language or 'python', '.py')
 
     # Validate MCP server for mcp_server type
     if payload.skill_type_variant == 'mcp_server':
@@ -555,12 +560,17 @@ async def update_custom_skill(
         raise HTTPException(status_code=400, detail="script_language must be one of: python, bash, nodejs")
 
     # Validate script_entrypoint (prevent path traversal / injection)
+    # BUG-498: Accept both filenames (main.py) and bare function names (main)
     if payload.script_entrypoint:
-        if not re.fullmatch(r'[\w.-]+\.(py|sh|js)', payload.script_entrypoint):
+        if not re.fullmatch(r'[\w.-]+(\.(py|sh|js))?', payload.script_entrypoint):
             raise HTTPException(
                 status_code=400,
-                detail="script_entrypoint must be a simple filename ending in .py, .sh, or .js"
+                detail="script_entrypoint must be a simple filename (e.g., 'main.py') or function name (e.g., 'main')"
             )
+        # Auto-append extension based on language if not already present
+        if '.' not in payload.script_entrypoint:
+            ext_map = {'python': '.py', 'bash': '.sh', 'nodejs': '.js'}
+            payload.script_entrypoint = payload.script_entrypoint + ext_map.get(payload.script_language or 'python', '.py')
 
     query = db.query(CustomSkill).filter(CustomSkill.id == skill_id)
     query = ctx.filter_by_tenant(query, CustomSkill.tenant_id)

@@ -253,8 +253,8 @@ class EmbeddingService:
 
             # Calculate cosine similarity
             dot_product = np.dot(emb1, emb2)
-            norm1 = np.linalg.norm(emb1)
-            norm2 = np.linalg.norm(emb2)
+            norm1 = float(np.linalg.norm(emb1))
+            norm2 = float(np.linalg.norm(emb2))
 
             if norm1 == 0 or norm2 == 0:
                 return 0.0

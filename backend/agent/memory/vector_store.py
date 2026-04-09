@@ -297,7 +297,7 @@ class VectorStore:
                     formatted_results.append(result)
 
                     # Collect embeddings
-                    if results.get('embeddings') and results['embeddings'][0]:
+                    if results.get('embeddings') and results['embeddings'][0] is not None and len(results['embeddings'][0]) > 0:
                         result_embeddings.append(results['embeddings'][0][i])
                     else:
                         result_embeddings.append([])

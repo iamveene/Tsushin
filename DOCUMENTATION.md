@@ -687,7 +687,7 @@ Executable scripts deployed to a sandboxed container. Supports Python, Bash, and
 |---|---|---|
 | `script_content` | string (max 256 KB) | The script source code |
 | `script_language` | string | `python` \| `bash` \| `nodejs` |
-| `script_entrypoint` | string | Entry function or file to execute |
+| `script_entrypoint` | string | Entry file to execute (e.g., `run.py`). Bare function names (e.g., `run`) are also accepted and auto-extended based on `script_language`. |
 
 **Example — Create a Python data-processing skill:**
 
@@ -1088,9 +1088,10 @@ Step handlers registered in `FlowEngine.handlers` (Source: `backend/flows/flow_e
 | `slash_command` | `SlashCommandStepHandler` | Runs a platform slash command. |
 | `skill` | `SkillStepHandler` | Agentic skill execution (Phase 16). |
 | `custom_skill` | `SkillStepHandler` | Alias for tenant custom skills (Phase 22). |
-| `summarization` | `SummarizationStepHandler` | AI summarization of prior step outputs. |
+| `summarization` | `SummarizationStepHandler` | AI summarization. Supports `thread_id`, `source_step`, or inline `text`/`content` in `config_json`. |
 | `browser_automation` | `BrowserAutomationStepHandler` | Browser control (navigate/screenshot/click/fill/extract). |
 | `Trigger`, `Subflow` + PascalCase aliases | Legacy handlers | Backward compat. |
+| `AgentNode` | `ConversationStepHandler` alias | Alias accepted for compatibility (same config as `conversation`). |
 
 Each `flow_node` row carries (Source: `models.py:1586-1639`):
 
