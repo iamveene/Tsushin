@@ -68,15 +68,7 @@ class TsushinBackup:
             caddy_dir = self.root_dir / "caddy"
             if caddy_dir.exists():
                 caddy_backup_dir = backup_dir / "caddy"
-                caddy_backup_dir.mkdir(parents=True, exist_ok=True)
-                # Backup Caddyfile (generated config)
-                caddyfile = caddy_dir / "Caddyfile"
-                if caddyfile.exists():
-                    shutil.copy(caddyfile, caddy_backup_dir / "Caddyfile")
-                # Backup certificates
-                certs_dir = caddy_dir / "certs"
-                if certs_dir.exists():
-                    shutil.copytree(certs_dir, caddy_backup_dir / "certs")
+                shutil.copytree(caddy_dir, caddy_backup_dir)
                 print("✅ Backed up SSL/Caddy configuration")
 
             # Export docker-compose configuration

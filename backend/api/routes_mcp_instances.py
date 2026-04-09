@@ -148,6 +148,17 @@ def _normalize_phone_number(phone_number: Optional[str]) -> str:
     return re.sub(r"\D+", "", phone_number or "")
 
 
+def _require_user_tenant_id(current_user: User) -> str:
+    tenant_id = getattr(current_user, "tenant_id", None)
+    if tenant_id:
+        return tenant_id
+
+    raise HTTPException(
+        status_code=403,
+        detail="Tenant context required for tenant-scoped MCP operations",
+    )
+
+
 def _build_tester_phone_conflict_warning(
     db: Session,
     tenant_id: str,
@@ -195,11 +206,12 @@ async def get_tester_status(
     _: None = Depends(require_permission("mcp.instances.read")),
     db: Session = Depends(get_db),
 ):
-    manager = MCPContainerManager()
+    tenant_id = _require_user_tenant_id(current_user)
+    manager = MCPContainerManager(tenant_id)
     status = manager.get_tester_status()
     status["warning"] = _build_tester_phone_conflict_warning(
         db,
-        current_user.tenant_id,
+        tenant_id,
         manager.get_tester_phone_number(),
     )
     return TesterStatusResponse(
@@ -213,7 +225,8 @@ async def get_tester_qr_code(
     current_user: User = Depends(get_current_user_required),
     _: None = Depends(require_permission("mcp.instances.read")),
 ):
-    manager = MCPContainerManager()
+    tenant_id = _require_user_tenant_id(current_user)
+    manager = MCPContainerManager(tenant_id)
     try:
         qr_code = manager.get_tester_qr_code()
         return QRCodeResponse(
@@ -230,7 +243,8 @@ async def restart_tester(
     current_user: User = Depends(get_current_user_required),
     _: None = Depends(require_permission("mcp.instances.manage")),
 ):
-    manager = MCPContainerManager()
+    tenant_id = _require_user_tenant_id(current_user)
+    manager = MCPContainerManager(tenant_id)
     try:
         manager.restart_tester()
         return {"success": True, "message": "Tester restarting"}
@@ -244,7 +258,8 @@ async def logout_tester(
     current_user: User = Depends(get_current_user_required),
     _: None = Depends(require_permission("mcp.instances.manage")),
 ):
-    manager = MCPContainerManager()
+    tenant_id = _require_user_tenant_id(current_user)
+    manager = MCPContainerManager(tenant_id)
     try:
         result = manager.logout_tester()
         return LogoutResponse(
@@ -275,7 +290,8 @@ async def create_mcp_instance(
     Use `/health` endpoint to monitor startup progress.
     """
     try:
-        manager = MCPContainerManager()
+        tenant_id = _require_user_tenant_id(current_user)
+        manager = MCPContainerManager(tenant_id)
         normalized_requested_phone = _normalize_phone_number(data.phone_number)
 
         conflicting_instance = next(
@@ -289,10 +305,7 @@ async def create_mcp_instance(
         if conflicting_instance:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "An existing WhatsApp MCP instance already uses this phone number "
-                    f"(instance {conflicting_instance.id})."
-                ),
+                detail="An existing WhatsApp MCP instance already uses this phone number.",
             )
 
         tester_status = manager.get_tester_status()
@@ -311,7 +324,7 @@ async def create_mcp_instance(
             )
 
         instance = manager.create_instance(
-            tenant_id=current_user.tenant_id,
+            tenant_id=tenant_id,
             phone_number=data.phone_number,
             db=db,
             created_by=current_user.id,
@@ -324,7 +337,7 @@ async def create_mcp_instance(
             db.commit()
 
         manager.reconcile_instance(instance, db)
-        logger.info(f"MCP instance {instance.id} ({data.instance_type}) created for tenant {current_user.tenant_id}")
+        logger.info(f"MCP instance {instance.id} ({data.instance_type}) created for tenant {tenant_id}")
 
         # Start watcher dynamically ONLY for agent instances (not tester)
         if data.instance_type == "agent" and hasattr(request.app.state, 'watcher_manager'):
@@ -340,20 +353,20 @@ async def create_mcp_instance(
         # "whatsapp" enabled but no whatsapp_integration_id yet when there is
         # exactly one unambiguous active agent instance for the tenant.
         if data.instance_type == "agent":
-            linked_count = backfill_unambiguous_whatsapp_bindings(db, current_user.tenant_id)
+            linked_count = backfill_unambiguous_whatsapp_bindings(db, tenant_id)
             if linked_count > 0:
                 db.commit()
-                logger.info(f"Auto-linked WhatsApp instance {instance.id} to {linked_count} agent(s) in tenant {current_user.tenant_id}")
+                logger.info(f"Auto-linked WhatsApp instance {instance.id} to {linked_count} agent(s) in tenant {tenant_id}")
 
             # Mark first agent instance as group handler if none set yet
             existing_group_handler = db.query(WhatsAppMCPInstance).filter(
-                WhatsAppMCPInstance.tenant_id == current_user.tenant_id,
+                WhatsAppMCPInstance.tenant_id == tenant_id,
                 WhatsAppMCPInstance.is_group_handler == True
             ).first()
             if not existing_group_handler:
                 instance.is_group_handler = True
                 db.commit()
-                logger.info(f"Marked WhatsApp instance {instance.id} as group handler for tenant {current_user.tenant_id}")
+                logger.info(f"Marked WhatsApp instance {instance.id} as group handler for tenant {tenant_id}")
 
         return MCPInstanceResponse.model_validate(instance)
 
@@ -908,7 +921,7 @@ async def get_mcp_health(
         raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
-        manager = MCPContainerManager()
+        manager = MCPContainerManager(instance.tenant_id)
         manager.reconcile_instance(instance, db)
         health_data = manager.health_check(instance, db)
         health_data["warning"] = _build_tester_phone_conflict_warning(

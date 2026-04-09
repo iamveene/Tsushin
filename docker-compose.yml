@@ -5,9 +5,9 @@
 # Usage:
 #   Development:  docker compose up --build
 #   Production:   docker compose -f docker-compose.yml up -d
-#   With Tester:  docker compose --profile testing up --build
 #   With TTS:     docker compose --profile tts up --build
-#   Full Stack:   docker compose --profile tts --profile testing up --build
+#   Tester note:  Hub tester controls resolve legacy/runtime tester targets;
+#                 the current compose file does not define a `testing` profile.
 #
 # Custom Tools Toolbox (per-tenant containers):
 #   Build base image: docker build -f backend/containers/Dockerfile.toolbox -t tsushin-toolbox:base ./backend/containers
@@ -121,8 +121,10 @@ services:
       - TSN_APP_PORT=8081
       - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
       - TSN_LOG_LEVEL=${TSN_LOG_LEVEL:-INFO}
+      - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-}
       - TSN_LOG_FORMAT=${TSN_LOG_FORMAT:-text}
       - TSN_METRICS_ENABLED=${TSN_METRICS_ENABLED:-true}
+      - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
       - TSN_SECRET_BACKEND=${TSN_SECRET_BACKEND:-env}
       - TSN_CONTAINER_RUNTIME=${TSN_CONTAINER_RUNTIME:-docker}
       - TSN_POLL_INTERVAL_MS=${TSN_POLL_INTERVAL_MS:-3000}
@@ -138,7 +140,7 @@ services:
       - TSN_GOOGLE_OAUTH_REDIRECT_URI=${TSN_GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8081/api/hub/google/oauth/callback}
 
       # Database
-      - DATABASE_URL=postgresql://tsushin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/tsushin
+      - DATABASE_URL=postgresql://tsushin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@${TSN_STACK_NAME:-tsushin}-postgres:5432/tsushin
       # Legacy SQLite path (kept for MCP reader and rollback)
       - INTERNAL_DB_PATH=/app/data/agent.db
       - TSN_CHROMA_DIR=/app/data/chroma
@@ -194,6 +196,7 @@ services:
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8081}
+        - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
     container_name: ${TSN_STACK_NAME:-tsushin}-frontend
     labels:
       tsushin.managed: "true"
@@ -203,6 +206,7 @@ services:
       - "${FRONTEND_PORT:-3030}:3030"
     environment:
       - NODE_ENV=production
+      - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
     depends_on:
       backend:
         condition: service_healthy

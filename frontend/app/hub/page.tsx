@@ -8,7 +8,7 @@
  * - Communication: WhatsApp, Telegram, Discord, Slack, Email (coming soon)
  * - Productivity: Asana, Google Calendar, Notion (coming soon)
  * - Developer Tools: Shell, Sandboxed Tools, GitHub (coming soon)
- * - Tool APIs: Brave Search, Amadeus
+ * - Tool APIs: Brave Search, Tavily, Amadeus
  */
 
 import { useEffect, useState, useCallback } from 'react'
@@ -244,6 +244,7 @@ const DEVELOPER_TOOLS: { value: string; label: string; Icon: React.FC<IconProps>
 
 const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
   { value: 'brave_search', label: 'Brave Search', Icon: SearchIcon, description: 'Privacy-focused web search API', status: 'available' },
+  { value: 'tavily', label: 'Tavily', Icon: GlobeIcon, description: 'AI-focused web search API', status: 'available' },
   { value: 'google_flights', label: 'SerpAPI (Google Services)', Icon: GlobeIcon, description: 'Unified SerpAPI key for Google Search, Google Flights, and other Google services', status: 'available' },
   { value: 'amadeus', label: 'Amadeus', Icon: PlaneIcon, description: 'Flight search API', status: 'available' },
 ]
@@ -417,7 +418,7 @@ export default function HubPage() {
   const loadMcpInstances = useCallback(async () => {
     try {
       const data = await api.getMCPInstances()
-      setMcpInstances(data.filter(instance => instance.instance_type === 'agent'))
+      setMcpInstances(data)
 
       // Load health status for each instance
       const healthPromises = data.map(async (instance) => {
@@ -450,7 +451,6 @@ export default function HubPage() {
       setTesterStatus(status)
     } catch (err) {
       console.error('Failed to load tester status:', err)
-      setTesterStatus(null)
     }
   }, [])
 
@@ -461,6 +461,7 @@ export default function HubPage() {
       fetchToolboxStatus()
       if (activeTab === 'communication') {
         loadMcpInstances()
+        loadTesterStatus()
         loadTelegramInstances()  // Phase 10.1.1
         loadSlackIntegrations()  // v0.6.0
         loadDiscordIntegrations()  // v0.6.0
@@ -1328,6 +1329,7 @@ export default function HubPage() {
       setSuccessMessage(`Instance created on port ${newInstance.mcp_port}. Click QR Code to authenticate.`)
       setTimeout(() => setSuccessMessage(null), 8000)
       loadMcpInstances()
+      loadTesterStatus()
     } catch (err: any) {
       setError(err.message || 'Failed to create instance')
     } finally {
@@ -1965,7 +1967,31 @@ export default function HubPage() {
     return `px-2 py-1 text-xs font-medium border rounded-full ${colors[status] || colors.stopped}`
   }
 
+  const getAuthBadge = (health?: Pick<MCPHealthStatus, 'authenticated' | 'connected' | 'needs_reauth'>) => {
+    if (health?.authenticated && health?.connected && !health?.needs_reauth) {
+      return {
+        className: 'bg-green-600/20 text-green-400 border border-green-600/50',
+        label: 'Authenticated',
+      }
+    }
+    if (health?.needs_reauth) {
+      return {
+        className: 'bg-orange-600/20 text-orange-300 border border-orange-600/50',
+        label: 'Needs Reauth',
+      }
+    }
+    return {
+      className: 'bg-yellow-600/20 text-yellow-400 border border-yellow-600/50',
+      label: 'Not Auth',
+    }
+  }
+
   const agentMcpInstances = mcpInstances.filter(instance => instance.instance_type === 'agent')
+  const testerMcpInstances = mcpInstances.filter(instance => instance.instance_type === 'tester')
+  const runtimeTesterInstances = testerMcpInstances.filter(instance => instance.status !== 'deleted')
+  const communicationMcpInstances = mcpInstances
+  const testerControlSource = testerStatus?.source ?? (runtimeTesterInstances.length > 0 ? 'runtime' : 'compose')
+  const showDedicatedTesterCard = testerControlSource === 'compose'
 
   // Render integration card based on status
   const renderIntegrationCard = (
@@ -2712,6 +2738,14 @@ export default function HubPage() {
                     </h3>
                   </div>
 
+                  {agentMcpInstances.length === 0 && testerMcpInstances.length > 0 && (
+                    <div className="card p-4 border border-orange-500/20 bg-orange-500/5">
+                      <p className="text-xs text-orange-200">
+                        Tester instances are visible for QA workflows. Create an agent instance when you want live WhatsApp traffic routed to an AI agent.
+                      </p>
+                    </div>
+                  )}
+
                   {canReadSettings && (
                     <div className="card p-4 border border-tsushin-border/60">
                       <div className="flex flex-col gap-3">
@@ -2754,7 +2788,7 @@ export default function HubPage() {
                     </div>
                   )}
 
-                  {agentMcpInstances.length === 0 ? (
+                  {communicationMcpInstances.length === 0 ? (
                     <div className="empty-state py-12 border border-dashed border-tsushin-border rounded-xl">
                       <div className="empty-state-icon">
                         <SmartphoneIcon size={36} className="text-gray-400" />
@@ -2773,8 +2807,9 @@ export default function HubPage() {
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                      {agentMcpInstances.map(instance => {
+                      {communicationMcpInstances.map(instance => {
                         const health = healthStatuses[instance.id]
+                        const authBadge = getAuthBadge(health)
                         return (
                           <div key={instance.id} className="card p-4 hover-glow">
                             <div className="flex items-start justify-between mb-3">
@@ -2791,11 +2826,8 @@ export default function HubPage() {
                                   }`}>
                                   {instance.instance_type === 'agent' ? <span className="flex items-center gap-1"><BotIconSvg size={12} /> Agent</span> : <span className="flex items-center gap-1"><BeakerIcon size={12} /> Tester</span>}
                                 </span>
-                                <span className={`px-2 py-1 text-xs font-medium rounded-full ${health?.authenticated
-                                    ? 'bg-green-600/20 text-green-400 border border-green-600/50'
-                                    : 'bg-yellow-600/20 text-yellow-400 border border-yellow-600/50'
-                                  }`}>
-                                  {health?.authenticated ? 'Authenticated' : 'Not Auth'}
+                                <span className={`px-2 py-1 text-xs font-medium rounded-full ${authBadge.className}`}>
+                                  {authBadge.label}
                                 </span>
                               </div>
                             </div>
@@ -2858,74 +2890,75 @@ export default function HubPage() {
                     </div>
                   )}
 
-                  <div className="card p-4 border border-tsushin-border/60">
-                    <div className="flex items-start justify-between mb-3 gap-4">
-                      <div>
-                        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                          <BeakerIcon size={16} className="text-orange-400" /> QA Tester
-                        </h3>
-                        <p className="text-xs text-tsushin-slate mt-1">
-                          {/* BUG-395 fix: Show correct source for runtime vs compose testers */}
-                          {testerStatus?.source === 'runtime'
-                            ? 'Runtime tester instance for WhatsApp QA and watcher diagnostics.'
-                            : 'Compose-managed tester instance for WhatsApp QA, QR validation, and watcher diagnostics.'}
-                        </p>
-                        <p className="text-xs text-tsushin-slate/70 mt-2">
-                          Container: {testerStatus?.name || 'tester-mcp'}
-                          {testerStatus?.source === 'runtime' && (
-                            <span className="ml-2 px-1.5 py-0.5 text-[10px] bg-blue-500/20 text-blue-300 rounded">runtime</span>
+                  {showDedicatedTesterCard && (
+                    <div className="card p-4 border border-tsushin-border/60">
+                      <div className="flex items-start justify-between mb-3 gap-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                            <BeakerIcon size={16} className="text-orange-400" /> QA Tester
+                          </h3>
+                          <p className="text-xs text-tsushin-slate mt-1">
+                            Compose-managed tester instance for WhatsApp QA, QR validation, and watcher diagnostics.
+                          </p>
+                          <p className="text-xs text-tsushin-slate/70 mt-2">
+                            Container: {testerStatus?.name || 'tester-mcp'}
+                          </p>
+                          {runtimeTesterInstances.length > 0 && (
+                            <p className="text-xs text-amber-300/90 mt-2">
+                              Compose tester controls remain active. Runtime tester rows are still listed below for cleanup and visibility.
+                            </p>
                           )}
-                        </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className={getStatusBadge(testerStatus?.container_state || 'stopped')}>
+                            {testerStatus?.container_state || 'unknown'}
+                          </span>
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                            testerStatus?.authenticated && testerStatus?.connected && !testerStatus?.needs_reauth
+                              ? 'bg-green-600/20 text-green-400 border border-green-600/50'
+                              : testerStatus?.needs_reauth
+                                ? 'bg-orange-600/20 text-orange-300 border border-orange-600/50'
+                                : 'bg-yellow-600/20 text-yellow-400 border border-yellow-600/50'
+                          }`}>
+                            {testerStatus?.authenticated && testerStatus?.connected && !testerStatus?.needs_reauth
+                              ? 'Authenticated'
+                              : testerStatus?.needs_reauth
+                                ? 'Needs Reauth'
+                                : 'Not Auth'}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex flex-col items-end gap-1">
-                        <span className={getStatusBadge(testerStatus?.container_state || 'stopped')}>
-                          {testerStatus?.container_state || 'unknown'}
-                        </span>
-                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                          testerStatus?.authenticated && testerStatus?.connected && !testerStatus?.needs_reauth
-                            ? 'bg-green-600/20 text-green-400 border border-green-600/50'
-                            : testerStatus?.needs_reauth
-                              ? 'bg-orange-600/20 text-orange-300 border border-orange-600/50'
-                              : 'bg-yellow-600/20 text-yellow-400 border border-yellow-600/50'
-                        }`}>
-                          {testerStatus?.authenticated && testerStatus?.connected && !testerStatus?.needs_reauth
-                            ? 'Authenticated'
-                            : testerStatus?.needs_reauth
-                              ? 'Needs Reauth'
-                              : 'Not Auth'}
-                        </span>
+
+                      <div className="grid gap-2 md:grid-cols-2 mb-3 text-xs text-tsushin-slate">
+                        <div>API: {testerStatus?.api_reachable ? 'reachable' : 'unreachable'}</div>
+                        <div>QR: {testerStatus?.qr_available ? 'available' : testerStatus?.qr_message || 'not ready'}</div>
+                        {testerStatus?.error && (
+                          <div className="md:col-span-2 text-amber-300">{testerStatus.error}</div>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          onClick={handleShowTesterQR}
+                          className="px-3 py-1.5 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded text-xs"
+                        >
+                          Tester QR
+                        </button>
+                        <button
+                          onClick={handleRestartTester}
+                          className="px-3 py-1.5 bg-blue-600/20 text-blue-400 border border-blue-600/50 rounded text-xs"
+                        >
+                          Restart
+                        </button>
+                        <button
+                          onClick={handleResetTesterAuth}
+                          className="px-3 py-1.5 bg-orange-600/20 text-orange-400 border border-orange-600/50 rounded text-xs"
+                        >
+                          Reset Auth
+                        </button>
                       </div>
                     </div>
-
-                    <div className="grid gap-2 md:grid-cols-2 mb-3 text-xs text-tsushin-slate">
-                      <div>API: {testerStatus?.api_reachable ? 'reachable' : 'unreachable'}</div>
-                      <div>QR: {testerStatus?.qr_available ? 'available' : testerStatus?.qr_message || 'not ready'}</div>
-                      {testerStatus?.error && (
-                        <div className="md:col-span-2 text-amber-300">{testerStatus.error}</div>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <button
-                        onClick={handleShowTesterQR}
-                        className="px-3 py-1.5 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded text-xs"
-                      >
-                        Tester QR
-                      </button>
-                      <button
-                        onClick={handleRestartTester}
-                        className="px-3 py-1.5 bg-blue-600/20 text-blue-400 border border-blue-600/50 rounded text-xs"
-                      >
-                        Restart
-                      </button>
-                      <button
-                        onClick={handleResetTesterAuth}
-                        className="px-3 py-1.5 bg-orange-600/20 text-orange-400 border border-orange-600/50 rounded text-xs"
-                      >
-                        Reset Auth
-                      </button>
-                    </div>
-                  </div>
+                  )}
                 </div>
 
                 {/* Phase 10.1.1: Telegram Bot Instances */}
@@ -3807,7 +3840,7 @@ export default function HubPage() {
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     These tools are automatically available to agents when the corresponding API keys are configured.
-                    Tools include: Web Search (Brave/Google), Flight Search (Amadeus/Google), and Web Scraping.
+                    Tools include: Web Search (Brave/Tavily/Google), Flight Search (Amadeus/Google), and Web Scraping.
                   </p>
                 </div>
               </div>

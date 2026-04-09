@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **New Bugs Found (4):** `BUG-454` (backend no-cache rebuild fails hard when Hugging Face model prewarm is unavailable), `BUG-455` (Tavily still absent from Hub Tool APIs despite backend service plumbing), `BUG-456` (live `/openapi.json` remains awkward for generated client round-trips), and `BUG-457` (setup accepts sub-8-character admin passwords that later auth flows reject).
 - **Still Unproven / Follow-up:** Tavily still lacks a stable tenant-facing validation path in the Hub, and release-quality generated-client validation remains dependent on manual cleanup around the exported OpenAPI surface.
 
+### Bug Fix — BUG-454 to BUG-458 follow-up (`develop`, 2026-04-09)
+
+- **BUG-454 (High):** Hardened the backend Docker image prewarm so transient Hugging Face failures no longer abort `docker-compose build --no-cache backend`. The build now retries and degrades to a warning with runtime lazy-download fallback.
+- **BUG-455 (Medium):** Restored Tavily to the Hub `Tool APIs` UI, including the built-in tools copy and Tavily-specific configure modal path, so the frontend matches the backend-supported provider list.
+- **BUG-456 (Medium):** Added typed health/readiness schemas, introduced dedicated public API v1 response models to avoid schema collisions, and exposed `/api/v1/openapi.json` plus `/api/v1/docs` for reliable SDK generation.
+- **BUG-457 (Medium):** Re-validated unified 8-character password enforcement across setup, signup, reset-password, and change-password flows with browser and API coverage on the rebuilt local stack.
+- **BUG-458 (Medium):** Fixed fresh-install setup wizard error handling so a short tenant-admin password now returns a validation `400` instead of a generic `500`, and added a focused regression test for that path.
+
 ### Bug Fix — BUG-452 (`develop`, 2026-04-08)
 
 - **BUG-452 (Medium):** Fixed MCP Server creation via Hub UI returning 400 Bad Request for localhost/private URLs. The SSRF validator was blocking private/loopback IPs where MCP servers typically run. Applied `allow_private=True` (matching Ollama pattern) and relaxed HTTPS+auth requirement for local URLs while preserving it for public URLs. Cloud metadata endpoints remain blocked.

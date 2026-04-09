@@ -38,7 +38,12 @@ class AgentSkillInfo(BaseModel):
     config: Optional[dict] = None
 
 
-class AgentSummary(BaseModel):
+class PublicAgentPersona(BaseModel):
+    id: int
+    name: str
+
+
+class PublicAgentSummary(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
@@ -48,15 +53,42 @@ class AgentSummary(BaseModel):
     is_default: bool
     avatar: Optional[str] = None
     enabled_channels: Optional[List[str]] = None
-    persona: Optional[dict] = None
+    persona: Optional[PublicAgentPersona] = None
     skills: List[str] = []
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
 
-class PaginatedAgentResponse(BaseModel):
-    data: List[AgentSummary] = Field(description="List of agents")
+class PublicPaginatedAgentResponse(BaseModel):
+    data: List[PublicAgentSummary] = Field(description="List of agents")
     meta: PaginationMeta = Field(description="Pagination metadata")
+
+
+class PublicAgentDetailResponse(PublicAgentSummary):
+    system_prompt: str
+    persona_id: Optional[int] = None
+    tone_preset_id: Optional[int] = None
+    keywords: List[str] = []
+    memory_size: Optional[int] = None
+    memory_isolation_mode: Optional[str] = None
+    trigger_dm_enabled: Optional[bool] = None
+    trigger_group_filters: Optional[List[str]] = None
+    trigger_number_filters: Optional[List[str]] = None
+    context_message_count: Optional[int] = None
+    context_char_limit: Optional[int] = None
+    enable_semantic_search: Optional[bool] = None
+    semantic_search_results: Optional[int] = None
+    semantic_similarity_threshold: Optional[float] = None
+    response_template: Optional[str] = None
+    contact_id: int
+    tenant_id: str
+    sandboxed_tool_ids: List[int] = []
+    skills_detail: List[AgentSkillInfo] = []
+
+
+class PersonaAssignResponse(BaseModel):
+    status: str
+    persona_id: Optional[int] = None
 
 
 class AgentCreateRequest(BaseModel):
@@ -303,7 +335,7 @@ def _get_agent_detail(agent: Agent, db: Session) -> dict:
 
 @router.get(
     "/api/v1/agents",
-    response_model=PaginatedAgentResponse,
+    response_model=PublicPaginatedAgentResponse,
     responses=COMMON_RESPONSES,
 )
 async def list_agents(
@@ -358,6 +390,7 @@ async def list_agents(
 
 @router.get(
     "/api/v1/agents/{agent_id}",
+    response_model=PublicAgentDetailResponse,
     responses={**COMMON_RESPONSES, **NOT_FOUND_RESPONSE},
 )
 async def get_agent(
@@ -384,6 +417,7 @@ async def get_agent(
 @router.post(
     "/api/v1/agents",
     status_code=201,
+    response_model=PublicAgentDetailResponse,
     responses={**COMMON_RESPONSES, **VALIDATION_RESPONSE},
 )
 async def create_agent(
@@ -504,6 +538,7 @@ async def create_agent(
 
 @router.put(
     "/api/v1/agents/{agent_id}",
+    response_model=PublicAgentDetailResponse,
     responses={**COMMON_RESPONSES, **NOT_FOUND_RESPONSE, **VALIDATION_RESPONSE},
 )
 async def update_agent(
@@ -676,6 +711,7 @@ async def remove_skill(
 
 @router.put(
     "/api/v1/agents/{agent_id}/persona",
+    response_model=PersonaAssignResponse,
     responses={**COMMON_RESPONSES, **NOT_FOUND_RESPONSE},
 )
 async def assign_persona(

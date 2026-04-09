@@ -6,6 +6,8 @@ Handles user authentication, registration, and password management.
 """
 
 from datetime import datetime, timedelta
+import re
+import secrets
 from typing import Optional, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
@@ -20,6 +22,7 @@ from auth_utils import (
     generate_reset_token,
     generate_invitation_token
 )
+from auth_password_policy import get_password_min_length_error
 
 
 class AuthenticationError(Exception):
@@ -32,6 +35,21 @@ class AuthService:
 
     def __init__(self, db: Session):
         self.db = db
+
+    def generate_tenant_slug(self, org_name: str) -> str:
+        """
+        Build the tenant slug exactly the same way signup will persist it.
+
+        Setup-time preflight checks call this before `signup()` so any derived
+        global-admin defaults match the eventual tenant record.
+        """
+        slug = re.sub(r'[^a-z0-9-]', '', org_name.lower().replace(' ', '-'))[:50] or "tenant"
+
+        existing_tenant = self.db.query(Tenant).filter(Tenant.slug == slug).first()
+        if existing_tenant:
+            slug = f"{slug}-{datetime.utcnow().strftime('%H%M%S')}"
+
+        return slug
 
     def login(self, email: str, password: str) -> Tuple[User, str]:
         """
@@ -114,22 +132,19 @@ class AuthService:
         if existing_user:
             raise AuthenticationError("Email already registered")
 
-        # Validate password strength (minimum 6 characters)
-        if len(password) < 6:
-            raise AuthenticationError("Password must be at least 6 characters")
+        password_error = get_password_min_length_error(password)
+        if password_error:
+            raise AuthenticationError(password_error)
+
+        owner_role = self.db.query(Role).filter(Role.name == 'owner').first()
+        if not owner_role:
+            raise AuthenticationError("Required owner role is not available")
 
         # Generate tenant ID and slug
-        import re
-        import secrets
         timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
         random_suffix = secrets.token_hex(3)
         tenant_id = f"tenant_{timestamp}_{random_suffix}"
-        slug = re.sub(r'[^a-z0-9-]', '', org_name.lower().replace(' ', '-'))[:50]
-
-        # Check if slug already exists, append number if needed
-        existing_tenant = self.db.query(Tenant).filter(Tenant.slug == slug).first()
-        if existing_tenant:
-            slug = f"{slug}-{datetime.utcnow().strftime('%H%M%S')}"
+        slug = self.generate_tenant_slug(org_name)
 
         # Create tenant
         tenant = Tenant(
@@ -163,15 +178,13 @@ class AuthService:
         self.db.flush()  # Get user ID
 
         # Assign owner role
-        owner_role = self.db.query(Role).filter(Role.name == 'owner').first()
-        if owner_role:
-            user_role = UserRole(
-                user_id=user.id,
-                role_id=owner_role.id,
-                tenant_id=tenant_id,
-                assigned_by=user.id  # Self-assigned on signup
-            )
-            self.db.add(user_role)
+        user_role = UserRole(
+            user_id=user.id,
+            role_id=owner_role.id,
+            tenant_id=tenant_id,
+            assigned_by=user.id  # Self-assigned on signup
+        )
+        self.db.add(user_role)
 
         self.db.commit()
 
@@ -249,9 +262,9 @@ class AuthService:
         if reset_token.expires_at < datetime.utcnow():
             raise AuthenticationError("Reset token expired")
 
-        # Validate new password
-        if len(new_password) < 6:
-            raise AuthenticationError("Password must be at least 6 characters")
+        password_error = get_password_min_length_error(new_password)
+        if password_error:
+            raise AuthenticationError(password_error)
 
         # Get user
         user = self.db.query(User).filter(User.id == reset_token.user_id).first()

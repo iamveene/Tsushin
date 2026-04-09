@@ -73,6 +73,8 @@ python3 install.py --help
 
 The installer handles infrastructure only (containers, networking, SSL, `.env` secrets). Organization setup and LLM provider keys are configured per-tenant through the `/setup` wizard and Hub UI — not via environment variables — enabling multi-tenant isolation.
 
+For SSL installs, the generated Caddy config now targets stack-scoped upstreams such as `${TSN_STACK_NAME}-frontend` and `${TSN_STACK_NAME}-backend`. That keeps `https://localhost` pinned to the intended stack even when multiple Tsushin instances share `tsushin-network`.
+
 → Full deployment options, GKE/Helm, GCP Secret Manager, and rebuild-safety rules: see [DOCUMENTATION.md §4 Deployment & Operations](DOCUMENTATION.md#4-deployment--operations).
 
 ### Verify
@@ -155,14 +157,18 @@ docker compose ps                          # Container states
 
 ## Essential Configuration
 
-Minimal `.env` for a fresh deployment (the installer generates these automatically):
+Representative minimal `.env` for a manual deployment. The installer writes a fuller file and derives stack-aware values such as `TSN_STACK_NAME`, `TSN_CORS_ORIGINS`, and local `TSN_AUTH_RATE_LIMIT` automatically:
 
 ```env
 # Security — required
 JWT_SECRET_KEY=<generated>        # python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 TSN_MASTER_KEY=<generated>        # Fernet key wrapping per-service encryption keys
 
+# Stack identity
+TSN_STACK_NAME=tsushin
+
 # PostgreSQL — required
+# Compose derives DATABASE_URL from TSN_STACK_NAME/POSTGRES_PASSWORD; set explicitly for manual deployments
 DATABASE_URL=postgresql+asyncpg://tsushin:<password>@tsushin-postgres:5432/tsushin
 POSTGRES_PASSWORD=<generated>
 
@@ -172,7 +178,8 @@ HOST_BACKEND_DATA_PATH=/absolute/host/path/to/backend/data
 # URLs
 TSN_BACKEND_URL=http://localhost:8081
 TSN_FRONTEND_URL=http://localhost:3030
-TSN_CORS_ORIGINS=*                # restrict in production
+TSN_CORS_ORIGINS=http://localhost:3030,http://127.0.0.1:3030
+TSN_AUTH_RATE_LIMIT=30/minute     # recommended local/self-signed default
 
 # Logging & metrics
 TSN_LOG_LEVEL=INFO                # DEBUG | INFO | WARNING | ERROR
@@ -184,7 +191,7 @@ TSN_METRICS_ENABLED=true
 
 **Operational notes for WhatsApp:**
 - Prefer `docker-compose up -d --build --no-cache backend` / `frontend` for rebuilds instead of `docker-compose down`, so active WhatsApp sessions stay attached to `tsushin-network`.
-- Hub → Communication now exposes a dedicated **QA Tester** card for the compose-managed tester instance. Use it for QR validation, restart, and reset-auth without mixing it into normal tenant WhatsApp instances.
+- Hub → Communication now exposes dedicated **QA Tester** controls for the current tester target and also lists runtime tester rows in the main WhatsApp table, so QA sessions stay visible without mixing them into normal agent operations.
 - Graph View now distinguishes explicit WhatsApp bindings, resolved-default bindings, and ambiguous/unassigned states; if an agent has WhatsApp enabled but no wire, check for the `WhatsApp Unassigned` warning node instead of assuming the graph failed to load.
 
 → Complete env-var reference (80+ variables, all defaults, all subsystems): [Appendix A](DOCUMENTATION.md#29-appendix-a-complete-environment-variable-reference).

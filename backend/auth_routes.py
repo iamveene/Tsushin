@@ -25,6 +25,7 @@ from slowapi.util import get_remote_address
 
 from db import get_db
 from auth_service import AuthService, AuthenticationError
+from auth_password_policy import get_password_min_length_error
 from models_rbac import User, UserInvitation, UserRole, Role, Tenant, TenantSSOConfig
 from models import GoogleOAuthCredentials, OAuthState
 from auth_utils import hash_password, verify_password, hash_token, create_access_token
@@ -61,10 +62,48 @@ def _set_session_cookie(response: JSONResponse, token: str) -> None:
     )
 
 
+def _get_permissions_for_user(db: Session, auth_service: AuthService, user: User) -> list:
+    """
+    Resolve permissions for a user, with a defensive fallback for legacy
+    global-admin accounts that exist without a UserRole row.
+    """
+    permissions = auth_service.get_user_permissions(user.id)
+    if permissions or not user.is_global_admin:
+        return permissions
+
+    from models_rbac import Permission, Role, RolePermission
+
+    owner_role = db.query(Role).filter(Role.name == "owner").first()
+    if not owner_role:
+        return permissions
+
+    fallback_permissions = (
+        db.query(Permission.name)
+        .join(RolePermission, Permission.id == RolePermission.permission_id)
+        .filter(RolePermission.role_id == owner_role.id)
+        .all()
+    )
+    return [p[0] for p in fallback_permissions]
+
+
 logger = logging.getLogger(__name__)
 
 # MED-004 FIX: Rate limiter for auth endpoints (uses app.state.limiter from app.py)
 limiter = Limiter(key_func=get_remote_address)
+
+def _resolve_auth_login_rate_limit() -> str:
+    """
+    Keep production defaults conservative, while allowing local HTTP/self-signed
+    installs to use a higher threshold without requiring an extra env override.
+    """
+    ssl_mode = (
+        os.getenv("TSN_SSL_MODE", "").strip().lower()
+        or os.getenv("SSL_MODE", "").strip().lower()
+    )
+    if ssl_mode in {"disabled", "selfsigned"}:
+        return "30/minute"
+
+    return "5/minute"
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
@@ -91,8 +130,7 @@ def _resolve_auth_limit(default_limit: str, env_var: Optional[str] = None) -> st
 
     return default_limit
 
-
-AUTH_LOGIN_RATE_LIMIT = _resolve_auth_limit("5/minute", env_var="TSN_AUTH_RATE_LIMIT")
+AUTH_LOGIN_RATE_LIMIT = _resolve_auth_limit(_resolve_auth_login_rate_limit(), env_var="TSN_AUTH_RATE_LIMIT")
 AUTH_SIGNUP_RATE_LIMIT = _resolve_auth_limit("3/hour")
 AUTH_SETUP_RATE_LIMIT = _resolve_auth_limit("3/hour")
 AUTH_PASSWORD_RESET_REQUEST_RATE_LIMIT = _resolve_auth_limit("3/hour")
@@ -291,10 +329,11 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
         user, token = auth_service.login(login_request.email, login_request.password)
 
         # Audit: successful login
-        log_tenant_event(db, user.tenant_id, user.id, TenantAuditActions.AUTH_LOGIN, "user", str(user.id), {"email": user.email}, request)
+        if user.tenant_id:
+            log_tenant_event(db, user.tenant_id, user.id, TenantAuditActions.AUTH_LOGIN, "user", str(user.id), {"email": user.email}, request)
 
         # Get user permissions for frontend
-        permissions = auth_service.get_user_permissions(user.id)
+        permissions = _get_permissions_for_user(db, auth_service, user)
 
         # BUG-251: Resolve tenant display name
         tenant_name = None
@@ -447,6 +486,39 @@ async def setup_wizard(
     auth_service = AuthService(db)
 
     try:
+        # Preflight all blocking global-admin validations before `signup()`.
+        # That path commits tenant + owner records, so recoverable validation
+        # failures must happen before any irreversible setup writes.
+        tentative_slug = auth_service.generate_tenant_slug(setup_request.tenant_name)
+        global_admin_email = setup_request.global_admin_email or f"globaladmin@{tentative_slug}.local"
+        global_admin_password = setup_request.global_admin_password or secrets.token_urlsafe(16)
+        global_admin_full_name = setup_request.global_admin_full_name or "Global Administrator"
+
+        # Validate that global admin email is different from tenant admin
+        if global_admin_email == setup_request.admin_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Global admin and tenant admin must use different email addresses"
+            )
+
+        global_admin_password_error = (
+            get_password_min_length_error(global_admin_password, "Global admin password")
+            if setup_request.global_admin_password
+            else None
+        )
+        if global_admin_password_error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=global_admin_password_error
+            )
+
+        owner_role = db.query(Role).filter(Role.name == "owner").first()
+        if not owner_role:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Required owner role is not available during setup"
+            )
+
         # Step 1: Create tenant and tenant owner (reuse signup logic)
         tenant_owner, tenant, tenant_owner_token = auth_service.signup(
             email=setup_request.admin_email,
@@ -457,40 +529,8 @@ async def setup_wizard(
 
         logger.info(f"Setup wizard: Created tenant '{tenant.name}' and tenant admin '{tenant_owner.email}'")
 
-        # Step 2: Create global admin user (no tenant affiliation)
-        from auth_utils import hash_password
-        import secrets
-
-        # Auto-generate global admin credentials if not provided
-        global_admin_email = setup_request.global_admin_email or f"globaladmin@{tenant.slug}.local"
-        global_admin_password = setup_request.global_admin_password or secrets.token_urlsafe(16)
-        global_admin_full_name = setup_request.global_admin_full_name or "Global Administrator"
-
-        # Check if global admin email already exists
-        existing_global_admin = db.query(User).filter(
-            User.email == global_admin_email
-        ).first()
-
-        if existing_global_admin:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Global admin email already exists"
-            )
-
-        # Validate that global admin email is different from tenant admin
-        if global_admin_email == setup_request.admin_email:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Global admin and tenant admin must use different email addresses"
-            )
-
-        # Validate global admin password minimum length
-        if setup_request.global_admin_password and len(global_admin_password) < 6:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Global admin password must be at least 6 characters"
-            )
-
+        # Step 2: Create global admin user. Reuse the preflight-resolved email
+        # so we don't drift if slug sanitization logic changes.
         # Hash password
         global_admin_password_hash = hash_password(global_admin_password)
 
@@ -499,12 +539,20 @@ async def setup_wizard(
             email=global_admin_email,
             password_hash=global_admin_password_hash,
             full_name=global_admin_full_name,
-            tenant_id=None,  # No tenant for pure global admin
+            tenant_id=tenant.id,
             is_global_admin=True,  # Global admin flag
             is_active=True,
             email_verified=True
         )
         db.add(global_admin)
+        db.flush()
+
+        db.add(UserRole(
+            user_id=global_admin.id,
+            role_id=owner_role.id,
+            tenant_id=tenant.id,
+            assigned_by=tenant_owner.id,
+        ))
         db.commit()
         db.refresh(global_admin)
 
@@ -730,6 +778,12 @@ async def setup_wizard(
 
     except HTTPException:
         raise
+    except AuthenticationError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except Exception as e:
         logger.error(f"Setup wizard failed: {e}", exc_info=True)
         raise HTTPException(
@@ -805,7 +859,7 @@ async def get_current_user_info(current_user: User = Depends(get_current_user_re
     Returns details about the currently authenticated user.
     """
     auth_service = AuthService(db)
-    permissions = auth_service.get_user_permissions(current_user.id)
+    permissions = _get_permissions_for_user(db, auth_service, current_user)
 
     # BUG-251: Resolve tenant display name from tenant_id
     tenant_name = None
@@ -875,10 +929,11 @@ async def change_password(
             detail="Current password is incorrect",
         )
 
-    if len(payload.new_password) < 8:
+    new_password_error = get_password_min_length_error(payload.new_password, "New password")
+    if new_password_error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="New password must be at least 8 characters",
+            detail=new_password_error,
         )
 
     current_user.password_hash = hash_password(payload.new_password)
@@ -1013,11 +1068,11 @@ async def accept_invitation(
             detail="Email is already registered"
         )
 
-    # Validate password
-    if len(request.password) < 8:
+    password_error = get_password_min_length_error(request.password)
+    if password_error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password must be at least 8 characters"
+            detail=password_error
         )
 
     # Create user

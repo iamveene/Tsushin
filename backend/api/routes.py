@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 import sys
 import os
@@ -24,6 +25,26 @@ spec.loader.exec_module(sender_memory_module)
 SenderMemory = sender_memory_module.SenderMemory
 
 router = APIRouter()
+
+
+class HealthResponse(BaseModel):
+    status: str
+    service: str
+    version: str
+    timestamp: str
+
+
+class ReadinessComponentStatus(BaseModel):
+    status: str
+    error: Optional[str] = None
+
+
+class ReadinessResponse(BaseModel):
+    status: str
+    service: str
+    version: str
+    timestamp: str
+    components: Dict[str, ReadinessComponentStatus]
 
 # Global engine reference
 _engine = None
@@ -67,7 +88,7 @@ def get_db():
         db.close()
 
 
-@router.get("/api/health")
+@router.get("/api/health", response_model=HealthResponse)
 def health_check():
     """Health check endpoint with service metadata"""
     from datetime import datetime
@@ -81,7 +102,7 @@ def health_check():
     }
 
 
-@router.get("/api/readiness")
+@router.get("/api/readiness", response_model=ReadinessResponse)
 def readiness_check():
     """
     Readiness probe — checks that critical dependencies are available.
@@ -96,6 +117,7 @@ def readiness_check():
     import logging
 
     logger = logging.getLogger(__name__)
+    timestamp = datetime.utcnow().isoformat() + "Z"
 
     # Guard against cold-start path where engine is not yet initialized
     if _engine is None:
@@ -103,7 +125,12 @@ def readiness_check():
             status_code=503,
             content={
                 "status": "unhealthy",
-                "postgresql": {"status": "unhealthy", "error": "engine not initialized"},
+                "service": settings.SERVICE_NAME,
+                "version": settings.SERVICE_VERSION,
+                "timestamp": timestamp,
+                "components": {
+                    "postgresql": {"status": "unhealthy", "error": "engine not initialized"},
+                },
             },
         )
 
@@ -131,7 +158,7 @@ def readiness_check():
         "status": "ready" if all_healthy else "degraded",
         "service": settings.SERVICE_NAME,
         "version": settings.SERVICE_VERSION,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": timestamp,
         "components": components,
     }
 

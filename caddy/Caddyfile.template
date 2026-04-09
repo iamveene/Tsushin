@@ -21,13 +21,13 @@
 # {SSL_DOMAIN} {
 #     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 #     handle /api/* {
-#         reverse_proxy backend:8081
+#         reverse_proxy {TSN_STACK_NAME}-backend:8081
 #     }
 #     handle /ws/* {
-#         reverse_proxy backend:8081
+#         reverse_proxy {TSN_STACK_NAME}-backend:8081
 #     }
 #     handle {
-#         reverse_proxy frontend:3030
+#         reverse_proxy {TSN_STACK_NAME}-frontend:3030
 #     }
 # }
 
@@ -36,13 +36,13 @@
 #     tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
 #     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 #     handle /api/* {
-#         reverse_proxy backend:8081
+#         reverse_proxy {TSN_STACK_NAME}-backend:8081
 #     }
 #     handle /ws/* {
-#         reverse_proxy backend:8081
+#         reverse_proxy {TSN_STACK_NAME}-backend:8081
 #     }
 #     handle {
-#         reverse_proxy frontend:3030
+#         reverse_proxy {TSN_STACK_NAME}-frontend:3030
 #     }
 # }
 
@@ -51,12 +51,12 @@
 #     tls internal
 #     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 #     handle /api/* {
-#         reverse_proxy backend:8081
+#         reverse_proxy {TSN_STACK_NAME}-backend:8081
 #     }
 #     handle /ws/* {
-#         reverse_proxy backend:8081
+#         reverse_proxy {TSN_STACK_NAME}-backend:8081
 #     }
 #     handle {
-#         reverse_proxy frontend:3030
+#         reverse_proxy {TSN_STACK_NAME}-frontend:3030
 #     }
 # }
