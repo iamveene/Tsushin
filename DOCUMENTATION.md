@@ -196,6 +196,8 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 
 For remote Ubuntu VM installs that use a host-level Ollama daemon, start with `http://host.docker.internal:11434` inside Tsushin. If the Docker engine on that host does not resolve `host.docker.internal`, use the container bridge gateway instead (for example `http://172.18.0.1:11434`) and re-test the provider instance from the Hub.
 
+For repetitive QA runs, auth throttling can be raised or temporarily disabled without code changes by setting `TSN_AUTH_RATE_LIMIT` or `TSN_DISABLE_AUTH_RATE_LIMIT=true` in `.env` before recreating the backend container. This is intended for test automation and should not be left enabled on public production installs.
+
 ### 3.4 Verify health
 
 ```bash
@@ -321,7 +323,9 @@ Source: `backend/settings.py:19-24`, `backend/services/secret_provider.py:148-26
 | `HOST_BACKEND_DATA_PATH` | Absolute host path of `./backend/data` — required for Docker-in-Docker volume mounts in dynamically spawned MCP/toolbox containers. |
 | `TSN_APP_HOST` / `TSN_APP_PORT` | Backend bind address and port (defaults: `127.0.0.1` / `8081`). |
 | `TSN_BACKEND_URL` / `TSN_FRONTEND_URL` | Public URLs used for OAuth callbacks and CORS. |
+| `TSN_STACK_NAME` | Stack prefix used for compose services plus runtime-created vector-store, MCP, toolbox, and volume names. |
 | `TSN_CORS_ORIGINS` | Comma-separated allowed origins. Defaults to `*` — restrict in production. |
+| `TSN_AUTH_RATE_LIMIT` / `TSN_DISABLE_AUTH_RATE_LIMIT` | Auth throttle controls for login/signup/setup/reset/SSO. Use the disable flag only for QA/dev bursts. |
 | `TSN_LOG_LEVEL` / `TSN_LOG_FORMAT` | Logging (`INFO` / `text`). Set `TSN_LOG_FORMAT=json` for structured logs. |
 
 Configuration is grouped by subsystem in Appendix A:
@@ -342,7 +346,7 @@ Configuration is grouped by subsystem in Appendix A:
 
 ### 6.1 Login flows
 
-All authentication endpoints live under `/api/auth/` (`backend/auth_routes.py:69`). Rate limiting is enforced by `slowapi` (MED-004, `auth_routes.py:22-24, 66-67`).
+All authentication endpoints live under `/api/auth/` (`backend/auth_routes.py:69`). Rate limiting is enforced by `slowapi` (MED-004, `auth_routes.py:22-24, 66-67`) and is configurable per install via `TSN_AUTH_RATE_LIMIT`. QA or local development can temporarily disable those auth throttles with `TSN_DISABLE_AUTH_RATE_LIMIT=true`; the installer defaults HTTP-only / self-signed installs to a higher `30/minute` login ceiling while leaving public HTTPS installs on the stricter default.
 
 | Method | Path | Purpose | Source |
 |---|---|---|---|
@@ -2730,6 +2734,7 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `TSN_APP_PORT` | `8081` | Backend HTTP port. | `APP_PORT` | `settings.py:62` |
 | `TSN_BACKEND_URL` | `http://{APP_HOST}:{APP_PORT}` | Absolute backend URL (for OAuth callbacks). | `BACKEND_URL` | `settings.py:66` |
 | `TSN_FRONTEND_URL` | `http://localhost:3030` | Absolute frontend URL. | `FRONTEND_URL` | `settings.py:67` |
+| `TSN_STACK_NAME` | `tsushin` | Naming prefix for compose services, volumes, and runtime-created MCP/toolbox/vector-store containers. | — | `install.py:204-205`, `docker-compose.yml:24,49,92,197,269-283`, `services/mcp_container_manager.py:979-980`, `services/toolbox_container_service.py:59-61`, `services/vector_store_container_manager.py:47-49` |
 | `FRONTEND_PORT` | `3030` | Host port mapped to frontend. | — | `docker-compose.yml:181` |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8081` | Frontend build-time API URL. | — | `docker-compose.yml:178` |
 
@@ -2763,6 +2768,8 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `TSN_CORS_ORIGINS` | `*` | Comma-separated allowed origins. | `app.py:1108` |
 | `TSN_TRUSTED_PROXY_HOSTS` | `127.0.0.1,::1` | X-Forwarded-For proxy allowlist. | `app.py:1138` |
 | `TSN_ENABLE_HSTS` | *(unset)* | Set `1`/`true` to emit HSTS header. | `app.py:1172` |
+| `TSN_AUTH_RATE_LIMIT` | `5/minute` on public HTTPS installs, `30/minute` on `disabled` / `selfsigned` installs | Default auth throttle applied to login and related auth endpoints unless a more specific override is present. | `install.py:217-223`, `auth_routes.py:95-100` |
+| `TSN_DISABLE_AUTH_RATE_LIMIT` | `false` | QA/dev escape hatch that effectively disables auth throttling by swapping in a very high limit. Do not enable on public production installs. | `install.py:226-228`, `auth_routes.py:81-94` |
 | `TSN_SSL_MODE` | *(unset)* | When unset/`off`/`none`/`disabled`, session cookie `secure` flag is OFF. | `auth_routes.py:51` |
 | `GOOGLE_SSO_CLIENT_ID` / `TSN_GOOGLE_SSO_CLIENT_ID` | `""` | Google SSO OAuth client ID (platform-wide). | `settings.py:77` |
 | `GOOGLE_SSO_CLIENT_SECRET` / `TSN_GOOGLE_SSO_CLIENT_SECRET` | `""` | Platform-wide SSO secret. | `settings.py:78` |

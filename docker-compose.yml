@@ -119,12 +119,16 @@ services:
       # Application
       - TSN_APP_HOST=0.0.0.0
       - TSN_APP_PORT=8081
+      - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
       - TSN_LOG_LEVEL=${TSN_LOG_LEVEL:-INFO}
       - TSN_LOG_FORMAT=${TSN_LOG_FORMAT:-text}
       - TSN_METRICS_ENABLED=${TSN_METRICS_ENABLED:-true}
       - TSN_SECRET_BACKEND=${TSN_SECRET_BACKEND:-env}
       - TSN_CONTAINER_RUNTIME=${TSN_CONTAINER_RUNTIME:-docker}
       - TSN_POLL_INTERVAL_MS=${TSN_POLL_INTERVAL_MS:-3000}
+      - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-5/minute}
+      - TSN_DISABLE_AUTH_RATE_LIMIT=${TSN_DISABLE_AUTH_RATE_LIMIT:-false}
+      - TSN_SSL_MODE=${TSN_SSL_MODE:-}
       # Docker socket proxy (BUG-135: no direct socket mount)
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
 

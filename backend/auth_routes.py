@@ -69,6 +69,37 @@ limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
 
+def _env_flag_enabled(value: Optional[str]) -> bool:
+    """Interpret common truthy env-var values."""
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_auth_limit(default_limit: str, env_var: Optional[str] = None) -> str:
+    """
+    Resolve the effective auth throttle at import time.
+
+    TSN_DISABLE_AUTH_RATE_LIMIT provides a QA/dev escape hatch that effectively
+    disables throttling across auth endpoints after a backend restart.
+    """
+    if _env_flag_enabled(os.environ.get("TSN_DISABLE_AUTH_RATE_LIMIT")):
+        return "1000000/minute"
+
+    if env_var:
+        configured_limit = (os.environ.get(env_var) or "").strip()
+        if configured_limit:
+            return configured_limit
+
+    return default_limit
+
+
+AUTH_LOGIN_RATE_LIMIT = _resolve_auth_limit("5/minute", env_var="TSN_AUTH_RATE_LIMIT")
+AUTH_SIGNUP_RATE_LIMIT = _resolve_auth_limit("3/hour")
+AUTH_SETUP_RATE_LIMIT = _resolve_auth_limit("3/hour")
+AUTH_PASSWORD_RESET_REQUEST_RATE_LIMIT = _resolve_auth_limit("3/hour")
+AUTH_PASSWORD_RESET_CONFIRM_RATE_LIMIT = _resolve_auth_limit("5/minute")
+AUTH_SSO_EXCHANGE_RATE_LIMIT = _resolve_auth_limit("10/minute")
+
+
 # Request/Response Models
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -245,13 +276,14 @@ def _exchange_sso_callback_code(db: Session, code: str) -> tuple[str, Optional[s
 # Authentication Endpoints
 
 @router.post("/login", response_model=AuthResponse)
-@limiter.limit("5/minute")  # MED-004 FIX: Prevent brute force attacks
+@limiter.limit(AUTH_LOGIN_RATE_LIMIT)  # MED-004 FIX: Prevent brute force attacks
 async def login(request: Request, login_request: LoginRequest, db: Session = Depends(get_db)):
     """
     Login endpoint
 
     Authenticates user with email and password, returns JWT access token.
-    Rate limited to 5 requests per minute per IP.
+    Rate limit is configurable via TSN_AUTH_RATE_LIMIT and can be temporarily
+    disabled for QA/dev with TSN_DISABLE_AUTH_RATE_LIMIT=true.
     """
     auth_service = AuthService(db)
 
@@ -299,7 +331,7 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
 
 
 @router.post("/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/hour")  # MED-004 FIX: Prevent spam account creation
+@limiter.limit(AUTH_SIGNUP_RATE_LIMIT)  # MED-004 FIX: Prevent spam account creation
 async def signup(request: Request, signup_request: SignupRequest, db: Session = Depends(get_db)):
     """
     Signup endpoint
@@ -349,7 +381,7 @@ async def setup_status(db: Session = Depends(get_db)):
 
 
 @router.post("/setup-wizard", status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/hour")  # MED-004 FIX: Prevent abuse
+@limiter.limit(AUTH_SETUP_RATE_LIMIT)  # MED-004 FIX: Prevent abuse
 async def setup_wizard(
     request: Request,
     setup_request: SetupWizardRequest,
@@ -707,7 +739,7 @@ async def setup_wizard(
 
 
 @router.post("/password-reset/request", response_model=MessageResponse)
-@limiter.limit("3/hour")  # MED-004 FIX: Prevent email enumeration/flooding
+@limiter.limit(AUTH_PASSWORD_RESET_REQUEST_RATE_LIMIT)  # MED-004 FIX: Prevent email enumeration/flooding
 async def request_password_reset(request: Request, reset_request: PasswordResetRequest, db: Session = Depends(get_db)):
     """
     Request password reset endpoint
@@ -731,7 +763,7 @@ async def request_password_reset(request: Request, reset_request: PasswordResetR
 
 
 @router.post("/password-reset/confirm", response_model=MessageResponse)
-@limiter.limit("5/minute")  # MED-004 FIX: Prevent token brute-force
+@limiter.limit(AUTH_PASSWORD_RESET_CONFIRM_RATE_LIMIT)  # MED-004 FIX: Prevent token brute-force
 async def confirm_password_reset(request: Request, confirm_request: PasswordResetConfirm, db: Session = Depends(get_db)):
     """
     Confirm password reset endpoint
@@ -1234,7 +1266,7 @@ async def google_sso_callback(
 
 
 @router.post("/sso-exchange", response_model=SSOCodeExchangeResponse)
-@limiter.limit("10/minute")  # Rate limit to prevent code guessing attacks
+@limiter.limit(AUTH_SSO_EXCHANGE_RATE_LIMIT)  # Rate limit to prevent code guessing attacks
 async def exchange_sso_code(
     request: Request,
     exchange_request: SSOCodeExchangeRequest,

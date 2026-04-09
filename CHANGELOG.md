@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fix — BUG-453 (`develop`, 2026-04-09)
+
+- **BUG-453 (Low):** Completed the `BUG-443` auth-throttling fix for fresh installs by wiring runtime env propagation all the way into the backend container. `docker-compose.yml` now passes `TSN_STACK_NAME`, `TSN_AUTH_RATE_LIMIT`, `TSN_DISABLE_AUTH_RATE_LIMIT`, and `TSN_SSL_MODE` into `tsushin-backend`; `auth_routes.py` now resolves login/signup/setup/reset/SSO limits from env; and `install.py` persists/backfills the new auth-throttle settings in `.env`.
+- **Live VM verification:** On the Ubuntu audit stack (`TSN_STACK_NAME=tsushin-fresh-20260408`), the backend received the expected env overrides, 12 rapid login attempts completed without `429` when `TSN_DISABLE_AUTH_RATE_LIMIT=true`, and an auto-provisioned Qdrant instance used the correct `tsushin-fresh-20260408-vs-*` runtime naming prefix.
+
+### Ubuntu VM Fresh-Install Follow-up Audit (`develop`, 2026-04-09)
+
+- Re-ran the real-user Ubuntu VM audit on `10.211.55.5` against the disposable `tsushin-fresh-20260408` stack, preserving the interactive installer flow and validating the live runtime with both API checks and browser automation.
+- Reconfirmed the provider/tool matrix after setup: Gemini, OpenAI, Anthropic, Vertex AI (`us-east5`), Brave Search, and Ollama (`host.docker.internal:11434`) were all exercised successfully on the fresh VM.
+- **New Bugs Found (4):** `BUG-454` (backend no-cache rebuild fails hard when Hugging Face model prewarm is unavailable), `BUG-455` (Tavily still absent from Hub Tool APIs despite backend service plumbing), `BUG-456` (live `/openapi.json` remains awkward for generated client round-trips), and `BUG-457` (setup accepts sub-8-character admin passwords that later auth flows reject).
+- **Still Unproven / Follow-up:** Tavily still lacks a stable tenant-facing validation path in the Hub, and release-quality generated-client validation remains dependent on manual cleanup around the exported OpenAPI surface.
+
 ### Bug Fix — BUG-452 (`develop`, 2026-04-08)
 
 - **BUG-452 (Medium):** Fixed MCP Server creation via Hub UI returning 400 Bad Request for localhost/private URLs. The SSRF validator was blocking private/loopback IPs where MCP servers typically run. Applied `allow_private=True` (matching Ollama pattern) and relaxed HTTPS+auth requirement for local URLs while preserving it for public URLs. Cloud metadata endpoints remain blocked.
