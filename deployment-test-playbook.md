@@ -38,6 +38,8 @@ Use this profile when reproducing the 2026-04-08 interactive Ubuntu VM audit:
 | Default agents | `create_default_agents=true` |
 | Evidence folder | `output/playwright/` |
 
+> Note: the historical 2026-04-08 audit used `test123`, but repeat runs should use an 8+ character admin password such as `test12345` until `BUG-457` is fixed. The setup wizard currently accepts shorter passwords than later auth flows.
+
 ---
 
 ## Known Issues & Workarounds
@@ -46,6 +48,8 @@ Use this profile when reproducing the 2026-04-08 interactive Ubuntu VM audit:
 |-----|--------|-------|
 | BUG-201: docker-compose v1 frontend race | **Fixed in current release** — `install.py` now auto-recovers frontend after backend health. If on an older install, workaround: `docker-compose up -d frontend` once backend is healthy. |
 | BUG-202: Relative API paths 404 in HTTP-only installs | **Fixed in current release** — `client.ts` now uses absolute `NEXT_PUBLIC_API_URL` for all API calls. |
+| BUG-454: backend no-cache rebuild depends on external model prewarm | **Open** — if `docker compose up -d --build --no-cache backend` fails during Hugging Face model download, capture the logs as evidence and continue with the last healthy image or a targeted `docker compose up -d --no-build backend`. Do not `docker compose down` as part of the recovery path. |
+| BUG-457: setup password validation is weaker than later auth flows | **Open** — use an 8+ character tenant admin password for repeatable QA, even if the setup form currently accepts shorter values. |
 
 ---
 
@@ -99,6 +103,39 @@ Use this profile when reproducing the 2026-04-08 interactive Ubuntu VM audit:
 | 2 | `/api/readiness` returns `{"status": "ready"}` (HTTP 200) | |
 | 3 | `/metrics` returns Prometheus-formatted text | |
 | 4 | Frontend login page loads at port 3030 | |
+
+---
+
+## TC-1A: Auth Throttle Sanity
+
+**Goal:** Confirm QA installs do not get blocked by auth throttling during repetitive browser/API validation.
+
+### Steps
+
+1. From the repository root on the target host, verify the backend container received the runtime auth settings:
+   ```bash
+   docker compose exec backend /bin/sh -lc 'printf "TSN_AUTH_RATE_LIMIT=%s\nTSN_DISABLE_AUTH_RATE_LIMIT=%s\n" "$TSN_AUTH_RATE_LIMIT" "$TSN_DISABLE_AUTH_RATE_LIMIT"'
+   ```
+2. If QA is using the explicit override path, set `TSN_DISABLE_AUTH_RATE_LIMIT=true` in `.env` before recreating the backend container.
+3. Perform a rapid login burst against `POST /api/auth/login` using the tenant admin credentials:
+   ```bash
+   for i in $(seq 1 12); do
+     curl -s -o /tmp/tsn-login-$i.json -w "%{http_code}\n" \
+       -X POST http://<host>:8081/api/auth/login \
+       -H 'Content-Type: application/json' \
+       -d '{"email":"<tenant_admin_email>","password":"<tenant_admin_password>"}'
+   done
+   ```
+4. If the install is intentionally using a high but finite `TSN_AUTH_RATE_LIMIT`, keep the burst under that configured threshold and confirm no unexpected `429` appears.
+5. Log any `429 Too Many Requests` response as a release regression rather than pausing the rest of the audit.
+
+### Pass Criteria
+
+| # | Check | Pass? |
+|---|-------|-------|
+| 1 | Backend container exposes the expected `TSN_AUTH_RATE_LIMIT` / `TSN_DISABLE_AUTH_RATE_LIMIT` values | |
+| 2 | QA override installs complete a 10-12 login burst without `429` responses | |
+| 3 | Any throttling seen matches the explicit configured limit rather than an undeclared hardcoded default | |
 
 ---
 
@@ -585,7 +622,7 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 ### Steps
 
 1. In `/hub` → **AI Providers**, verify provider instances for Gemini, OpenAI, Anthropic, and Vertex AI can be created, tested, and assigned as defaults where needed.
-2. In `/hub` → **Tool APIs**, verify the tenant-facing cards/status for both Brave Search and Tavily are present and match the backend-supported integrations for the release under test.
+2. In `/hub` → **Tool APIs**, verify the tenant-facing cards/status match the backend-supported search integrations for the release under test. If the backend advertises an integration such as Tavily but no Hub card exists, log that parity gap as a product bug instead of patching the database or bypassing the UI.
 3. Install Ollama on the VM and pull at least one model such as `llama3.2`.
 4. In `/hub` → **Local Services**, configure Ollama with `http://host.docker.internal:11434`.
 5. If Docker-on-Linux name resolution fails, retry with the bridge fallback (for example `http://172.18.0.1:11434`).
@@ -596,7 +633,7 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 | # | Check | Pass? |
 |---|-------|-------|
 | 1 | Gemini, OpenAI, Anthropic, and Vertex AI provider instances save and test successfully | |
-| 2 | Brave Search and Tavily are both visible in Hub Tool APIs with accurate configured state | |
+| 2 | Hub Tool APIs matches the backend-supported search/provider surface for the release under test, or any mismatch is logged as a bug | |
 | 3 | Ollama health check succeeds from the backend container | |
 | 4 | At least one Ollama model is discovered and selectable | |
 | 5 | A tenant default provider can be changed without breaking existing agents | |
