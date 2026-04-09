@@ -363,6 +363,15 @@ async def get_comm_enabled_agents(
         )
         .subquery()
     )
+    enabled_permission_rows = (
+        db.query(AgentCommunicationPermission.source_agent_id)
+        .filter(
+            AgentCommunicationPermission.tenant_id == ctx.tenant_id,
+            AgentCommunicationPermission.is_enabled == True,
+        )
+        .distinct()
+        .subquery()
+    )
 
     agents_db = (
         db.query(Agent, Contact.friendly_name)
@@ -371,6 +380,7 @@ async def get_comm_enabled_agents(
             Agent.tenant_id == ctx.tenant_id,
             Agent.is_active == True,
             Agent.id.in_(comm_skill_rows),
+            Agent.id.in_(enabled_permission_rows),
         )
         .all()
     )

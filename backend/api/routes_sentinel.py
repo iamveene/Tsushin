@@ -62,6 +62,7 @@ class SentinelConfigResponse(BaseModel):
     """Response model for Sentinel configuration."""
     id: int
     tenant_id: Optional[str]
+    enabled: bool
     is_enabled: bool
     enable_prompt_analysis: bool
     enable_tool_analysis: bool
@@ -108,6 +109,7 @@ class SentinelConfigResponse(BaseModel):
 
 class SentinelConfigUpdate(BaseModel):
     """Request model for updating Sentinel configuration."""
+    enabled: Optional[bool] = None
     is_enabled: Optional[bool] = None
     enable_prompt_analysis: Optional[bool] = None
     enable_tool_analysis: Optional[bool] = None
@@ -306,6 +308,7 @@ async def get_sentinel_config(
     return SentinelConfigResponse(
         id=config.id,
         tenant_id=config.tenant_id,
+        enabled=config.is_enabled,
         is_enabled=config.is_enabled,
         enable_prompt_analysis=config.enable_prompt_analysis,
         enable_tool_analysis=config.enable_tool_analysis,
@@ -401,8 +404,10 @@ async def update_sentinel_config(
         )
         db.add(config)
 
-    # Apply updates
+    # Accept both legacy `enabled` and canonical `is_enabled`.
     update_data = update.dict(exclude_unset=True)
+    if "enabled" in update_data and "is_enabled" not in update_data:
+        update_data["is_enabled"] = update_data.pop("enabled")
     for field, value in update_data.items():
         if hasattr(config, field):
             setattr(config, field, value)
@@ -427,6 +432,7 @@ async def update_sentinel_config(
     return SentinelConfigResponse(
         id=config.id,
         tenant_id=config.tenant_id,
+        enabled=config.is_enabled,
         is_enabled=config.is_enabled,
         enable_prompt_analysis=config.enable_prompt_analysis,
         enable_tool_analysis=config.enable_tool_analysis,

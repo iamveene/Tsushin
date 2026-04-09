@@ -1,9 +1,13 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { api } from '@/lib/client'
+
+const MIN_PASSWORD_LENGTH = 8
+const PASSWORD_MIN_LENGTH_MESSAGE = `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
+const PASSWORD_PLACEHOLDER = `Min ${MIN_PASSWORD_LENGTH} characters`
 
 export default function SetupPage() {
   const router = useRouter()
@@ -76,10 +80,22 @@ export default function SetupPage() {
   // BUG-365: Global admin credential reveal after setup
   const [globalAdminCreds, setGlobalAdminCreds] = useState<{email: string, password: string, full_name: string} | null>(null)
 
+  const goToLogin = useCallback((replace = false) => {
+    if (typeof window !== 'undefined') {
+      if (replace) {
+        window.location.replace('/auth/login')
+      } else {
+        window.location.assign('/auth/login')
+      }
+      return
+    }
+    router.replace('/auth/login')
+  }, [router])
+
   useEffect(() => {
     api.getSetupStatus().then(({ needs_setup }) => {
       if (!needs_setup) {
-        router.replace('/auth/login')
+        goToLogin(true)
       } else {
         setChecking(false)
       }
@@ -87,7 +103,7 @@ export default function SetupPage() {
     // Fetch curated model suggestions (static fallback).
     // Failure is non-fatal — falls back to hardcoded PROVIDERS_META lists.
     api.getPredefinedModels().then(setPredefinedModels).catch(() => {})
-  }, [router])
+  }, [goToLogin])
 
   // When the user has typed an API key for the selected provider, debounce
   // a live /models fetch so the dropdown reflects the provider's current
@@ -114,8 +130,8 @@ export default function SetupPage() {
       return
     }
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters')
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(PASSWORD_MIN_LENGTH_MESSAGE)
       return
     }
 
@@ -160,7 +176,7 @@ export default function SetupPage() {
           setGlobalAdminCreds(result.global_admin)
           // Don't redirect yet — user needs to see and save credentials
         } else {
-          router.replace('/auth/login')
+          goToLogin(true)
         }
       }
     } catch (err) {
@@ -212,7 +228,8 @@ export default function SetupPage() {
               </div>
             </div>
             <button
-              onClick={() => router.replace('/auth/login')}
+              type="button"
+              onClick={() => goToLogin(false)}
               className="w-full btn-primary py-3 rounded-lg font-semibold"
             >
               Continue to Login
@@ -308,9 +325,10 @@ export default function SetupPage() {
                 id="password"
                 type="password"
                 required
+                minLength={MIN_PASSWORD_LENGTH}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Min 6 characters"
+                placeholder={PASSWORD_PLACEHOLDER}
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
               />
             </div>

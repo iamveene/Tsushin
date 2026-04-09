@@ -146,7 +146,24 @@ RUN mkdir -p /app/data /app/data/chroma /app/data/backups /app/logs \
 # can OOM-crash memory-constrained containers.
 ENV SENTENCE_TRANSFORMERS_HOME=/app/.model_cache
 RUN mkdir -p /app/.model_cache && \
-    python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" && \
+    max_attempts=3 && \
+    prewarm_ok=false && \
+    for attempt in 1 2 3; do \
+        echo "Prewarming all-MiniLM-L6-v2 (attempt ${attempt}/${max_attempts})"; \
+        if python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"; then \
+            echo "Embedding model prewarm completed."; \
+            prewarm_ok=true; \
+            break; \
+        fi; \
+        if [ "$attempt" -lt "$max_attempts" ]; then \
+            sleep_time=$((attempt * 5)); \
+            echo "Prewarm failed; retrying in ${sleep_time}s..."; \
+            sleep "$sleep_time"; \
+        fi; \
+    done && \
+    if [ "$prewarm_ok" != "true" ]; then \
+        echo "WARNING: Embedding model prewarm skipped after retries; runtime will lazy-download if needed."; \
+    fi && \
     chown -R tsushin:tsushin /app/.model_cache
 
 # Switch to non-root user

@@ -82,6 +82,8 @@ Tsushin ships as a Docker Compose stack defined in `/Users/vinicios/code/tsushin
 
 **Network:** All services attach to the **external** bridge network `tsushin-network`. The network is declared `external: true` in compose so that `docker-compose down` *cannot* tear it down — this is critical because MCP WhatsApp bot containers (spawned dynamically by `ToolboxContainerService` / `MCPContainerManager`) also join this network and would lose their WhatsApp sessions if the bridge were removed. Create the network once with `docker network create tsushin-network`; `install.py` handles this automatically. Source: `docker-compose.yml:229-237`.
 
+**Multi-stack note:** When SSL/Caddy is enabled, proxy upstreams must target stack-scoped container names (for example `tsushin-frontend:3030`, `tsushin-backend:8081`) rather than generic Docker aliases like `frontend` / `backend`. On the shared `tsushin-network`, generic aliases can resolve to another running Tsushin stack.
+
 **Persistent data:**
 
 | Volume / bind | Container path | Contents |
@@ -124,7 +126,7 @@ Source: `/Users/vinicios/code/tsushin/README.md:289-328`.
 Tsushin spawns per-tenant containers outside the compose stack, all joining `tsushin-network`:
 
 * **WhatsApp MCP bots** — one container per connected WhatsApp number, built from the `mcp-agent-tenant` image, managed by `services/mcp_container_manager.py`.
-* **Tester MCP** — optional QA bridge (port 8088) run with `--profile testing`.
+* **Tester surface** — QA bridge status exposed through `/api/mcp/instances/tester/*`; the backend prefers a legacy/compose tester container when present and otherwise falls back to the tenant's active runtime tester instance.
 * **Toolbox containers** — per-tenant sandboxes for "Sandboxed Tools" (nmap, dig, nuclei, etc.), managed by `services/toolbox_container_service.py` with base image built from `backend/containers/Dockerfile.toolbox`.
 
 Source: `docker-compose.yml:12-14`, `backend/services/toolbox_container_service.py:114`, `backend/services/mcp_container_manager.py:234`.
@@ -176,7 +178,7 @@ The installer automatically:
 3. Generates `.env` with random `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, `TSN_MASTER_KEY`.
 4. Sets `HOST_BACKEND_DATA_PATH` to the absolute host path of `backend/data` (required for Docker-in-Docker volume mounts).
 5. Builds backend + frontend images and starts the stack.
-6. (If SSL) Generates Caddy config and self-signed cert or configures Let's Encrypt.
+6. (If SSL) Generates `caddy/<stack-name>/Caddyfile` with stack-scoped upstreams plus matching self-signed cert or Let's Encrypt configuration.
 
 Source: `install.py:49-53`, `docker-compose.yml:131-134` (HOST_BACKEND_DATA_PATH is required in `.env`).
 
@@ -235,10 +237,14 @@ docker compose stop backend
 
 # Optional profiles
 docker compose --profile tts up -d        # Add Kokoro TTS
-docker compose --profile testing up -d    # Add tester-mcp (port 8088)
+
+# Tester note
+# The current repo does not define a `testing` compose profile.
+# Hub tester controls resolve a legacy tester container when present,
+# or the active runtime tester instance for the tenant.
 ```
 
-Source: `DOCKER.md:114-169`, `docker-compose.yml:203-204` (tts profile).
+Source: `DOCKER.md:114-169`, `docker-compose.yml:220-226` (tts profile).
 
 ### 4.2 Container rebuild safety (SAFE vs UNSAFE)
 
@@ -2611,7 +2617,7 @@ The Tester MCP is a containerized Go WhatsApp bridge dedicated to QA. It is conf
 
 **Authentication:** Bearer token on `Authorization: Bearer <api_secret>` (per project conventions; exact secret provisioning is container-specific — see the tester container's env).
 
-**Hub visibility:** the tester is intentionally not listed as a tenant-managed `WhatsAppMCPInstance`. Instead, Hub exposes it as a dedicated **QA Tester** card backed by `/api/mcp/instances/tester/*` endpoints so operators can monitor auth state, fetch QR, restart the tester, and reset auth without confusing it with production tenant instances.
+**Hub visibility:** Hub now shows runtime tester instances in the main WhatsApp list, while the dedicated **QA Tester** controls backed by `/api/mcp/instances/tester/*` resolve the current tester target for QR/auth/restart actions. Those controls prefer a legacy/compose tester container when present and otherwise target the tenant's active runtime tester instance.
 
 **Tester vs. tenant agent separation:** the tester is a dedicated QA bridge, not a tenant-managed production instance. For meaningful end-to-end validation, the tester and the tenant agent must authenticate with different WhatsApp accounts/phone numbers. If the same phone number is reused, `/api/mcp/instances/tester/status` and `/api/mcp/instances/{id}/health` now surface warning strings, and tenant-agent creation is rejected when the requested number is already in use by an authenticated tester or another WhatsApp MCP instance.
 
@@ -2766,6 +2772,7 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `JWT_SECRET_KEY` | (required) | HMAC key for JWTs. Generate with `secrets.token_urlsafe(32)`. | `auth_utils.py:26`, `docker-compose.yml:137` |
 | `TSN_MASTER_KEY` | (required for SEC-006) | Fernet master key for envelope-encrypting per-tenant encryption keys stored in DB. Generate with `Fernet.generate_key()`. | `services/encryption_key_service.py:42`, `migrations/wrap_encryption_keys.py:66` |
 | `TSN_CORS_ORIGINS` | `*` | Comma-separated allowed origins. | `app.py:1108` |
+| `TSN_AUTH_RATE_LIMIT` | `30/minute` on local `disabled`/`selfsigned` installs unless overridden | Login throttle policy. Installer writes this explicitly for local workflows; production can override it. | `install.py:267-269`, `install.py:918`, `docker-compose.yml:123` |
 | `TSN_TRUSTED_PROXY_HOSTS` | `127.0.0.1,::1` | X-Forwarded-For proxy allowlist. | `app.py:1138` |
 | `TSN_ENABLE_HSTS` | *(unset)* | Set `1`/`true` to emit HSTS header. | `app.py:1172` |
 | `TSN_AUTH_RATE_LIMIT` | `5/minute` on public HTTPS installs, `30/minute` on `disabled` / `selfsigned` installs | Default auth throttle applied to login and related auth endpoints unless a more specific override is present. | `install.py:217-223`, `auth_routes.py:95-100` |

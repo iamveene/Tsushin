@@ -12,9 +12,9 @@ This guide covers deploying Tsushin using Docker containers.
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  ┌─────────────┐  ┌─────────────┐  ┌──────────┐  ┌─────────────────────┐  │
-│  │   backend   │  │  frontend   │  │ postgres │  │  tester-mcp         │  │
-│  │  FastAPI    │  │  Next.js    │  │ PG 16    │  │  (QA Profile)       │  │
-│  │  Port 8081  │  │  Port 3030  │  │ Port 5432│  │  Port 8088          │  │
+│  │   backend   │  │  frontend   │  │ postgres │  │ tester surface       │  │
+│  │  FastAPI    │  │  Next.js    │  │ PG 16    │  │ (legacy or runtime)  │  │
+│  │  Port 8081  │  │  Port 3030  │  │ Port 5432│  │  Port 8088 when used │  │
 │  └──────┬──────┘  └──────┬──────┘  └────┬─────┘  └──────────┬──────────┘  │
 │         │                │               │                   │             │
 │         ▼                ▼               ▼                   ▼             │
@@ -100,13 +100,16 @@ Next.js 14 application with:
 **Build Args:**
 - `NEXT_PUBLIC_API_URL` - Backend API URL (default: http://localhost:8081)
 
-### Tester MCP (Optional)
+### Tester MCP
 
-WhatsApp bridge for QA testing. Activated with the `testing` profile:
+WhatsApp bridge for QA testing. The current repository does not define a `testing` compose profile; Hub tester controls resolve a legacy tester container when present or fall back to the tenant's active runtime tester instance.
 
 ```bash
-# Start with tester MCP
-docker compose --profile testing up -d
+# Start the main stack
+docker compose up -d
+
+# Optional TTS profile
+docker compose --profile tts up -d
 ```
 
 **Port:** 8088 (configurable via `TESTER_MCP_PORT`)
@@ -125,17 +128,17 @@ docker compose up -d --build
 # Start specific service
 docker compose up -d backend
 
-# Start with testing profile
-docker compose --profile testing up -d
+# Start with optional TTS profile
+docker compose --profile tts up -d
 ```
 
 ### Stopping Services
 
 ```bash
-# Stop all services
-docker compose down
+# Stop all services without tearing down the shared network
+docker compose stop
 
-# Stop and remove volumes (CAUTION: deletes data)
+# Full reset (CAUTION: deletes data and removes containers)
 docker compose down -v
 
 # Stop specific service

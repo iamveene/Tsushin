@@ -823,6 +823,7 @@ VALID_FLOW_TYPES = {"notification", "conversation", "workflow", "task"}
 VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring", "keyword"}  # BUG-336: added keyword
 
 
+@router.post("", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))], include_in_schema=False)
 @router.post("/", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))])
 def create_flow(
     flow: FlowDefinitionCreate,
@@ -1150,6 +1151,7 @@ def instantiate_flow_template(
         raise HTTPException(status_code=500, detail="Failed to instantiate template")
 
 
+@router.get("", dependencies=[Depends(require_permission("flows.read"))], include_in_schema=False)
 @router.get("/", dependencies=[Depends(require_permission("flows.read"))])
 def list_flows(
     active: Optional[bool] = None,

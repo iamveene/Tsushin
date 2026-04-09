@@ -1,5 +1,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -1171,6 +1173,37 @@ app.include_router(v1_router)  # Public API v1: All /api/v1/ endpoints
 app.include_router(discord_router)  # Phase 23: Discord Bot Integration (BUG-311, BUG-313)
 app.include_router(slack_router)  # Phase 23: Slack Workspace Integration (BUG-312)
 app.include_router(channel_webhooks_router)  # Phase 23: Channel Inbound Webhooks (Discord interactions, Slack events)
+
+
+def _build_v1_openapi_schema():
+    """Build a public-only OpenAPI schema for SDK generation and docs."""
+    return get_openapi(
+        title="Tsushin Public API v1",
+        version="1.0.0",
+        description="Public API v1 only. Use this schema for SDK generation.",
+        routes=[
+            route
+            for route in app.routes
+            if getattr(route, "path", "").startswith("/api/v1/")
+        ],
+    )
+
+
+@app.get("/api/v1/openapi.json", include_in_schema=False)
+def get_v1_openapi():
+    """Serve a dedicated Public API v1 schema without legacy/internal routes."""
+    if not getattr(app.state, "v1_openapi_schema", None):
+        app.state.v1_openapi_schema = _build_v1_openapi_schema()
+    return JSONResponse(app.state.v1_openapi_schema)
+
+
+@app.get("/api/v1/docs", include_in_schema=False)
+def get_v1_docs():
+    """Serve Swagger UI for the dedicated Public API v1 schema."""
+    return get_swagger_ui_html(
+        openapi_url="/api/v1/openapi.json",
+        title="Tsushin Public API v1 Docs",
+    )
 
 # Prometheus metrics endpoint (unauthenticated — scrape target)
 from services.metrics_service import metrics_endpoint

@@ -1,6 +1,94 @@
 # Tsushin Bug Tracker
-**Open:** 0 | **In Progress:** 0 | **Resolved:** 482
-**Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)** + **Post-Release Stabilization (2026-04-06)** + **Community PR #8 (2026-04-06)** + **Community PRs #9, #10 (2026-04-06)** + **Provider Instance Validation (2026-04-06)** + **Wave 1 Security + Wave 2 Critical Functionality Audit (2026-04-06)** + **Ship-Gate QA (2026-04-06)** + **Onboarding Overlap Audit (2026-04-06)** + **UI/UX Exploration Audit (2026-04-06)** + **Ubuntu VM E2E Install Audit (2026-04-07)** + **Full Bug Sprint — 26 bugs resolved (2026-04-07)** + **Release 0.6.0 Re-Validation Audit (2026-04-07)** + **Ubuntu VM Fresh Install QA (2026-04-07)** + **Ubuntu VM Re-Test (2026-04-07)** + **Fresh Install Docker Naming & Runtime Management Audit (2026-04-07)** + **Fresh Install Dual-Surface Regression Audit (2026-04-07)** + **Fresh Install Browser vs API Audit (2026-04-07)** + **Fresh Install Develop Audit & Restore (2026-04-07)** + **Ubuntu VM Fresh Install Develop Coverage Audit (2026-04-07)** + **Stabilization Sprint & Re-Validation (2026-04-07)** + **Fresh Install Stabilization Closeout (2026-04-08)** + **v0.6.0 Comprehensive E2E Audit — 6 findings (2026-04-08)** + **Ubuntu VM Fresh Install Full QA (2026-04-08)** + **macOS Fresh Install QA (2026-04-08)** + **macOS Loopback & Runtime Isolation Audit (2026-04-08)**
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 488
+**Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)** + **Post-Release Stabilization (2026-04-06)** + **Community PR #8 (2026-04-06)** + **Community PRs #9, #10 (2026-04-06)** + **Provider Instance Validation (2026-04-06)** + **Wave 1 Security + Wave 2 Critical Functionality Audit (2026-04-06)** + **Ship-Gate QA (2026-04-06)** + **Onboarding Overlap Audit (2026-04-06)** + **UI/UX Exploration Audit (2026-04-06)** + **Ubuntu VM E2E Install Audit (2026-04-07)** + **Full Bug Sprint — 26 bugs resolved (2026-04-07)** + **Release 0.6.0 Re-Validation Audit (2026-04-07)** + **Ubuntu VM Fresh Install QA (2026-04-07)** + **Ubuntu VM Re-Test (2026-04-07)** + **Fresh Install Docker Naming & Runtime Management Audit (2026-04-07)** + **Fresh Install Dual-Surface Regression Audit (2026-04-07)** + **Fresh Install Browser vs API Audit (2026-04-07)** + **Fresh Install Develop Audit & Restore (2026-04-07)** + **Ubuntu VM Fresh Install Develop Coverage Audit (2026-04-07)** + **Stabilization Sprint & Re-Validation (2026-04-07)** + **Fresh Install Stabilization Closeout (2026-04-08)** + **v0.6.0 Comprehensive E2E Audit — 6 findings (2026-04-08)** + **Ubuntu VM Fresh Install Full QA (2026-04-08)** + **macOS Fresh Install QA (2026-04-08)** + **macOS Loopback & Runtime Isolation Audit (2026-04-08)** + **Ubuntu VM Fresh Install Follow-up (2026-04-09)** + **Local Re-Test & Setup Validation Follow-up (2026-04-09)**
+
+## Ubuntu VM Fresh Install Follow-up (2026-04-09)
+
+**Scope:** Continued the interactive Ubuntu VM fresh-install audit after unblocking auth throttling, then ran a local rebuilt-stack re-test to validate the same fixes in browser and API flows. Coverage focused on runtime env propagation into the backend container, no-cache backend rebuild resilience, Hub Tool APIs parity, generated-client fidelity against `/openapi.json`, the setup/auth password-policy path, and setup-wizard validation mapping.
+
+**Total findings: 6** (High: 1, Medium: 5)
+
+### BUG-453: Backend container ignored installer/runtime `TSN_*` envs, breaking auth-throttle overrides and stack-scoped runtime naming
+- **Status:** Resolved
+- **Resolved:** 2026-04-09
+- **Severity:** Medium
+- **Category:** Deployment / Runtime Configuration
+- **Files:** `docker-compose.yml`, `backend/auth_routes.py`, `install.py`
+- **Description:** The installer wrote `TSN_STACK_NAME`, `TSN_AUTH_RATE_LIMIT`, `TSN_DISABLE_AUTH_RATE_LIMIT`, and `TSN_SSL_MODE` into `.env`, but the backend service never received them at runtime because `docker-compose.yml` did not pass those variables into the container environment. On the fresh VM this left `docker exec tsushin-fresh-20260408-backend printenv` empty for those keys, so auth login still behaved like the old hardcoded `5/minute` path and runtime-created vector-store containers defaulted back to the global `tsushin-*` prefix instead of the install-specific stack prefix.
+- **Steps to Reproduce:** 1) Run the interactive installer with `TSN_STACK_NAME=tsushin-fresh-20260408` and HTTP-only mode. 2) Confirm `.env` contains `TSN_STACK_NAME`, `TSN_AUTH_RATE_LIMIT=30/minute`, and `TSN_DISABLE_AUTH_RATE_LIMIT=true`. 3) `docker exec tsushin-fresh-20260408-backend /bin/sh -lc 'echo \"$TSN_STACK_NAME $TSN_AUTH_RATE_LIMIT $TSN_DISABLE_AUTH_RATE_LIMIT\"'` returns empty values. 4) Burst `/api/auth/login` or auto-provision a vector store and observe the backend ignoring those installer defaults.
+- **Remediation:** Pass the runtime envs through the backend compose service and make the auth decorators honor them at import time.
+- **Fix:** Added `TSN_STACK_NAME`, `TSN_AUTH_RATE_LIMIT`, `TSN_DISABLE_AUTH_RATE_LIMIT`, and `TSN_SSL_MODE` to the backend service env in `docker-compose.yml`; updated `backend/auth_routes.py` to resolve auth limits from env and support a QA disable flag; updated `install.py` to write/backfill `TSN_DISABLE_AUTH_RATE_LIMIT`.
+- **Verification:** `.private/qa/ubuntu-vm-20260408/reports/auth_rate_limit_burst_after_fix.json`, `.private/qa/ubuntu-vm-20260408/reports/vector_store_stack_prefix_probe.json`
+
+### BUG-454: No-cache backend rebuild hard-fails when Hugging Face is transiently unavailable
+- **Status:** Resolved
+- **Reported:** 2026-04-09
+- **Resolved:** 2026-04-09
+- **Severity:** High
+- **Category:** Installer / Docker Build / External Dependency
+- **Files:** `backend/Dockerfile`
+- **Description:** A realistic fresh-install or rebuild can fail even when the local stack is healthy because the backend image build synchronously pre-warms `SentenceTransformer('all-MiniLM-L6-v2')` during Docker build. On the Ubuntu VM, repeated `503 Service Unavailable` responses from Hugging Face caused `docker compose build --no-cache backend` to abort at the final runtime layer, blocking redeploy of unrelated changes.
+- **Steps to Reproduce:** 1) From the fresh VM clone root, run `docker compose build --no-cache backend`. 2) Hit a transient upstream outage or throttling window on Hugging Face. 3) Observe the build fail in the layer that runs `python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"` instead of degrading gracefully.
+- **Remediation:** Do not require a live Hugging Face fetch during Docker build. Move model warm-up to first-run/background startup, make it optional, or tolerate download failure with a cached/offline fallback.
+- **Fix:** Replaced the hard-required embedding prewarm in `backend/Dockerfile` with a bounded retry loop and warning-only fallback. The image now retries transient Hugging Face failures, logs a clear warning when the model still cannot be fetched, and leaves runtime lazy-download as the recovery path instead of aborting the whole build.
+- **Verification:** `docker-compose build --no-cache backend && docker-compose up -d backend` completed successfully on 2026-04-09 while Hugging Face returned repeated `429` responses during prewarm, and the rebuilt backend container returned to `healthy`.
+- **Evidence:** `.private/qa/ubuntu-vm-20260408/reports/backend_rebuild_hf_503.txt`, `.private/qa/ubuntu-vm-20260408/reports/bug454-local-no-cache-build-summary.txt`
+
+### BUG-455: Tavily is supported by backend API-key plumbing but missing from the Hub Tool APIs UI
+- **Status:** Resolved
+- **Reported:** 2026-04-09
+- **Resolved:** 2026-04-09
+- **Severity:** Medium
+- **Category:** Hub / Integrations / UI Parity
+- **Files:** `frontend/app/hub/page.tsx`, `backend/api/routes_api_keys.py`
+- **Description:** The fresh-install audit could configure Tavily only through API/backend-side paths because the Hub `Tool APIs` surface still exposes `Brave Search`, `SerpAPI (Google Services)`, and `Amadeus`, but no Tavily card. Backend support exists (`routes_api_keys.py` advertises `tavily`), so the release surface is inconsistent for normal self-serve setup.
+- **Steps to Reproduce:** 1) Log in as tenant admin and open `/hub`. 2) Switch to `Tool APIs`. 3) Observe no Tavily option even though backend API key services include a `tavily` provider.
+- **Remediation:** Add Tavily to the Hub Tool APIs configuration surface or remove/backend-gate the unsupported provider until the UI path exists.
+- **Fix:** Added Tavily to the Hub `Tool APIs` catalog and updated the built-in tools copy so the UI now matches the backend-supported providers.
+- **Verification:** On the rebuilt local stack, Playwright confirmed the Tavily card appears in `/hub` → `Tool APIs`, the built-in tools copy now reads `Brave/Tavily/Google`, and the Configure modal opens with `Tavily` preselected in the service dropdown.
+- **Evidence:** `.private/qa/ubuntu-vm-20260408/reports/tavily_hub_gap.md`, `.private/qa/ubuntu-vm-20260408/reports/bug455-tavily-ui-local-summary.txt`, `output/playwright/hub-tool-apis-no-tavily-20260409.png`, `output/playwright/bug455-tavily-hub-local-20260409.png`
+
+### BUG-456: Exported OpenAPI spec is not generator-friendly enough for a reliable API client
+- **Status:** Resolved
+- **Reported:** 2026-04-09
+- **Resolved:** 2026-04-09
+- **Severity:** Medium
+- **Category:** API v1 / OpenAPI / SDK Generation
+- **Files:** `backend/app.py`, `backend/api/v1/*`
+- **Description:** Direct API v1 calls worked in the VM audit, but the generated client did not round-trip the same contracts cleanly. The exported `/openapi.json` led the generated client to parse `GET /api/v1/agents` as a raw array instead of the live `{data, meta}` wrapper, and even the generated health call returned parsed value `None` despite HTTP 200. The API is usable over raw HTTP but not stable enough for smooth client generation.
+- **Steps to Reproduce:** 1) Download `/openapi.json` from the fresh install. 2) Generate a client from that spec. 3) Call health and agents endpoints through the generated SDK. 4) Compare the parsed results against direct HTTP responses.
+- **Remediation:** Tighten the OpenAPI response models and schema generation so generated SDKs preserve the live response envelopes and scalar response shapes.
+- **Fix:** Added explicit response models for `/api/health` and `/api/readiness`, introduced public-only API v1 response models to avoid schema collisions, and exposed a dedicated `/api/v1/openapi.json` plus `/api/v1/docs` for SDK generation without legacy/internal routes mixed in.
+- **Verification:** The rebuilt stack now serves `Tsushin Public API v1` at `/api/v1/openapi.json`, excludes `/api/health` from that public schema, and emits `#/components/schemas/PublicPaginatedAgentResponse` for `GET /api/v1/agents`. Regenerating a client with `openapi-python-client` produced a typed `PublicPaginatedAgentResponse`, and a post-login call parsed successfully instead of collapsing to `None` or an untyped array.
+- **Evidence:** `.private/qa/ubuntu-vm-20260408/reports/openapi.json`, `.private/qa/ubuntu-vm-20260408/reports/api_v1_report.json`, `.private/qa/ubuntu-vm-20260408/reports/generated_client_report.json`, `.private/qa/ubuntu-vm-20260408/reports/openapi_generated_client_mismatch.md`, `.private/qa/ubuntu-vm-20260408/reports/bug456-local-v1-openapi-summary.json`
+
+### BUG-457: Setup wizard accepts 6-character admin passwords while later auth flows require 8
+- **Status:** Resolved
+- **Reported:** 2026-04-09
+- **Resolved:** 2026-04-09
+- **Severity:** Medium
+- **Category:** Setup Wizard / Auth / Validation Consistency
+- **Files:** `frontend/app/setup/page.tsx`, `backend/auth_service.py`, `backend/auth_routes.py`, `backend/auth_password_policy.py`
+- **Description:** The fresh-install onboarding flow accepted `test123` during `/setup`, but later password-management routes enforce an 8-character minimum. That mismatch forced a post-setup owner password rotation during the audit (`test12345`) and creates a confusing first-run experience where the product accepts a password it later rejects under its own auth rules.
+- **Steps to Reproduce:** 1) Complete `/setup` with a 6- or 7-character tenant admin password. 2) Log in successfully. 3) Attempt a later password-change path that enforces the 8-character validation. 4) Observe the user is now held to a stricter policy than the setup wizard used.
+- **Remediation:** Unify password policy enforcement across setup, signup, change-password, and reset-password flows, with shared validation and matching frontend copy.
+- **Fix:** Added shared backend password policy helper (`MIN_PASSWORD_LENGTH=8`) and switched setup/global-admin preflight, signup, reset-password, change-password, and invitation-accept password checks to use it. Updated setup UI validation/copy to `Min 8 characters` and aligned the inline error text with backend responses.
+- **Verification:** `PYTEST_ADDOPTS='' pytest -q -c /dev/null backend/tests/test_auth_security_fixes.py -k BUG457UnifiedPasswordPolicy` (4 passed during the first fix pass, 5 passed including the setup-wizard follow-up regression after the local re-test). Browser validation on `https://localhost/setup` showed `minLength=8` with the native too-short message, and `POST /api/auth/signup` with a 7-character password returned `400` with `Password must be at least 8 characters`.
+- **Evidence:** `.private/qa/ubuntu-vm-20260408/reports/setup_password_policy_mismatch.md`, `.private/qa/ubuntu-vm-20260408/reports/bug457-password-policy-local-summary.txt`, `.private/qa/ubuntu-vm-20260408/audit-notes.txt`
+
+### BUG-458: Setup wizard converts a short tenant-admin password into a generic 500 instead of a validation 400
+- **Status:** Resolved
+- **Reported:** 2026-04-09
+- **Resolved:** 2026-04-09
+- **Severity:** Medium
+- **Category:** Setup Wizard / Auth / Error Handling
+- **Files:** `backend/auth_routes.py`, `backend/tests/test_auth_security_fixes.py`
+- **Description:** After the shared 8-character password policy was unified, the fresh-install setup wizard still handled a short tenant-admin password incorrectly. `AuthService.signup()` raised `AuthenticationError("Password must be at least 8 characters")`, but `setup_wizard()` only special-cased `HTTPException` and treated the auth validation as an unexpected exception, returning a generic `500 Setup failed. Check server logs for details.` instead of surfacing the real validation error to the installer UI.
+- **Steps to Reproduce:** 1) On a fresh stack, call `POST /api/auth/setup-wizard` with a 6- or 7-character `admin_password`. 2) Observe the backend catch path wrap the validation failure as a generic 500 instead of returning the password-policy message with status 400.
+- **Remediation:** Map `AuthenticationError` to `HTTPException(status_code=400, detail=str(e))` inside `setup_wizard()` and keep a regression so fresh-install auth validations surface consistently.
+- **Fix:** Added an explicit `except AuthenticationError` branch in `setup_wizard()` that rolls back and returns a 400 with the original validation message. Added a focused regression test to lock the mapping down.
+- **Verification:** `PYTEST_ADDOPTS='' pytest -q -c /dev/null backend/tests/test_auth_security_fixes.py -k 'BUG457UnifiedPasswordPolicy or setup_wizard_maps_short_tenant_admin_password_to_400'` passed after the fix, and the rebuilt backend container returned to `healthy`.
+- **Evidence:** `.private/qa/ubuntu-vm-20260408/reports/bug458-setup-wizard-short-password-summary.txt`
 
 ## macOS Loopback & Runtime Isolation Audit (2026-04-08)
 

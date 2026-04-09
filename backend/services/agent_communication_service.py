@@ -85,6 +85,7 @@ class AgentCommunicationService:
     DEFAULT_TIMEOUT_SECONDS = 60
     DEFAULT_RATE_LIMIT_RPM = 30
     GLOBAL_RATE_LIMIT_RPM = 100
+    AUTO_MANAGED_SKILL_MARKER = "__tsn_auto_managed_permission_skill__"
     MAX_MESSAGE_LENGTH = 4000
     MAX_CONTEXT_LENGTH = 2000
 
@@ -448,43 +449,71 @@ class AgentCommunicationService:
         max_depth: int = 3,
         rate_limit_rpm: int = 30,
     ) -> AgentCommunicationPermission:
-        perm = AgentCommunicationPermission(
-            tenant_id=self.tenant_id,
-            source_agent_id=source_agent_id,
-            target_agent_id=target_agent_id,
-            is_enabled=True,
-            max_depth=max_depth,
-            rate_limit_rpm=rate_limit_rpm,
-        )
-        self.db.add(perm)
-        self.db.commit()
-        self.db.refresh(perm)
-        self._audit_log("agent_comm.permission.create", source_agent_id, target_agent_id, {
-            "permission_id": perm.id,
-        })
-        return perm
+        try:
+            perm = AgentCommunicationPermission(
+                tenant_id=self.tenant_id,
+                source_agent_id=source_agent_id,
+                target_agent_id=target_agent_id,
+                is_enabled=True,
+                max_depth=max_depth,
+                rate_limit_rpm=rate_limit_rpm,
+            )
+            self.db.add(perm)
+            self._ensure_agent_communication_skill(
+                source_agent_id,
+                allow_enable_auto_managed=True,
+            )
+            self.db.commit()
+            self.db.refresh(perm)
+            self._audit_log("agent_comm.permission.create", source_agent_id, target_agent_id, {
+                "permission_id": perm.id,
+            })
+            return perm
+        except Exception:
+            self.db.rollback()
+            logger.exception("Failed to create agent communication permission")
+            raise
 
     def update_permission(self, perm_id: int, **kwargs) -> Optional[AgentCommunicationPermission]:
-        perm = (
-            self.db.query(AgentCommunicationPermission)
-            .filter(
-                AgentCommunicationPermission.id == perm_id,
-                AgentCommunicationPermission.tenant_id == self.tenant_id,
+        try:
+            perm = (
+                self.db.query(AgentCommunicationPermission)
+                .filter(
+                    AgentCommunicationPermission.id == perm_id,
+                    AgentCommunicationPermission.tenant_id == self.tenant_id,
+                )
+                .first()
             )
-            .first()
-        )
-        if not perm:
-            return None
-        for key in ("is_enabled", "max_depth", "rate_limit_rpm"):
-            if key in kwargs:
-                setattr(perm, key, kwargs[key])
-        perm.updated_at = datetime.utcnow()
-        self.db.commit()
-        self.db.refresh(perm)
-        self._audit_log("agent_comm.permission.update", perm.source_agent_id, perm.target_agent_id, {
-            "permission_id": perm.id, "changes": kwargs,
-        })
-        return perm
+            if not perm:
+                return None
+            explicit_enable = kwargs.get("is_enabled") is True
+            explicit_disable = kwargs.get("is_enabled") is False
+            for key in ("is_enabled", "max_depth", "rate_limit_rpm"):
+                if key in kwargs:
+                    setattr(perm, key, kwargs[key])
+
+            if explicit_enable:
+                self._ensure_agent_communication_skill(
+                    perm.source_agent_id,
+                    allow_enable_auto_managed=True,
+                )
+            elif explicit_disable:
+                self._disable_auto_managed_agent_communication_skill_if_unused(
+                    perm.source_agent_id,
+                    exclude_permission_id=perm.id,
+                )
+
+            perm.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(perm)
+            self._audit_log("agent_comm.permission.update", perm.source_agent_id, perm.target_agent_id, {
+                "permission_id": perm.id, "changes": kwargs,
+            })
+            return perm
+        except Exception:
+            self.db.rollback()
+            logger.exception("Failed to update agent communication permission")
+            raise
 
     def delete_permission(self, perm_id: int) -> bool:
         perm = (
@@ -497,10 +526,15 @@ class AgentCommunicationService:
         )
         if not perm:
             return False
+        source_agent_id = perm.source_agent_id
         self._audit_log("agent_comm.permission.delete", perm.source_agent_id, perm.target_agent_id, {
             "permission_id": perm.id,
         })
         self.db.delete(perm)
+        self._disable_auto_managed_agent_communication_skill_if_unused(
+            source_agent_id,
+            exclude_permission_id=perm.id,
+        )
         self.db.commit()
         return True
 
@@ -594,6 +628,107 @@ class AgentCommunicationService:
             Agent.tenant_id == self.tenant_id,
         ).first()
 
+    def _get_default_agent_communication_config(self, *, auto_managed: bool) -> Dict[str, Any]:
+        from agent.skills.agent_communication_skill import AgentCommunicationSkill
+
+        config = AgentCommunicationSkill.get_default_config()
+        if auto_managed:
+            config = {**config, self.AUTO_MANAGED_SKILL_MARKER: True}
+        return config
+
+    def _is_auto_managed_agent_communication_skill(self, skill: AgentSkill) -> bool:
+        return bool(isinstance(skill.config, dict) and skill.config.get(self.AUTO_MANAGED_SKILL_MARKER))
+
+    def _ensure_agent_communication_skill(
+        self,
+        agent_id: int,
+        *,
+        allow_enable_auto_managed: bool = False,
+    ) -> AgentSkill:
+        """
+        Ensure the source agent can invoke the A2A skill.
+
+        Permission rows define who may talk to whom, but the tool itself is
+        only exposed when the source agent has an enabled `agent_communication`
+        AgentSkill. Only auto-managed skill rows are re-enabled here so
+        manually provisioned skill rows remain the source of truth, while
+        auto-managed rows continue to track permission lifecycle changes.
+        """
+        skill = (
+            self.db.query(AgentSkill)
+            .filter(
+                AgentSkill.agent_id == agent_id,
+                AgentSkill.skill_type == "agent_communication",
+            )
+            .first()
+        )
+
+        if skill:
+            auto_managed = self._is_auto_managed_agent_communication_skill(skill)
+            if not skill.config:
+                skill.config = self._get_default_agent_communication_config(auto_managed=auto_managed)
+            if allow_enable_auto_managed and auto_managed and not skill.is_enabled:
+                skill.is_enabled = True
+                logger.info(f"Re-enabled auto-managed agent_communication skill for agent {agent_id}")
+            return skill
+
+        skill = AgentSkill(
+            agent_id=agent_id,
+            skill_type="agent_communication",
+            is_enabled=True,
+            config=self._get_default_agent_communication_config(auto_managed=True),
+        )
+        self.db.add(skill)
+        logger.info(f"Created agent_communication skill for agent {agent_id}")
+        return skill
+
+    def _count_enabled_permissions_for_agent(
+        self,
+        agent_id: int,
+        *,
+        exclude_permission_id: Optional[int] = None,
+    ) -> int:
+        query = (
+            self.db.query(AgentCommunicationPermission.id)
+            .filter(
+                AgentCommunicationPermission.tenant_id == self.tenant_id,
+                AgentCommunicationPermission.source_agent_id == agent_id,
+                AgentCommunicationPermission.is_enabled == True,
+            )
+        )
+        if exclude_permission_id is not None:
+            query = query.filter(AgentCommunicationPermission.id != exclude_permission_id)
+        return query.count()
+
+    def _disable_auto_managed_agent_communication_skill_if_unused(
+        self,
+        agent_id: int,
+        *,
+        exclude_permission_id: Optional[int] = None,
+    ) -> None:
+        if self._count_enabled_permissions_for_agent(
+            agent_id,
+            exclude_permission_id=exclude_permission_id,
+        ) > 0:
+            return
+
+        skill = (
+            self.db.query(AgentSkill)
+            .filter(
+                AgentSkill.agent_id == agent_id,
+                AgentSkill.skill_type == "agent_communication",
+            )
+            .first()
+        )
+        if not skill or not skill.is_enabled:
+            return
+
+        if not self._is_auto_managed_agent_communication_skill(skill):
+            return
+
+        skill.is_enabled = False
+        logger.info(f"Disabled auto-managed agent_communication skill for agent {agent_id}")
+
     def _check_permission(self, source_id: int, target_id: int) -> Optional[AgentCommunicationPermission]:
         return (
             self.db.query(AgentCommunicationPermission)
@@ -685,6 +820,9 @@ class AgentCommunicationService:
             "agent_id": target_agent.id,
             "model_provider": target_agent.model_provider,
             "model_name": target_agent.model_name,
+            # Preserve per-instance provider routing so delegated runs use the
+            # same API credentials/base URL as direct chats.
+            "provider_instance_id": getattr(target_agent, "provider_instance_id", None),
             "system_prompt": target_agent.system_prompt,
             "keywords": target_agent.keywords or [],
             "memory_size": target_agent.memory_size or 1000,
