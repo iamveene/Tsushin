@@ -779,7 +779,7 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
                             </div>
                             <div className="flex items-start gap-2">
                               <span className="text-white/60 font-medium">{fact.key}:</span>
-                              <span className="text-white/90 flex-1">{fact.value}</span>
+                              <span className="text-white/90 flex-1 break-words min-w-0">{fact.value}</span>
                             </div>
                           </>
                         )}

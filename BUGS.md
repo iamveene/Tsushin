@@ -1,5 +1,5 @@
 # Tsushin Bug Tracker
-**Open:** 6 | **In Progress:** 0 | **Resolved:** 488
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 494
 **Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)** + **Post-Release Stabilization (2026-04-06)** + **Community PR #8 (2026-04-06)** + **Community PRs #9, #10 (2026-04-06)** + **Provider Instance Validation (2026-04-06)** + **Wave 1 Security + Wave 2 Critical Functionality Audit (2026-04-06)** + **Ship-Gate QA (2026-04-06)** + **Onboarding Overlap Audit (2026-04-06)** + **UI/UX Exploration Audit (2026-04-06)** + **Ubuntu VM E2E Install Audit (2026-04-07)** + **Full Bug Sprint — 26 bugs resolved (2026-04-07)** + **Release 0.6.0 Re-Validation Audit (2026-04-07)** + **Ubuntu VM Fresh Install QA (2026-04-07)** + **Ubuntu VM Re-Test (2026-04-07)** + **Fresh Install Docker Naming & Runtime Management Audit (2026-04-07)** + **Fresh Install Dual-Surface Regression Audit (2026-04-07)** + **Fresh Install Browser vs API Audit (2026-04-07)** + **Fresh Install Develop Audit & Restore (2026-04-07)** + **Ubuntu VM Fresh Install Develop Coverage Audit (2026-04-07)** + **Stabilization Sprint & Re-Validation (2026-04-07)** + **Fresh Install Stabilization Closeout (2026-04-08)** + **v0.6.0 Comprehensive E2E Audit — 6 findings (2026-04-08)** + **Ubuntu VM Fresh Install Full QA (2026-04-08)** + **macOS Fresh Install QA (2026-04-08)** + **macOS Loopback & Runtime Isolation Audit (2026-04-08)** + **Ubuntu VM Fresh Install Follow-up (2026-04-09)** + **Local Re-Test & Setup Validation Follow-up (2026-04-09)** + **macOS Fresh Install Automated QA (2026-04-09)**
 
 ## macOS Fresh Install Automated QA (2026-04-09)
@@ -9,7 +9,7 @@
 **Total findings: 6** (Medium: 4, Low: 2)
 
 ### BUG-459: Docker Compose project name collision during parallel fresh installs removes stopped original containers
-- **Status:** Open
+- **Status:** Resolved (2026-04-09) — Installer now writes `COMPOSE_PROJECT_NAME` to `.env` derived from `TSN_STACK_NAME`, ensuring each install gets a unique Docker Compose project name.
 - **Reported:** 2026-04-09
 - **Severity:** Medium
 - **Category:** Installer / Docker Compose / Isolation
@@ -19,7 +19,7 @@
 - **Remediation:** Set `COMPOSE_PROJECT_NAME` in the `.env` to a unique value derived from `TSN_STACK_NAME`, or have the installer pass `-p` to Docker Compose, so the project name differs between installations.
 
 ### BUG-460: HTTP-only fresh installs produce 401 cascades when accessed via localhost instead of LAN IP
-- **Status:** Open
+- **Status:** Resolved (2026-04-09) — Frontend `client.ts` now dynamically resolves `API_URL` using `window.location.hostname` on HTTP installs, ensuring the API hostname always matches the browser's cookie scope.
 - **Reported:** 2026-04-09
 - **Severity:** Medium
 - **Category:** Auth / Cookie / Frontend
@@ -29,7 +29,7 @@
 - **Remediation:** Either set `NEXT_PUBLIC_API_URL=http://localhost:8081` when access type is local/HTTP, proxy API calls through the Next.js server to avoid cross-origin cookie issues, or add `SameSite=None` with HTTPS to allow cross-origin cookies. The simplest fix for dev use is to match `NEXT_PUBLIC_API_URL` to the frontend host.
 
 ### BUG-461: `kokoro-tts` container name does not follow `TSN_STACK_NAME` naming convention
-- **Status:** Open
+- **Status:** Resolved (2026-04-09) — Changed `container_name` to `${TSN_STACK_NAME:-tsushin}-kokoro-tts` in `docker-compose.yml`.
 - **Reported:** 2026-04-09
 - **Severity:** Low
 - **Category:** Docker / Naming Convention
@@ -39,7 +39,7 @@
 - **Remediation:** Change `container_name: kokoro-tts` to `container_name: ${TSN_STACK_NAME:-tsushin}-kokoro-tts` in `docker-compose.yml`.
 
 ### BUG-462: `/inject` slash command not recognized via Playground API chat
-- **Status:** Open
+- **Status:** Resolved (2026-04-09) — Added `SlashCommandService` interception in both sync and async Playground chat paths (`routes_playground.py` and `queue_worker.py`) before `PlaygroundService.send_message()`. Commands are now detected and executed before reaching the LLM.
 - **Reported:** 2026-04-09
 - **Severity:** Medium
 - **Category:** Slash Commands / Playground
@@ -49,7 +49,7 @@
 - **Remediation:** Ensure the playground chat endpoint's command parser intercepts slash commands before routing to the LLM. Verify the command dispatcher is wired into the sync chat path.
 
 ### BUG-463: `/status` slash command treated as regular text in Playground chat
-- **Status:** Open
+- **Status:** Resolved (2026-04-09) — Same fix as BUG-462. Slash command interception now covers all commands in the Playground path.
 - **Reported:** 2026-04-09
 - **Severity:** Medium
 - **Category:** Slash Commands / Playground
@@ -59,7 +59,7 @@
 - **Remediation:** Same root cause as BUG-462 — wire the command dispatcher into the sync chat path.
 
 ### BUG-464: Facts text overflows the container area in Playground Memory Inspector
-- **Status:** Open
+- **Status:** Resolved (2026-04-09) — Added `break-words min-w-0` Tailwind classes to the fact value `<span>` in `MemoryInspector.tsx`. The `min-w-0` overrides the flex child default `min-width: auto`, allowing `overflow-wrap: break-word` to take effect. Verified via Playwright CSS measurement: zero overflow.
 - **Reported:** 2026-04-09
 - **Severity:** Low
 - **Category:** UI / CSS / Playground

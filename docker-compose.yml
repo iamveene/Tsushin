@@ -225,7 +225,7 @@ services:
   # ==========================================================================
   kokoro-tts:
     image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4
-    container_name: kokoro-tts
+    container_name: ${TSN_STACK_NAME:-tsushin}-kokoro-tts
     profiles:
       - tts
     ports:

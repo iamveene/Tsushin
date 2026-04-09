@@ -931,6 +931,7 @@ TSN_APP_HOST=0.0.0.0
 TSN_APP_PORT={self.config['TSN_APP_PORT']}
 FRONTEND_PORT={self.config['FRONTEND_PORT']}
 TSN_STACK_NAME={self.config.get('TSN_STACK_NAME', 'tsushin')}
+COMPOSE_PROJECT_NAME={self.config.get('TSN_STACK_NAME', 'tsushin')}  # Must equal TSN_STACK_NAME for consistent naming
 TSN_BACKEND_URL={backend_url}
 TSN_FRONTEND_URL={frontend_url}
 TSN_LOG_LEVEL=INFO

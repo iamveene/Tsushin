@@ -7,7 +7,29 @@
  * Using the absolute URL ensures HTTP-only installs work correctly without a
  * Caddy reverse-proxy (fixes BUG-202: relative paths 404 on port 3030).
  */
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
+/**
+ * BUG-460: For HTTP installs, the build-time API URL may use a LAN IP while
+ * the user accesses the frontend via localhost (or vice-versa). httpOnly
+ * cookies are scoped to the browser's hostname, so cross-origin API calls on
+ * plain HTTP silently drop the session cookie → 401 cascade.
+ *
+ * Fix: on the client side, replace the API hostname with window.location.hostname
+ * so cookies always match. Server-side (SSR) keeps the configured URL.
+ */
+function resolveApiUrl(): string {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
+  if (typeof window === 'undefined') return envUrl
+  try {
+    const apiUrl = new URL(envUrl)
+    if (apiUrl.protocol === 'http:' && apiUrl.hostname !== window.location.hostname) {
+      apiUrl.hostname = window.location.hostname
+      return apiUrl.toString().replace(/\/$/, '')
+    }
+  } catch { /* URL parse error — fall through */ }
+  return envUrl
+}
+
+const API_URL = resolveApiUrl()
 
 /**
  * Helper function to handle API response errors with user-friendly messages

@@ -309,6 +309,40 @@ class QueueWorker:
         thread_id = payload.get("thread_id")
         media_type = payload.get("media_type")
 
+        # BUG-462/BUG-463: Intercept slash commands before normal message processing
+        if message.strip().startswith('/'):
+            from services.slash_command_service import SlashCommandService
+            slash_service = SlashCommandService(db)
+            command_info = slash_service.detect_command(message, item.tenant_id)
+            if command_info:
+                slash_result = await slash_service.execute_command(
+                    message=message,
+                    tenant_id=item.tenant_id,
+                    agent_id=item.agent_id,
+                    sender_key=payload.get("sender_key", f"playground_user_{user_id}"),
+                    channel="playground",
+                    user_id=user_id
+                )
+                if slash_result and slash_result.get("message"):
+                    result_payload = {
+                        "status": "success",
+                        "message": slash_result["message"],
+                        "agent_name": None,
+                        "timestamp": None,
+                        "thread_renamed": False,
+                        "new_thread_title": None,
+                        "kb_used": [],
+                    }
+                    # Send result via WebSocket so the frontend UI updates
+                    if user_id:
+                        from websocket_manager import manager as ws_manager
+                        await ws_manager.send_to_user(user_id, {
+                            "type": "queue_message_completed",
+                            "queue_id": item.id,
+                            "result": result_payload,
+                        })
+                    return result_payload
+
         service = PlaygroundService(db)
         result = await service.send_message(
             user_id=user_id,

@@ -273,6 +273,38 @@ async def send_chat_message(
                 )
 
         # Not a project command, proceed with normal message handling
+
+        # BUG-462/BUG-463: Check for slash commands before normal message processing.
+        # Previously only the WhatsApp/Telegram router intercepted slash commands;
+        # the Playground sync and async paths both skipped straight to send_message().
+        if request.message.strip().startswith('/'):
+            from services.slash_command_service import SlashCommandService
+            slash_service = SlashCommandService(db)
+            command_info = slash_service.detect_command(request.message, tenant_id)
+            if command_info:
+                slash_result = await slash_service.execute_command(
+                    message=request.message,
+                    tenant_id=tenant_id,
+                    agent_id=request.agent_id,
+                    sender_key=sender_key,
+                    channel="playground",
+                    user_id=current_user.id
+                )
+                if slash_result and slash_result.get("message"):
+                    return PlaygroundChatResponse(
+                        status="success",
+                        message=slash_result["message"],
+                        agent_name=agent_name,
+                        timestamp=datetime.utcnow().isoformat() + "Z"
+                    )
+                # Command was recognized but returned no message — don't forward to LLM
+                return PlaygroundChatResponse(
+                    status="success",
+                    message=slash_result.get("message", "Command executed.") if slash_result else "Unknown command.",
+                    agent_name=agent_name,
+                    timestamp=datetime.utcnow().isoformat() + "Z"
+                )
+
         # Async mode (default): enqueue the message for background processing
         if not sync:
             from services.message_queue_service import MessageQueueService

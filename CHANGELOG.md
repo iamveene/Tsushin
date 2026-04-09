@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Sprint — BUG-459 to BUG-464 resolved (`develop`, 2026-04-09)
+
+- **BUG-459 (Medium):** Fixed Docker Compose project name collision between parallel installs. The installer now writes `COMPOSE_PROJECT_NAME` to `.env` derived from `TSN_STACK_NAME`, so each install gets a unique project name and won't recreate stopped containers from another install.
+- **BUG-460 (Medium):** Fixed 401 cascade when accessing HTTP-only installs via `localhost` instead of LAN IP. Frontend `client.ts` now dynamically resolves `API_URL` to match `window.location.hostname` on HTTP installs, ensuring the httpOnly session cookie scope always matches the API endpoint origin.
+- **BUG-461 (Low):** Fixed `kokoro-tts` container name to follow the `${TSN_STACK_NAME:-tsushin}-kokoro-tts` naming convention used by all other services in `docker-compose.yml`.
+- **BUG-462 (Medium):** Fixed `/inject` slash command not being recognized via Playground API chat. Added `SlashCommandService` interception in both sync (`routes_playground.py`) and async (`queue_worker.py`) Playground chat paths before `PlaygroundService.send_message()`, mirroring the existing WhatsApp/Telegram router pattern.
+- **BUG-463 (Medium):** Fixed `/status` slash command treated as regular text in Playground chat. Same root cause and fix as BUG-462 — all slash commands are now intercepted in the Playground path.
+- **BUG-464 (Low):** Fixed facts text overflow in Playground Memory Inspector. Added `break-words min-w-0` Tailwind classes to the fact value span in `MemoryInspector.tsx`. The `min-w-0` overrides the flex child `min-width: auto` default, allowing `overflow-wrap: break-word` to constrain long unbreakable strings.
+
 ### macOS Fresh Install Automated QA (`develop`, 2026-04-09)
 
 - Executed full automated fresh-install QA on macOS with `TSN_STACK_NAME=fresh-v060-tsushin` and `--defaults --http` mode. Covered 32+ test cases across API and Playwright browser automation.
