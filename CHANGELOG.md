@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### macOS v0.6.0 Full Feature Regression (`develop`, 2026-04-09)
+
+- Executed comprehensive v0.6.0 full feature regression on macOS (fresh install of `develop` branch), covering all 23 test cases (TC-01 to TC-23) via API and Playwright browser automation.
+- **Install & Setup:** `TSN_STACK_NAME=tsushin-fresh python3 install.py --defaults --http`; stack healthy; 6 LLM providers configured (Gemini 2.5-flash, Anthropic, OpenAI, Vertex AI, Brave, Tavily).
+- **Infrastructure (PASS):** Health/readiness/metrics 200. Toolbox auto-provisioned (`tsushin-fresh-toolbox-*`).
+- **Auth & RBAC (PASS):** Tenant owner login, OAuth2 client_credentials, X-API-Key auth, logout, global admin panel.
+- **Playground & Memory (PASS):** Chat, memory recall across sessions ("QATestUser" recalled correctly), /status + /inject + /clear slash commands, browser automation skill (navigated example.com).
+- **A2A Communications (PASS):** Permission created, playground A2A delegation from Tsushin → Kira confirmed with response "Hello! How can I help you?".
+- **Sandboxed Tools (PASS):** `/tool dig lookup domain=google.com` and `/tool nmap quick_scan target=scanme.nmap.org` both returned results.
+- **API v1 (PASS):** OAuth2 token exchange, sync/async chat, X-API-Key header auth, agents/skills/personas/tone-presets listing (returns `data` key, not `items`).
+- **Sentinel (PASS):** 5 profiles (Off/Permissive/Moderate/Aggressive/Custom); profile assignment and effective config verified; injection attempt detected by LLM (detection_mode=detect_only).
+- **Custom Skills (PARTIAL):** Instruction-type skill created successfully; script-type blocked by confusing `script_entrypoint` field validation (BUG-498).
+- **Flows (PARTIAL):** 7 templates listed; flow create/node-add/run works; `AgentNode` type causes executor failure (BUG-495); Summarization step ignores inline text (BUG-496).
+- **Vector Stores, Webhook, KB, Channel Health (PASS):** Qdrant VS instance created; webhook integration created with inbound URL; agent KB facts stored/retrieved (26 facts); channel health summary endpoint responds.
+- **Memory (PARTIAL):** Semantic search emits NumPy array ambiguity error in vector_store (BUG-497, non-fatal but degrades recall).
+- **New Bugs Found (4):** BUG-495, BUG-496, BUG-497, BUG-498.
+
 ### Ubuntu VM Fresh Install Full QA — v0.6.0 (`develop`, 2026-04-09)
 
 - Executed full automated fresh-install QA on Ubuntu 24.04 VM (10.211.55.5) — fresh clone of `develop` branch, interactive installer, full 31-case test suite via Playwright browser automation and API curl.
