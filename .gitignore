@@ -252,6 +252,21 @@ backend/test-api.html
 /output/
 /deployment-test-playbook.md
 
+# Dev/test scripts, temp files, internal notes (not for remote repo)
+backend/app.py.tmp
+backend/logs_backend.txt
+backend/logs_startup.txt
+backend/add_search_provider.py
+backend/complete_conversation*.py
+backend/complete_e2e_test.sh
+backend/execute_jt_flow.py
+backend/query_events.py
+backend/sync_mcp_databases.sh
+backend/asana_prompt.txt
+backend/hub/asana/*_old.py
+backend/hub/providers/KOKORO_TTS_FIX.md
+frontend/dark-mode-map.md
+
 # Local-only directories (QA artifacts, internal validation markdown, test data, methodology docs, brand assets)
 qa-screenshots/
 test-evidence/
