@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### macOS Fresh Install Automated QA (`develop`, 2026-04-09)
+
+- Executed full automated fresh-install QA on macOS with `TSN_STACK_NAME=fresh-v060-tsushin` and `--defaults --http` mode. Covered 32+ test cases across API and Playwright browser automation.
+- **All core features validated:** Setup wizard, auth (tenant + global admin), Watcher dashboard (8 tabs + Graph View), Studio (6 agents), Playground (chat, memory inspector, facts CRUD), Hub (AI Providers, Tool APIs, MCP Servers), all 15 Settings pages, 4 System Admin pages, Sentinel security, vector stores (Qdrant auto-provision), custom skills, sandboxed tools (dig), API v1 (agents, sync chat, OAuth), flows, projects.
+- **New Bugs Found (6):** `BUG-459` (Docker Compose project name collision removes stopped original containers), `BUG-460` (localhost access causes 401 cascade due to cross-origin httpOnly cookie), `BUG-461` (kokoro-tts naming inconsistency), `BUG-462` (`/inject` slash command not recognized via Playground sync API), `BUG-463` (`/status` slash command treated as regular text), `BUG-464` (facts text overflow in Memory Inspector panel).
+- Environment restored to pre-test state after cleanup.
+
 ### Bug Fix — BUG-453 (`develop`, 2026-04-09)
 
 - **BUG-453 (Low):** Completed the `BUG-443` auth-throttling fix for fresh installs by wiring runtime env propagation all the way into the backend container. `docker-compose.yml` now passes `TSN_STACK_NAME`, `TSN_AUTH_RATE_LIMIT`, `TSN_DISABLE_AUTH_RATE_LIMIT`, and `TSN_SSL_MODE` into `tsushin-backend`; `auth_routes.py` now resolves login/signup/setup/reset/SSO limits from env; and `install.py` persists/backfills the new auth-throttle settings in `.env`.

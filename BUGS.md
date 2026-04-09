@@ -1,6 +1,72 @@
 # Tsushin Bug Tracker
-**Open:** 0 | **In Progress:** 0 | **Resolved:** 488
-**Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)** + **Post-Release Stabilization (2026-04-06)** + **Community PR #8 (2026-04-06)** + **Community PRs #9, #10 (2026-04-06)** + **Provider Instance Validation (2026-04-06)** + **Wave 1 Security + Wave 2 Critical Functionality Audit (2026-04-06)** + **Ship-Gate QA (2026-04-06)** + **Onboarding Overlap Audit (2026-04-06)** + **UI/UX Exploration Audit (2026-04-06)** + **Ubuntu VM E2E Install Audit (2026-04-07)** + **Full Bug Sprint — 26 bugs resolved (2026-04-07)** + **Release 0.6.0 Re-Validation Audit (2026-04-07)** + **Ubuntu VM Fresh Install QA (2026-04-07)** + **Ubuntu VM Re-Test (2026-04-07)** + **Fresh Install Docker Naming & Runtime Management Audit (2026-04-07)** + **Fresh Install Dual-Surface Regression Audit (2026-04-07)** + **Fresh Install Browser vs API Audit (2026-04-07)** + **Fresh Install Develop Audit & Restore (2026-04-07)** + **Ubuntu VM Fresh Install Develop Coverage Audit (2026-04-07)** + **Stabilization Sprint & Re-Validation (2026-04-07)** + **Fresh Install Stabilization Closeout (2026-04-08)** + **v0.6.0 Comprehensive E2E Audit — 6 findings (2026-04-08)** + **Ubuntu VM Fresh Install Full QA (2026-04-08)** + **macOS Fresh Install QA (2026-04-08)** + **macOS Loopback & Runtime Isolation Audit (2026-04-08)** + **Ubuntu VM Fresh Install Follow-up (2026-04-09)** + **Local Re-Test & Setup Validation Follow-up (2026-04-09)**
+**Open:** 6 | **In Progress:** 0 | **Resolved:** 488
+**Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)** + **Post-Release Stabilization (2026-04-06)** + **Community PR #8 (2026-04-06)** + **Community PRs #9, #10 (2026-04-06)** + **Provider Instance Validation (2026-04-06)** + **Wave 1 Security + Wave 2 Critical Functionality Audit (2026-04-06)** + **Ship-Gate QA (2026-04-06)** + **Onboarding Overlap Audit (2026-04-06)** + **UI/UX Exploration Audit (2026-04-06)** + **Ubuntu VM E2E Install Audit (2026-04-07)** + **Full Bug Sprint — 26 bugs resolved (2026-04-07)** + **Release 0.6.0 Re-Validation Audit (2026-04-07)** + **Ubuntu VM Fresh Install QA (2026-04-07)** + **Ubuntu VM Re-Test (2026-04-07)** + **Fresh Install Docker Naming & Runtime Management Audit (2026-04-07)** + **Fresh Install Dual-Surface Regression Audit (2026-04-07)** + **Fresh Install Browser vs API Audit (2026-04-07)** + **Fresh Install Develop Audit & Restore (2026-04-07)** + **Ubuntu VM Fresh Install Develop Coverage Audit (2026-04-07)** + **Stabilization Sprint & Re-Validation (2026-04-07)** + **Fresh Install Stabilization Closeout (2026-04-08)** + **v0.6.0 Comprehensive E2E Audit — 6 findings (2026-04-08)** + **Ubuntu VM Fresh Install Full QA (2026-04-08)** + **macOS Fresh Install QA (2026-04-08)** + **macOS Loopback & Runtime Isolation Audit (2026-04-08)** + **Ubuntu VM Fresh Install Follow-up (2026-04-09)** + **Local Re-Test & Setup Validation Follow-up (2026-04-09)** + **macOS Fresh Install Automated QA (2026-04-09)**
+
+## macOS Fresh Install Automated QA (2026-04-09)
+
+**Scope:** Full automated fresh-install QA on macOS using a disposable clone at `.private/installations/fresh-install-v060-20260409/tsushin` with `TSN_STACK_NAME=fresh-v060-tsushin python3 install.py --defaults --http`. Original Tsushin containers were stopped first to avoid port conflicts. Coverage combined API-led validation and Playwright browser automation across setup/auth, all settings pages, playground chat, memory inspector, sentinel, vector stores, MCP servers, custom skills, sandboxed tools, API v1, flows, projects, Graph View, and system admin. WhatsApp QR auth was skipped per user request.
+
+**Total findings: 6** (Medium: 4, Low: 2)
+
+### BUG-459: Docker Compose project name collision during parallel fresh installs removes stopped original containers
+- **Status:** Open
+- **Reported:** 2026-04-09
+- **Severity:** Medium
+- **Category:** Installer / Docker Compose / Isolation
+- **Files:** `install.py`, `docker-compose.yml`
+- **Description:** When a fresh install is performed in a cloned directory named "tsushin", Docker Compose v2 derives the same project name (`tsushin`) as the original installation. Running `docker compose up --build -d` from the fresh install directory causes Docker Compose to "Recreate" (remove + replace) the stopped original containers (`tsushin-backend`, `tsushin-frontend`, `tsushin-postgres`, `tsushin-docker-proxy`) because it considers them part of the same project. Only orphan containers from the SSL overlay (`tsushin-proxy`) and external MCP containers survive. This means `docker start` cannot be used to restore the original stack — `docker compose up -d` from the original directory is required.
+- **Steps to Reproduce:** 1) Stop all original tsushin containers via `docker stop`. 2) Clone the repo into a directory ending with `tsushin`. 3) Run `TSN_STACK_NAME=fresh-v060-tsushin python3 install.py --defaults --http`. 4) Observe Docker Compose logs showing "Recreate" for the original stopped containers.
+- **Remediation:** Set `COMPOSE_PROJECT_NAME` in the `.env` to a unique value derived from `TSN_STACK_NAME`, or have the installer pass `-p` to Docker Compose, so the project name differs between installations.
+
+### BUG-460: HTTP-only fresh installs produce 401 cascades when accessed via localhost instead of LAN IP
+- **Status:** Open
+- **Reported:** 2026-04-09
+- **Severity:** Medium
+- **Category:** Auth / Cookie / Frontend
+- **Files:** `frontend/lib/client.ts`, `install.py`
+- **Description:** The installer sets `NEXT_PUBLIC_API_URL=http://<LAN_IP>:8081` (e.g., `http://192.168.15.2:8081`). When a user accesses the frontend via `http://localhost:3030` (the most natural dev URL on macOS), the login sets an httpOnly cookie scoped to `localhost`. Subsequent API calls from the frontend go to `http://192.168.15.2:8081`, a different origin. The browser does not send the `localhost` cookie cross-origin, causing all Watcher dashboard API calls to return 401 and producing a "Session expired" error cascade (44+ console errors within seconds of login).
+- **Steps to Reproduce:** 1) Run the HTTP-only installer on macOS. 2) Open `http://localhost:3030` in a browser. 3) Login successfully (redirects to dashboard). 4) Observe 401 errors on all dashboard data API calls in the browser console.
+- **Remediation:** Either set `NEXT_PUBLIC_API_URL=http://localhost:8081` when access type is local/HTTP, proxy API calls through the Next.js server to avoid cross-origin cookie issues, or add `SameSite=None` with HTTPS to allow cross-origin cookies. The simplest fix for dev use is to match `NEXT_PUBLIC_API_URL` to the frontend host.
+
+### BUG-461: `kokoro-tts` container name does not follow `TSN_STACK_NAME` naming convention
+- **Status:** Open
+- **Reported:** 2026-04-09
+- **Severity:** Low
+- **Category:** Docker / Naming Convention
+- **Files:** `docker-compose.yml`
+- **Description:** All core services use `container_name: ${TSN_STACK_NAME:-tsushin}-<service>` except `kokoro-tts`, which is hardcoded as `container_name: kokoro-tts`. This breaks the naming convention that all tsushin-related containers should include the stack name, making it inconsistent with the rest of the stack and harder to filter/manage containers programmatically.
+- **Steps to Reproduce:** 1) Run `docker ps --filter name=tsushin --format "{{.Names}}"`. 2) Observe `kokoro-tts` is not listed because it doesn't match the tsushin filter.
+- **Remediation:** Change `container_name: kokoro-tts` to `container_name: ${TSN_STACK_NAME:-tsushin}-kokoro-tts` in `docker-compose.yml`.
+
+### BUG-462: `/inject` slash command not recognized via Playground API chat
+- **Status:** Open
+- **Reported:** 2026-04-09
+- **Severity:** Medium
+- **Category:** Slash Commands / Playground
+- **Files:** `backend/api/routes_playground.py`, `backend/agent/skills/`
+- **Description:** Sending `/inject topic=test key=qa_secret value=fresh_install_2026` through the Playground API (`POST /api/playground/chat?sync=true`) does not trigger the `/inject` command handler. The agent treats the message as regular text and responds with "I'm sorry, I cannot fulfill that request as `/inject` is not a recognized command." The same behavior occurs with `/status`, which asks for a `flow_identifier` instead of returning agent status.
+- **Steps to Reproduce:** 1) Send `{"message":"/inject topic=test key=secret value=hello","agent_id":1}` to `POST /api/playground/chat?sync=true`. 2) Observe the agent treats it as regular text instead of executing the command.
+- **Remediation:** Ensure the playground chat endpoint's command parser intercepts slash commands before routing to the LLM. Verify the command dispatcher is wired into the sync chat path.
+
+### BUG-463: `/status` slash command treated as regular text in Playground chat
+- **Status:** Open
+- **Reported:** 2026-04-09
+- **Severity:** Medium
+- **Category:** Slash Commands / Playground
+- **Files:** `backend/api/routes_playground.py`
+- **Description:** Sending `/status` via the Playground API sync chat results in the agent asking "Could you please provide the `flow_identifier`?" instead of executing the system status command. The slash command prefix is not intercepted by the command dispatcher in the sync chat path.
+- **Steps to Reproduce:** 1) Send `{"message":"/status","agent_id":1}` to `POST /api/playground/chat?sync=true`. 2) Observe the agent responds as if it were a normal user message.
+- **Remediation:** Same root cause as BUG-462 — wire the command dispatcher into the sync chat path.
+
+### BUG-464: Facts text overflows the container area in Playground Memory Inspector
+- **Status:** Open
+- **Reported:** 2026-04-09
+- **Severity:** Low
+- **Category:** UI / CSS / Playground
+- **Files:** `frontend/app/playground/page.tsx` or related memory inspector component
+- **Description:** In the Playground right panel, under Memory Inspector > Facts tab, fact text (particularly long values or metadata) overflows the visible area boundaries instead of wrapping or truncating with ellipsis. This creates a visual overflow that breaks the panel layout.
+- **Steps to Reproduce:** 1) Open Playground with an agent that has facts stored. 2) Open the Memory tab > Facts sub-tab. 3) Observe long fact values extending beyond the panel boundaries.
+- **Remediation:** Add `overflow-wrap: break-word`, `word-break: break-word`, or `text-overflow: ellipsis` with `overflow: hidden` to the fact value container CSS.
 
 ## Ubuntu VM Fresh Install Follow-up (2026-04-09)
 
