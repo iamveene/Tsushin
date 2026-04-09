@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Ubuntu VM Fresh Install Full QA — v0.6.0 (`develop`, 2026-04-09)
+
+- Executed full automated fresh-install QA on Ubuntu 24.04 VM (10.211.55.5) — fresh clone of `develop` branch, interactive installer, full 31-case test suite via Playwright browser automation and API curl.
+- **Install & Setup:** Installer completed, Docker Compose stack healthy. Setup wizard created tenant org "Tsushin QA". All 6 LLM providers configured (Gemini, Anthropic, OpenAI, Brave Search, Tavily, Vertex AI).
+- **Infrastructure (PASS):** Health/readiness/metrics all 200. Auth throttle: 12 rapid logins, no 429.
+- **Auth & RBAC (PASS):** Tenant + global admin login, sidebar isolation, member user created — System nav hidden, `/system/tenants` redirect enforced.
+- **Core UI (PASS):** All Watcher tabs, Studio, Playground chat, Memory Inspector (facts CRUD), Flows, Hub, all 13 Settings pages, System Admin.
+- **Advanced Features (PASS):** Web Search (Brave), Image Generation, Knowledge Base (CSV → 2 chunks, semantic recall correct), Custom Skills ("QA Greeting Skill" created + tested), Sentinel (injections blocked), API v1 (OAuth2, X-API-Key, sync/async), Graph View (8 nodes, 12 connections), A2A Comms (Tsushin→Kokoro permission + delegation session logged as "completed").
+- **Partial/Fail:** TC-22 — PNG upload silently accepted but LLM cannot process (BUG-465). TC-29 — Flow message step fails with `'NoneType' object is not iterable` (BUG-466). Flow creation wizard Step 2 closes prematurely (BUG-467).
+- **Log check:** 0 ERROR/CRITICAL in backend.
+- **New Bugs Found (3):** BUG-465, BUG-466, BUG-467.
+
 ### Bug Sprint — BUG-459 to BUG-464 resolved (`develop`, 2026-04-09)
 
 - **BUG-459 (Medium):** Fixed Docker Compose project name collision between parallel installs. The installer now writes `COMPOSE_PROJECT_NAME` to `.env` derived from `TSN_STACK_NAME`, so each install gets a unique project name and won't recreate stopped containers from another install.
