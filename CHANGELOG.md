@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Ubuntu VM Fresh-Install QA (`develop`, 2026-04-10)
+
+- Executed a full real-user Ubuntu 24.04 VM audit on `10.211.55.5` using the interactive installer (`python3 install.py`), `/setup` via Playwright, and dual-surface API + browser validation across providers, vector stores, memory modes, knowledge base, Sentinel/MemGuard, Playground, A2A, MCP/custom skills, Shell Command Center, sandboxed tools, slash commands, API v1, flows, and projects.
+- **Install + setup (PASS):** Interactive install completed on ports `8081` / `3030` in HTTP-only remote mode. Tenant `Tsushin QA` was created through the browser setup wizard and the generated global-admin credentials were captured privately.
+- **Provider + runtime matrix (PASS):** Gemini, OpenAI, Anthropic, Brave Search, Tavily, Vertex AI (`us-east5`), Ollama, MCP stdio (`uvx mcp-server-fetch`), custom instruction/script skills, sandboxed tools, project knowledge, flows, and API v1 message retrieval were all revalidated successfully on the live VM.
+- **Shell Command Center (PASS):** Registered a real beacon from the Ubuntu VM, executed approved commands through the live shell integration, and captured the command result privately. The VM needed the native `python3.12-venv` package before the downloaded beacon could bootstrap cleanly.
+- **Revalidated open bugs:** `BUG-499` (fresh installs still do not auto-provision a default vector store) and `BUG-500` (Playground sync still drops the first user message, breaking same-thread recall).
+- **Reopened regressions:** `BUG-388` (shared-memory cross-thread recall is broken again) and `BUG-419` (`channel_isolated` Playground memory no longer persists across threads again).
+- **New bug:** `BUG-503` (A2A delegation triggers the `agent_communication` skill and renders a graph edge, but no communication session is created and Watcher > A2A Comms stays empty).
+- **Audit-note correction:** The disposable QA harness briefly flagged an API v1 failure because it called a nonexistent `GET /api/v1/agents/{agent_id}/threads/{thread_id}` route. Live follow-up confirmed the documented `/api/v1/agents/{agent_id}/threads/{thread_id}/messages` path still works correctly and was not logged as a product bug.
+
 ### Bug Fix Sprint — BUG-495 to BUG-498 (`develop`, 2026-04-09)
 
 - **BUG-495 (Medium):** Fixed flow execution engine rejecting `"AgentNode"` step type. Added `"AgentNode"` as an alias for `ConversationStepHandler` in `flow_engine.py`. Users can now create and run flows with `AgentNode` step types without a "No handler" runtime failure.
