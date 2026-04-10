@@ -67,8 +67,10 @@ Use this profile when reproducing the 2026-04-08 interactive Ubuntu VM audit:
    - **Create default agents:** enabled
    - **Primary provider:** Gemini
 3. Also enter OpenAI and Anthropic keys during setup so the tenant starts with multiple LLM providers available.
-4. Finish setup and capture the generated global admin credentials shown on the completion screen.
-5. Save a screenshot of the completion state to `output/playwright/`.
+4. Confirm the setup response or UI state exposes the auto-provisioned default vector store / default provider metadata before any manual vector-store creation happens later in the audit.
+5. Finish setup and capture the generated global admin credentials shown on the completion screen.
+6. Save a screenshot of the completion state to `output/playwright/`.
+7. Save the installer transcript, `.env` creation evidence, and post-install health evidence alongside the browser screenshot set.
 
 ### Pass Criteria
 
@@ -76,8 +78,10 @@ Use this profile when reproducing the 2026-04-08 interactive Ubuntu VM audit:
 |---|-------|-------|
 | 1 | `/setup` loads and submits without error | |
 | 2 | Tenant admin account is created successfully | |
-| 3 | Completion screen reveals global admin credentials | |
-| 4 | Redirect to login or dashboard succeeds after setup | |
+| 3 | Auto-provisioned default vector store metadata is visible before manual vector-store creation | |
+| 4 | Completion screen reveals global admin credentials | |
+| 5 | Redirect to login or dashboard succeeds after setup | |
+| 6 | Installer transcript, `.env`, and screenshot evidence are captured | |
 
 ---
 
@@ -671,18 +675,19 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 ### Steps
 
 1. Create or reuse one disposable agent for each mode: `isolated`, `shared`, and `channel_isolated`.
-2. In thread A, store a unique secret phrase for each agent.
-3. Open thread B and ask the same agent to recall the phrase.
-4. For `shared`, expect recall across threads.
-5. For `isolated`, expect no recall across threads.
-6. For `channel_isolated`, validate the intended per-channel behavior in Playground and confirm the Memory Inspector / shared-knowledge views match observed chat behavior.
+2. Use the API-side memory endpoints for each agent mode so the check is not limited to the visual inspector.
+3. In thread A, store a unique secret phrase for each agent and confirm it appears in the corresponding memory payload or history.
+4. Open thread B and ask the same agent to recall the phrase.
+5. For `shared`, expect recall across threads.
+6. For `isolated`, expect no recall across threads, including when checked through the API memory endpoint.
+7. For `channel_isolated`, validate the intended per-channel behavior in Playground and confirm the API memory view, Memory Inspector, and chat response all agree for both channels.
 
 ### Pass Criteria
 
 | # | Check | Pass? |
 |---|-------|-------|
-| 1 | Shared mode recalls facts across threads | |
-| 2 | Isolated mode does not leak across threads | |
+| 1 | Shared mode recalls facts across threads and via the API memory view | |
+| 2 | Isolated mode does not leak across threads or the API memory view | |
 | 3 | Channel-isolated mode behaves consistently with the configured scope | |
 | 4 | Inspector views match runtime chat behavior | |
 
@@ -694,20 +699,22 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 
 ### Steps
 
-1. In `/hub` or `/settings/vector-stores`, create one auto-provisioned **Qdrant** instance.
-2. Set Qdrant as the tenant default vector store.
+1. Before creating any manual vector store, verify the setup-time auto-provisioned default vector store exists and is marked as the tenant default in the UI or API.
+2. In `/hub` or `/settings/vector-stores`, create one additional manual **Qdrant** instance for comparison.
 3. Keep at least one agent on the built-in ChromaDB path for fallback comparison.
 4. Attach Qdrant-backed long-term memory to a test agent.
 5. Store a distinctive long-term fact, start a fresh thread, and confirm semantic recall still works.
+6. Confirm the auto-provisioned store and the manually created store are distinguishable in the list and that changing the tenant default does not remove the pre-provisioned instance.
 
 ### Pass Criteria
 
 | # | Check | Pass? |
 |---|-------|-------|
-| 1 | Qdrant instance provisions and tests healthy | |
-| 2 | Tenant default vector store saves successfully | |
-| 3 | Qdrant-backed agent recalls long-term information in a later thread | |
-| 4 | ChromaDB-backed fallback agent still works | |
+| 1 | Auto-provisioned default vector store exists before any manual creation | |
+| 2 | Manual Qdrant instance provisions and tests healthy | |
+| 3 | Tenant default vector store saves successfully | |
+| 4 | Qdrant-backed agent recalls long-term information in a later thread | |
+| 5 | ChromaDB-backed fallback agent still works | |
 
 ---
 
@@ -743,21 +750,23 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 
 1. Register a stdio MCP server using `uvx mcp-server-fetch`.
 2. Verify the server reaches a healthy or discoverable state in the Hub.
-3. Create three custom skills:
+3. If the UI or API exposes a non-stdio creation path such as SSE or HTTP, register one server through that path as well and confirm it becomes discoverable without manual database edits.
+4. Create three custom skills:
    - one instruction skill
    - one script skill
    - one MCP-backed skill
-4. Run any Sentinel scan available on save.
-5. Assign the skills to a test agent and invoke them from Playground.
+5. Run any Sentinel scan available on save.
+6. Assign the skills to a test agent and invoke them from Playground.
 
 ### Pass Criteria
 
 | # | Check | Pass? |
 |---|-------|-------|
 | 1 | MCP server registration succeeds | |
-| 2 | Instruction skill can be created, assigned, and invoked | |
-| 3 | Script skill can be created, assigned, and invoked | |
-| 4 | MCP-backed skill can be discovered and invoked | |
+| 2 | Non-stdio MCP creation works when exposed by the product, or the lack of that surface is logged as a gap | |
+| 3 | Instruction skill can be created, assigned, and invoked | |
+| 4 | Script skill can be created, assigned, and invoked | |
+| 5 | MCP-backed skill can be discovered and invoked | |
 
 ---
 
@@ -771,7 +780,8 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 2. Register a beacon from the VM in **Shell Command Center**.
 3. Execute one approved shell command through the shell integration.
 4. Execute one sandboxed tool against a safe public target such as `example.com` or `scanme.nmap.org`.
-5. In Playground, run `/shell`, `/tools`, `/status`, `/memory status`, and `/inject`.
+5. In Playground, run `/shell`, `/tools`, `/status`, `/memory status`, and one `/inject` action that includes output from the approved shell or tool run.
+6. Ask the same thread a follow-up question and confirm the injected output changes the next response rather than remaining inert context.
 
 ### Pass Criteria
 
@@ -780,8 +790,9 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 | 1 | Beacon registers and checks in successfully | |
 | 2 | Approved shell command completes and returns output | |
 | 3 | Sandboxed tool executes successfully | |
-| 4 | Slash-command routing works for all covered commands | |
-| 5 | Beacon bootstrap does not require undocumented manual recovery beyond the VM's native Python `venv` package | |
+| 4 | `/inject` can consume `/shell` or `/tool` output and affect the next response | |
+| 5 | Slash-command routing works for all covered commands | |
+| 6 | Beacon bootstrap does not require undocumented manual recovery beyond the VM's native Python `venv` package | |
 
 ---
 
@@ -799,7 +810,8 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 3. Use OAuth client-credentials auth to request a bearer token and call `GET /api/v1/flows`.
 4. Send one sync chat request and one async chat request, then poll the queue until completion.
 5. Fetch the corresponding thread and message history by listing threads with `GET /api/v1/agents/{agent_id}/threads`, then calling `GET /api/v1/agents/{agent_id}/threads/{thread_id}/messages` for the returned thread ID.
-6. Download `/openapi.json`, generate a client from the local file, and perform at least one live API call with the generated SDK.
+6. Download `/api/v1/openapi.json`, generate a client from that authoritative schema, and perform at least one live API call with the generated SDK.
+7. Sanity-check `/openapi.json` against `/api/v1/openapi.json` for drift; record any meaningful path or schema mismatch as a release issue instead of ignoring it.
 
 ### Pass Criteria
 
@@ -809,7 +821,8 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 | 2 | OAuth client-credentials auth succeeds | |
 | 3 | Sync and async chat both complete successfully | |
 | 4 | Thread and message retrieval work for completed chats | |
-| 5 | Generated client completes at least one live call | |
+| 5 | Generated client completes at least one live call from `/api/v1/openapi.json` | |
+| 6 | `/openapi.json` does not show unexpected drift versus `/api/v1/openapi.json` | |
 
 ---
 
@@ -875,8 +888,10 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 1. Trigger an A2A conversation such as Tsushin delegating to ACME Sales.
 2. Open `/agents/communication` and confirm a completed session is listed with source, target, depth, and status.
 3. Open Graph View and verify the interaction appears visually.
-4. Treat a graph edge alone as insufficient evidence. If the graph shows an A2A edge but the communication log is empty, fail the case and record the mismatch explicitly.
-5. Save screenshots for both views to `output/playwright/`.
+4. While the A2A session is active, keep Graph View open and confirm the edge or activity indicator updates in near real time rather than appearing only after a refresh.
+5. Also watch Graph View during at least one additional activity type if visible in the release, such as a project conversation, flow run, or other live activity signal, and confirm the graph reflects that activity.
+6. Treat a graph edge alone as insufficient evidence. If the graph shows an A2A edge but the communication log is empty, fail the case and record the mismatch explicitly.
+7. Save screenshots for both views to `output/playwright/`.
 
 ### Pass Criteria
 
@@ -885,4 +900,6 @@ Expected: **zero** ERROR or CRITICAL lines in backend logs; no unexpected errors
 | 1 | Communication session appears in `/agents/communication` | |
 | 2 | Session status and depth are correct | |
 | 3 | Graph View reflects the A2A interaction | |
-| 4 | Evidence screenshots are captured | |
+| 4 | Graph View updates while the A2A session is active | |
+| 5 | At least one additional visible activity type is reflected in Graph View | |
+| 6 | Evidence screenshots are captured | |
