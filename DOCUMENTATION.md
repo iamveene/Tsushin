@@ -481,6 +481,7 @@ Semantics:
 - **isolated** — each sender key has its own ring buffer. For threaded Playground/API chats, Tsushin uses a canonical thread-scoped sender key, so one thread cannot recall another thread's isolated memory.
 - **shared** — buffer is shared across senders for the agent.
 - **channel_isolated** — buffer is partitioned per channel (whatsapp/telegram/playground…). Separate threads inside the same channel share the channel buffer, but the UI/API still filters message history per thread.
+- Thread-aware Playground reads (`history`, `memory`, and clear-history operations) accept an optional `thread_id` and resolve the same canonical identity used on writes, so thread-scoped history does not drift from the underlying memory mode.
 
 ### 7.3 Per-Agent Trigger & Context Overrides
 
@@ -1670,6 +1671,11 @@ Web-based chat UI for testing/interacting with agents. UI: `frontend/app/playgro
 
 Threads managed by `backend/services/playground_thread_service.py`. Each thread holds a message history and belongs to a tenant/user. Auto-rename is supported and emitted over WebSocket (`frontend/app/playground/page.tsx:142, :178`).
 
+The Playground history and memory endpoints accept an optional `thread_id` so reads use the same identity contract as writes:
+- `isolated` → per-thread memory
+- `channel_isolated` → shared memory across Playground threads in the same channel, but thread-scoped history display
+- `shared` → per-agent global memory across Playground threads
+
 ### 18.2 Audio Recording & Whisper Transcription
 
 The page uses `MediaRecorder` to capture voice directly in the browser (`page.tsx:498-518`):
@@ -1685,7 +1691,12 @@ Supported extensions (Source: `backend/services/playground_document_service.py:3
 - `.txt` → txt
 - `.csv` → csv
 - `.json` → json
-- `.docx` → docx
+- `.xlsx` / `.xls` → xlsx
+- `.docx` / `.doc` → docx
+- `.md` / `.markdown` → md
+- `.rtf` → rtf
+
+The Playground "Attach documents" flow is document-only. Images and other unsupported file types are rejected by both the frontend chooser and the backend validation layer with an explicit supported-types error message. Maximum file size is 10 MB per document.
 
 Handling lives in `playground_document_service.py` and `playground_message_service.py`.
 
@@ -1996,6 +2007,8 @@ Backend resolution (`services/system_ai_config.py`): When `system_ai_provider_in
 Supported vendors (label map, `:8-12`): `mongodb → MongoDB`, `pinecone → Pinecone`, `qdrant → Qdrant`.
 
 Actions: **Save**, **Test** (connection probe returns `{success, message}` via `api.testVectorStoreConnection`).
+
+Fresh setup now attempts to create `Qdrant (Default)` through the shared vector-store provisioning helper. If provisioning fails (for example image pull or runtime startup issues), setup completes with a warning and the operator can repair or recreate the instance later from **Settings → Vector Stores**.
 
 Agents can override the default in the Agent Builder.
 
@@ -2856,7 +2869,7 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `CONTAMINATION_PATTERNS_EXTRA` | `""` | Extra regex patterns for Sentinel contamination detector. | `agent/contamination_detector.py:54` |
 | `QA_PHONE_NUMBER` | `""` | Allowlist phone for QA tester. | `app.py:430` |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama endpoint from inside container. | `agent/ai_client.py:205`, `db.py:1339` |
-| `KOKORO_SERVICE_URL` | `http://kokoro-tts:8880` | Kokoro TTS service URL. | `hub/providers/kokoro_tts_provider.py:176` |
+| `KOKORO_SERVICE_URL` | `http://${TSN_STACK_NAME:-tsushin}-kokoro-tts:8880` | Kokoro TTS service URL (stack-scoped by default). | `hub/providers/kokoro_tts_provider.py:182` |
 | `GROQ_API_KEY` / `GROK_API_KEY` / `ELEVENLABS_API_KEY` | `""` | Pass-through env for providers not configured via Hub. | `docker-compose.yml:149-151` |
 | `ASANA_ENCRYPTION_KEY` | `""` | Fernet key for Asana integration. | `docker-compose.yml:144`, `migrations/add_service_encryption_keys.py:164` |
 | `ASANA_REDIRECT_URI` | `http://localhost:3030/hub/asana/callback` | Asana OAuth callback. | `api/routes_hub.py:153` |

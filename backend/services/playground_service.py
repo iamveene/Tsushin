@@ -17,6 +17,9 @@ from services.watcher_activity_service import emit_agent_processing_async
 from services.playground_thread_service import (
     build_playground_channel_id,
     build_playground_thread_recipient,
+    get_agent_memory_isolation_mode,
+    resolve_playground_identity,
+    sync_playground_thread_recipient,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,11 +113,47 @@ class PlaygroundService:
             "api_user_",
             "api_thread_",
         )
-        return not sender_key.startswith(synthetic_prefixes)
+        if sender_key == "shared":
+            return False
+        if sender_key.startswith(synthetic_prefixes):
+            return False
+        if sender_key.startswith("playground_") and sender_key[len("playground_"):].isdigit():
+            return False
+        return True
 
     def _resolve_chat_id(self, user_id: int, chat_id_override: Optional[str] = None) -> str:
         """Resolve the logical channel identifier used for channel-scoped memory."""
         return chat_id_override or build_playground_channel_id(user_id)
+
+    def _get_thread_record(
+        self,
+        *,
+        thread_id: Optional[int],
+        user_id: int,
+        agent_id: int,
+        tenant_id: Optional[str] = None,
+    ):
+        """Load and normalize a Playground thread when the caller provided one."""
+        if not thread_id:
+            return None
+
+        from models import ConversationThread
+
+        query = self.db.query(ConversationThread).filter(
+            ConversationThread.id == thread_id,
+            ConversationThread.agent_id == agent_id,
+            ConversationThread.thread_type == "playground",
+        )
+        if tenant_id is not None:
+            query = query.filter(ConversationThread.tenant_id == tenant_id)
+        query = query.filter(ConversationThread.user_id == user_id)
+
+        thread = query.first()
+        if thread:
+            recipient = sync_playground_thread_recipient(thread)
+            if thread.recipient != recipient:
+                thread.recipient = recipient
+        return thread
 
     async def send_message(
         self,
@@ -160,40 +199,6 @@ class PlaygroundService:
         from agent.memory.multi_agent_memory import MultiAgentMemoryManager
 
         try:
-            if sender_key:
-                self.logger.info(f"Using explicit sender_key: {sender_key}")
-            elif thread_id:
-                sender_key = build_playground_thread_recipient(user_id, agent_id, thread_id)
-                self.logger.info(f"Using thread-specific sender_key: {sender_key}")
-            else:
-                # Fallback for backward compatibility - check contact mapping
-                user_contact_mapping = self.db.query(UserContactMapping).filter(
-                    UserContactMapping.user_id == user_id
-                ).first()
-
-                if user_contact_mapping:
-                    contact = self.db.query(Contact).filter(Contact.id == user_contact_mapping.contact_id).first()
-                    if contact and contact.phone_number:
-                        sender_key = contact.phone_number
-                        self.logger.info(f"Using contact-based sender_key (no thread): {sender_key}")
-                    elif contact and contact.whatsapp_id:
-                        sender_key = contact.whatsapp_id
-                        self.logger.info(f"Using contact whatsapp_id sender_key (no thread): {sender_key}")
-                    else:
-                        sender_key = f"playground_user_{user_id}"
-                        self.logger.warning(f"Contact has no phone/whatsapp, using user-based key")
-                else:
-                    sender_key = self.resolve_user_identity(user_id)
-                    self.logger.warning(f"No thread_id or contact mapping, using generic sender_key: {sender_key}")
-
-            if not sender_key:
-                return {
-                    "error": "Failed to resolve user identity",
-                    "status": "error"
-                }
-            chat_id = self._resolve_chat_id(user_id, chat_id_override)
-            use_contact_mapping = self._should_use_contact_mapping(sender_key)
-
             # Get agent configuration with optional tenant validation (HIGH-011 defense-in-depth)
             query = self.db.query(Agent).filter(Agent.id == agent_id)
             if tenant_id:
@@ -205,11 +210,69 @@ class PlaygroundService:
                     "status": "error"
                 }
 
-            # BUG-388 fix: For shared-memory agents, use a stable "shared" sender_key
-            # so that all threads/users share the same memory pool for cross-thread recall.
-            if getattr(agent, 'memory_isolation_mode', 'isolated') == 'shared':
-                sender_key = "shared"
-                self.logger.info(f"BUG-388: Shared memory mode — overriding sender_key to 'shared'")
+            thread = self._get_thread_record(
+                thread_id=thread_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                tenant_id=tenant_id or agent.tenant_id,
+            )
+            if thread_id and not thread:
+                return {
+                    "error": f"Thread {thread_id} not found",
+                    "status": "error",
+                }
+
+            isolation_mode = get_agent_memory_isolation_mode(agent)
+            identity = resolve_playground_identity(
+                user_id=user_id,
+                agent_id=agent_id,
+                isolation_mode=isolation_mode,
+                thread_id=thread.id if thread else thread_id,
+                thread_recipient=thread.recipient if thread else None,
+                sender_key_override=sender_key,
+                chat_id_override=chat_id_override,
+            )
+
+            sender_key = identity["sender_key"]
+            chat_id = identity["chat_id"] or self._resolve_chat_id(user_id, chat_id_override)
+
+            if sender_key:
+                self.logger.info(
+                    f"Using playground identity sender_key={sender_key}, chat_id={chat_id}, "
+                    f"thread_id={thread.id if thread else thread_id}, isolation={isolation_mode}"
+                )
+            else:
+                # Fallback for legacy non-thread traffic
+                user_contact_mapping = self.db.query(UserContactMapping).filter(
+                    UserContactMapping.user_id == user_id
+                ).first()
+
+                if user_contact_mapping:
+                    contact = self.db.query(Contact).filter(Contact.id == user_contact_mapping.contact_id).first()
+                    if contact and contact.phone_number:
+                        sender_key = contact.phone_number
+                    elif contact and contact.whatsapp_id:
+                        sender_key = contact.whatsapp_id
+                    else:
+                        sender_key = f"playground_user_{user_id}"
+                else:
+                    sender_key = self.resolve_user_identity(user_id)
+
+                self.logger.warning(
+                    f"No canonical Playground thread sender_key was available; "
+                    f"falling back to {sender_key}"
+                )
+
+            if thread and thread.recipient != identity["thread_recipient"]:
+                thread.recipient = identity["thread_recipient"]
+                self.db.commit()
+
+            if not sender_key:
+                return {
+                    "error": "Failed to resolve user identity",
+                    "status": "error"
+                }
+            use_contact_mapping = self._should_use_contact_mapping(sender_key)
 
             # Phase 10: Check if playground channel is enabled for this agent
             import json as json_module
@@ -594,35 +657,57 @@ class PlaygroundService:
             else:
                 try:
                     from models import UserProjectSession, AgentProjectAccess
-                    generic_sender_key = f"playground_user_{user_id}"
+                    session_sender_keys = []
+                    for candidate in (
+                        sender_key,
+                        chat_id,
+                        f"playground_user_{user_id}",
+                    ):
+                        if candidate and candidate not in session_sender_keys:
+                            session_sender_keys.append(candidate)
 
-                    self.logger.info(f"[KB FIX] Session lookup: tenant={agent.tenant_id}, sender={generic_sender_key}, agent={agent_id}")
+                    self.logger.info(
+                        f"[KB FIX] Session lookup: tenant={agent.tenant_id}, "
+                        f"senders={session_sender_keys}, agent={agent_id}"
+                    )
 
-                    project_session = self.db.query(UserProjectSession).filter(
-                        UserProjectSession.tenant_id == agent.tenant_id,
-                        UserProjectSession.sender_key == generic_sender_key,
-                        UserProjectSession.agent_id == agent_id,
-                        UserProjectSession.channel == "playground",
-                        UserProjectSession.project_id.isnot(None)
-                    ).first()
-
-                    if not project_session:
+                    project_session = None
+                    for session_sender_key in session_sender_keys:
                         project_session = self.db.query(UserProjectSession).filter(
                             UserProjectSession.tenant_id == agent.tenant_id,
-                            UserProjectSession.sender_key == generic_sender_key,
+                            UserProjectSession.sender_key == session_sender_key,
+                            UserProjectSession.agent_id == agent_id,
                             UserProjectSession.channel == "playground",
                             UserProjectSession.project_id.isnot(None)
                         ).first()
-
                         if project_session:
+                            break
+
+                    if not project_session:
+                        for session_sender_key in session_sender_keys:
+                            project_session = self.db.query(UserProjectSession).filter(
+                                UserProjectSession.tenant_id == agent.tenant_id,
+                                UserProjectSession.sender_key == session_sender_key,
+                                UserProjectSession.channel == "playground",
+                                UserProjectSession.project_id.isnot(None)
+                            ).first()
+
+                            if not project_session:
+                                continue
+
                             access = self.db.query(AgentProjectAccess).filter(
                                 AgentProjectAccess.agent_id == agent_id,
                                 AgentProjectAccess.project_id == project_session.project_id
                             ).first()
 
-                            if not access:
-                                self.logger.warning(f"[KB FIX] Agent {agent_id} doesn't have access to project {project_session.project_id}")
-                                project_session = None
+                            if access:
+                                break
+
+                            self.logger.warning(
+                                f"[KB FIX] Agent {agent_id} doesn't have access to project "
+                                f"{project_session.project_id}"
+                            )
+                            project_session = None
 
                     if project_session:
                         project_id = project_session.project_id
@@ -1511,7 +1596,9 @@ class PlaygroundService:
         self,
         user_id: int,
         agent_id: int,
-        limit: int = 50
+        limit: int = 50,
+        thread_id: Optional[int] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get conversation history between user and agent.
@@ -1520,51 +1607,47 @@ class PlaygroundService:
             user_id: RBAC user ID
             agent_id: Agent ID
             limit: Maximum number of messages to return
+            thread_id: Optional thread ID for thread-aware history reads
+            tenant_id: Optional tenant ID for ownership validation
 
         Returns:
             List of messages with role, content, timestamp
         """
-        from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+        from models import ConversationThread
+        from services.playground_thread_service import PlaygroundThreadService
 
         try:
-            # BUG-352 FIX: Use the same sender_key format as send_message()
-            # Messages are stored under playground_u{user_id}_a{agent_id}, not
-            # the legacy playground_user_{user_id} from resolve_user_identity().
-            sender_key = f"playground_u{user_id}_a{agent_id}"
+            thread_service = PlaygroundThreadService(self.db)
+            thread = None
+            if thread_id is not None:
+                thread = thread_service.get_thread_record(
+                    thread_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                )
+            else:
+                query = self.db.query(ConversationThread).filter(
+                    ConversationThread.user_id == user_id,
+                    ConversationThread.agent_id == agent_id,
+                    ConversationThread.thread_type == "playground",
+                    ConversationThread.is_archived == False,
+                )
+                if tenant_id is not None:
+                    query = query.filter(ConversationThread.tenant_id == tenant_id)
+                thread = query.order_by(ConversationThread.updated_at.desc()).first()
+                if thread:
+                    sync_playground_thread_recipient(thread)
 
-            # Build a minimal config for memory manager
-            from models import Agent
-            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
-            if not agent:
+            if not thread:
                 return []
 
-            config_dict = {
-                "memory_size": agent.memory_size or 1000,
-                "enable_semantic_search": agent.enable_semantic_search,
-                "semantic_search_results": agent.semantic_search_results or 10,
-                "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
-            }
-
-            # Initialize memory manager
-            memory_manager = MultiAgentMemoryManager(self.db, config_dict)
-
-            # Get conversation context (working memory contains the message history)
-            context = await memory_manager.get_context(
-                agent_id=agent_id,
-                sender_key=sender_key,
-                current_message="",
-                chat_id=f"playground_{user_id}",
-                include_knowledge=False,  # Don't need facts for history display
-                include_shared=False  # Don't need shared memory for history display
-            )
-
-            # Use working_memory key (Layer 1 - recent messages)
-            if not context or not context.get("working_memory"):
+            raw_messages = thread_service._get_thread_messages_from_memory(thread)
+            if not raw_messages:
                 return []
 
-            # Format messages for frontend
             messages = []
-            for msg in context["working_memory"][-limit:]:
+            for msg in raw_messages[-limit:]:
                 messages.append({
                     "role": msg["role"],
                     "content": msg["content"],
@@ -1586,7 +1669,9 @@ class PlaygroundService:
     async def clear_conversation_history(
         self,
         user_id: int,
-        agent_id: int
+        agent_id: int,
+        thread_id: Optional[int] = None,
+        tenant_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Clear conversation history between user and agent.
@@ -1594,20 +1679,16 @@ class PlaygroundService:
         Args:
             user_id: RBAC user ID
             agent_id: Agent ID
+            thread_id: Optional thread ID for scoped clears
+            tenant_id: Optional tenant ID for ownership validation
 
         Returns:
             Success status
         """
-        from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+        from models import Agent, ConversationThread
+        from services.playground_thread_service import PlaygroundThreadService
 
         try:
-            # BUG-352 FIX: Use the same sender_key format as send_message()
-            # and get_conversation_history() so clear actually removes the
-            # correct memory records.
-            sender_key = f"playground_u{user_id}_a{agent_id}"
-
-            # Build a minimal config for memory manager
-            from models import Agent
             agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
             if not agent:
                 return {"success": False, "error": "Agent not found"}
@@ -1617,13 +1698,57 @@ class PlaygroundService:
                 "enable_semantic_search": agent.enable_semantic_search,
             }
 
-            # Initialize memory manager
-            memory_manager = MultiAgentMemoryManager(self.db, config_dict)
+            thread_service = PlaygroundThreadService(self.db)
+            thread = None
+            if thread_id is not None:
+                thread = thread_service.get_thread_record(
+                    thread_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                )
+            else:
+                query = self.db.query(ConversationThread).filter(
+                    ConversationThread.user_id == user_id,
+                    ConversationThread.agent_id == agent_id,
+                    ConversationThread.thread_type == "playground",
+                    ConversationThread.is_archived == False,
+                )
+                if tenant_id is not None:
+                    query = query.filter(ConversationThread.tenant_id == tenant_id)
+                thread = query.order_by(ConversationThread.updated_at.desc()).first()
+                if thread:
+                    sync_playground_thread_recipient(thread)
 
-            # Clear memory for this conversation
+            if not thread:
+                return {"success": True, "message": "No conversation history to clear"}
+
+            isolation_mode = get_agent_memory_isolation_mode(agent)
+
+            if isolation_mode in ("shared", "channel_isolated"):
+                memory = thread_service._find_memory_record(thread, isolation_mode)
+                if memory and memory.messages_json:
+                    retained_messages = [
+                        msg for msg in (memory.messages_json or [])
+                        if not isinstance(msg.get("metadata"), dict)
+                        or msg["metadata"].get("thread_id") != thread.id
+                    ]
+                    if retained_messages:
+                        memory.messages_json = retained_messages
+                    else:
+                        self.db.delete(memory)
+                    self.db.commit()
+                return {
+                    "success": True,
+                    "message": "Conversation history cleared",
+                }
+
+            from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+
+            memory_manager = MultiAgentMemoryManager(self.db, config_dict)
             memory_manager.clear_agent_memory(
                 agent_id=agent_id,
-                sender_key=sender_key
+                sender_key=thread.recipient,
             )
             success = True
 

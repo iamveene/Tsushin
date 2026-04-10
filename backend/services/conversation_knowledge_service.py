@@ -117,38 +117,23 @@ class ConversationKnowledgeService:
         user_id: int
     ) -> List[Dict[str, str]]:
         """Get all messages from a thread."""
-        from models import Memory
+        from services.playground_thread_service import PlaygroundThreadService
 
-        # Find memory record for this thread
-        # sender_key pattern for playground threads: sender_playground_u{user_id}_a{agent_id}_t{thread_id}
-        sender_key_pattern = f"%_t{thread_id}"
+        thread_service = PlaygroundThreadService(self.db)
+        thread = thread_service.get_thread_record(
+            thread_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        if not thread:
+            self.logger.warning(f"[Phase 14.6] Thread {thread_id} not found")
+            return []
 
-        self.logger.info(f"[Phase 14.6] Querying Memory with pattern: {sender_key_pattern}")
-
-        # BUG-LOG-015: Memory now has tenant_id — filter directly at the row level.
-        # (Previously had to derive agent_ids by tenant; see BUG-LOG-003 history.)
-        memory_records = self.db.query(Memory).filter(
-            Memory.tenant_id == tenant_id,
-            Memory.sender_key.like(sender_key_pattern)
-        ).all()
-
-        self.logger.info(f"[Phase 14.6] Found {len(memory_records)} memory records for thread {thread_id}")
-        for mem in memory_records:
-            self.logger.info(f"[Phase 14.6] Memory record: sender_key={mem.sender_key}, messages_json_length={len(mem.messages_json) if mem.messages_json else 0}")
-
-        messages = []
-        for mem in memory_records:
-            try:
-                # messages_json is already deserialized by SQLAlchemy (JSON type)
-                msgs = mem.messages_json if mem.messages_json else []
-                if isinstance(msgs, str):
-                    # If it's still a string, parse it
-                    msgs = json.loads(msgs)
-                messages.extend(msgs)
-            except Exception as e:
-                self.logger.warning(f"[Phase 14.6] Failed to parse messages_json: {e}")
-                continue
-
+        messages = thread_service._get_thread_messages_from_memory(thread)
+        self.logger.info(
+            f"[Phase 14.6] Loaded {len(messages)} messages for thread {thread_id} "
+            f"(recipient={thread.recipient})"
+        )
         return messages
 
     async def _extract_tags(

@@ -20,6 +20,18 @@ interface DocumentPanelProps {
   onClose: () => void
 }
 
+const SUPPORTED_TYPES = [
+  '.pdf', '.txt', '.csv', '.json', '.xlsx', '.xls',
+  '.docx', '.doc', '.md', '.markdown', '.rtf'
+]
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+  return fallback
+}
+
 export default function DocumentPanel({
   agentId,
   documents,
@@ -33,18 +45,31 @@ export default function DocumentPanel({
   const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const SUPPORTED_TYPES = [
-    '.pdf', '.txt', '.csv', '.json', '.xlsx', '.xls',
-    '.docx', '.doc', '.md', '.markdown', '.rtf'
-  ]
+  const getUnsupportedFiles = useCallback((files: File[]) => {
+    return files.filter((file) => {
+      const lowerName = file.name.toLowerCase()
+      return !SUPPORTED_TYPES.some((extension) => lowerName.endsWith(extension))
+    })
+  }, [])
 
   const handleFileUpload = useCallback(async (files: FileList | File[]) => {
     setError(null)
-    setIsUploading(true)
 
     const fileArray = Array.from(files)
+    const unsupportedFiles = getUnsupportedFiles(fileArray)
+    if (unsupportedFiles.length > 0) {
+      const rejectedNames = unsupportedFiles.map((file) => file.name).join(', ')
+      setError(`Unsupported file type: ${rejectedNames}. Supported formats: ${SUPPORTED_TYPES.join(', ')}`)
+    }
 
-    for (const file of fileArray) {
+    const supportedFiles = fileArray.filter((file) => !unsupportedFiles.includes(file))
+    if (supportedFiles.length === 0) {
+      return
+    }
+
+    setIsUploading(true)
+
+    for (const file of supportedFiles) {
       try {
         setUploadProgress(`Uploading ${file.name}...`)
         const result = await api.uploadPlaygroundDocument(agentId, file)
@@ -52,22 +77,22 @@ export default function DocumentPanel({
         if (result.status === 'error') {
           setError(result.error || 'Upload failed')
         }
-      } catch (err: any) {
-        setError(err.message || 'Upload failed')
+      } catch (error) {
+        setError(getErrorMessage(error, 'Upload failed'))
       }
     }
 
     setIsUploading(false)
     setUploadProgress(null)
     onDocumentsChange()
-  }, [agentId, onDocumentsChange])
+  }, [agentId, getUnsupportedFiles, onDocumentsChange])
 
   const handleDelete = useCallback(async (docId: number) => {
     try {
       await api.deletePlaygroundDocument(docId)
       onDocumentsChange()
-    } catch (err: any) {
-      setError(err.message || 'Failed to delete document')
+    } catch (error) {
+      setError(getErrorMessage(error, 'Failed to delete document'))
     }
   }, [onDocumentsChange])
 
@@ -77,8 +102,8 @@ export default function DocumentPanel({
     try {
       await api.clearPlaygroundDocuments(agentId)
       onDocumentsChange()
-    } catch (err: any) {
-      setError(err.message || 'Failed to clear documents')
+    } catch (error) {
+      setError(getErrorMessage(error, 'Failed to clear documents'))
     }
   }, [agentId, onDocumentsChange])
 
@@ -193,6 +218,7 @@ export default function DocumentPanel({
                 <p className="text-sm text-tsushin-slate mb-2">
                   Drag & drop files here, or{' '}
                   <button
+                    type="button"
                     onClick={() => fileInputRef.current?.click()}
                     className="text-tsushin-teal hover:underline"
                   >

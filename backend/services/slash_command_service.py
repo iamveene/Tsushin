@@ -243,7 +243,7 @@ class SlashCommandService:
             )
 
         if handler_type == "built-in":
-            return await self._execute_builtin(
+            result = await self._execute_builtin(
                 cmd=cmd,
                 groups=detection["groups"],
                 args=detection["args"],
@@ -254,14 +254,39 @@ class SlashCommandService:
                 user_id=user_id
             )
         elif handler_type == "custom":
-            return await self._execute_custom(cmd, detection)
+            result = await self._execute_custom(cmd, detection)
         elif handler_type == "webhook":
-            return await self._execute_webhook(cmd, detection)
+            result = await self._execute_webhook(cmd, detection)
         else:
-            return {
+            result = {
                 "status": "error",
                 "error": f"Unknown handler type: {handler_type}"
             }
+
+        return self._buffer_tool_result(
+            agent_id=agent_id,
+            sender_key=sender_key,
+            result=result,
+        )
+
+    def _buffer_tool_result(
+        self,
+        agent_id: int,
+        sender_key: str,
+        result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Attach a single buffered execution ID for tool results across callers."""
+        if not isinstance(result, dict):
+            return result
+
+        from agent.memory.tool_output_buffer import get_tool_output_buffer
+
+        get_tool_output_buffer().buffer_command_result(
+            agent_id=agent_id,
+            sender_key=sender_key,
+            result=result,
+        )
+        return result
 
     async def _execute_builtin(
         self,

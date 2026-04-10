@@ -92,6 +92,31 @@ def _sync_api_thread_recipient(db, thread_id: int, caller) -> Optional[str]:
     return recipient
 
 
+def _extract_response_text(result: dict) -> Optional[str]:
+    """Preserve empty strings and fall back to tool output when available."""
+    empty_primary = None
+
+    for key in ("message", "answer"):
+        if key not in result:
+            continue
+        value = result.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                return value
+            if empty_primary is None:
+                empty_primary = value
+            continue
+        return str(value)
+
+    tool_result = result.get("tool_result")
+    if tool_result is not None:
+        return tool_result if isinstance(tool_result, str) else str(tool_result)
+
+    return empty_primary
+
+
 # ============================================================================
 # Schemas
 # ============================================================================
@@ -281,7 +306,7 @@ async def _process_sync(agent, agent_name, request, caller, db):
     elif isinstance(tokens, (int, float)):
         tokens_used = int(tokens)
 
-    response_text = result.get("message") or result.get("answer")
+    response_text = _extract_response_text(result)
 
     return ChatResponse(
         status="success",

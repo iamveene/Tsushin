@@ -44,6 +44,60 @@ def build_api_channel_id(api_client_id: Optional[str] = None, user_id: Optional[
     return "api"
 
 
+def get_agent_memory_isolation_mode(agent: Optional[Agent]) -> str:
+    """Normalize the configured memory isolation mode for an agent."""
+    return getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
+
+
+def sync_playground_thread_recipient(thread: ConversationThread) -> str:
+    """Ensure playground thread recipients always use the canonical format."""
+    if thread.thread_type == "playground" and thread.user_id is not None:
+        recipient = build_playground_thread_recipient(thread.user_id, thread.agent_id, thread.id)
+        thread.recipient = recipient
+        return recipient
+    return thread.recipient
+
+
+def resolve_playground_identity(
+    *,
+    user_id: int,
+    agent_id: int,
+    isolation_mode: str,
+    thread_id: Optional[int] = None,
+    thread_recipient: Optional[str] = None,
+    sender_key_override: Optional[str] = None,
+    chat_id_override: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    """
+    Resolve the canonical sender/chat identifiers for Playground memory access.
+
+    Rules:
+    - isolated: thread-specific sender key
+    - channel_isolated: channel-shared sender key with thread metadata
+    - shared: global shared sender key with thread metadata
+    """
+    chat_id = chat_id_override or build_playground_channel_id(user_id)
+    canonical_thread_recipient = thread_recipient or (
+        build_playground_thread_recipient(user_id, agent_id, thread_id)
+        if thread_id is not None else None
+    )
+
+    if isolation_mode == "shared":
+        sender_key = "shared"
+    elif sender_key_override:
+        sender_key = sender_key_override
+    elif isolation_mode == "channel_isolated":
+        sender_key = chat_id
+    else:
+        sender_key = canonical_thread_recipient
+
+    return {
+        "sender_key": sender_key,
+        "chat_id": chat_id,
+        "thread_recipient": canonical_thread_recipient,
+    }
+
+
 class PlaygroundThreadService:
     """
     Service for managing playground conversation threads.
@@ -71,6 +125,36 @@ class PlaygroundThreadService:
             Unique sender key for this thread
         """
         return build_playground_thread_recipient(user_id, agent_id, thread_id)
+
+    def get_thread_record(
+        self,
+        thread_id: int,
+        *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[int] = None,
+        agent_id: Optional[int] = None,
+    ) -> Optional[ConversationThread]:
+        """Load a playground thread with optional ownership filters."""
+        query = self.db.query(ConversationThread).filter(
+            ConversationThread.id == thread_id,
+            ConversationThread.thread_type == "playground",
+        )
+
+        if tenant_id is not None:
+            query = query.filter(ConversationThread.tenant_id == tenant_id)
+        if user_id is not None:
+            query = query.filter(ConversationThread.user_id == user_id)
+        if agent_id is not None:
+            query = query.filter(ConversationThread.agent_id == agent_id)
+
+        thread = query.first()
+        if thread:
+            sync_playground_thread_recipient(thread)
+        return thread
+
+    def count_thread_messages(self, thread: ConversationThread) -> int:
+        """Count messages using the same isolation semantics used for thread views."""
+        return len(self._get_thread_messages_from_memory(thread))
 
     def _get_thread_channel_id(self, thread: ConversationThread) -> str:
         """Resolve the channel-scoped memory identifier for a thread."""
@@ -128,7 +212,7 @@ class PlaygroundThreadService:
     def _get_thread_messages_from_memory(self, thread: ConversationThread) -> List[Dict[str, Any]]:
         """Load thread messages with the correct isolation semantics."""
         agent = self.db.query(Agent).filter(Agent.id == thread.agent_id).first()
-        isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
+        isolation_mode = get_agent_memory_isolation_mode(agent)
 
         memory = self._find_memory_record(thread, isolation_mode)
         if not memory or not memory.messages_json:
@@ -332,12 +416,11 @@ class PlaygroundThreadService:
             Thread dict or None if not found
         """
         try:
-            thread = self.db.query(ConversationThread).filter(
-                ConversationThread.id == thread_id,
-                ConversationThread.tenant_id == tenant_id,
-                ConversationThread.user_id == user_id,
-                ConversationThread.thread_type == "playground"
-            ).first()
+            thread = self.get_thread_record(
+                thread_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
 
             if not thread:
                 self.logger.warning(f"[get_thread] Thread {thread_id} not found for user {user_id}")
@@ -418,12 +501,11 @@ class PlaygroundThreadService:
             Dict with status
         """
         try:
-            thread = self.db.query(ConversationThread).filter(
-                ConversationThread.id == thread_id,
-                ConversationThread.tenant_id == tenant_id,
-                ConversationThread.user_id == user_id,
-                ConversationThread.thread_type == "playground"
-            ).first()
+            thread = self.get_thread_record(
+                thread_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
 
             if not thread:
                 return {
@@ -484,10 +566,7 @@ class PlaygroundThreadService:
             Dict with status and new title if renamed
         """
         try:
-            thread = self.db.query(ConversationThread).filter(
-                ConversationThread.id == thread_id,
-                ConversationThread.thread_type == "playground"
-            ).first()
+            thread = self.get_thread_record(thread_id)
 
             if not thread:
                 return {
@@ -562,12 +641,11 @@ class PlaygroundThreadService:
             Dict with status
         """
         try:
-            thread = self.db.query(ConversationThread).filter(
-                ConversationThread.id == thread_id,
-                ConversationThread.tenant_id == tenant_id,
-                ConversationThread.user_id == user_id,
-                ConversationThread.thread_type == "playground"
-            ).first()
+            thread = self.get_thread_record(
+                thread_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
 
             if not thread:
                 return {
@@ -576,7 +654,7 @@ class PlaygroundThreadService:
                 }
 
             agent = self.db.query(Agent).filter(Agent.id == thread.agent_id).first()
-            isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
+            isolation_mode = get_agent_memory_isolation_mode(agent)
             memory = self._find_memory_record(thread, isolation_mode)
 
             if memory:

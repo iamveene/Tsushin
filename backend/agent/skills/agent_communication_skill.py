@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,11 @@ class AgentCommunicationSkill(BaseSkill):
                 output="Agent ID or tenant ID not available.",
                 metadata={"error": "missing_context", "skip_ai": False},
             )
+
+        if action == "list_agents":
+            promoted = await self._promote_list_request(arguments, message, config, agent_id, tenant_id)
+            if promoted is not None:
+                return promoted
 
         if action == "list_agents":
             return await self._handle_list_agents(agent_id, tenant_id)
@@ -349,6 +355,112 @@ class AgentCommunicationSkill(BaseSkill):
                 "skip_ai": True,
             },
         )
+
+    async def _promote_list_request(
+        self,
+        arguments: Dict[str, Any],
+        message: Optional[InboundMessage],
+        config: Dict[str, Any],
+        agent_id: int,
+        tenant_id: str,
+    ) -> Optional[SkillResult]:
+        intent = self._infer_direct_action(arguments, message)
+        if not intent:
+            return None
+
+        target_name = arguments.get("target_agent_name") or self._infer_target_agent_name(
+            message.body if message else "",
+            agent_id,
+            tenant_id,
+        )
+        if not target_name:
+            return None
+
+        delegated_message = arguments.get("message") or (message.body.strip() if message and message.body else None)
+        if not delegated_message:
+            return None
+
+        promoted_arguments = {
+            **arguments,
+            "action": intent,
+            "target_agent_name": target_name,
+            "message": delegated_message,
+        }
+
+        logger.info(
+            "Promoting agent_communication list_agents call to %s for agent '%s'",
+            intent,
+            target_name,
+        )
+
+        if intent == "delegate":
+            return await self._handle_delegate(promoted_arguments, message, config, agent_id, tenant_id)
+        return await self._handle_ask(promoted_arguments, message, config, agent_id, tenant_id)
+
+    def _infer_direct_action(
+        self,
+        arguments: Dict[str, Any],
+        message: Optional[InboundMessage],
+    ) -> Optional[str]:
+        body = (message.body if message else "") or ""
+        target_name = arguments.get("target_agent_name")
+        delegated_message = arguments.get("message")
+
+        lowered = body.lower()
+        delegate_patterns = (
+            "delegate",
+            "delegat",
+            "hand off",
+            "handoff",
+            "pass this to",
+            "route this to",
+            "assign this to",
+            "delegue",
+            "delegar",
+        )
+        ask_patterns = (
+            "ask",
+            "question for",
+            "check with",
+            "consult",
+            "pergunte",
+            "consulte",
+        )
+
+        if target_name and delegated_message:
+            if any(pattern in lowered for pattern in delegate_patterns):
+                return "delegate"
+            return "ask"
+
+        if any(pattern in lowered for pattern in delegate_patterns):
+            return "delegate"
+        if any(pattern in lowered for pattern in ask_patterns):
+            return "ask"
+        return None
+
+    def _infer_target_agent_name(
+        self,
+        body: str,
+        agent_id: int,
+        tenant_id: str,
+    ) -> Optional[str]:
+        if not body:
+            return None
+
+        from services.agent_communication_service import AgentCommunicationService
+
+        svc = AgentCommunicationService(self.db_session, tenant_id, self._token_tracker)
+        available_agents = svc.discover_agents(agent_id)
+        body_lower = body.lower()
+
+        matches = [
+            info.agent_name
+            for info in available_agents
+            if info.agent_name and re.search(rf"\b{re.escape(info.agent_name.lower())}\b", body_lower)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     def _resolve_agent_by_name(self, name: str, tenant_id: str):
         """Resolve an agent by friendly name (exact case-insensitive match).

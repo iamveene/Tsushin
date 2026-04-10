@@ -202,6 +202,44 @@ class ToolOutputBuffer:
 
         return execution_id
 
+    def buffer_command_result(
+        self,
+        agent_id: int,
+        sender_key: str,
+        result: Dict[str, object]
+    ) -> Optional[int]:
+        """
+        Buffer a slash-command result when it represents a tool execution.
+
+        The helper is idempotent so shared execution paths can attach an
+        execution ID once and callers can safely pass the same result through
+        without duplicating buffered outputs.
+        """
+        if not agent_id or not sender_key:
+            return None
+
+        existing_execution_id = result.get("execution_id")
+        if isinstance(existing_execution_id, int):
+            return existing_execution_id
+
+        if result.get("action") not in ("tool_executed", "tool_running"):
+            return None
+
+        output = result.get("message")
+        if not isinstance(output, str) or not output:
+            return None
+
+        execution_id = self.add_tool_output(
+            agent_id=agent_id,
+            sender_key=sender_key,
+            tool_name=str(result.get("tool_name", "unknown")),
+            command_name=str(result.get("command_name", "execute")),
+            output=output,
+            target=result.get("target") if isinstance(result.get("target"), str) else None,
+        )
+        result["execution_id"] = execution_id
+        return execution_id
+
     def increment_message_count(self, agent_id: int, sender_key: str) -> None:
         """Increment message count for a conversation."""
         key = self._get_buffer_key(agent_id, sender_key)

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional, Dict, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
@@ -256,6 +256,29 @@ class FlowStepConfig(BaseModel):
     # Custom name for step output reference in templates
     # Example: output_alias="scan_results" allows {{scan_results.status}} in later steps
     output_alias: Optional[str] = None
+
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def normalize_recipients_field(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if isinstance(value, list):
+            return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        return value
+
+    @model_validator(mode="after")
+    def normalize_recipients(self):
+        if isinstance(self.recipient, str):
+            normalized_recipient = self.recipient.strip()
+            self.recipient = normalized_recipient or None
+
+        recipients = list(self.recipients or [])
+        if self.recipient and self.recipient not in recipients:
+            recipients.append(self.recipient)
+        self.recipients = recipients
+        return self
 
 
 class FlowStepCreate(BaseModel):

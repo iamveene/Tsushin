@@ -39,6 +39,27 @@ router = APIRouter(prefix="/api/flows", tags=["flows"])
 # Global engine reference (set by main app.py)
 _engine = None
 
+
+def _serialize_step_config(step_type: StepType, step_config: Optional[Any]) -> Dict[str, Any]:
+    config = step_config.model_dump() if step_config else {}
+    if step_type == StepType.MESSAGE:
+        recipients = config.get("recipients") or []
+        if isinstance(recipients, str):
+            recipients = [recipients]
+        else:
+            recipients = [item for item in recipients if isinstance(item, str) and item]
+
+        recipient = config.get("recipient")
+        if isinstance(recipient, str):
+            recipient = recipient.strip()
+            config["recipient"] = recipient or None
+
+        if recipient and recipient not in recipients:
+            recipients.append(recipient)
+        config["recipients"] = recipients
+
+    return config
+
 def set_engine(engine):
     global _engine
     _engine = engine
@@ -909,7 +930,7 @@ def create_flow_v2(
                     step_description=step_data.description,
                     type=step_data.type.value,
                     position=step_data.position,
-                    config_json=json.dumps(step_data.config.model_dump() if step_data.config else {}),
+                    config_json=json.dumps(_serialize_step_config(step_data.type, step_data.config)),
                     timeout_seconds=step_data.timeout_seconds,
                     retry_on_failure=step_data.retry_on_failure,
                     max_retries=step_data.max_retries,

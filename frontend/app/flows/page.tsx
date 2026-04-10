@@ -12,7 +12,7 @@
  * UI: List view with sortable columns for better organization
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { useToast } from '@/contexts/ToastContext'
 import {
@@ -1380,7 +1380,11 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-800 rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-700">
+      <div
+        className="bg-slate-800 rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-700"
+        onClick={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
           <div>
@@ -1390,7 +1394,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
               {step === 'steps' && 'Add steps to your flow'}
             </p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white">
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-white">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -1469,6 +1473,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                     return (
                       <button
                         key={method.value}
+                        type="button"
                         onClick={() => setFlowData(prev => ({ ...prev, execution_method: method.value }))}
                         className={`p-3 rounded-lg border text-center transition-all ${flowData.execution_method === method.value
                             ? 'border-cyan-500 bg-cyan-500/10 text-white'
@@ -1563,6 +1568,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
         {/* Footer */}
         <div className="px-6 py-4 border-t border-slate-700 flex items-center justify-between">
           <button
+            type="button"
             onClick={() => {
               if (step === 'steps') setStep('config')
               else onClose()
@@ -1572,6 +1578,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
             {step === 'config' ? 'Cancel' : 'Back'}
           </button>
           <button
+            type="button"
             onClick={() => {
               if (step === 'config') setStep('steps')
               else handleSubmit()
@@ -1602,6 +1609,15 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
 }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [showAddStep, setShowAddStep] = useState(steps.length === 0)
+
+  function handleStepTypeClick(
+    event: MouseEvent<HTMLButtonElement>,
+    stepType: StepType
+  ) {
+    event.preventDefault()
+    event.stopPropagation()
+    addStep(stepType)
+  }
 
   function addStep(stepType: StepType) {
     const newStep: CreateFlowStepData = {
@@ -1667,6 +1683,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
               >
                 <div className="flex flex-col gap-1">
                   <button
+                    type="button"
                     onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
                     disabled={index === 0}
                     className="text-slate-500 hover:text-white disabled:opacity-30"
@@ -1676,6 +1693,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                     </svg>
                   </button>
                   <button
+                    type="button"
                     onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
                     disabled={index === steps.length - 1}
                     className="text-slate-500 hover:text-white disabled:opacity-30"
@@ -1727,6 +1745,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                 </div>
 
                 <button
+                  type="button"
                   onClick={(e) => { e.stopPropagation(); removeStep(index) }}
                   className="text-red-400 hover:text-red-300 p-2"
                 >
@@ -1772,7 +1791,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
               return (
                 <button
                   key={type.value}
-                  onClick={() => addStep(type.value)}
+                  type="button"
+                  onClick={(event) => handleStepTypeClick(event, type.value)}
                   className="p-4 rounded-lg border border-slate-700 hover:border-cyan-500/50 hover:bg-cyan-500/5
                              text-center transition-all text-slate-300 hover:text-cyan-400"
                 >
@@ -1788,6 +1808,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
         </div>
       ) : (
         <button
+          type="button"
           onClick={() => setShowAddStep(true)}
           className="w-full py-3 rounded-xl border border-dashed border-slate-600 text-slate-400
                      hover:border-cyan-500/50 hover:text-cyan-400 transition-all flex items-center justify-center gap-2"

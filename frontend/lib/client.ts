@@ -4672,14 +4672,19 @@ export const api = {
     return res.json()
   },
 
-  async getPlaygroundHistory(agent_id: number, limit: number = 50): Promise<PlaygroundHistoryResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/playground/history/${agent_id}?limit=${limit}`)
+  async getPlaygroundHistory(agent_id: number, limit: number = 50, thread_id?: number): Promise<PlaygroundHistoryResponse> {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (thread_id) params.append('thread_id', String(thread_id))
+    const res = await authenticatedFetch(`${API_URL}/api/playground/history/${agent_id}?${params.toString()}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch playground history')
     return res.json()
   },
 
-  async clearPlaygroundHistory(agent_id: number): Promise<{ success: boolean; message: string }> {
-    const res = await authenticatedFetch(`${API_URL}/api/playground/history/${agent_id}`, {
+  async clearPlaygroundHistory(agent_id: number, thread_id?: number): Promise<{ success: boolean; message: string }> {
+    const params = new URLSearchParams()
+    if (thread_id) params.append('thread_id', String(thread_id))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/playground/history/${agent_id}${suffix}`, {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to clear playground history')
