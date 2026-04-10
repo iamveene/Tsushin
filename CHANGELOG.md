@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### macOS v0.6.0 Targeted Regression (`develop`, 2026-04-10)
+
+- Executed a full v0.6.0 targeted regression test on the production macOS dev stack (`develop` branch, `https://localhost`) covering all 22 TCs from the v0.6.0 test matrix. Both API (`X-API-Key` / OAuth2) and browser automation (Playwright) paths tested. LLM providers configured before test: Anthropic (`claude-sonnet-4-6`, id=2), OpenAI (`gpt-4o-mini`, id=3), Gemini (pre-configured, id=4).
+- **Smoke Tests (PASS):** Backend health (`/api/health` → 200), frontend loads, login (`test@example.com`/`test123`), dashboard.
+- **TC-1 — Vector Stores (FAIL):** `vector_store_instance` table empty; no ChromaDB containers running. BUG-499 revalidated open.
+- **TC-2/3 — Memory Isolation/Shared (PASS):** `isolated` mode stored/retrieved correctly per-thread; `shared` mode accessible across agents in same tenant.
+- **TC-5 — Sentinel (PARTIAL):** Sentinel runs (`operation=sentinel_analysis` in logs), intercepts messages. `sentinel_audit_log` never written — **BUG-505 new**.
+- **TC-6 — MemGuard (PASS):** Prompt injection detected and sanitized (MemGuard integrated in sentinel profile).
+- **TC-7 — Playground Chat (PASS):** Text message → agent responds with memory context via API v1.
+- **TC-11 — MCP Server Create (PASS):** Created `regression-mcp-server` (SSE transport) via `POST /api/mcp-servers`; appears in list.
+- **TC-13 — Custom Skill Create (PASS):** Created `test-regression-skill` (instruction type) via `POST /api/custom-skills`; verified in list.
+- **TC-14 — Custom Skill Use (FAIL):** Skill assigned correctly; `/skill test-regression-skill` via chat returns `{message:null, response:null}` despite consuming 5,791 tokens — **BUG-504 new**.
+- **TC-16 — Sandboxed Tools (PASS):** `/tool dig lookup domain=example.com` returns DNS results via API chat.
+- **TC-17 — Slash Commands (PASS):** 28 commands listed; `/status` executed, confirmed agent name/model returned.
+- **TC-18 — /inject (PASS):** `POST /api/playground/inject` injects context; verified in next chat response.
+- **TC-19/20 — API Clients (PASS):** Client created via `POST /api/clients`; OAuth2 token exchange succeeds; `POST /api/v1/agents/{id}/chat` with generated key returns valid response.
+- **TC-21 — Flows Programmatic (PARTIAL):** Flow 3 (`QA Gate Flow`) executes; gate condition false (expected). `SummarizationStepHandler` BUG-496 previously fixed and holds.
+- **TC-22 — Flows Agentic (FAIL):** Flow 4 (`QA Notification Flow`) step 3 (message/notification) fails. BUG-422 revalidated open.
+- **API v1 E2E pytest:** 24/29 pass; 5 failures in `TestAgentDescription` due to tenant `max_agents=5` constraint (pre-existing; agent limit hit).
+- **Browser tests:** Deferred — Chrome required restart for newly-installed Caddy `tls internal` CA cert to take effect (cert added to macOS system keychain).
+- **New Bugs:** BUG-504 (custom skill null response), BUG-505 (sentinel audit log never written).
+- **Revalidated Open:** BUG-499, BUG-422, BUG-495 (prior session).
+
 ### Ubuntu VM Fresh-Install QA (`develop`, 2026-04-10)
 
 - Executed a full real-user Ubuntu 24.04 VM audit on `10.211.55.5` using the interactive installer (`python3 install.py`), `/setup` via Playwright, and dual-surface API + browser validation across providers, vector stores, memory modes, knowledge base, Sentinel/MemGuard, Playground, A2A, MCP/custom skills, Shell Command Center, sandboxed tools, slash commands, API v1, flows, and projects.
