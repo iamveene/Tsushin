@@ -92,6 +92,7 @@ class SentinelService:
         "knowledge_context",       # KB retrieval context
         "memory_context",          # Conversation memory context
     ]
+    ANALYSIS_LOG_TABLE_NAME = SentinelAnalysisLog.__tablename__
 
     def __init__(self, db: Session, tenant_id: Optional[str] = None, token_tracker=None):
         """
@@ -974,7 +975,7 @@ class SentinelService:
             )
 
             # Log with exception info (if logging enabled)
-            if config.log_all_analyses:
+            if self._should_log_analysis(blocked_result, config):
                 self._log_analysis(
                     analysis_type=analysis_type,
                     detection_type=detection_type,
@@ -1067,7 +1068,7 @@ class SentinelService:
                 response_time_ms=response_time_ms,
             )
             # Log the fail-closed event for audit
-            if config.log_all_analyses:
+            if self._should_log_analysis(blocked_result, config):
                 self._log_analysis(
                     analysis_type=analysis_type,
                     detection_type=detection_type,
@@ -1120,7 +1121,7 @@ class SentinelService:
         )
 
         # Log analysis
-        if result.is_threat_detected or config.log_all_analyses:
+        if self._should_log_analysis(result, config):
             self._log_analysis(
                 analysis_type=analysis_type,
                 detection_type=detection_type,
@@ -1339,7 +1340,7 @@ class SentinelService:
                 cached=False,
                 response_time_ms=response_time_ms,
             )
-            if config.log_all_analyses:
+            if self._should_log_analysis(blocked_result, config):
                 self._log_analysis(
                     analysis_type=analysis_type,
                     detection_type="unified",
@@ -1401,7 +1402,7 @@ class SentinelService:
         )
 
         # Log if threat detected or log_all enabled
-        if result.is_threat_detected or config.log_all_analyses:
+        if self._should_log_analysis(result, config):
             self._log_analysis(
                 analysis_type=analysis_type,
                 detection_type=result.detection_type,
@@ -1613,6 +1614,14 @@ class SentinelService:
             cached=False,
             response_time_ms=int((time.time() - start_time) * 1000),
         )
+
+    def _should_log_analysis(
+        self,
+        result: Optional[SentinelAnalysisResult],
+        config: SentinelEffectiveConfig,
+    ) -> bool:
+        """Threats always log; safe analyses log only when explicitly enabled."""
+        return bool(result and (result.is_threat_detected or config.log_all_analyses))
 
     def _hash_input(self, content: str) -> str:
         """Generate SHA-256 hash of input content."""

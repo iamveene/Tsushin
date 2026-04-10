@@ -11,13 +11,19 @@ single-default enforcement, soft-delete with FK cleanup.
 import json
 import logging
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from sqlalchemy.orm import Session
 from models import VectorStoreInstance, Agent
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_VENDORS = {"mongodb", "pinecone", "qdrant"}
+AUTO_PROVISIONABLE_VENDORS = {"mongodb", "qdrant"}
+DEFAULT_SETUP_VECTOR_STORE_VENDOR = "qdrant"
+DEFAULT_SETUP_VECTOR_STORE_NAME = "Qdrant (Default)"
+DEFAULT_SETUP_VECTOR_STORE_DESCRIPTION = (
+    "Auto-provisioned during setup for tenant long-term memory."
+)
 
 
 class VectorStoreInstanceService:
@@ -125,6 +131,116 @@ class VectorStoreInstanceService:
         db.commit()
         db.refresh(instance)
         return instance
+
+    @staticmethod
+    def provision_instance(
+        instance: VectorStoreInstance,
+        db: Session,
+        *,
+        mem_limit: str = None,
+        cpu_quota: int = None,
+        fail_open_on_error: bool = False,
+        warning_context: str = None,
+    ) -> Optional[str]:
+        if instance.vendor not in AUTO_PROVISIONABLE_VENDORS:
+            raise ValueError(
+                f"Auto-provisioning not supported for vendor: {instance.vendor}"
+            )
+
+        if mem_limit is not None:
+            instance.mem_limit = mem_limit
+        if cpu_quota is not None:
+            instance.cpu_quota = cpu_quota
+        instance.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(instance)
+
+        from services.vector_store_container_manager import VectorStoreContainerManager
+
+        try:
+            VectorStoreContainerManager().provision(instance, db)
+            db.refresh(instance)
+            return None
+        except Exception as e:
+            logger.warning(
+                "Vector store auto-provisioning failed for tenant=%s instance=%s: %s",
+                instance.tenant_id,
+                instance.instance_name,
+                e,
+            )
+            db.refresh(instance)
+            if not fail_open_on_error:
+                raise
+
+            context = warning_context or f"Vector store '{instance.instance_name}'"
+            error_detail = getattr(instance, "health_status_reason", None) or str(e)
+            return (
+                f"{context} could not be auto-provisioned during setup. "
+                "You can retry from Settings > Vector Stores. "
+                f"Error: {error_detail}"
+            )
+
+    @staticmethod
+    def create_instance_with_optional_provisioning(
+        tenant_id: str,
+        vendor: str,
+        instance_name: str,
+        db: Session,
+        description: str = None,
+        base_url: str = None,
+        credentials: Dict = None,
+        extra_config: Dict = None,
+        security_config: Dict = None,
+        is_default: bool = False,
+        auto_provision: bool = False,
+        mem_limit: str = None,
+        cpu_quota: int = None,
+        fail_open_on_provision_error: bool = False,
+        warning_context: str = None,
+    ) -> Tuple[VectorStoreInstance, Optional[str]]:
+        instance = VectorStoreInstanceService.create_instance(
+            tenant_id=tenant_id,
+            vendor=vendor,
+            instance_name=instance_name,
+            db=db,
+            description=description,
+            base_url=base_url,
+            credentials=credentials,
+            extra_config=extra_config,
+            security_config=security_config,
+            is_default=is_default,
+        )
+
+        warning = None
+        if auto_provision:
+            warning = VectorStoreInstanceService.provision_instance(
+                instance,
+                db,
+                mem_limit=mem_limit,
+                cpu_quota=cpu_quota,
+                fail_open_on_error=fail_open_on_provision_error,
+                warning_context=warning_context,
+            )
+            db.refresh(instance)
+
+        return instance, warning
+
+    @staticmethod
+    def create_default_setup_instance(
+        tenant_id: str,
+        db: Session,
+    ) -> Tuple[VectorStoreInstance, Optional[str]]:
+        return VectorStoreInstanceService.create_instance_with_optional_provisioning(
+            tenant_id=tenant_id,
+            vendor=DEFAULT_SETUP_VECTOR_STORE_VENDOR,
+            instance_name=DEFAULT_SETUP_VECTOR_STORE_NAME,
+            db=db,
+            description=DEFAULT_SETUP_VECTOR_STORE_DESCRIPTION,
+            is_default=True,
+            auto_provision=True,
+            fail_open_on_provision_error=True,
+            warning_context=f"Default vector store '{DEFAULT_SETUP_VECTOR_STORE_NAME}'",
+        )
 
     @staticmethod
     def update_instance(

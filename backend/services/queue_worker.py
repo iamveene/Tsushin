@@ -319,7 +319,7 @@ class QueueWorker:
                     message=message,
                     tenant_id=item.tenant_id,
                     agent_id=item.agent_id,
-                    sender_key=payload.get("sender_key", f"playground_user_{user_id}"),
+                    sender_key=item.sender_key or f"playground_user_{user_id}",
                     channel="playground",
                     user_id=user_id
                 )
@@ -350,6 +350,8 @@ class QueueWorker:
             message_text=message,
             thread_id=thread_id,
             media_type=media_type,
+            tenant_id=item.tenant_id,
+            sender_key=item.sender_key,
         )
 
         result_payload = {

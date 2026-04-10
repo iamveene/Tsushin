@@ -140,7 +140,6 @@ async def execute_command(
 
     Handles built-in commands and routes to appropriate handlers.
     """
-    from agent.memory.tool_output_buffer import get_tool_output_buffer
     from models import Agent
     import logging
 
@@ -176,22 +175,6 @@ async def execute_command(
         channel=data.channel,
         user_id=current_user.id
     )
-
-    # Layer 5: Store tool output in ephemeral buffer for follow-up interactions
-    # This enables agentic analysis of tool results with execution IDs
-    if result.get("action") in ("tool_executed", "tool_running") and result.get("message"):
-        tool_buffer = get_tool_output_buffer()
-        tool_name = result.get("tool_name", "unknown")
-        command_name = result.get("command_name", "execute")
-
-        execution_id = tool_buffer.add_tool_output(
-            agent_id=data.agent_id,
-            sender_key=sender_key,
-            tool_name=tool_name,
-            command_name=command_name,
-            output=result["message"]
-        )
-        result["execution_id"] = execution_id
 
     # Store command and response in conversation memory for complete history
     # This fixes the "broken/split" conversation issue in Playground UI

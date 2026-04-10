@@ -71,6 +71,7 @@ interface FreshnessDistribution {
 interface MemoryInspectorProps {
   agentId: number | null
   senderKey?: string
+  threadId?: number | null
 }
 
 const FRESHNESS_COLORS: Record<string, { dot: string; text: string; bg: string }> = {
@@ -80,7 +81,7 @@ const FRESHNESS_COLORS: Record<string, { dot: string; text: string; bg: string }
   archived: { dot: 'bg-gray-500', text: 'text-gray-400', bg: 'bg-gray-500/10' },
 }
 
-export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorProps) {
+export default function MemoryInspector({ agentId, senderKey, threadId }: MemoryInspectorProps) {
   const [memoryData, setMemoryData] = useState<MemoryData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -116,23 +117,25 @@ export default function MemoryInspector({ agentId, senderKey }: MemoryInspectorP
     setDecayEnabled(false)
     setArchivePreview(null)
 
-    if (agentId && senderKey) {
+    if (agentId && (threadId || senderKey)) {
       loadMemory()
       loadMemoryStats()
     }
-  }, [agentId, senderKey])
+  }, [agentId, senderKey, threadId])
 
   const loadMemory = async () => {
     // BUG-PLAYGROUND-003 FIX: Guard against undefined senderKey
     // If senderKey is undefined, the backend uses fallback logic that returns
     // data from ANY matching sender_key, causing cross-thread data display
-    if (!agentId || senderKey === undefined) return
+    if (!agentId || (!threadId && senderKey === undefined)) return
     setLoading(true)
     setError(null)
 
     try {
       const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/memory/${agentId}`)
-      if (senderKey) {
+      if (threadId) {
+        url.searchParams.set('thread_id', String(threadId))
+      } else if (senderKey) {
         url.searchParams.set('sender_key', senderKey)
       }
 

@@ -269,6 +269,7 @@ class TsushinInstaller:
         """
         env_vars = self._read_env_file_vars()
         updates: Dict[str, str] = {}
+        replacements: Dict[str, str] = {}
 
         if not env_vars.get('TSN_AUTH_RATE_LIMIT'):
             updates['TSN_AUTH_RATE_LIMIT'] = self._resolve_auth_rate_limit()
@@ -281,18 +282,39 @@ class TsushinInstaller:
         if not env_vars.get('TSN_SSL_MODE'):
             updates['TSN_SSL_MODE'] = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
 
-        if not updates:
+        desired_kokoro_url = self._get_default_kokoro_service_url()
+        if not env_vars.get('KOKORO_SERVICE_URL'):
+            updates['KOKORO_SERVICE_URL'] = desired_kokoro_url
+        elif env_vars.get('KOKORO_SERVICE_URL') == 'http://kokoro-tts:8880':
+            replacements['KOKORO_SERVICE_URL'] = desired_kokoro_url
+
+        if not updates and not replacements:
             return
 
         existing_content = self.env_file.read_text() if self.env_file.exists() else ""
-        prefix = "" if not existing_content or existing_content.endswith("\n") else "\n"
-        with open(self.env_file, 'a') as f:
-            f.write(prefix + "\n".join(f"{key}={value}" for key, value in updates.items()) + "\n")
+        for key, value in replacements.items():
+            existing_content = re.sub(
+                rf"(?m)^{re.escape(key)}=.*$",
+                f"{key}={value}",
+                existing_content,
+            )
 
+        prefix = "" if not existing_content or existing_content.endswith("\n") else "\n"
+        updated_content = existing_content
+        if updates:
+            updated_content += prefix + "\n".join(f"{key}={value}" for key, value in updates.items()) + "\n"
+
+        with open(self.env_file, 'w') as f:
+            f.write(updated_content)
+
+        changed_keys = sorted({*updates.keys(), *replacements.keys()})
         print_info(
-            "Updated existing .env with missing runtime defaults: "
-            + ", ".join(sorted(updates.keys()))
+            "Updated existing .env with runtime defaults: "
+            + ", ".join(changed_keys)
         )
+
+    def _get_default_kokoro_service_url(self) -> str:
+        return f"http://{self._get_stack_name()}-kokoro-tts:8880"
 
     def check_existing_installation(self) -> str:
         """
@@ -972,6 +994,9 @@ HTTPS_PORT=443
 
 # Frontend Build Args
 NEXT_PUBLIC_API_URL={backend_url}
+
+# Optional local services
+KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
 """
 
         # Write .env file

@@ -982,11 +982,12 @@ export default function ExpertMode({
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept=".pdf,.txt,.csv,.json,.xlsx,.xls,.docx,.doc,.md,.markdown,.rtf,.jpg,.jpeg,.png,.webp,.gif"
+                    accept=".pdf,.txt,.csv,.json,.xlsx,.xls,.docx,.doc,.md,.markdown,.rtf"
                     onChange={(e) => e.target.files && onFileUpload(e.target.files)}
                     className="hidden"
                   />
                   <button
+                    type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isSending}
                     className="h-11 w-11 flex-shrink-0 rounded-lg bg-[var(--pg-surface)] border border-[var(--pg-border)] text-[var(--pg-text-secondary)] hover:text-[var(--pg-accent)] hover:border-[var(--pg-accent)]/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed relative flex items-center justify-center"
@@ -1106,13 +1107,8 @@ export default function ExpertMode({
                 {activeInspector === 'memory' && (
                   <MemoryInspector
                     agentId={selectedAgentId}
-                    senderKey={
-                      // BUG-397 fix: Use stable per-user-per-agent key (without _t{threadId} suffix)
-                      // to match the key format used by playground_service.py for memory storage.
-                      // Thread recipient is "playground_u{uid}_a{aid}_t{tid}" but memory is stored
-                      // under "playground_u{uid}_a{aid}".
-                      activeThread?.recipient?.replace(/_t\d+$/, '')
-                    }
+                    senderKey={activeThread?.recipient}
+                    threadId={activeThread?.id}
                   />
                 )}
                 {activeInspector === 'skills' && <SkillsPanel agentId={selectedAgentId} />}

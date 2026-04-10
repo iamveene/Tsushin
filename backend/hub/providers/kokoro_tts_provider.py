@@ -30,6 +30,13 @@ from .tts_provider import (
 logger = logging.getLogger(__name__)
 
 
+def _get_default_kokoro_service_url() -> str:
+    stack_name = (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+    if os.path.exists("/.dockerenv"):
+        return f"http://{stack_name}-kokoro-tts:8880"
+    return "http://localhost:8880"
+
+
 class KokoroTTSProvider(TTSProvider):
     """
     Kokoro TTS Provider.
@@ -171,9 +178,8 @@ class KokoroTTSProvider(TTSProvider):
 
     def __init__(self, db=None, token_tracker=None):
         super().__init__(db=db, token_tracker=token_tracker)
-        # VOICE-005 Fix: Auto-detect Docker environment for correct default URL
-        default_url = "http://kokoro-tts:8880" if os.path.exists("/.dockerenv") else "http://localhost:8880"
-        self.service_url = os.getenv("KOKORO_SERVICE_URL", default_url)
+        # VOICE-005 Fix: Auto-detect Docker environment for correct default URL.
+        self.service_url = os.getenv("KOKORO_SERVICE_URL", _get_default_kokoro_service_url())
 
     def get_provider_name(self) -> str:
         return "kokoro"

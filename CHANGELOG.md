@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Sprint — 12 bugs resolved (`develop`, 2026-04-10)
+
+- Fixed Playground memory normalization for `isolated`, `channel_isolated`, and `shared` modes by centralizing sender-key/chat-id resolution across sync chat, queue/streaming, history, memory inspector, thread detail, and websocket auto-rename. Playground history and memory reads now accept optional `thread_id` and return the same canonical thread-scoped data used on writes.
+- Fixed `/tool` buffering so sandboxed-tool results are added exactly once in the shared slash-command execution path and are immediately visible to `/inject`.
+- Fixed agentic chat regressions by promoting A2A `list_agents` delegate intents into real communication sessions and by returning tool/custom-skill output from `/api/v1/agents/{id}/chat` when the assistant body would otherwise be empty.
+- Fixed Sentinel audit semantics to use the real `sentinel_analysis_log` write path, always log threat analyses, and only log benign analyses when `log_all_analyses=true`.
+- Fixed setup/runtime regressions by auto-creating `Qdrant (Default)` during setup through the shared vector-store provisioning helper, surfacing fail-open setup warnings with a manual recovery path, and resolving Kokoro through stack-scoped `KOKORO_SERVICE_URL` defaults derived from `TSN_STACK_NAME`.
+- Fixed flow and Playground UX regressions by normalizing `recipient`/`recipients` in message steps, rejecting image uploads in the Playground document flow with explicit supported-type copy, and keeping the `/flows` creation wizard open when a step type is selected even with onboarding/user-guide overlays present.
+- Validation: rebuilt `backend` and `frontend` without cache, verified health/readiness plus authenticated API smoke, ran the combined focused regression slice (`16 passed`), and used Playwright to validate Playground document rejection, threaded Playground history/memory, and flow-wizard step selection stability.
+
 ### macOS v0.6.0 Targeted Regression (`develop`, 2026-04-10)
 
 - Executed a full v0.6.0 targeted regression test on the production macOS dev stack (`develop` branch, `https://localhost`) covering all 22 TCs from the v0.6.0 test matrix. Both API (`X-API-Key` / OAuth2) and browser automation (Playwright) paths tested. LLM providers configured before test: Anthropic (`claude-sonnet-4-6`, id=2), OpenAI (`gpt-4o-mini`, id=3), Gemini (pre-configured, id=4).

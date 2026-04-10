@@ -165,7 +165,7 @@ services:
       - ASANA_REDIRECT_URI=${ASANA_REDIRECT_URI:-http://localhost:3030/hub/asana/callback}
 
       # External services (use host.docker.internal for host access)
-      - KOKORO_SERVICE_URL=${KOKORO_SERVICE_URL:-http://kokoro-tts:8880}
+      - KOKORO_SERVICE_URL=${KOKORO_SERVICE_URL:-http://${TSN_STACK_NAME:-tsushin}-kokoro-tts:8880}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - GROK_API_KEY=${GROK_API_KEY:-}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}

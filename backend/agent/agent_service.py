@@ -419,6 +419,27 @@ class AgentService:
         cleaned = re.sub(r"\n\n\n+", "\n\n", cleaned).strip()
         return cleaned
 
+    def _prefer_tool_result_when_response_empty(
+        self,
+        ai_response: Optional[str],
+        tool_result: Optional[str],
+    ) -> Optional[str]:
+        """Use the executed tool output when sanitization leaves no user-facing reply."""
+        if isinstance(ai_response, str) and ai_response.strip():
+            return ai_response
+
+        if tool_result is None:
+            return ai_response
+
+        if not isinstance(tool_result, str):
+            tool_result = str(tool_result)
+
+        if tool_result.strip():
+            self.logger.info("Using tool execution result as final agent response")
+            return tool_result
+
+        return ai_response
+
     async def process_message(
         self,
         sender_key: str,
@@ -1091,6 +1112,7 @@ IMPORTANT: When the user asks for system information, server status, file listin
             # wasn't executed or the model produced pseudo tool syntax.
             if ai_response:
                 ai_response = self._sanitize_unexecuted_tool_output(ai_response)
+            ai_response = self._prefer_tool_result_when_response_empty(ai_response, tool_result)
 
             # Phase 4.8: Memory management moved to Multi-Agent Memory Manager in router
             # Ring buffer deprecated

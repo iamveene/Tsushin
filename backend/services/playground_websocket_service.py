@@ -149,7 +149,6 @@ class PlaygroundWebSocketService:
 
                     if thread_id:
                         from services.playground_thread_service import PlaygroundThreadService
-                        from models import Memory
 
                         # Ensure clean DB session before post-streaming queries
                         try:
@@ -163,15 +162,11 @@ class PlaygroundWebSocketService:
                         ).first()
 
                         if current_thread:
-                            # Count messages from Memory table (where they're actually stored)
-                            memory_sender_key = f"sender_{current_thread.recipient}"
-                            memory = self.db.query(Memory).filter(
-                                Memory.agent_id == agent_id,
-                                Memory.sender_key == memory_sender_key
-                            ).first()
-
-                            message_count = len(memory.messages_json) if memory and memory.messages_json else 0
-                            self.logger.warning(f"[Auto-rename WS] Thread {thread_id}: memory_key={memory_sender_key}, message_count={message_count}")
+                            message_count = PlaygroundThreadService(self.db).count_thread_messages(current_thread)
+                            self.logger.warning(
+                                f"[Auto-rename WS] Thread {thread_id}: "
+                                f"recipient={current_thread.recipient}, message_count={message_count}"
+                            )
 
                             # Only auto-rename after first exchange (2 messages: user + assistant)
                             if message_count <= 2:

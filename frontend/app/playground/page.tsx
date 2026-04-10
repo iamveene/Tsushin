@@ -1156,7 +1156,7 @@ export default function PlaygroundPage() {
     }
 
     try {
-      await api.clearPlaygroundHistory(selectedAgentId)
+      await api.clearPlaygroundHistory(selectedAgentId, activeThreadId || undefined)
       setMessages([])
       setError(null)
     } catch (err: any) {

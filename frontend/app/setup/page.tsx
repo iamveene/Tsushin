@@ -79,6 +79,7 @@ export default function SetupPage() {
   const [loading, setLoading] = useState(false)
   // BUG-365: Global admin credential reveal after setup
   const [globalAdminCreds, setGlobalAdminCreds] = useState<{email: string, password: string, full_name: string} | null>(null)
+  const [setupWarnings, setSetupWarnings] = useState<string[]>([])
 
   const goToLogin = useCallback((replace = false) => {
     if (typeof window !== 'undefined') {
@@ -171,6 +172,7 @@ export default function SetupPage() {
       })
 
       if (result.success) {
+        setSetupWarnings(Array.isArray(result.warnings) ? result.warnings : [])
         // BUG-365: Show global admin credentials before redirecting
         if (result.global_admin) {
           setGlobalAdminCreds(result.global_admin)
@@ -208,14 +210,25 @@ export default function SetupPage() {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center py-12 px-4">
         <div className="max-w-lg w-full space-y-6">
-          <div className="bg-gray-900 border border-gray-700 rounded-lg p-6">
-            <h2 className="text-xl font-bold text-white mb-2">Setup Complete</h2>
-            <p className="text-gray-400 mb-6">
-              Save these global administrator credentials. They will not be shown again.
-            </p>
-            <div className="space-y-4 bg-gray-800 rounded-lg p-4 mb-6">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Email</label>
+        <div className="bg-gray-900 border border-gray-700 rounded-lg p-6">
+          <h2 className="text-xl font-bold text-white mb-2">Setup Complete</h2>
+          <p className="text-gray-400 mb-6">
+            Save these global administrator credentials. They will not be shown again.
+          </p>
+          {setupWarnings.length > 0 && (
+            <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
+              <h3 className="text-sm font-semibold text-amber-200 mb-2">Setup needs attention</h3>
+              <div className="space-y-2 text-sm text-amber-100">
+                {setupWarnings.map((warning, index) => (
+                  <p key={`${warning}-${index}`}>{warning}</p>
+                ))}
+                <p>Manual recovery path: Settings &gt; Vector Stores.</p>
+              </div>
+            </div>
+          )}
+          <div className="space-y-4 bg-gray-800 rounded-lg p-4 mb-6">
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Email</label>
                 <div className="font-mono text-white bg-gray-900 px-3 py-2 rounded border border-gray-600 select-all">
                   {globalAdminCreds.email}
                 </div>

@@ -174,7 +174,7 @@ async def create_vector_store_instance(
     ).delete()
 
     try:
-        instance = VectorStoreInstanceService.create_instance(
+        instance, _warning = VectorStoreInstanceService.create_instance_with_optional_provisioning(
             tenant_id=ctx.tenant_id,
             vendor=data.vendor,
             instance_name=data.instance_name,
@@ -185,19 +185,10 @@ async def create_vector_store_instance(
             extra_config=data.extra_config,
             security_config=data.security_config,
             is_default=data.is_default,
+            auto_provision=data.auto_provision,
+            mem_limit=data.mem_limit,
+            cpu_quota=data.cpu_quota,
         )
-
-        # Auto-provision Docker container if requested
-        if data.auto_provision and data.vendor in ("qdrant", "mongodb"):
-            import asyncio
-            from services.vector_store_container_manager import VectorStoreContainerManager
-            if data.mem_limit:
-                instance.mem_limit = data.mem_limit
-            if data.cpu_quota:
-                instance.cpu_quota = data.cpu_quota
-            db.commit()
-            mgr = VectorStoreContainerManager()
-            await asyncio.get_event_loop().run_in_executor(None, mgr.provision, instance, db)
 
         return _to_response(instance, db)
     except ValueError as e:

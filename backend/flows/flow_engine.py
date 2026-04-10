@@ -498,6 +498,8 @@ class MessageStepHandler(FlowStepHandler):
     ) -> Dict[str, Any]:
         """Send message to recipients."""
         config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
+        if not config:
+            config = {}
 
         # Channel guard: WhatsApp and Telegram supported
         channel = config.get("channel", "whatsapp")
@@ -510,9 +512,11 @@ class MessageStepHandler(FlowStepHandler):
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
-        recipients = config.get("recipients", [])
+        recipients = config.get("recipients") or []
         if isinstance(recipients, str):
             recipients = [recipients]
+        else:
+            recipients = [item for item in recipients if isinstance(item, str) and item]
         recipient = config.get("recipient")
         if recipient and recipient not in recipients:
             recipients.append(recipient)

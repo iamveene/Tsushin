@@ -738,8 +738,53 @@ async def setup_wizard(
         except Exception as e:
             logger.warning(f"Setup wizard: Failed to seed shell skill: {e}")
 
+        # Step 7: Auto-provision the default vector store for long-term memory.
+        # This is fail-open during setup so image pull/runtime issues do not block install.
+        default_vector_store_instance = None
+        setup_warnings = []
+        try:
+            from services.vector_store_instance_service import VectorStoreInstanceService
+
+            default_vector_store_instance, vector_store_warning = (
+                VectorStoreInstanceService.create_default_setup_instance(
+                    tenant_id=tenant.id,
+                    db=db,
+                )
+            )
+            if vector_store_warning:
+                setup_warnings.append(vector_store_warning)
+                logger.warning(
+                    "Setup wizard: Default vector store provisioning warning for tenant %s: %s",
+                    tenant.id,
+                    vector_store_warning,
+                )
+            else:
+                logger.info(
+                    "Setup wizard: Auto-provisioned default vector store instance %s for tenant %s",
+                    default_vector_store_instance.id,
+                    tenant.id,
+                )
+        except Exception as e:
+            warning = (
+                "Default vector store could not be created during setup. "
+                "You can create or repair it later from Settings > Vector Stores."
+            )
+            setup_warnings.append(warning)
+            logger.warning(
+                "Setup wizard: Failed to create default vector store for tenant %s: %s",
+                tenant.id,
+                e,
+                exc_info=True,
+            )
+
         # Get tenant admin permissions for frontend
         tenant_admin_permissions = auth_service.get_user_permissions(tenant_owner.id)
+        setup_message = (
+            f"Setup complete! Tenant '{tenant.name}' created with "
+            f"{len(agents_created)} agents and {len(tools_created)} sandboxed tools."
+        )
+        if setup_warnings:
+            setup_message += " Some setup steps need attention."
 
         # SEC-005: Set httpOnly session cookie on setup-wizard
         response = JSONResponse(status_code=201, content={
@@ -771,7 +816,16 @@ async def setup_wizard(
             "system_ai_configured": first_provider_instance is not None,
             "provider_instance_created": first_provider_instance.id if first_provider_instance else None,
             "provider_instances_created": provider_instances_created,
-            "message": f"Setup complete! Tenant '{tenant.name}' created with {len(agents_created)} agents and {len(tools_created)} sandboxed tools."
+            "default_vector_store_instance_id": (
+                default_vector_store_instance.id if default_vector_store_instance else None
+            ),
+            "default_vector_store_provisioned": bool(
+                default_vector_store_instance
+                and default_vector_store_instance.container_status == "running"
+                and not setup_warnings
+            ),
+            "warnings": setup_warnings,
+            "message": setup_message,
         })
         _set_session_cookie(response, tenant_owner_token)
         return response
