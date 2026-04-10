@@ -190,6 +190,8 @@ def _save_encryption_key_to_db(key_type: str, key: str, db: Session) -> bool:
             config.discord_encryption_key = wrapped
         elif key_type == 'webhook':
             config.webhook_encryption_key = wrapped
+        elif key_type == 'remote_access':
+            config.remote_access_encryption_key = wrapped
         else:
             logger.warning(f"Unknown key type: {key_type}")
             return False
@@ -237,6 +239,7 @@ def get_encryption_key(key_type: str, db: Session, auto_generate: bool = True) -
         'slack': 'SLACK_ENCRYPTION_KEY',
         'discord': 'DISCORD_ENCRYPTION_KEY',
         'webhook': 'WEBHOOK_ENCRYPTION_KEY',
+        'remote_access': 'REMOTE_ACCESS_ENCRYPTION_KEY',
     }
 
     # Step 1: Check database (Config table)
@@ -262,6 +265,8 @@ def get_encryption_key(key_type: str, db: Session, auto_generate: bool = True) -
                 stored_key = config.discord_encryption_key
             elif key_type == 'webhook':
                 stored_key = config.webhook_encryption_key
+            elif key_type == 'remote_access':
+                stored_key = config.remote_access_encryption_key
 
             if stored_key:
                 # Unwrap the stored key (SEC-006 envelope decryption)
@@ -449,3 +454,20 @@ def get_webhook_encryption_key(db: Session) -> Optional[str]:
         Webhook encryption key (never None in normal operation)
     """
     return get_encryption_key('webhook', db, auto_generate=True)
+
+
+def get_remote_access_encryption_key(db: Session) -> Optional[str]:
+    """
+    Get Remote Access encryption key (for Cloudflare Tunnel tokens).
+
+    v0.6.0: Dedicated encryption key for RemoteAccessConfig.tunnel_token_encrypted.
+
+    Automatically generates a new key if none exists (SaaS-ready).
+
+    Args:
+        db: Database session
+
+    Returns:
+        Remote Access encryption key (never None in normal operation)
+    """
+    return get_encryption_key('remote_access', db, auto_generate=True)

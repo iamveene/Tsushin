@@ -30,6 +30,9 @@ class Tenant(Base):
     created_by_global_admin = Column(Integer, ForeignKey('user.id'), nullable=True)
     slash_commands_default_policy = Column(String(30), default="enabled_for_known")  # Feature #12: disabled | enabled_for_all | enabled_for_known
     audit_retention_days = Column(Integer, default=90)
+    # v0.6.0 Remote Access: per-tenant entitlement gate. When False, users from this
+    # tenant cannot authenticate via the public Cloudflare tunnel hostname.
+    remote_access_enabled = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)

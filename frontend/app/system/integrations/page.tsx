@@ -58,6 +58,16 @@ const adminCards: AdminCard[] = [
       </svg>
     ),
   },
+  {
+    title: 'Remote Access',
+    description: 'Expose Tsushin via a Cloudflare Tunnel and control per-tenant access to the public URL.',
+    href: '/system/remote-access',
+    icon: (
+      <svg className="w-8 h-8 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 21a9 9 0 100-18 9 9 0 000 18zm0 0c-2.5 0-4.5-4-4.5-9S9.5 3 12 3s4.5 4 4.5 9-2 9-4.5 9zM3.6 9h16.8M3.6 15h16.8" />
+      </svg>
+    ),
+  },
 ]
 
 export default function SystemOverviewPage() {

@@ -153,6 +153,73 @@ export default function TenantDetailPage() {
           </div>
         </div>
       )}
+
+      {/* v0.6.0 Remote Access: per-tenant entitlement */}
+      <RemoteAccessTenantCard
+        tenant={tenant}
+        onUpdated={(t) => setTenant(t)}
+      />
+    </div>
+  )
+}
+
+function RemoteAccessTenantCard({
+  tenant,
+  onUpdated,
+}: {
+  tenant: TenantInfo
+  onUpdated: (t: TenantInfo) => void
+}) {
+  const [toggling, setToggling] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const enabled = !!tenant.remote_access_enabled
+
+  const handleToggle = async () => {
+    setErr(null)
+    setToggling(true)
+    try {
+      const next = !enabled
+      const updated = await api.setTenantRemoteAccess(tenant.id, next)
+      onUpdated({ ...tenant, remote_access_enabled: updated.remote_access_enabled })
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to update entitlement')
+    } finally {
+      setToggling(false)
+    }
+  }
+
+  return (
+    <div className="bg-tsushin-elevated rounded-lg p-4 border border-tsushin-border mt-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-medium text-tsushin-slate mb-1">Remote Access</h2>
+          <p className="text-xs text-tsushin-slate max-w-md">
+            Allow this tenant's users to authenticate via the public Cloudflare Tunnel URL.
+            When off, login from the tunnel hostname returns 403 and is audited. Internal
+            network login is unaffected.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label={`Toggle remote access for ${tenant.name}`}
+          onClick={handleToggle}
+          disabled={toggling}
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+            enabled ? 'bg-teal-500' : 'bg-tsushin-surface border border-tsushin-border'
+          } ${toggling ? 'opacity-60' : ''}`}
+        >
+          <span
+            className={`inline-block h-4 w-4 rounded-full bg-white transform transition-transform ${
+              enabled ? 'translate-x-6' : 'translate-x-1'
+            }`}
+          />
+        </button>
+      </div>
+      {err && (
+        <p className="mt-2 text-xs text-red-400" role="alert">{err}</p>
+      )}
     </div>
   )
 }

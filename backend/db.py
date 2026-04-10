@@ -1526,6 +1526,13 @@ def init_database(engine):
     except Exception as e:
         print(f"[Discord/Slack Migration] Warning: {e}")
 
+    # v0.6.0 Remote Access (Cloudflare Tunnel): config table + tenant entitlement column
+    try:
+        from migrations.add_remote_access import upgrade_from_engine as upgrade_remote_access
+        upgrade_remote_access(engine)
+    except Exception as e:
+        print(f"[Remote Access Migration] Warning: {e}")
+
     # Create default config if not exists
     SessionLocal = sessionmaker(bind=engine)
     session = SessionLocal()

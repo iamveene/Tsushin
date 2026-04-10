@@ -19,6 +19,16 @@
 function resolveApiUrl(): string {
   const envUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
   if (typeof window === 'undefined') return envUrl
+
+  // v0.6.0 Remote Access: when the page is loaded over HTTPS, all API calls
+  // must also go over HTTPS on the same origin (no explicit port). This covers
+  // both the local https://localhost Caddy proxy and the public Cloudflare
+  // Tunnel hostname (e.g. https://tsushin.archsec.io). In both cases Caddy
+  // routes /api/* → tsushin-backend:8081 internally.
+  if (window.location.protocol === 'https:') {
+    return `${window.location.protocol}//${window.location.host}`
+  }
+
   try {
     const apiUrl = new URL(envUrl)
     if (apiUrl.protocol === 'http:' && apiUrl.hostname !== window.location.hostname) {
@@ -2245,6 +2255,7 @@ export interface TenantInfo {
   status: string
   user_count: number
   agent_count: number
+  remote_access_enabled?: boolean  // v0.6.0: Cloudflare tunnel entitlement
   created_at: string | null
   updated_at: string | null
 }
@@ -5103,6 +5114,7 @@ export const api = {
     max_agents?: number
     max_monthly_requests?: number
     status?: string
+    remote_access_enabled?: boolean  // v0.6.0: Cloudflare tunnel entitlement
   }): Promise<TenantInfo> {
     const res = await authenticatedFetch(`${API_URL}/api/tenants/${id}`, {
       method: 'PUT',
@@ -7250,6 +7262,148 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to archive decayed facts')
     return res.json()
   },
+
+  // ==========================================================================
+  // v0.6.0 Remote Access (Cloudflare Tunnel) — Global Admin only
+  // ==========================================================================
+  async getRemoteAccessConfig(): Promise<RemoteAccessConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/remote-access/config`)
+    if (!res.ok) await handleApiError(res, 'Failed to load remote access config')
+    return res.json()
+  },
+
+  async updateRemoteAccessConfig(body: RemoteAccessConfigUpdate): Promise<RemoteAccessConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/remote-access/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update remote access config')
+    return res.json()
+  },
+
+  async getRemoteAccessStatus(): Promise<RemoteAccessStatus> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/remote-access/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to load remote access status')
+    return res.json()
+  },
+
+  async startRemoteAccess(mode?: RemoteAccessMode): Promise<RemoteAccessStatus> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/remote-access/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: mode ?? null }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to start remote access tunnel')
+    return res.json()
+  },
+
+  async stopRemoteAccess(): Promise<RemoteAccessStatus> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/remote-access/stop`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to stop remote access tunnel')
+    return res.json()
+  },
+
+  async listRemoteAccessTenants(): Promise<RemoteAccessTenantRow[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/remote-access/tenants`)
+    if (!res.ok) await handleApiError(res, 'Failed to load tenant entitlements')
+    return res.json()
+  },
+
+  async setTenantRemoteAccess(tenantId: string, enabled: boolean, reason?: string): Promise<RemoteAccessTenantRow> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/remote-access/tenants/${tenantId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, reason: reason ?? null }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update tenant entitlement')
+    return res.json()
+  },
+
+  async getRemoteAccessCallbacks(): Promise<RemoteAccessCallbacks> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/remote-access/callbacks`)
+    if (!res.ok) await handleApiError(res, 'Failed to load callback URIs')
+    return res.json()
+  },
+}
+
+// ============================================================================
+// v0.6.0 Remote Access — TypeScript types
+// ============================================================================
+export type RemoteAccessState =
+  | 'stopped' | 'starting' | 'running' | 'stopping'
+  | 'crashed' | 'error' | 'unavailable'
+export type RemoteAccessMode = 'quick' | 'named'
+export type RemoteAccessProtocol = 'auto' | 'http2' | 'quic'
+export type RemoteAccessCallbackPurpose = 'google_sso' | 'hub_oauth'
+
+export interface RemoteAccessConfig {
+  enabled: boolean
+  mode: RemoteAccessMode
+  autostart: boolean
+  protocol: RemoteAccessProtocol
+  tunnel_hostname: string | null
+  tunnel_dns_target: string | null
+  target_url: string
+  tunnel_token_configured: boolean
+  last_started_at: string | null
+  last_stopped_at: string | null
+  last_error: string | null
+  updated_at: string | null
+  updated_by_email: string | null
+}
+
+export interface RemoteAccessConfigUpdate {
+  enabled?: boolean
+  mode?: RemoteAccessMode
+  autostart?: boolean
+  protocol?: RemoteAccessProtocol
+  tunnel_hostname?: string | null
+  tunnel_dns_target?: string | null
+  target_url?: string
+  tunnel_token?: string         // write-only; omit to leave unchanged
+  clear_tunnel_token?: boolean
+  expected_updated_at?: string | null
+}
+
+export interface RemoteAccessStatus {
+  state: RemoteAccessState
+  mode: RemoteAccessMode | null
+  public_url: string | null
+  hostname: string | null
+  target_url: string | null
+  pid: number | null
+  started_at: string | null
+  updated_at: string | null
+  last_error: string | null
+  restart_attempts: number
+  supervisor_active: boolean
+  binary_available: boolean
+  cloudflared_path: string | null
+  message: string | null
+}
+
+export interface RemoteAccessTenantRow {
+  id: string
+  name: string
+  slug: string
+  user_count: number
+  remote_access_enabled: boolean
+  last_changed_at: string | null
+  last_changed_by_email: string | null
+}
+
+export interface RemoteAccessCallback {
+  label: string
+  uri: string
+  purpose: RemoteAccessCallbackPurpose
+}
+
+export interface RemoteAccessCallbacks {
+  hostname: string | null
+  callbacks: RemoteAccessCallback[]
 }
 
 // Default export for convenience (used by prompts page and others)

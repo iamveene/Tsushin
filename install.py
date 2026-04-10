@@ -739,7 +739,14 @@ class TsushinInstaller:
                 self.config['SSL_MODE'] = 'disabled'
 
     def generate_caddyfile(self):
-        """Generate Caddy reverse proxy configuration based on SSL mode"""
+        """Generate Caddy reverse proxy configuration based on SSL mode.
+
+        v0.6.0 Remote Access: emits an additional :80 site block using the same
+        routing snippet so cloudflared (running inside the backend container)
+        can forward Cloudflare Tunnel requests to `{stack}-proxy:80`. Without
+        this, tunnel traffic would bypass Caddy's /api routing and the
+        frontend's API calls would 502.
+        """
         ssl_mode = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
         if ssl_mode == 'disabled':
             return
@@ -750,8 +757,10 @@ class TsushinInstaller:
         backend_host = f"{stack_name}-backend:8081"
         frontend_host = f"{stack_name}-frontend:3030"
 
-        # Build Caddyfile based on SSL mode
-        routing_block = f"""    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # Reusable snippet — imported by both the main HTTPS site and the
+        # HTTP :80 site used by the Cloudflare Tunnel (v0.6.0 Remote Access).
+        snippet_block = f"""(tsushin_routes) {{
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
     handle /api/* {{
         reverse_proxy {backend_host}
     }}
@@ -760,20 +769,44 @@ class TsushinInstaller:
     }}
     handle {{
         reverse_proxy {frontend_host}
-    }}"""
+    }}
+}}"""
+
+        remote_access_block = """# v0.6.0 Remote Access (Cloudflare Tunnel): cloudflared forwards requests
+# from the public tunnel hostname to this proxy on plain HTTP inside the
+# container network. Cloudflare terminates TLS at the edge.
+:80 {
+    import tsushin_routes
+}"""
 
         if ssl_mode == 'letsencrypt':
             email = self.config.get('SSL_EMAIL', '')
-            caddyfile_content = f"""{{\n    email {email}\n}}\n\n{domain} {{\n{routing_block}\n}}\n"""
+            caddyfile_content = (
+                f"{{\n    email {email}\n}}\n\n"
+                f"{snippet_block}\n\n"
+                f"{domain} {{\n    import tsushin_routes\n}}\n\n"
+                f"{remote_access_block}\n"
+            )
 
         elif ssl_mode == 'manual':
-            caddyfile_content = f"""{domain} {{\n    tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem\n{routing_block}\n}}\n"""
+            caddyfile_content = (
+                f"{snippet_block}\n\n"
+                f"{domain} {{\n"
+                f"    tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem\n"
+                f"    import tsushin_routes\n}}\n\n"
+                f"{remote_access_block}\n"
+            )
 
         elif ssl_mode == 'selfsigned':
             # default_sni ensures Caddy serves the cert even when clients don't
             # send SNI (e.g., curl/browsers connecting via bare IP address)
-            global_block = f"""{{\n    default_sni {domain}\n}}\n\n"""
-            caddyfile_content = f"""{global_block}{domain} {{\n    tls internal\n{routing_block}\n}}\n"""
+            global_block = f"{{\n    default_sni {domain}\n}}\n\n"
+            caddyfile_content = (
+                f"{global_block}"
+                f"{snippet_block}\n\n"
+                f"{domain} {{\n    tls internal\n    import tsushin_routes\n}}\n\n"
+                f"{remote_access_block}\n"
+            )
 
         else:
             return

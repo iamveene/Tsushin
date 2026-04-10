@@ -89,6 +89,7 @@ class Config(Base):
     slack_encryption_key = Column(String(500), nullable=True)  # Slack token encryption (Fernet key) — v0.6.0 Item 33
     discord_encryption_key = Column(String(500), nullable=True)  # Discord token encryption (Fernet key) — v0.6.0 Item 34
     webhook_encryption_key = Column(String(500), nullable=True)  # Webhook HMAC secret encryption (Fernet key) — v0.6.0
+    remote_access_encryption_key = Column(String(500), nullable=True)  # Cloudflare Tunnel token encryption (Fernet key) — v0.6.0 Remote Access
 
     # System-Level AI Configuration (Phase 17: Tenant-Configurable System AI)
     # These settings control which AI provider/model is used for system operations
@@ -3635,6 +3636,41 @@ class OKGMemoryAuditLog(Base):
 
 # BUG-311/312/313: public_key and app_id fields added to existing
 # DiscordIntegration and SlackIntegration models above.
+
+
+# ============================================================================
+# Remote Access (Cloudflare Tunnel) — v0.6.0
+# ============================================================================
+class RemoteAccessConfig(Base):
+    """System-wide Cloudflare Tunnel config (single row, id=1).
+
+    Stores the global admin's tunnel configuration. Per-tenant entitlement
+    lives on Tenant.remote_access_enabled. The tunnel_token field is
+    encrypted at rest using the remote_access_encryption_key from Config.
+    """
+    __tablename__ = "remote_access_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    enabled = Column(Boolean, default=False, nullable=False)
+    mode = Column(String(20), default="quick", nullable=False)        # quick | named
+    autostart = Column(Boolean, default=False, nullable=False)
+    protocol = Column(String(10), default="auto", nullable=False)     # auto | http2 | quic
+
+    # Named-tunnel config
+    tunnel_token_encrypted = Column(Text, nullable=True)              # Fernet via TokenEncryption
+    tunnel_hostname = Column(String(255), nullable=True)              # e.g. tsushin.archsec.io
+    tunnel_dns_target = Column(String(255), nullable=True)            # *.cfargotunnel.com (informational)
+
+    # Target for the tunnel — defaults to the frontend container
+    target_url = Column(String(255), nullable=False, default="http://frontend:3030")
+
+    # Cross-restart persistence (service may crash; admin needs visibility)
+    last_started_at = Column(DateTime, nullable=True)
+    last_stopped_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+
+    updated_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 # ============================================================================
