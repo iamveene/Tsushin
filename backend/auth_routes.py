@@ -41,6 +41,75 @@ def get_encryption_key(db: Session) -> Optional[str]:
     return get_google_encryption_key(db)
 
 
+def _enforce_remote_access_gate(request: Request, user: User, db: Session) -> None:
+    """v0.6.0 Remote Access: block login via the public Cloudflare tunnel
+    hostname if the user's tenant is not enabled for remote access.
+
+    No-op for:
+    - Requests that did not arrive via the configured tunnel hostname.
+    - Global admins (no tenant).
+    - Tenants whose ``remote_access_enabled`` flag is True.
+
+    Raises HTTPException(403) otherwise, and writes an audit event tagged
+    ``auth.remote_access.denied`` (severity=warning) so the tenant owner
+    sees the attempt in their audit log.
+    """
+    try:
+        from models import RemoteAccessConfig
+    except Exception:
+        return
+
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or ""
+    )
+    host = host.split(",")[0].strip().lower()
+    if not host:
+        return
+
+    cfg = db.query(RemoteAccessConfig).filter(RemoteAccessConfig.id == 1).first()
+    if not cfg or not cfg.enabled or not cfg.tunnel_hostname:
+        return
+
+    tunnel_host = cfg.tunnel_hostname.strip().lower()
+    # Strip the port if the request carries one
+    host_no_port = host.split(":", 1)[0]
+    if host_no_port != tunnel_host:
+        return  # internal or direct-to-backend access — gate does not apply
+
+    if not user.tenant_id:
+        return  # global admin — always permitted through the tunnel
+
+    tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id).first()
+    if tenant and tenant.remote_access_enabled:
+        return
+
+    # Denied — write an audit entry then raise
+    log_tenant_event(
+        db,
+        user.tenant_id,
+        None,
+        "auth.remote_access.denied",
+        "tenant",
+        user.tenant_id,
+        {"email": user.email, "hostname": host_no_port},
+        request,
+        severity="warning",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error_code": "REMOTE_ACCESS_TENANT_DISABLED",
+            "message": (
+                "Remote access is not enabled for this tenant. "
+                "Contact your administrator."
+            ),
+            "tenant_id": user.tenant_id,
+        },
+    )
+
+
 def _set_session_cookie(response: JSONResponse, token: str) -> None:
     """
     SEC-005: Set the httpOnly session cookie on the response.
@@ -327,6 +396,11 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
 
     try:
         user, token = auth_service.login(login_request.email, login_request.password)
+
+        # v0.6.0 Remote Access: reject if the request arrived via the public
+        # tunnel hostname AND the user's tenant does not have remote access
+        # enabled. Raises HTTPException(403) on denial.
+        _enforce_remote_access_gate(request, user, db)
 
         # Audit: successful login
         if user.tenant_id:
@@ -1396,6 +1470,19 @@ async def exchange_sso_code(
     try:
         jwt_token, redirect_after = _exchange_sso_callback_code(db, exchange_request.code)
 
+        # v0.6.0 Remote Access: enforce per-tenant gate for SSO logins too.
+        # Decode the JWT we just issued to find the user, then apply the gate.
+        from auth_utils import decode_access_token
+        claims = decode_access_token(jwt_token)
+        if claims and claims.get("sub"):
+            try:
+                user_id = int(claims["sub"])
+                user = db.query(User).filter(User.id == user_id).first()
+                if user:
+                    _enforce_remote_access_gate(request, user, db)
+            except (ValueError, TypeError):
+                pass  # Malformed sub claim — let downstream handle it
+
         # SEC-005: Set httpOnly session cookie on SSO code exchange
         response = JSONResponse(content={
             "access_token": jwt_token,
@@ -1405,6 +1492,8 @@ async def exchange_sso_code(
         _set_session_cookie(response, jwt_token)
         return response
 
+    except HTTPException:
+        raise  # Preserve the REMOTE_ACCESS_TENANT_DISABLED 403
     except ValueError as e:
         logger.warning(f"SSO code exchange failed: {e}")
         raise HTTPException(

@@ -76,6 +76,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
+# v0.6.0 Remote Access: install cloudflared binary so the backend can manage
+# a Cloudflare Tunnel subprocess. Pinned to a specific upstream release with
+# SHA256 verification (supply-chain hardening — do NOT switch back to
+# releases/latest). Bump CLOUDFLARED_VERSION + checksums to upgrade.
+# Installed while still root so /usr/local/bin/cloudflared has the correct
+# permissions; the non-root `tsushin` user only needs execute access.
+ARG CLOUDFLARED_VERSION=2026.3.0
+ARG CLOUDFLARED_SHA256_AMD64=4a9e50e6d6d798e90fcd01933151a90bf7edd99a0a55c28ad18f2e16263a5c30
+ARG CLOUDFLARED_SHA256_ARM64=0755ba4cbab59980e6148367fcf53a8f3ec85a97deefd63c2420cf7850769bee
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      x86_64) cf_arch="amd64"; cf_sha="${CLOUDFLARED_SHA256_AMD64}" ;; \
+      aarch64|arm64) cf_arch="arm64"; cf_sha="${CLOUDFLARED_SHA256_ARM64}" ;; \
+      *) echo "Unsupported architecture for cloudflared: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${cf_arch}" -o /usr/local/bin/cloudflared; \
+    echo "${cf_sha}  /usr/local/bin/cloudflared" | sha256sum -c -; \
+    chmod 0755 /usr/local/bin/cloudflared; \
+    /usr/local/bin/cloudflared --version
+
 # Optional: ffmpeg (used by kokoro_tts_provider.py for WAV->Opus conversion)
 RUN if [ "$INSTALL_FFMPEG" = "true" ]; then \
         apt-get update && apt-get install -y --no-install-recommends ffmpeg \

@@ -66,10 +66,18 @@ ops/.pids/
 .idea/
 .claude/
 .cursor/
+# Internal/never-push files (bug tracker, playbooks, agent/roadmap notes)
 CLAUDE.md
 AGENTS.md
 BUGS.md
 ROADMAP.md
+deployment-test-playbook.md
+DEPLOYMENT-TEST-PLAYBOOK.md
+PLAYBOOK.md
+/deployment-*.md
+/internal-*.md
+/*-playbook.md
+/*_playbook.md
 *.swp
 *.swo
 *~
@@ -167,6 +175,9 @@ caddy/Caddyfile
 caddy/certs/*.crt
 caddy/certs/*.key
 caddy/certs/*.pem
+# Per-stack generated Caddy artifacts (install.py writes here per TSN_STACK_NAME)
+caddy/*/Caddyfile
+caddy/*/certs/
 
 # Test data
 test_data/
@@ -250,7 +261,6 @@ backend/test-api.html
 # Root-level screenshots & dev artifacts
 /*.png
 /output/
-/deployment-test-playbook.md
 
 # Dev/test scripts, temp files, internal notes (not for remote repo)
 backend/app.py.tmp

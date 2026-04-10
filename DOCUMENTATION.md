@@ -2132,6 +2132,151 @@ Platform-level third-party credentials (keys that apply globally, not per-tenant
 
 Define plan tiers (Free, Pro, Enterprise, etc.) with quotas and feature toggles. Each tenant's current plan is visible on the Organization page (§21.1).
 
+### 22.5 Remote Access (Cloudflare Tunnel) — v0.6.0
+
+**Primary sources:**
+- `backend/services/cloudflare_tunnel_service.py` — subprocess lifecycle, supervisor, metrics probe
+- `backend/services/remote_access_config_service.py` — DB CRUD + optimistic concurrency + audit
+- `backend/api/routes_remote_access.py` — REST surface under `/api/admin/remote-access/*`
+- `backend/auth_routes.py::_enforce_remote_access_gate` — per-tenant login gate
+- `frontend/app/system/remote-access/page.tsx` — Global Admin UI
+
+Remote Access exposes the whole Tsushin instance through a single Cloudflare Tunnel so users can log in from outside the internal network. The feature is **off by default** at both the system level (`RemoteAccessConfig.enabled=false`) and the per-tenant level (`Tenant.remote_access_enabled=false`). There are two layers of control:
+
+1. **System tunnel** (managed by the Global Admin in `/system/remote-access`): configures and runs the `cloudflared` subprocess inside the backend container.
+2. **Per-tenant entitlement** (managed by the Global Admin per tenant): gates which tenants' users can actually log in via the public URL. Users from tenants without the entitlement get an HTTP 403 with the error code `REMOTE_ACCESS_TENANT_DISABLED` and the message "Remote access is not enabled for this tenant. Contact your administrator." The attempt is written to the tenant audit log as `auth.remote_access.denied` (severity=warning).
+
+#### 22.5.1 Architecture
+
+```
+┌──────────────────────┐         ┌────────────────────────────┐
+│ Cloudflare Edge      │◀──QUIC──│ cloudflared subprocess     │
+│ tsushin.example.com  │         │ (inside tsushin-backend,   │
+└──────────────────────┘         │  metrics @127.0.0.1:20241) │
+                                 └────────────┬───────────────┘
+                                              │ http://tsushin-proxy:80
+                                              ▼
+                                 ┌────────────────────────────┐
+                                 │ Caddy (tsushin-proxy)      │
+                                 │ /api/*  → backend:8081     │
+                                 │ /ws/*   → backend:8081     │
+                                 │ else    → frontend:3030    │
+                                 └────────────────────────────┘
+```
+
+Key properties:
+- `cloudflared` runs as a supervised Python subprocess inside `tsushin-backend` (not a separate compose sidecar). A supervisor task restarts it up to 3 times with 5s/15s/30s backoff before giving up and marking `status=error`.
+- Readiness is confirmed by polling `cloudflared`'s Prometheus metrics endpoint for a `cloudflared_tunnel_ha_connections > 0` line — named mode no longer relies on a race-condition-prone sleep.
+- Cloudflare terminates TLS at the edge. The tunnel forwards plain HTTP to the local Caddy proxy on port 80, which then routes `/api/*` and `/ws/*` to the backend and everything else to the frontend. This is why `install.py` generates a `:80` site block in every SSL mode; without it, tunnel requests would bypass Caddy's `/api` routing and the frontend's API calls would 502.
+- The tunnel token is encrypted at rest with a dedicated Fernet key (`config.remote_access_encryption_key`), which itself is wrapped with `TSN_MASTER_KEY` (SEC-006 envelope pattern). The plaintext token is never logged, never returned in any API response, and only surfaced as the boolean `tunnel_token_configured` in the GET config endpoint.
+- Optimistic concurrency on config writes: the PUT endpoint takes an `expected_updated_at` and returns HTTP 409 if the stored `updated_at` has moved since the admin last read it.
+
+#### 22.5.2 Tunnel modes
+
+| Mode | When to use | URL | Persistence | Auth |
+|---|---|---|---|---|
+| **Quick** | Dev, demos, smoke tests | Random `https://<words>.trycloudflare.com` | Ephemeral (new URL per start) | None — any visitor can reach it |
+| **Named** | Production / enterprise | Custom FQDN (e.g. `https://tsushin.acme.com`) | Stable; bound to a Cloudflare Tunnel in your Zero Trust account | Tunnel token pinned to your Cloudflare account; add Zero Trust Access policies if you want additional auth on top of Tsushin's own login |
+
+In both modes, Tsushin's own RBAC + per-tenant entitlement still apply.
+
+#### 22.5.3 Setting up a Named Tunnel (production)
+
+One-time Cloudflare setup (only needed for Named mode):
+
+1. Log in to the Cloudflare dashboard → **Zero Trust** → **Networks** → **Connectors** (previously "Tunnels").
+2. **Create a tunnel** → choose **Cloudflared** → name it (e.g. `tsushin`). Cloudflare generates a connector token — copy it; you'll need it in a moment.
+3. Go to **Published application routes** → **Add a published application route**:
+   - **Subdomain + Domain**: pick the hostname you want (e.g. `tsushin` + `acme.com` → `tsushin.acme.com`). Cloudflare will auto-create the DNS record for you.
+   - **Path**: leave empty.
+   - **Service type**: HTTP.
+   - **Service URL**: `tsushin-proxy:80` (the Caddy reverse proxy inside your Docker network). **Do not** use `frontend:3030` — that would bypass Caddy and break `/api` routing.
+
+Tsushin setup:
+
+1. Log in as a Global Admin and navigate to **System Administration** → **Remote Access** (`/system/remote-access`).
+2. In the **Tunnel Configuration** card:
+   - Check **Feature enabled globally**.
+   - Select **Named** mode.
+   - Paste the **Tunnel hostname** (e.g. `tsushin.acme.com`).
+   - Paste the **Tunnel token** from Cloudflare (write-only — placeholder turns to `●●●●●● (configured)` after save).
+   - Optionally toggle **Auto-start on boot (with supervisor)** so the tunnel survives backend restarts.
+   - Click **Save configuration**.
+3. Scroll to the **Google OAuth callback URIs** card. **Before** starting the tunnel, copy both URIs and add them to your Google Cloud Console OAuth 2.0 client (**APIs & Services → Credentials → your OAuth client → Authorized redirect URIs**):
+   - `https://<hostname>/api/auth/google/callback` (SSO login)
+   - `https://<hostname>/api/hub/google/oauth/callback` (Hub Gmail/Calendar integrations)
+   - Skipping this step will break Google SSO for users arriving via the public URL.
+4. In the **Tunnel Status** card, select **Named** in the mode dropdown and click **Start**. Within 10–15 seconds the badge will turn green (`Running`) and the public URL field will show your hostname.
+5. Open `https://<hostname>` in a browser — you should see the Tsushin login page.
+
+#### 22.5.4 Enabling remote access for a specific tenant
+
+Even after the tunnel is running, no tenant can actually log in through the public URL until the Global Admin enables their `remote_access_enabled` flag. Two ways to do it:
+
+**Option A — from `/system/remote-access` (fastest for bulk toggles):**
+1. Scroll to the **Per-tenant entitlement** card at the bottom.
+2. Find the tenant in the table and click the toggle in the **Remote Access** column. The toggle is optimistic (instant visual feedback with rollback on error).
+3. The "Last changed" column updates with the admin's email. Both the global audit log and the tenant-scoped audit log record the change (`remote_access.tenant.enabled` or `remote_access.tenant.disabled`).
+
+**Option B — from the tenant detail page:**
+1. Navigate to **System Administration** → **Tenant Management** → click into the specific tenant.
+2. Scroll to the **Remote Access** card and flip the toggle.
+3. Same audit trail as Option A.
+
+**What happens behind the scenes:**
+- A user from an enabled tenant logs in at `https://<hostname>/auth/login` → normal login flow, normal JWT, normal dashboard.
+- A user from a disabled tenant sees a banner on the login page: "Remote access is not enabled for this tenant. Contact your administrator." → 403 response, no JWT issued, `auth.remote_access.denied` written to their tenant audit log.
+- Global admins (`user.tenant_id IS NULL`) always pass the gate — they can always reach the system via the public URL.
+- **Internal network access is unaffected.** The gate only fires when the request's `Host` / `X-Forwarded-Host` header matches the configured `tunnel_hostname`. Requests coming in via `https://localhost` or direct to `tsushin-backend:8081` skip the gate entirely.
+
+#### 22.5.5 Quick Tunnel (dev / demo)
+
+For quick spot-checks you can skip the named-tunnel setup entirely:
+
+1. `/system/remote-access` → **Tunnel Status** → mode dropdown = **Quick** → **Start**.
+2. Within 30 seconds the public URL field shows a random `https://<words>.trycloudflare.com` URL.
+3. Share that URL with the demo audience; it stays alive until you click **Stop** or restart the backend.
+4. Per-tenant entitlement still applies.
+
+Quick tunnels are intentionally unauthenticated at the Cloudflare layer — anyone with the URL can reach Tsushin's login page. The per-tenant gate + Tsushin login + (optionally) Google SSO are the only things protecting it. **Never use quick mode for production traffic.**
+
+#### 22.5.6 Status, lifecycle, and troubleshooting
+
+The Status card polls `GET /api/admin/remote-access/status` every 5 seconds while the tab is visible (it pauses when you switch away, per the `document.visibilityState` API). State values:
+
+| State | Meaning |
+|---|---|
+| `stopped` | Subprocess is not running. Default state after boot if autostart is off. |
+| `starting` | Subprocess is launching; readiness probe hasn't confirmed yet. |
+| `running` | Subprocess is up and connected to the Cloudflare edge (≥1 HA connection). |
+| `stopping` | Graceful stop in progress (SIGTERM → 10s → SIGKILL → 5s ladder). |
+| `crashed` | Subprocess exited unexpectedly; supervisor may be about to restart. |
+| `error` | Supervisor gave up after 3 restart attempts — manual intervention required. |
+| `unavailable` | `cloudflared` binary not found in the backend container (should never happen with the shipped Dockerfile). |
+
+Common errors surfaced in `last_error`:
+- **"Named tunnel failed readiness probe (no HA connections in 15s)"** — the tunnel token is wrong, the hostname isn't bound to any route, or outbound QUIC/HTTPS is blocked by your firewall. Double-check the token and the Cloudflare Dashboard route.
+- **"Quick tunnel timed out waiting for URL"** — cloudflared couldn't reach the `trycloudflare.com` edge. Network / egress issue.
+- **"Supervisor gave up after 3 restart attempts"** — cloudflared keeps crashing. Check `docker logs tsushin-backend | grep cloudflared` for the underlying error; typical causes: invalid token, revoked route, stale DNS record.
+
+#### 22.5.7 Security considerations
+
+- **Token at rest:** Fernet (AES-128-CBC + HMAC-SHA256) with a per-feature key that's envelope-wrapped by `TSN_MASTER_KEY`. Rotating `TSN_MASTER_KEY` without re-encrypting the token will cause `_load_config` to throw and the tunnel will refuse to start — document the rotation procedure in your runbook.
+- **Token in transit:** never logged, never returned in any API response, never surfaced to the frontend beyond a boolean `tunnel_token_configured` flag.
+- **Login gate:** enforced on both the password login path and the Google SSO exchange path. Host header spoofing from inside your LAN is possible but accepted — the gate is permissive (allows local access) by design, and your internal network is assumed to be trusted. External attackers can only reach the backend via the tunnel, which enforces the hostname upstream.
+- **Global admin bypass:** intentional — the platform operator always needs a way in, even if every tenant is disabled.
+- **Audit:** every config change fires `remote_access.config.updated` on `GlobalAdminAuditLog`. Tenant entitlement changes fire on BOTH the global stream and the tenant-scoped stream. Denied logins fire `auth.remote_access.denied` on the tenant-scoped stream with `severity=warning`.
+- **Rotating the tunnel token:** paste a new token in the Config card and click Save. If the tunnel is currently running, the backend performs a stop→start cycle automatically (`reload_config()`).
+
+#### 22.5.8 Disabling the feature
+
+To fully disable remote access for every tenant without tearing the config down:
+
+1. `/system/remote-access` → **Tunnel Status** → **Stop**.
+2. (Optional) In **Tunnel Configuration**, uncheck **Feature enabled globally** → Save.
+
+To restore it later, just click Start — the encrypted token and hostname are preserved.
+
 ---
 
 ## 23. Audit Logging & Compliance

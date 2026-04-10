@@ -49,6 +49,7 @@ class TenantUpdate(BaseModel):
     max_agents: Optional[int] = None
     max_monthly_requests: Optional[int] = None
     status: Optional[str] = None  # active, suspended, trial
+    remote_access_enabled: Optional[bool] = None  # v0.6.0: per-tenant remote access gate
 
 
 class TenantResponse(BaseModel):
@@ -65,6 +66,7 @@ class TenantResponse(BaseModel):
     status: str
     user_count: int = 0
     agent_count: int = 0
+    remote_access_enabled: bool = False  # v0.6.0: Cloudflare tunnel entitlement
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -142,6 +144,7 @@ def tenant_to_response(tenant: Tenant, db: Session) -> TenantResponse:
         status=tenant.status,
         user_count=user_count,
         agent_count=agent_count,
+        remote_access_enabled=bool(getattr(tenant, "remote_access_enabled", False)),
         created_at=tenant.created_at.isoformat() if tenant.created_at else None,
         updated_at=tenant.updated_at.isoformat() if tenant.updated_at else None,
     )
@@ -425,6 +428,19 @@ async def update_tenant(
         if request.status is not None:
             tenant.status = request.status
             tenant.is_active = request.status == "active"
+        # v0.6.0 Remote Access: per-tenant entitlement (global admin only).
+        # Delegates to the remote access service so both audit streams fire.
+        if request.remote_access_enabled is not None and bool(tenant.remote_access_enabled) != bool(request.remote_access_enabled):
+            from services.remote_access_config_service import set_tenant_entitlement
+            set_tenant_entitlement(
+                db=db,
+                admin=current_user,
+                tenant_id=tenant.id,
+                enabled=bool(request.remote_access_enabled),
+                reason=None,
+            )
+            # Refresh for the response
+            db.refresh(tenant)
 
     tenant.updated_at = datetime.utcnow()
     db.commit()

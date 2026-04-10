@@ -155,6 +155,8 @@ from api.routes_custom_skills import router as custom_skills_router, set_engine 
 from api.routes_mcp_servers import router as mcp_servers_router, set_engine as set_mcp_servers_engine
 from api.routes_services import router as services_router
 from api.routes_agent_communication import router as agent_comm_router, set_engine as set_agent_comm_engine
+# v0.6.0 Remote Access (Cloudflare Tunnel)
+from api.routes_remote_access import router as remote_access_router
 from api.v1.router import v1_router
 from middleware.rate_limiter import ApiV1RateLimitMiddleware
 from services.queue_worker import start_queue_worker, stop_queue_worker
@@ -749,6 +751,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error starting Syslog Forwarder Worker: {e}", exc_info=True)
 
+    # v0.6.0 Remote Access (Cloudflare Tunnel): initialize the singleton
+    # service and, if config.enabled + config.autostart, fire-and-forget
+    # autostart. Failures here must never block app startup.
+    try:
+        from services.cloudflare_tunnel_service import get_cloudflare_tunnel_service
+        TunnelSession = sessionmaker(bind=engine)
+        tunnel_service = get_cloudflare_tunnel_service(TunnelSession)
+        app.state.tunnel_service = tunnel_service
+        logging.info(
+            "Cloudflare tunnel service initialized (binary=%s)",
+            tunnel_service._cloudflared_path or "not found",
+        )
+        if await tunnel_service.should_autostart():
+            asyncio.create_task(tunnel_service.start_autostart())
+            logging.info("Cloudflare tunnel autostart requested")
+    except Exception as e:
+        logging.error(f"Error initializing Cloudflare tunnel service: {e}", exc_info=True)
+
     # Phase 22.4: Auto-connect active MCP servers on startup
     async def _auto_connect_mcp_servers():
         await asyncio.sleep(5)  # Wait for full startup
@@ -911,6 +931,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error stopping Syslog Forwarder Worker: {e}", exc_info=True)
 
+    # v0.6.0 Remote Access: stop cloudflared subprocess cleanly so SIGTERM
+    # propagates before the DB engine is disposed.
+    try:
+        if hasattr(app.state, "tunnel_service") and app.state.tunnel_service is not None:
+            await app.state.tunnel_service.shutdown()
+            logging.info("Cloudflare tunnel service stopped")
+    except Exception as e:
+        logging.error(f"Error stopping Cloudflare tunnel service: {e}", exc_info=True)
+
     session.close()
     logging.info("Application shutdown")
 
@@ -990,6 +1019,44 @@ else:
     _cors_origins = [origin.strip() for origin in _cors_origins_str.split(",") if origin.strip()]
     _cors_origin_regex = None
     _cors_allow_credentials = True  # Safe to allow credentials with explicit origins
+
+# v0.6.0 Remote Access: append the configured Cloudflare Tunnel hostname to
+# the allow list so cross-origin API integrations that target the public URL
+# work even when TSN_CORS_ORIGINS is pinned to localhost. Same-origin browser
+# traffic (UI loaded from the tunnel hostname calling /api on the same
+# hostname) does not require CORS, but explicit origins here protect
+# external API consumers. Best-effort; silently skipped if the
+# remote_access_config table does not yet exist (fresh install pre-migration).
+if _cors_origins:
+    _cors_bootstrap = None
+    try:
+        from sqlalchemy import create_engine as _cors_engine, text as _cors_text
+        _cors_bootstrap_url = os.getenv("DATABASE_URL", "")
+        if _cors_bootstrap_url:
+            # Engine creation must be inside the try/finally so a failure
+            # here (rather than only during .connect()) still releases the
+            # connection pool properly.
+            _cors_bootstrap = _cors_engine(_cors_bootstrap_url)
+            with _cors_bootstrap.connect() as _cors_conn:
+                _cors_row = _cors_conn.execute(
+                    _cors_text(
+                        "SELECT tunnel_hostname FROM remote_access_config WHERE id = 1"
+                    )
+                ).first()
+                if _cors_row and _cors_row[0]:
+                    _cors_tunnel_origin = f"https://{str(_cors_row[0]).strip().lower()}"
+                    if _cors_tunnel_origin not in _cors_origins:
+                        _cors_origins.append(_cors_tunnel_origin)
+                        logger.info(
+                            f"CORS: added tunnel hostname origin {_cors_tunnel_origin}"
+                        )
+    except Exception as _cors_exc:
+        logger.debug(
+            f"CORS tunnel-hostname bootstrap skipped (table may not exist yet): {_cors_exc}"
+        )
+    finally:
+        if _cors_bootstrap is not None:
+            _cors_bootstrap.dispose()
 
 logger.info(f"CORS origins: {_cors_origins or 'reflect-all'} (credentials={_cors_allow_credentials})")
 
@@ -1169,6 +1236,7 @@ app.include_router(api_clients_router)  # Public API v1: Client Management (UI-f
 app.include_router(audit_router)  # v0.6.0: Tenant-Scoped Audit Logs
 app.include_router(agent_comm_router, prefix="/api")  # v0.6.0 Item 15: Agent-to-Agent Communication
 app.include_router(syslog_config_router)  # v0.6.0: Syslog Forwarding Configuration
+app.include_router(remote_access_router)  # v0.6.0: Remote Access (Cloudflare Tunnel)
 app.include_router(v1_router)  # Public API v1: All /api/v1/ endpoints
 app.include_router(discord_router)  # Phase 23: Discord Bot Integration (BUG-311, BUG-313)
 app.include_router(slack_router)  # Phase 23: Slack Workspace Integration (BUG-312)
