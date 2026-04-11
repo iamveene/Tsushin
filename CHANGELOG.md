@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fresh Install v0.6.0 Audit (`develop`, 2026-04-11)
+
+Recorded the disposable fresh-install audit run from `.private/installations/fresh-install-v060-20260411-081937/tsushin`, including restore-manifest handling, API plus Playwright coverage, Quick Tunnel validation, provider/vector-store setup, and the user-directed skip of the final WhatsApp message exchange after QR blockers were reproduced.
+
+- **New bugs logged:** `BUG-519` through `BUG-524` in `BUGS.md`
+- **Revalidated open:** `BUG-515` (Welcome Tour persistence) and `BUG-516` (User Guide dialog interference)
+- **Highest-impact findings:** Quick Tunnel still defaults to `http://frontend:3030` and leaves public `/api/*` routes unreachable; script custom-skill tests can return `success=true` with blank output; Playground thread detail/memory inspector can lose the user turn; Vertex AI discovery returns zero models on a healthy provider instance; runtime WhatsApp QR/health resolution breaks on long stack-prefixed MCP names; dedicated tester QR controls still target missing compose `tester-mcp` instead of the active runtime tester instance.
+
 ### Ubuntu VM v0.6.0 Fresh-Install Regression Audit (`develop`, 2026-04-11)
 
 Full interactive fresh-install QA on Ubuntu 24.04 aarch64 (`10.211.55.5`). All 31 TCs executed via API (curl) and browser automation (Playwright). Install path: `/home/parallels/code2/tsushin-v060-20260411-084511/`. All integrations configured: Gemini (default/gemini-2.5-flash), OpenAI, Anthropic, Ollama (reconfigured to `0.0.0.0:11434` for Docker bridge access), Brave Search, Tavily.
