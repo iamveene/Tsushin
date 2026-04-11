@@ -96,14 +96,12 @@ async function handleApiError(res: Response, defaultMessage: string): Promise<ne
 export function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
   // SEC-005 Phase 3: Auth relies entirely on httpOnly cookie (tsushin_session).
   // No localStorage token read — eliminates XSS token theft vector.
-  const headers: HeadersInit = {
-    ...options.headers,
-  }
+  const headers = new Headers(options.headers)
 
   // Add Content-Type for JSON requests if not already set
   // IMPORTANT: Do NOT set Content-Type for FormData - browser sets it with boundary
-  if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
-    headers['Content-Type'] = 'application/json'
+  if (options.body && typeof options.body === 'string' && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
   }
 
   return fetch(url, {
@@ -146,6 +144,15 @@ export interface Config {
   ollama_api_key: string | null
   // Phase 18: Global WhatsApp conversation delay
   whatsapp_conversation_delay_seconds: number
+}
+
+export interface OllamaHealthResponse {
+  status: string
+  base_url: string
+  available: boolean
+  models_count?: number
+  models?: Array<{ name: string; size: number; modified_at: string }>
+  error?: string
 }
 
 export interface Message {
@@ -6755,10 +6762,10 @@ export const api = {
 
   async discoverModelsRaw(vendor: string, apiKey: string, baseUrl?: string): Promise<string[]> {
     // Live-discover models from a provider using a raw API key (no saved
-    // instance). Backend does a single outbound request and returns the
-    // current model list. Returns [] on any failure — caller should keep
-    // their static suggestions as a fallback.
-    const res = await fetch(`${API_URL}/api/provider-instances/discover-models-raw`, {
+    // instance). Backend keeps this anonymous only before first-run setup,
+    // then requires the normal authenticated session. Returns [] on any
+    // failure — caller should keep their static suggestions as a fallback.
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/discover-models-raw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ vendor, api_key: apiKey, base_url: baseUrl }),
@@ -6801,6 +6808,12 @@ export const api = {
 
   async getKokoroStatus(): Promise<{ status: string; name?: string; image?: string; message?: string }> {
     const res = await authenticatedFetch(`${API_URL}/api/services/kokoro/status`)
+    return res.json()
+  },
+
+  async getOllamaHealth(): Promise<OllamaHealthResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/ollama/health`)
+    if (!res.ok) await handleApiError(res, 'Failed to load Ollama health')
     return res.json()
   },
 

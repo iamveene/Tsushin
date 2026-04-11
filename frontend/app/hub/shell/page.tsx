@@ -1490,7 +1490,7 @@ export default function ShellDashboardPage() {
                     <div className="relative">
                       <pre className="bg-gray-950 p-3 rounded text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap">
 {`# Download and install beacon
-curl -L "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
+curl -L -H "X-API-Key: ${newApiKey}" "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
 unzip beacon.zip && \\
 cd shell_beacon && \\
 pip install -r requirements.txt
@@ -1504,7 +1504,7 @@ python run.py \\
                       <button
                         onClick={() => {
                           const cmd = `# Download and install beacon
-curl -L "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
+curl -L -H "X-API-Key: ${newApiKey}" "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
 unzip beacon.zip && \\
 cd shell_beacon && \\
 pip install -r requirements.txt
