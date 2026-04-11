@@ -37,12 +37,18 @@ Full interactive fresh-install QA on Ubuntu 24.04 aarch64 (`10.211.55.5`). All 3
 - TC-31: A2A sessions API confirms 1 completed session, 100% success rate, 2091ms avg response time
 - TC-13: 0 ERROR/CRITICAL backend log lines across the full test run
 
-**Findings: 5 new bugs (BUG-514 through BUG-518):**
+**Findings: 6 new bugs (BUG-514 through BUG-518, BUG-525):**
 - `BUG-514` — `.local` TLD silently rejected by frontend email validator (blocks global admin browser login)
 - `BUG-515` — Welcome Tour modal reappears on every page navigation (state not persisted)
 - `BUG-516` — `window.alert()` suppressed by native `<dialog>` User Guide (blocks fact creation and API key save UI)
 - `BUG-517` — `add_remote_access` migration startup WARN: `enabled` boolean/integer mismatch (non-blocking)
 - `BUG-518` — A2A skill agent lookup fails when user appends " agent" suffix in natural language query
+- `BUG-525` — `uvx` binary absent from backend Docker image; stdio MCP servers non-functional on fresh installs without manual ad-hoc install
+
+**Supplemental coverage (continued session):**
+- TC-23: Memory isolation verified — isolated memory blocks cross-user access (user_B cannot see user_A facts on isolated agent), shared memory pool functional (23 tenant-wide facts visible)
+- TC-26: MCP server (stdio `uvx mcp-server-fetch`) registered and connected, `fetch` tool discovered, Sentinel scan clean; all 3 custom skill types created (instruction/script/mcp_server), instruction skill invocation confirmed ("Hello from custom skill!" prefix); `uvx` required manual container install (BUG-525)
+- TC-31: Graph View browser-verified — 12 nodes / 20 connections, live green indicator; A2A Comms tab shows `Tsushin → ACME Sales` session as completed (depth 1/2, 2 msgs). Screenshots: `output/playwright/tc31-graph-view.png`, `output/playwright/tc31-a2a-comms.png`
 
 ### Bug Sprint — 8 bugs resolved (`develop`, 2026-04-10 evening)
 
