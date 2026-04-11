@@ -311,6 +311,11 @@ export default function HubPage() {
   const [vertexRegion, setVertexRegion] = useState('us-east5')
   const [vertexSaEmail, setVertexSaEmail] = useState('')
   const [vertexPrivateKey, setVertexPrivateKey] = useState('')
+  // BUG-513: Track unsaved form edits so Test Connection can be blocked until
+  // the user saves the modal — the backend test endpoint only validates the
+  // stored tenant config, so testing unsaved draft fields would always hit
+  // the previously saved values and mislead the user.
+  const [vertexDirty, setVertexDirty] = useState(false)
   const [vertexJsonPaste, setVertexJsonPaste] = useState('')
   const [vertexSaving, setVertexSaving] = useState(false)
   const [vertexTesting, setVertexTesting] = useState(false)
@@ -1166,6 +1171,7 @@ export default function HubPage() {
       if (parsed.project_id) setVertexProjectId(parsed.project_id)
       if (parsed.client_email) setVertexSaEmail(parsed.client_email)
       if (parsed.private_key) setVertexPrivateKey(parsed.private_key)
+      setVertexDirty(true)
     } catch {
       // Not valid JSON — user may be typing
     }
@@ -1209,6 +1215,7 @@ export default function HubPage() {
       })
 
       await fetchAPIKeys()
+      setVertexDirty(false)
       setShowVertexAiModal(false)
       setSuccessMessage('Vertex AI credentials saved successfully')
       setTimeout(() => setSuccessMessage(null), 3000)
@@ -4755,7 +4762,7 @@ export default function HubPage() {
               <input
                 type="text"
                 value={vertexProjectId}
-                onChange={(e) => setVertexProjectId(e.target.value)}
+                onChange={(e) => { setVertexProjectId(e.target.value); setVertexDirty(true) }}
                 className="input w-full"
                 placeholder="my-project-123"
               />
@@ -4766,7 +4773,7 @@ export default function HubPage() {
               <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Region <span className="text-tsushin-vermilion">*</span></label>
               <select
                 value={vertexRegion}
-                onChange={(e) => setVertexRegion(e.target.value)}
+                onChange={(e) => { setVertexRegion(e.target.value); setVertexDirty(true) }}
                 className="input w-full"
               >
                 <option value="us-east5">us-east5 (Columbus)</option>
@@ -4787,7 +4794,7 @@ export default function HubPage() {
               <input
                 type="text"
                 value={vertexSaEmail}
-                onChange={(e) => setVertexSaEmail(e.target.value)}
+                onChange={(e) => { setVertexSaEmail(e.target.value); setVertexDirty(true) }}
                 className="input w-full"
                 placeholder="my-sa@my-project.iam.gserviceaccount.com"
               />
@@ -4798,7 +4805,7 @@ export default function HubPage() {
               <label className="block text-sm font-medium text-tsushin-fog mb-1.5">Private Key (PEM) <span className="text-tsushin-vermilion">*</span></label>
               <textarea
                 value={vertexPrivateKey}
-                onChange={(e) => setVertexPrivateKey(e.target.value)}
+                onChange={(e) => { setVertexPrivateKey(e.target.value); setVertexDirty(true) }}
                 className="input w-full h-32 font-mono text-xs"
                 placeholder="Paste your PEM private key here"
               />
@@ -4811,11 +4818,21 @@ export default function HubPage() {
               </div>
             )}
 
+            {/* BUG-513: The backend test endpoint only validates the saved
+                tenant config. Block Test until the form is saved so users
+                don't think the modal is honoring their unsaved edits. */}
+            {vertexDirty && (
+              <p className="text-xs text-tsushin-slate">
+                Save configuration before testing — the Test Connection button
+                validates the currently saved credentials, not the fields above.
+              </p>
+            )}
+
             {/* Actions */}
             <div className="flex gap-3 pt-2">
               <button
                 onClick={handleTestVertexAi}
-                disabled={vertexTesting || !vertexPrivateKey.trim()}
+                disabled={vertexTesting || vertexSaving || vertexDirty || !vertexPrivateKey.trim()}
                 className="btn-secondary flex-1"
               >
                 {vertexTesting ? 'Testing...' : 'Test Connection'}

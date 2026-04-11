@@ -15,6 +15,8 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from agent.response_helpers import extract_response_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -878,10 +880,14 @@ class ProjectService:
                 project_id=project_id,  # BUG-446: Pass project context for CombinedKnowledgeService
             )
 
-            if response.get("status") == "success" and response.get("message"):
+            # BUG-511: Fall back to tool output when the primary message is empty,
+            # mirroring the API v1 chat response handling from BUG-504.
+            assistant_text = extract_response_text(response) if isinstance(response, dict) else None
+
+            if response.get("status") == "success" and assistant_text:
                 messages.append({
                     "role": "assistant",
-                    "content": response["message"],
+                    "content": assistant_text,
                     "timestamp": response.get("timestamp", datetime.utcnow().isoformat() + "Z")
                 })
 
@@ -897,7 +903,7 @@ class ProjectService:
 
             return {
                 "status": response.get("status", "success"),
-                "message": response.get("message"),
+                "message": assistant_text,
                 "conversation": self._conversation_to_dict(conversation)
             }
 

@@ -6812,9 +6812,20 @@ export const api = {
   },
 
   async getOllamaHealth(): Promise<OllamaHealthResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/ollama/health`)
-    if (!res.ok) await handleApiError(res, 'Failed to load Ollama health')
-    return res.json()
+    // BUG-507: Ollama is optional and the agents/hub surfaces call this on
+    // every mount. A 404 or network error should return an "unavailable"
+    // payload instead of throwing a console error — otherwise callers see
+    // noisy 404s on healthy installs where the frontend origin is proxied
+    // separately from the backend.
+    try {
+      const res = await authenticatedFetch(`${API_URL}/api/ollama/health`)
+      if (!res.ok) {
+        return { available: false, models: [] } as OllamaHealthResponse
+      }
+      return res.json()
+    } catch {
+      return { available: false, models: [] } as OllamaHealthResponse
+    }
   },
 
   // ==================== Ollama Instance Management ====================

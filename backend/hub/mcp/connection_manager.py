@@ -91,6 +91,20 @@ class MCPConnectionManager:
             except SSRFValidationError as e:
                 raise ValueError(f"SSRF blocked: {e}")
 
+        # BUG-512: For stdio transports the binary runs inside the tenant's
+        # toolbox container. Auto-start that container here so first-time
+        # /test calls don't fail with "Container not found for tenant ...".
+        if config.transport_type == 'stdio':
+            try:
+                from services.toolbox_container_service import ToolboxContainerService
+                ToolboxContainerService().ensure_container_running(
+                    tenant_id=config.tenant_id, db=db
+                )
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to start toolbox container for tenant {config.tenant_id}: {e}"
+                ) from e
+
         # Create transport and connect
         transport = self._create_transport(config)
         await transport.connect()

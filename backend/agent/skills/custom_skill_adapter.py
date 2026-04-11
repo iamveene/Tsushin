@@ -67,7 +67,10 @@ class CustomSkillAdapter(BaseSkill):
             return SkillResult(success=False, output="No skill record attached", metadata={})
 
         if self._record.skill_type_variant == 'instruction':
-            return self._execute_instruction(arguments)
+            # BUG-509: Route runtime tool-call execution through the LLM adapter
+            # so Playground/WhatsApp invocations behave like the /test endpoint
+            # and never leak raw instructions_md back to the user.
+            return await self.execute_instruction_with_llm(arguments, config)
         elif self._record.skill_type_variant == 'script':
             return await self._execute_script(arguments, config)
         elif self._record.skill_type_variant == 'mcp_server':

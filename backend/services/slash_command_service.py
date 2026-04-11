@@ -1303,6 +1303,64 @@ Type `/help all` to see syntax for all commands.
                 "message": f"❌ Failed to list tools: {str(e)}"
             }
 
+    def _resolve_pending_shell_executions(
+        self, agent_id: Optional[int], sender_key: Optional[str]
+    ) -> None:
+        """BUG-510: Update pending shell-command stubs with real beacon output.
+
+        We keep the buffer in-memory while the ShellCommand row lives in the
+        DB. This walks pending stubs (source='shell_command'), fetches the
+        latest status, and rewrites the buffered output once the beacon has
+        completed or failed the command.
+        """
+        if not agent_id or not sender_key:
+            return
+        try:
+            from agent.memory.tool_output_buffer import get_tool_output_buffer
+            from services.shell_command_service import ShellCommandService
+
+            buffer = get_tool_output_buffer()
+            pending = buffer.list_pending_executions(
+                agent_id, sender_key, source="shell_command"
+            )
+            if not pending:
+                return
+
+            svc = ShellCommandService(self.db)
+            # Cap the work per /inject call to avoid runaway DB fan-out.
+            for execution in pending[:10]:
+                if not execution.source_ref:
+                    continue
+                try:
+                    cmd_result = svc.get_command_result(execution.source_ref)
+                except Exception as fetch_err:
+                    self.logger.warning(
+                        f"Failed to fetch shell command {execution.source_ref}: {fetch_err}"
+                    )
+                    continue
+
+                status = (cmd_result.status or "").lower()
+                if status in ("completed", "failed", "timeout", "error"):
+                    output_text = cmd_result.stdout or ""
+                    if cmd_result.stderr:
+                        output_text += ("\n[stderr]\n" + cmd_result.stderr)
+                    if not output_text.strip():
+                        if cmd_result.error_message:
+                            output_text = f"[error] {cmd_result.error_message}"
+                        else:
+                            output_text = f"(no output, status={status})"
+                    buffer.update_execution_output(
+                        agent_id=agent_id,
+                        sender_key=sender_key,
+                        execution_id=execution.execution_id,
+                        output=output_text,
+                        pending=False,
+                    )
+        except Exception as resolver_err:
+            self.logger.warning(
+                f"Failed to resolve pending shell executions: {resolver_err}"
+            )
+
     async def _handle_inject(self, **kwargs) -> Dict[str, Any]:
         """
         Handle /inject command for selective tool output retrieval.
@@ -1329,6 +1387,13 @@ Type `/help all` to see syntax for all commands.
         args_parts = args.strip().split() if args else []
 
         buffer = get_tool_output_buffer()
+
+        # BUG-510: Resolve any pending async shell executions before reading
+        # the buffer. When /shell is fired-and-forget we drop a stub into the
+        # buffer; the real stdout only arrives once the beacon completes the
+        # command and ShellCommandService marks it completed in the DB. On each
+        # /inject call, we lazily pull updated results for any pending entries.
+        self._resolve_pending_shell_executions(agent_id, sender_key)
 
         # Handle /inject list
         if args_parts and args_parts[0].lower() == "list":
@@ -2262,6 +2327,27 @@ Type `/help all` to see syntax for all commands.
                     if len(output) > 1500:
                         output = output[:1500] + "\n... (truncated)"
 
+                    # BUG-510: Buffer completed shell outputs into /inject so
+                    # users can recall them later with `/inject list`.
+                    try:
+                        from agent.memory.tool_output_buffer import get_tool_output_buffer
+                        buffered_output = result.stdout or ""
+                        if result.stderr:
+                            buffered_output += ("\n[stderr]\n" + result.stderr)
+                        get_tool_output_buffer().add_tool_output(
+                            agent_id=agent_id,
+                            sender_key=sender_key,
+                            tool_name="shell",
+                            command_name=command,
+                            output=buffered_output or "(no output)",
+                            target=target,
+                            pending=False,
+                            source="shell_command",
+                            source_ref=result.command_id,
+                        )
+                    except Exception as _buf_err:
+                        self.logger.warning(f"Failed to buffer /shell result for /inject: {_buf_err}")
+
                     return {
                         "status": "success",
                         "action": "shell_executed",
@@ -2271,6 +2357,26 @@ Type `/help all` to see syntax for all commands.
                     }
                 else:
                     # Fire and forget
+                    # BUG-510: Insert a pending stub into the injection buffer so
+                    # /inject list sees the queued command immediately. The lazy
+                    # resolver in /inject pulls the real stdout once the beacon
+                    # marks the ShellCommand row as completed.
+                    try:
+                        from agent.memory.tool_output_buffer import get_tool_output_buffer
+                        get_tool_output_buffer().add_tool_output(
+                            agent_id=agent_id,
+                            sender_key=sender_key,
+                            tool_name="shell",
+                            command_name=command,
+                            output=f"Command queued; pending beacon execution (id={result.command_id}).",
+                            target=target,
+                            pending=True,
+                            source="shell_command",
+                            source_ref=result.command_id,
+                        )
+                    except Exception as _buf_err:
+                        self.logger.warning(f"Failed to buffer /shell pending stub for /inject: {_buf_err}")
+
                     return {
                         "status": "success",
                         "action": "shell_queued",
