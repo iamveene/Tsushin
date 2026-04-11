@@ -353,6 +353,7 @@ class PlaygroundService:
             # Phase 21: This prevents memory poisoning from blocked messages
             # The message must be analyzed BEFORE storing to memory, otherwise
             # malicious content pollutes the agent's memory even if blocked
+            transcript_only_message = False
             if not skip_user_message and agent.tenant_id:
                 try:
                     from services.sentinel_service import SentinelService
@@ -391,16 +392,16 @@ class PlaygroundService:
                                 "threat_type": sentinel_result.detection_type,
                                 "timestamp": datetime.utcnow().isoformat() + "Z"
                             }
-                        # BUG-382: detect_only mode — allow response but skip memory storage
-                        # for injection/poisoning threats to prevent working memory contamination.
-                        skip_memory_storage = sentinel_result.detection_type in (
+                        # BUG-382: detect_only mode — allow response but keep the message
+                        # transcript-only for injection/poisoning threats so the thread
+                        # stays complete while future memory reuse can stay filtered.
+                        transcript_only_message = sentinel_result.detection_type in (
                             'prompt_injection', 'memory_poisoning', 'instruction_injection',
                             'jailbreak', 'system_prompt_override'
                         )
-                        if skip_memory_storage:
-                            skip_user_message = True  # Prevent storing poisoned message
+                        if transcript_only_message:
                             self.logger.warning(
-                                f"🛡️ SENTINEL (detect_only): Skipping memory storage for "
+                                f"🛡️ SENTINEL (detect_only): Marking transcript-only for "
                                 f"{sentinel_result.detection_type} — response still allowed"
                             )
                         else:
@@ -413,9 +414,21 @@ class PlaygroundService:
 
             # STEP 1: Add user message to memory FIRST (WhatsApp consistency)
             # This ensures the message is in context for agent processing
-            # Skip if skip_user_message=True (for regeneration after edit or sentinel detect_only)
+            # Skip if skip_user_message=True (for regeneration after edit)
             message_id = f"msg_user_{user_id}_{int(datetime.utcnow().timestamp() * 1000)}"
             if not skip_user_message:
+                user_message_metadata = {
+                    "source": "playground",
+                    "agent_id": agent_id,
+                    "user_id": user_id,
+                    "thread_id": thread_id
+                }
+                if transcript_only_message:
+                    user_message_metadata.update({
+                        "playground_transcript_only": True,
+                        "playground_transcript_only_reason": "sentinel_detect_only",
+                        "playground_sentinel_detection_type": sentinel_result.detection_type,
+                    })
                 await memory_manager.add_message(
                     agent_id=agent_id,
                     sender_key=sender_key,
@@ -423,12 +436,7 @@ class PlaygroundService:
                     content=message_text,
                     chat_id=chat_id,
                     message_id=message_id,
-                    metadata={
-                        "source": "playground",
-                        "agent_id": agent_id,
-                        "user_id": user_id,
-                        "thread_id": thread_id
-                    },
+                    metadata=user_message_metadata,
                     use_contact_mapping=use_contact_mapping,
                 )
                 self.logger.info(f"Added user message to memory before processing (WhatsApp consistency)")
@@ -799,6 +807,12 @@ class PlaygroundService:
                     "agent_id": agent_id,
                     "thread_id": thread_id
                 }
+                if transcript_only_message:
+                    memory_metadata.update({
+                        "playground_transcript_only": True,
+                        "playground_transcript_only_reason": "sentinel_detect_only",
+                        "playground_sentinel_detection_type": sentinel_result.detection_type,
+                    })
                 memory_content = result["answer"]  # Always store FULL content for UI display
 
                 # Include KB usage tracking if available

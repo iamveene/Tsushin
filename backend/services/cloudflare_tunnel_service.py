@@ -24,8 +24,9 @@ Concurrency model:
       around config writes AND a leader-election mechanism for subprocess
       ownership.
 
-Target URL default: `http://frontend:3030` (the frontend container's hostname
-on tsushin-network). Never use localhost from inside the backend container.
+Target URL default: the stack-scoped Caddy proxy (`http://{stack}-proxy:80`).
+Never use the frontend container directly or localhost from inside the backend
+container.
 """
 
 from __future__ import annotations
@@ -35,12 +36,15 @@ import logging
 import re
 import shutil
 from contextlib import suppress
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Callable, Literal, Optional, cast
 
 import httpx
 from sqlalchemy.orm import Session
+
+from models import get_remote_access_proxy_target_url
+from services.remote_access_config_service import normalize_remote_access_target_url
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +181,7 @@ class CloudflareTunnelService:
         Opens and closes its own DB session. Must be called without holding
         self._lock because it performs IO.
         """
-        from models import Config, RemoteAccessConfig
+        from models import RemoteAccessConfig
         from hub.security import TokenEncryption
         from services.encryption_key_service import get_remote_access_encryption_key
 
@@ -218,10 +222,21 @@ class CloudflareTunnelService:
                 tunnel_token=token_plain,
                 tunnel_hostname=(row.tunnel_hostname or None),
                 tunnel_dns_target=(row.tunnel_dns_target or None),
-                target_url=row.target_url or "http://frontend:3030",
+                target_url=normalize_remote_access_target_url(row.target_url),
             )
         finally:
             db.close()
+
+    async def _probe_proxy_target(self, target_url: str, timeout: float = 5.0) -> bool:
+        """Check that the stack proxy/Caddy layer is reachable before launch."""
+        probe_url = f"{target_url.rstrip('/')}/api/health"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(probe_url)
+                return response.status_code == 200
+        except Exception as exc:
+            logger.info("Remote Access proxy probe failed for %s: %s", probe_url, exc)
+            return False
 
     def _persist(
         self,
@@ -318,6 +333,19 @@ class CloudflareTunnelService:
             running = self._process is not None and self._process.returncode is None
             if running and self._state.mode == requested_mode:
                 return self._snapshot_dict()
+
+        expected_target_url = get_remote_access_proxy_target_url()
+        loaded.target_url = normalize_remote_access_target_url(loaded.target_url)
+        if loaded.target_url != expected_target_url:
+            raise TunnelConfigurationError(
+                "Remote Access requires the stack-scoped Caddy proxy target "
+                f"{expected_target_url}; current target is {loaded.target_url}."
+            )
+        if not await self._probe_proxy_target(expected_target_url, timeout=5.0):
+            raise TunnelConfigurationError(
+                "Remote Access requires the Caddy proxy layer to be running "
+                f"at {expected_target_url} before it can start."
+            )
 
         # Stop any existing process outside the lock (stop() takes the lock itself)
         if self._process is not None and self._process.returncode is None:

@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from hub.security import TokenEncryption
-from models import Config, RemoteAccessConfig
+from models import Config, RemoteAccessConfig, get_remote_access_proxy_target_url
 from models_rbac import Tenant, User, AuditEvent
 from services.audit_service import (
     log_admin_action,
@@ -31,10 +31,47 @@ from services.encryption_key_service import get_remote_access_encryption_key
 logger = logging.getLogger(__name__)
 
 WORKSPACE_ID = "remote_access_system"
+LEGACY_REMOTE_ACCESS_TARGET_URL = "http://frontend:3030"
 
 
 class ConfigConflictError(Exception):
     """Raised when the expected_updated_at in a PUT does not match the DB row."""
+
+
+def normalize_remote_access_target_url(target_url: Optional[str]) -> str:
+    """Return the canonical Remote Access target URL for the current stack.
+
+    Legacy installs used ``http://frontend:3030``. We rewrite that value to the
+    stack-scoped proxy target so side-by-side installs do not cross-wire traffic.
+    """
+    default_target = get_remote_access_proxy_target_url()
+    if not target_url:
+        return default_target
+
+    cleaned = target_url.strip().rstrip("/")
+    if not cleaned:
+        return default_target
+
+    if cleaned.lower() in {LEGACY_REMOTE_ACCESS_TARGET_URL, default_target.lower()}:
+        return default_target
+
+    return cleaned
+
+
+def _apply_target_url_backfill(
+    db: Session,
+    row: RemoteAccessConfig,
+    *,
+    persist: bool,
+) -> RemoteAccessConfig:
+    normalized = normalize_remote_access_target_url(row.target_url)
+    if row.target_url != normalized:
+        row.target_url = normalized
+        row.updated_at = datetime.utcnow()
+        if persist:
+            db.commit()
+            db.refresh(row)
+    return row
 
 
 def get_or_create_config(db: Session) -> RemoteAccessConfig:
@@ -44,7 +81,13 @@ def get_or_create_config(db: Session) -> RemoteAccessConfig:
         db.add(row)
         db.commit()
         db.refresh(row)
-    return row
+    return _apply_target_url_backfill(db, row, persist=True)
+
+
+def backfill_remote_access_target_url(db: Session) -> RemoteAccessConfig:
+    """Repair legacy Remote Access target URLs in-place."""
+    row = get_or_create_config(db)
+    return _apply_target_url_backfill(db, row, persist=True)
 
 
 def serialize_config(db: Session, row: RemoteAccessConfig) -> Dict[str, Any]:
@@ -62,7 +105,7 @@ def serialize_config(db: Session, row: RemoteAccessConfig) -> Dict[str, Any]:
         "protocol": row.protocol or "auto",
         "tunnel_hostname": row.tunnel_hostname,
         "tunnel_dns_target": row.tunnel_dns_target,
-        "target_url": row.target_url or "http://frontend:3030",
+        "target_url": normalize_remote_access_target_url(row.target_url),
         "tunnel_token_configured": bool(row.tunnel_token_encrypted),
         "last_started_at": row.last_started_at.isoformat() if row.last_started_at else None,
         "last_stopped_at": row.last_stopped_at.isoformat() if row.last_stopped_at else None,
@@ -116,6 +159,8 @@ def update_config(
     for field_name in non_nullable_fields:
         if field_name in payload and payload[field_name] is not None:
             new_value = payload[field_name]
+            if field_name == "target_url":
+                new_value = normalize_remote_access_target_url(new_value)
             current = getattr(row, field_name)
             if new_value != current:
                 diff[field_name] = new_value

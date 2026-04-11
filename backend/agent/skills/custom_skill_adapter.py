@@ -267,10 +267,19 @@ class CustomSkillAdapter(BaseSkill):
                 error_msg = "Script killed (out of memory)"
             return SkillResult(success=False, output=error_msg, metadata=metadata)
 
+        if not stdout:
+            return SkillResult(
+                success=False,
+                output="Script completed successfully but produced no usable output.",
+                metadata=metadata,
+            )
+
         # Try to parse stdout as JSON
         try:
             parsed = json.loads(stdout)
             output_text = parsed.get('output', stdout)
+            if output_text is None or not str(output_text).strip():
+                output_text = stdout
             metadata.update({k: v for k, v in parsed.items() if k != 'output'})
             return SkillResult(success=True, output=str(output_text), metadata=metadata)
         except (json.JSONDecodeError, AttributeError):

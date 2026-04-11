@@ -12,6 +12,7 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { Input } from '@/components/ui/form-input'
 import { api } from '@/lib/client'
+import { validateEmailAddress } from '@/lib/validation'
 
 // Google Icon SVG
 const GoogleIcon = () => (
@@ -42,6 +43,7 @@ function LoginContent() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [emailError, setEmailError] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleSSOEnabled, setGoogleSSOEnabled] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
@@ -77,10 +79,20 @@ function LoginContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    setEmailError('')
+
+    const normalizedEmail = email.trim()
+    const emailValidationError = validateEmailAddress(normalizedEmail)
+    if (emailValidationError) {
+      setEmailError(emailValidationError)
+      return
+    }
+
+    setEmail(normalizedEmail)
     setLoading(true)
 
     try {
-      await login(email, password)
+      await login(normalizedEmail, password)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
@@ -126,13 +138,20 @@ function LoginContent() {
             )}
 
             <Input
-              type="email"
+              type="text"
               label="Email address"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value)
+                if (emailError) setEmailError('')
+              }}
               required
               autoComplete="email"
+              inputMode="email"
+              autoCapitalize="none"
+              spellCheck={false}
               placeholder="you@example.com"
+              error={emailError}
             />
 
             <Input

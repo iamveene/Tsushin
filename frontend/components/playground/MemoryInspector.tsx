@@ -15,7 +15,7 @@
  * - Archive decayed facts button
  */
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   BrainIcon,
   AlertTriangleIcon,
@@ -23,8 +23,10 @@ import {
   SearchIcon,
   DocumentIcon
 } from '@/components/ui/icons'
+import Modal from '@/components/ui/Modal'
 import { formatDateTime } from '@/lib/dateUtils'
 import { authenticatedFetch, api } from '@/lib/client'
+import { useToast } from '@/contexts/ToastContext'
 
 interface MemoryMessage {
   role: string
@@ -82,6 +84,7 @@ const FRESHNESS_COLORS: Record<string, { dot: string; text: string; bg: string }
 }
 
 export default function MemoryInspector({ agentId, senderKey, threadId }: MemoryInspectorProps) {
+  const toast = useToast()
   const [memoryData, setMemoryData] = useState<MemoryData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -101,6 +104,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
   const [editingTopic, setEditingTopic] = useState('')
   const [editingKey, setEditingKey] = useState('')
   const [editingValue, setEditingValue] = useState('')
+  const [pendingDeleteFact, setPendingDeleteFact] = useState<Fact | null>(null)
 
   // Creating state
   const [isCreating, setIsCreating] = useState(false)
@@ -108,22 +112,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
 
-  useEffect(() => {
-    // BUG-PLAYGROUND-003 FIX: Clear previous data immediately when dependencies change
-    // This prevents showing stale data from a different thread during transitions
-    setMemoryData(null)
-    setError(null)
-    setFreshnessDistribution(null)
-    setDecayEnabled(false)
-    setArchivePreview(null)
-
-    if (agentId && (threadId || senderKey)) {
-      loadMemory()
-      loadMemoryStats()
-    }
-  }, [agentId, senderKey, threadId])
-
-  const loadMemory = async () => {
+  const loadMemory = useCallback(async () => {
     // BUG-PLAYGROUND-003 FIX: Guard against undefined senderKey
     // If senderKey is undefined, the backend uses fallback logic that returns
     // data from ANY matching sender_key, causing cross-thread data display
@@ -152,9 +141,9 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
     } finally {
       setLoading(false)
     }
-  }
+  }, [agentId, senderKey, threadId])
 
-  const loadMemoryStats = async () => {
+  const loadMemoryStats = useCallback(async () => {
     if (!agentId) return
     try {
       const stats = await api.getAgentMemoryStats(agentId)
@@ -167,7 +156,22 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
     } catch {
       // Stats are supplementary, don't block on failure
     }
-  }
+  }, [agentId])
+
+  useEffect(() => {
+    // BUG-PLAYGROUND-003 FIX: Clear previous data immediately when dependencies change
+    // This prevents showing stale data from a different thread during transitions
+    setMemoryData(null)
+    setError(null)
+    setFreshnessDistribution(null)
+    setDecayEnabled(false)
+    setArchivePreview(null)
+
+    if (agentId && (threadId || senderKey)) {
+      loadMemory()
+      loadMemoryStats()
+    }
+  }, [agentId, senderKey, threadId, loadMemory, loadMemoryStats])
 
   const handleArchiveDecayed = async () => {
     if (!agentId) return
@@ -178,13 +182,13 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
       try {
         const result = await api.archiveDecayedFacts(agentId, true)
         if (result.archived_count === 0) {
-          alert('No decayed facts to archive.')
+          toast.info('Nothing to archive', 'No decayed facts are ready to archive.')
           setArchiving(false)
           return
         }
         setArchivePreview({ count: result.archived_count, facts: result.archived_facts || [] })
       } catch (err: any) {
-        alert(`Failed to preview archive: ${err.message}`)
+        toast.error('Archive Preview Failed', err.message || 'Failed to preview archive')
       } finally {
         setArchiving(false)
       }
@@ -196,8 +200,9 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
         setArchivePreview(null)
         await loadMemory()
         await loadMemoryStats()
+        toast.success('Facts Archived', 'Decayed facts have been archived.')
       } catch (err: any) {
-        alert(`Failed to archive: ${err.message}`)
+        toast.error('Archive Failed', err.message || 'Failed to archive facts')
       } finally {
         setArchiving(false)
       }
@@ -205,11 +210,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
   }
 
   const handleDeleteFact = async (fact: Fact) => {
-    if (!agentId) return
-
-    if (!confirm(`Are you sure you want to delete this fact?\n\n${fact.key}: ${fact.value}`)) {
-      return
-    }
+    if (!agentId || !fact.id) return
 
     try {
       let url: string
@@ -226,11 +227,12 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
 
       if (response.ok) {
         await loadMemory()
+        toast.success('Fact Deleted', `${fact.key} was removed from memory.`)
       } else {
-        alert('Failed to delete fact')
+        toast.error('Delete Failed', 'Failed to delete fact')
       }
     } catch (err: any) {
-      alert(`Error deleting fact: ${err.message}`)
+      toast.error('Delete Failed', err.message || 'Error deleting fact')
     }
   }
 
@@ -287,11 +289,12 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
       if (response.ok) {
         handleCancelEdit()
         await loadMemory()
+        toast.success('Fact Updated', `${editingKey || 'Fact'} was saved.`)
       } else {
-        alert('Failed to update fact')
+        toast.error('Update Failed', 'Failed to update fact')
       }
     } catch (err: any) {
-      alert(`Error updating fact: ${err.message}`)
+      toast.error('Update Failed', err.message || 'Error updating fact')
     }
   }
 
@@ -311,7 +314,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
 
   const handleCreateFact = async () => {
     if (!agentId || !newTopic.trim() || !newKey.trim() || !newValue.trim()) {
-      alert('Please fill in all fields')
+      toast.error('Missing Fields', 'Please fill in all fields before saving.')
       return
     }
 
@@ -355,12 +358,13 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
       if (response.ok) {
         handleCancelCreate()
         await loadMemory()
+        toast.success('Fact Created', `${newKey} was added to memory.`)
       } else {
         const errorData = await response.json().catch(() => ({}))
-        alert(`Failed to create fact: ${errorData.detail || 'Unknown error'}`)
+        toast.error('Create Failed', errorData.detail || 'Unknown error')
       }
     } catch (err: any) {
-      alert(`Error creating fact: ${err.message}`)
+      toast.error('Create Failed', err.message || 'Error creating fact')
     }
   }
 
@@ -384,9 +388,6 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
         f.topic.toLowerCase().includes(searchQuery.toLowerCase())
       : true
   ) || []
-
-  // Check if any fact has freshness data
-  const hasFreshnessData = filteredFacts.some(f => f.freshness)
 
   return (
     <div className="h-full flex flex-col bg-tsushin-deep">
@@ -770,7 +771,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
                                   </svg>
                                 </button>
                                 <button
-                                  onClick={() => handleDeleteFact(fact)}
+                                  onClick={() => setPendingDeleteFact(fact)}
                                   className="p-1 text-white/40 hover:text-red-400 transition-colors"
                                   title="Delete"
                                 >
@@ -795,6 +796,49 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
           </>
         )}
       </div>
+
+      <Modal
+        isOpen={Boolean(pendingDeleteFact)}
+        onClose={() => setPendingDeleteFact(null)}
+        title="Delete fact"
+        size="md"
+        footer={
+          <div className="flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => setPendingDeleteFact(null)}
+              className="px-4 py-2 rounded-lg border border-tsushin-border text-tsushin-slate hover:text-white hover:bg-white/[0.04] transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!pendingDeleteFact) return
+                const factToDelete = pendingDeleteFact
+                setPendingDeleteFact(null)
+                await handleDeleteFact(factToDelete)
+              }}
+              className="px-4 py-2 rounded-lg bg-red-500/20 text-red-300 hover:bg-red-500/30 transition-colors"
+            >
+              Delete
+            </button>
+          </div>
+        }
+      >
+        {pendingDeleteFact && (
+          <div className="space-y-3">
+            <p className="text-sm text-tsushin-fog">
+              This will permanently remove the fact from memory.
+            </p>
+            <div className="rounded-lg border border-tsushin-border bg-tsushin-deep p-3 text-sm">
+              <p className="text-tsushin-slate text-xs uppercase tracking-wide mb-1">{pendingDeleteFact.topic}</p>
+              <p className="text-white font-medium">{pendingDeleteFact.key}</p>
+              <p className="text-tsushin-fog mt-1 whitespace-pre-wrap break-words">{pendingDeleteFact.value}</p>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Footer - BUG-PLAYGROUND-003 FIX: Enhanced to show thread context clearly */}
       <div className="px-4 py-2 border-t border-white/[0.06] text-xs text-white/30">

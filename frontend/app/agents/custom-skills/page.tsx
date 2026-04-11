@@ -1050,6 +1050,9 @@ function CustomSkillsPageContent() {
                           className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white font-mono text-sm placeholder-tsushin-slate/50 focus:outline-none focus:border-tsushin-accent/50"
                           placeholder="main.py"
                         />
+                        <p className="text-xs text-tsushin-slate/60 mt-1">
+                          Tsushin executes this file and reads stdout or JSON stdout. Returning a value from a function is not enough on its own.
+                        </p>
                       </div>
                     </div>
                     <div>
@@ -1062,7 +1065,7 @@ function CustomSkillsPageContent() {
                         placeholder={formScriptLanguage === 'python' ? 'import os, json\n\ninput_data = json.loads(os.environ.get("TSUSHIN_INPUT", "{}"))\nprint(json.dumps({"output": "Hello from script!"}))' : '#!/bin/bash\necho \'{"output": "Hello from script!"}\''}
                       />
                       <p className="text-xs text-tsushin-slate/60 mt-1">
-                        {new Blob([formScriptContent]).size.toLocaleString()}/262,144 bytes &middot; Output JSON to stdout with an "output" key
+                        {new Blob([formScriptContent]).size.toLocaleString()}/262,144 bytes &middot; Print text or JSON to stdout. Blank stdout fails script tests.
                       </p>
                     </div>
                   </>

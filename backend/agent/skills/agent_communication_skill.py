@@ -469,26 +469,36 @@ class AgentCommunicationSkill(BaseSkill):
 
         clean_name = name.strip().lower()
 
-        contact = (
-            self.db_session.query(Contact)
-            .filter(
-                Contact.role == "agent",
-                Contact.is_active == True,
-                func.lower(Contact.friendly_name) == clean_name,
-                Contact.tenant_id == tenant_id,
+        def _lookup(candidate_name: str):
+            contact = (
+                self.db_session.query(Contact)
+                .filter(
+                    Contact.role == "agent",
+                    Contact.is_active == True,
+                    func.lower(Contact.friendly_name) == candidate_name,
+                    Contact.tenant_id == tenant_id,
+                )
+                .first()
             )
-            .first()
-        )
-        if not contact:
-            return None
+            if not contact:
+                return None
 
-        agent = (
-            self.db_session.query(Agent)
-            .filter(
-                Agent.contact_id == contact.id,
-                Agent.tenant_id == tenant_id,
-                Agent.is_active == True,
+            return (
+                self.db_session.query(Agent)
+                .filter(
+                    Agent.contact_id == contact.id,
+                    Agent.tenant_id == tenant_id,
+                    Agent.is_active == True,
+                )
+                .first()
             )
-            .first()
-        )
-        return agent
+
+        exact_match = _lookup(clean_name)
+        if exact_match:
+            return exact_match
+
+        normalized_name = re.sub(r"[\s,;:.\-]*(agent|assistant|bot)\.?$", "", clean_name).strip()
+        if normalized_name and normalized_name != clean_name:
+            return _lookup(normalized_name)
+
+        return None

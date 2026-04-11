@@ -44,14 +44,38 @@ const OnboardingContext = createContext<OnboardingContextType | undefined>(undef
 
 // BUG-319: Reduced from 9 to 8 (step 9 "Setup Checklist" removed — it duplicated GettingStartedChecklist)
 const TOTAL_STEPS = 8
-const STORAGE_KEY = 'tsushin_onboarding_completed'
+const LEGACY_STORAGE_KEY = 'tsushin_onboarding_completed'
+
+function getStorageKey(userId: number | null): string | null {
+  if (userId === null) {
+    return null
+  }
+  return `${LEGACY_STORAGE_KEY}:${userId}`
+}
+
+function getCompletedForUser(storageKey: string): boolean {
+  if (localStorage.getItem(storageKey) === 'true') {
+    return true
+  }
+
+  if (localStorage.getItem(LEGACY_STORAGE_KEY) === 'true') {
+    localStorage.setItem(storageKey, 'true')
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
+    return true
+  }
+
+  return false
+}
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
+  const userId = user?.id ?? null
   // Refs for values that need to be read in event handlers without stale closures
   const isUserGuideOpenRef = useRef(false)
   const tourStartedRef = useRef(false)
   const tourDismissedRef = useRef(false)
+  const autoStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeStorageKeyRef = useRef<string | null>(null)
 
   const [state, setState] = useState<OnboardingState>({
     isActive: false,
@@ -61,6 +85,13 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     hasCompletedOnboarding: false,
     isUserGuideOpen: false,
   })
+
+  const clearAutoStartTimer = () => {
+    if (autoStartTimerRef.current) {
+      clearTimeout(autoStartTimerRef.current)
+      autoStartTimerRef.current = null
+    }
+  }
 
   // BUG-325: Track User Guide open state via refs + state
   // Using a ref avoids stale closure issues in event handlers and other effects
@@ -77,10 +108,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       // start it now that the guide is closed — but ONLY if tour hasn't been dismissed/completed.
       // Check refs (not stale closure state) to avoid race conditions.
       if (!tourStartedRef.current && !tourDismissedRef.current) {
-        const completed = localStorage.getItem(STORAGE_KEY) === 'true'
+        const storageKey = activeStorageKeyRef.current
+        const completed = storageKey ? getCompletedForUser(storageKey) : false
         if (!completed) {
           tourStartedRef.current = true
-          setTimeout(() => {
+          clearAutoStartTimer()
+          autoStartTimerRef.current = setTimeout(() => {
             setState(prev => {
               // Final check using prev state to be safe
               if (!prev.isActive && !prev.hasCompletedOnboarding) {
@@ -88,6 +121,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
               }
               return prev
             })
+            autoStartTimerRef.current = null
           }, 500)
         }
       }
@@ -102,36 +136,78 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   // Load completion status and auto-start tour for first-time users
   useEffect(() => {
-    const completed = localStorage.getItem(STORAGE_KEY) === 'true'
-    if (completed) {
-      tourDismissedRef.current = true
-    }
-    setState(prev => ({ ...prev, hasCompletedOnboarding: completed }))
+    const storageKey = getStorageKey(userId)
 
-    // Auto-start tour on first login (when user is loaded and tour not completed)
-    if (!completed && user) {
-      // Small delay to let the dashboard render first
-      const timer = setTimeout(() => {
+    clearAutoStartTimer()
+
+    if (!storageKey) {
+      activeStorageKeyRef.current = null
+      tourStartedRef.current = false
+      tourDismissedRef.current = false
+      queueMicrotask(() => {
+        setState(prev => ({
+          ...prev,
+          isActive: false,
+          isMinimized: false,
+          hasCompletedOnboarding: false,
+          currentStep: 1,
+        }))
+      })
+      return
+    }
+
+    const previousStorageKey = activeStorageKeyRef.current
+    activeStorageKeyRef.current = storageKey
+
+    if (previousStorageKey !== storageKey) {
+      tourStartedRef.current = false
+      tourDismissedRef.current = false
+      queueMicrotask(() => {
+        setState(prev => ({
+          ...prev,
+          isActive: false,
+          isMinimized: false,
+          currentStep: 1,
+        }))
+      })
+    }
+
+    const completed = getCompletedForUser(storageKey)
+
+    tourDismissedRef.current = completed
+    if (!completed) {
+      tourStartedRef.current = false
+    }
+    queueMicrotask(() => {
+      setState(prev => {
+        if (prev.hasCompletedOnboarding === completed) {
+          return prev
+        }
+        return { ...prev, hasCompletedOnboarding: completed }
+      })
+    })
+
+    if (!completed && userId !== null) {
+      autoStartTimerRef.current = setTimeout(() => {
         // BUG-325: Don't auto-start if the User Guide is currently open (use ref, not stale state)
-        if (isUserGuideOpenRef.current) {
-          // Guide is open — deferred start will happen when guide closes (see handleGuideClose above)
-          // Mark tourStartedRef as false so the deferred start knows to fire
-          tourStartedRef.current = false
+        if (isUserGuideOpenRef.current || tourStartedRef.current || tourDismissedRef.current) {
+          // Guide is open, or the user already launched/dismissed the tour.
           return
         }
         tourStartedRef.current = true
         setState(prev => {
-          if (!prev.hasCompletedOnboarding && !localStorage.getItem(STORAGE_KEY)) {
+          if (!prev.hasCompletedOnboarding) {
             return { ...prev, isActive: true, currentStep: 1, isMinimized: false }
           }
           return prev
         })
       }, 1000)
-      return () => clearTimeout(timer)
+      return () => clearAutoStartTimer()
     }
-  }, [user])
+  }, [userId])
 
   const startTour = () => {
+    clearAutoStartTimer()
     tourStartedRef.current = true
     tourDismissedRef.current = false
     setState(prev => ({
@@ -171,8 +247,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   // BUG-334: completeTour sets localStorage FIRST, then updates state
   const completeTour = () => {
-    localStorage.setItem(STORAGE_KEY, 'true')
+    const storageKey = activeStorageKeyRef.current
+    if (storageKey) {
+      localStorage.setItem(storageKey, 'true')
+    }
     tourDismissedRef.current = true
+    clearAutoStartTimer()
     setState(prev => ({
       ...prev,
       isActive: false,
@@ -186,8 +266,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   // BUG-334: dismissTour permanently dismisses — sets localStorage BEFORE state update
   const dismissTour = () => {
-    localStorage.setItem(STORAGE_KEY, 'true')
+    const storageKey = activeStorageKeyRef.current
+    if (storageKey) {
+      localStorage.setItem(storageKey, 'true')
+    }
     tourDismissedRef.current = true
+    clearAutoStartTimer()
     setState(prev => ({
       ...prev,
       isActive: false,
@@ -198,8 +282,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   const skipTour = () => {
     // BUG-334: Set localStorage synchronously before state update — no confirm dialog (blocks browser events)
-    localStorage.setItem(STORAGE_KEY, 'true')
+    const storageKey = activeStorageKeyRef.current
+    if (storageKey) {
+      localStorage.setItem(storageKey, 'true')
+    }
     tourDismissedRef.current = true
+    clearAutoStartTimer()
     setState(prev => ({
       ...prev,
       isActive: false,

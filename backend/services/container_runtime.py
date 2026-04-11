@@ -344,13 +344,19 @@ class ContainerRuntime(ABC):
         ...
 
     @abstractmethod
-    def ensure_container_on_network(self, name_or_id: str, network_name: str) -> None:
+    def ensure_container_on_network(
+        self,
+        name_or_id: str,
+        network_name: str,
+        aliases: Optional[List[str]] = None,
+    ) -> None:
         """
         Ensure a container is connected to a specific network.
 
         Args:
             name_or_id: Container name or ID
             network_name: Network to connect to
+            aliases: Optional DNS aliases to assign on the network
         """
         ...
 
@@ -553,6 +559,7 @@ class DockerRuntime(ContainerRuntime):
                 "image_tags": container.image.tags if container.image.tags else [str(container.image.id)[:12]],
                 "created": container.attrs.get("Created"),
                 "state": container.attrs.get("State", {}),
+                "NetworkSettings": container.attrs.get("NetworkSettings", {}),
                 "network_settings": container.attrs.get("NetworkSettings", {}),
             }
         except docker_lib.errors.NotFound:
@@ -695,16 +702,43 @@ class DockerRuntime(ContainerRuntime):
             logger.info(f"DockerRuntime: Creating network {network_name}")
             return self._client.networks.create(network_name, driver="bridge")
 
-    def ensure_container_on_network(self, name_or_id: str, network_name: str) -> None:
+    def ensure_container_on_network(
+        self,
+        name_or_id: str,
+        network_name: str,
+        aliases: Optional[List[str]] = None,
+    ) -> None:
         import docker as docker_lib
         try:
             container = self._client.containers.get(name_or_id)
             container.reload()
             networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+            network = self.get_or_create_network(network_name)
+            desired_aliases = [alias for alias in (aliases or []) if alias]
+            current_aliases = networks.get(network_name, {}).get("Aliases", []) or []
+
             if network_name not in networks:
-                logger.info(f"DockerRuntime: Connecting {name_or_id} to {network_name}")
-                network = self.get_or_create_network(network_name)
-                network.connect(container)
+                logger.info(
+                    f"DockerRuntime: Connecting {name_or_id} to {network_name}"
+                    + (f" with aliases {desired_aliases}" if desired_aliases else "")
+                )
+                network.connect(container, aliases=desired_aliases or None)
+                return
+
+            if desired_aliases and not set(desired_aliases).issubset(set(current_aliases)):
+                logger.info(
+                    f"DockerRuntime: Refreshing aliases for {name_or_id} on {network_name}"
+                    + f" -> {desired_aliases}"
+                )
+                try:
+                    network.connect(container, aliases=desired_aliases)
+                    return
+                except docker_lib.errors.APIError:
+                    try:
+                        network.disconnect(container)
+                    except docker_lib.errors.APIError:
+                        pass
+                    network.connect(container, aliases=desired_aliases)
         except docker_lib.errors.NotFound:
             raise ContainerNotFoundError(f"Container {name_or_id} not found")
         except Exception as e:
@@ -1658,7 +1692,12 @@ class K8sRuntime(ContainerRuntime):
         )
         return _K8sNetworkPlaceholder(network_name)
 
-    def ensure_container_on_network(self, name_or_id: str, network_name: str) -> None:
+    def ensure_container_on_network(
+        self,
+        name_or_id: str,
+        network_name: str,
+        aliases: Optional[List[str]] = None,
+    ) -> None:
         # No-op — all pods in the same namespace can communicate
         logger.debug(
             f"K8sRuntime: ensure_container_on_network is a no-op for '{name_or_id}'"

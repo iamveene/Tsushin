@@ -688,13 +688,13 @@ curl -X POST http://localhost:8081/api/custom-skills \
 
 #### 9.3.2 Script Skills
 
-Executable scripts deployed to a sandboxed container. Supports Python, Bash, and Node.js.
+Executable scripts deployed to a sandboxed container. Supports Python, Bash, and Node.js. The runtime executes the script file and reads stdout (plain text or JSON with an `output` field). Returning a value from a function without printing it does not produce usable output, and `/api/custom-skills/{id}/test` now fails closed when stdout is blank.
 
 | Field | Type | Description |
 |---|---|---|
 | `script_content` | string (max 256 KB) | The script source code |
 | `script_language` | string | `python` \| `bash` \| `nodejs` |
-| `script_entrypoint` | string | Entry file to execute (e.g., `run.py`). Bare function names (e.g., `run`) are also accepted and auto-extended based on `script_language`. |
+| `script_entrypoint` | string | Entry file to execute (e.g., `run.py`). Bare names (e.g., `run`) are auto-extended based on `script_language`, but the file still needs to print its result to stdout. |
 
 **Example — Create a Python data-processing skill:**
 
@@ -709,7 +709,7 @@ curl -X POST http://localhost:8081/api/custom-skills \
     "execution_mode": "tool",
     "script_language": "python",
     "script_entrypoint": "analyze",
-    "script_content": "import json\nimport statistics\n\ndef analyze(data: str) -> str:\n    rows = data.strip().split(\"\\n\")\n    return json.dumps({\"row_count\": len(rows)})",
+    "script_content": "import json\nimport os\n\ninput_data = json.loads(os.environ.get(\"TSUSHIN_INPUT\", \"{}\"))\nrows = input_data.get(\"rows\", [])\nprint(json.dumps({\"output\": json.dumps({\"row_count\": len(rows)})}))",
     "timeout_seconds": 60
   }'
 ```
@@ -2199,6 +2199,7 @@ One-time Cloudflare setup (only needed for Named mode):
    - **Path**: leave empty.
    - **Service type**: HTTP.
    - **Service URL**: `tsushin-proxy:80` (the Caddy reverse proxy inside your Docker network). **Do not** use `frontend:3030` — that would bypass Caddy and break `/api` routing.
+   - Tsushin now defaults saved tunnel targets to the stack proxy service and rejects starts when that proxy/Caddy layer is unreachable, rather than booting a broken public route.
 
 Tsushin setup:
 
@@ -2809,6 +2810,8 @@ The Tester MCP is a containerized Go WhatsApp bridge dedicated to QA. It is conf
 **Authentication:** Bearer token on `Authorization: Bearer <api_secret>` (per project conventions; exact secret provisioning is container-specific — see the tester container's env).
 
 **Hub visibility:** Hub now shows runtime tester instances in the main WhatsApp list, while the dedicated **QA Tester** controls backed by `/api/mcp/instances/tester/*` resolve the current tester target for QR/auth/restart actions. Those controls prefer a legacy/compose tester container when present and otherwise target the tenant's active runtime tester instance.
+
+**Stdio launcher baseline:** The tenant toolbox base image ships `uvx`, and the Hub stdio/MCP launcher guidance is aligned to that shipped runtime. Use approved launchers such as `uvx` rather than assuming host-local package managers inside the backend container.
 
 **Tester vs. tenant agent separation:** the tester is a dedicated QA bridge, not a tenant-managed production instance. For meaningful end-to-end validation, the tester and the tenant agent must authenticate with different WhatsApp accounts/phone numbers. If the same phone number is reused, `/api/mcp/instances/tester/status` and `/api/mcp/instances/{id}/health` now surface warning strings, and tenant-agent creation is rejected when the requested number is already in use by an authenticated tester or another WhatsApp MCP instance.
 

@@ -10,6 +10,8 @@ Revises: 0030
 from alembic import op
 import sqlalchemy as sa
 
+from models import get_remote_access_proxy_target_url
+
 
 revision = '0031'
 down_revision = '0030'
@@ -20,6 +22,7 @@ depends_on = None
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    default_target_url = get_remote_access_proxy_target_url()
 
     # 1. remote_access_config table
     existing_tables = set(inspector.get_table_names())
@@ -34,7 +37,7 @@ def upgrade() -> None:
             sa.Column('tunnel_token_encrypted', sa.Text(), nullable=True),
             sa.Column('tunnel_hostname', sa.String(length=255), nullable=True),
             sa.Column('tunnel_dns_target', sa.String(length=255), nullable=True),
-            sa.Column('target_url', sa.String(length=255), nullable=False, server_default='http://frontend:3030'),
+            sa.Column('target_url', sa.String(length=255), nullable=False, server_default=sa.text(f"'{default_target_url}'")),
             sa.Column('last_started_at', sa.DateTime(), nullable=True),
             sa.Column('last_stopped_at', sa.DateTime(), nullable=True),
             sa.Column('last_error', sa.Text(), nullable=True),
@@ -44,7 +47,7 @@ def upgrade() -> None:
         # Seed the single config row
         op.execute(
             "INSERT INTO remote_access_config (id, enabled, mode, autostart, protocol, target_url) "
-            "VALUES (1, false, 'quick', false, 'auto', 'http://frontend:3030')"
+            f"VALUES (1, false, 'quick', false, 'auto', '{default_target_url}')"
         )
 
     # 2. config.remote_access_encryption_key
