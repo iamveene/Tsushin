@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Ubuntu VM v0.6.0 Fresh-Install Regression Audit (`develop`, 2026-04-11)
+
+Full interactive fresh-install QA on Ubuntu 24.04 aarch64 (`10.211.55.5`). All 31 TCs executed via API (curl) and browser automation (Playwright). Install path: `/home/parallels/code2/tsushin-v060-20260411-084511/`. All integrations configured: Gemini (default/gemini-2.5-flash), OpenAI, Anthropic, Ollama (reconfigured to `0.0.0.0:11434` for Docker bridge access), Brave Search, Tavily.
+
+**Pass summary (evidence screenshots in `output/playwright/`):**
+- TC-0: Setup wizard — org `Tsushin QA`, tenant admin `test@example.com`, providers auto-configured, global admin credentials displayed
+- TC-1/2/3: Health/readiness, tenant login (no System section), global admin verified via API (browser blocked by BUG-514)
+- TC-4–TC-10: Dashboard/Watcher tabs, Studio (7 agents including ACME Sales), Playground chat, Memory Inspector, Flows page, Hub page, all 15 Core sub-pages
+- TC-11: System admin endpoints via API (`/api/tenants/`, `/api/system/status`, `/api/admin/remote-access/tenants`) — all 200
+- TC-14/TC-21: AI providers (Gemini/OpenAI/Anthropic/Ollama) + Tool APIs (Brave Search/Tavily saved via API workaround due to BUG-516)
+- TC-15: Brave web search — live results from Reuters, TIME, ScienceDaily returned in Playground
+- TC-16: Image generation — "Image generated successfully!" confirmed in Playground
+- TC-17: ACME Sales agent + KB (`acme_products.csv`) — "The Laptop Pro X (SKU: LPX-001) is priced at $1299." with "1 doc used (Agent)" tag
+- TC-18/TC-19: A2A permission (Tsushin→ACME Sales, depth=2, 10RPM) + delegation — "The ErgoMouse has a price of $55 and an SKU of EMX-002."
+- TC-25: Sentinel config enabled with all detection types active; 0 events in log (no attacks in session)
+- TC-27: Sandboxed tools via API — `/tool dig lookup domain=example.com` returns DNS IPs; `/status` returns agent/session state
+- TC-28: API v1 — OAuth2 token exchange, X-API-Key auth, all `/api/v1/*` endpoints 200, sync chat responding
+- TC-29: Flows page rendered; 2 flows created (notification + agentic/workflow)
+- TC-30: Project "ACME QA Project" created + conversation started
+- TC-31: A2A sessions API confirms 1 completed session, 100% success rate, 2091ms avg response time
+- TC-13: 0 ERROR/CRITICAL backend log lines across the full test run
+
+**Findings: 5 new bugs (BUG-514 through BUG-518):**
+- `BUG-514` — `.local` TLD silently rejected by frontend email validator (blocks global admin browser login)
+- `BUG-515` — Welcome Tour modal reappears on every page navigation (state not persisted)
+- `BUG-516` — `window.alert()` suppressed by native `<dialog>` User Guide (blocks fact creation and API key save UI)
+- `BUG-517` — `add_remote_access` migration startup WARN: `enabled` boolean/integer mismatch (non-blocking)
+- `BUG-518` — A2A skill agent lookup fails when user appends " agent" suffix in natural language query
+
 ### Bug Sprint — 8 bugs resolved (`develop`, 2026-04-10 evening)
 
 Closeout of the remaining open bugs from the 2026-04-10 Ubuntu VM fresh-install QA.
