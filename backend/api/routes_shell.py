@@ -24,7 +24,9 @@ from auth_dependencies import (
     TenantContext,
     get_tenant_context,
     require_permission,
-    get_current_user_required
+    get_current_user_required,
+    get_current_user_optional_strict_from_request,
+    ensure_permission,
 )
 
 logger = logging.getLogger(__name__)
@@ -1090,12 +1092,23 @@ class BeaconVersionResponse(BaseModel):
 
 
 @router.get("/beacon/version", response_model=BeaconVersionResponse)
-async def get_beacon_version():
+async def get_beacon_version(
+    x_api_key: str = Header(..., alias="X-API-Key"),
+    db: Session = Depends(get_db),
+):
     """
     Get the latest beacon version info for auto-update.
 
     Beacons call this endpoint on startup and periodically to check for updates.
+
+    v0.6.0 Remote Access hardening: requires X-API-Key matching an existing
+    ShellIntegration. Prevents anonymous recon of beacon version, download URL,
+    and payload checksum on publicly-tunneled instances.
     """
+    integration = verify_beacon_api_key(x_api_key, db)
+    if not integration:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
     import os
     import hashlib
     from pathlib import Path
@@ -1127,12 +1140,34 @@ async def get_beacon_version():
 
 
 @router.get("/beacon/download")
-async def download_beacon():
+async def download_beacon(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
     """
     Download the latest beacon package as a zip file.
 
     Returns the shell_beacon package for installation on remote hosts.
+
+    v0.6.0 Remote Access hardening: dual auth. Accepts EITHER a valid session
+    JWT (so the "/hub/shell" UI anchor click works over the tunnel — the
+    browser auto-sends the tsushin_session cookie on same-origin requests)
+    OR an X-API-Key header matching an existing ShellIntegration (so the
+    curl-from-target-host install flow keeps working, and so beacons can
+    auto-update via the URL returned from /beacon/version).
     """
+    if x_api_key and verify_beacon_api_key(x_api_key, db):
+        jwt_ok = True
+    else:
+        jwt_ok = False
+
+    if not jwt_ok:
+        current_user = get_current_user_optional_strict_from_request(request, db)
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        ensure_permission(current_user, "shell.read", db)
+
     import io
     import zipfile
     from pathlib import Path

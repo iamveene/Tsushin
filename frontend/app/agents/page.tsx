@@ -314,19 +314,12 @@ export default function AgentsPage() {
 
   const checkOllamaHealth = async () => {
     try {
-      const apiUrl = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081')
-      const response = await fetch(`${apiUrl}/api/ollama/health`)
-      if (response.ok) {
-        const data = await response.json()
-        setOllamaAvailable(data.available === true)
-        if (data.available && data.models) {
-          const modelNames = data.models.map((m: { name: string }) => m.name)
-          setOllamaModels(modelNames)
-        } else {
-          setOllamaModels([])
-        }
+      const data = await api.getOllamaHealth()
+      setOllamaAvailable(data.available === true)
+      if (data.available && data.models) {
+        const modelNames = data.models.map((m) => m.name)
+        setOllamaModels(modelNames)
       } else {
-        setOllamaAvailable(false)
         setOllamaModels([])
       }
     } catch (error) {

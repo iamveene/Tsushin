@@ -28,7 +28,8 @@ The Shell Beacon connects to a Tsushin backend server and executes shell command
 
 ```bash
 # Download from Tsushin server
-curl -o tsushin_beacon.zip https://your-server.com/api/shell/beacon/download
+curl -H "X-API-Key: shb_your_key_here" -o tsushin_beacon.zip \
+  https://your-server.com/api/shell/beacon/download
 unzip tsushin_beacon.zip
 cd shell_beacon
 pip install -r requirements.txt
@@ -111,7 +112,8 @@ python run.py \
 
 ```bash
 # Download and extract to /tmp
-curl -L "https://your-server.com/api/shell/beacon/download" -o beacon.zip
+curl -L -H "X-API-Key: shb_your_key_here" \
+  "https://your-server.com/api/shell/beacon/download" -o beacon.zip
 unzip beacon.zip
 
 # CORRECT: Run from parent directory (/tmp in this case)

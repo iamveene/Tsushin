@@ -232,12 +232,9 @@ export default function AgentConfigurationManager({ agentId }: Props) {
 
   const fetchOllamaModels = async () => {
     try {
-      const response = await fetch('/api/ollama/health')
-      if (response.ok) {
-        const data = await response.json()
-        if (data.available && data.models) {
-          setOllamaModels(data.models.map((m: { name: string }) => m.name))
-        }
+      const data = await api.getOllamaHealth()
+      if (data.available && data.models) {
+        setOllamaModels(data.models.map((m) => m.name))
       }
     } catch {
       // Ollama not available

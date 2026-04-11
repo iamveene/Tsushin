@@ -830,19 +830,8 @@ export default function HubPage() {
 
   const fetchOllamaHealth = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/ollama/health`)
-      if (response.ok) {
-        const data = await response.json()
-        setOllamaHealth(data)
-      } else {
-        setOllamaHealth({
-          status: 'offline',
-          base_url: 'http://localhost:11434',
-          available: false,
-          error: 'Health check failed'
-        })
-      }
+      const data = await api.getOllamaHealth()
+      setOllamaHealth(data)
     } catch (error) {
       setOllamaHealth({
         status: 'offline',

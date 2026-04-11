@@ -205,14 +205,11 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
 
   const fetchOllamaModels = async () => {
     try {
-      const response = await fetch('/api/ollama/health')
-      if (response.ok) {
-        const data = await response.json()
-        if (data.available && data.models) {
-          setOllamaModels(
-            data.models.map((m: { name: string }) => ({ value: m.name, label: m.name }))
-          )
-        }
+      const data = await api.getOllamaHealth()
+      if (data.available && data.models) {
+        setOllamaModels(
+          data.models.map((m) => ({ value: m.name, label: m.name }))
+        )
       }
     } catch {
       // Ollama not available
