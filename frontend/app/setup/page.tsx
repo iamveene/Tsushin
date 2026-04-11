@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { api } from '@/lib/client'
+import { validateEmailAddress } from '@/lib/validation'
 
 const MIN_PASSWORD_LENGTH = 8
 const PASSWORD_MIN_LENGTH_MESSAGE = `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
@@ -76,6 +77,7 @@ export default function SetupPage() {
   }
   const [createDefaultAgents, setCreateDefaultAgents] = useState(true)
   const [error, setError] = useState('')
+  const [emailError, setEmailError] = useState('')
   const [loading, setLoading] = useState(false)
   // BUG-365: Global admin credential reveal after setup
   const [globalAdminCreds, setGlobalAdminCreds] = useState<{email: string, password: string, full_name: string} | null>(null)
@@ -125,6 +127,7 @@ export default function SetupPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    setEmailError('')
 
     if (password !== confirmPassword) {
       setError('Passwords do not match')
@@ -136,10 +139,18 @@ export default function SetupPage() {
       return
     }
 
+    const normalizedEmail = email.trim()
+    const emailValidationError = validateEmailAddress(normalizedEmail)
+    if (emailValidationError) {
+      setEmailError(emailValidationError)
+      return
+    }
+
+    setEmail(normalizedEmail)
     setLoading(true)
     try {
       // Auto-include any uncommitted key in the text field
-      let allKeys = [...providerKeys]
+      const allKeys = [...providerKeys]
       if (currentKey.trim() && !allKeys.some(p => p.provider === selectedProvider)) {
         const model = currentModel || PROVIDERS[selectedProvider]?.defaultModel || ''
         allKeys.push({ provider: selectedProvider, key: currentKey.trim(), model })
@@ -161,7 +172,7 @@ export default function SetupPage() {
 
       const result = await api.setupWizard({
         tenant_name: orgName,
-        admin_email: email,
+        admin_email: normalizedEmail,
         admin_password: password,
         admin_full_name: fullName,
         create_default_agents: createDefaultAgents,
@@ -306,13 +317,24 @@ export default function SetupPage() {
               </label>
               <input
                 id="email"
-                type="email"
+                type="text"
                 required
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value)
+                  if (emailError) setEmailError('')
+                }}
                 placeholder="admin@example.com"
+                inputMode="email"
+                autoComplete="email"
+                autoCapitalize="none"
+                spellCheck={false}
+                aria-invalid={Boolean(emailError)}
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
               />
+              {emailError && (
+                <p className="mt-1 text-sm text-red-400">{emailError}</p>
+              )}
             </div>
 
             <div>

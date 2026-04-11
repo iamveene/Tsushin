@@ -27,6 +27,7 @@ import { GlobeIcon } from '@/components/ui/icons'
 
 const STATUS_POLL_INTERVAL_MS = 5000
 const STATUS_REFRESH_DELAY_MS = 1500
+const DEFAULT_TARGET_URL_PLACEHOLDER = 'http://<stack>-proxy:80'
 
 const HOSTNAME_REGEX =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/
@@ -71,7 +72,7 @@ function buildDraftFromConfig(cfg: RemoteAccessConfig | null): FormDraft {
     protocol: cfg?.protocol ?? 'auto',
     tunnel_hostname: cfg?.tunnel_hostname ?? '',
     tunnel_dns_target: cfg?.tunnel_dns_target ?? '',
-    target_url: cfg?.target_url ?? 'http://frontend:3030',
+    target_url: cfg?.target_url ?? '',
     tunnel_token: '',
     clear_token: false,
   }
@@ -298,7 +299,7 @@ export default function RemoteAccessPage() {
         protocol: formDraft.protocol,
         tunnel_hostname: formDraft.tunnel_hostname.trim() || null,
         tunnel_dns_target: formDraft.tunnel_dns_target.trim() || null,
-        target_url: formDraft.target_url.trim() || 'http://frontend:3030',
+        target_url: formDraft.target_url.trim() || undefined,
         expected_updated_at: config?.updated_at ?? null,
       }
       if (formDraft.clear_token) {
@@ -762,11 +763,12 @@ export default function RemoteAccessPage() {
                     onChange={(e) =>
                       setFormDraft({ ...formDraft, target_url: e.target.value })
                     }
-                    placeholder="http://frontend:3030"
+                    placeholder={DEFAULT_TARGET_URL_PLACEHOLDER}
                     className="w-full px-3 py-2 bg-tsushin-ink border border-tsushin-border rounded-md text-white font-mono text-xs"
                   />
                   <p className="mt-1 text-xs text-tsushin-slate">
-                    Only change for non-standard deployments.
+                    Defaults to the stack-scoped Caddy proxy. Only change for
+                    non-standard deployments.
                   </p>
                 </div>
               )}

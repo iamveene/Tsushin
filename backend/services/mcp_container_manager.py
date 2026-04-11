@@ -6,7 +6,9 @@ Manages Docker containers for WhatsApp MCP instances.
 Handles container lifecycle: create, start, stop, restart, delete.
 """
 
+import hashlib
 import os
+import re
 import time
 import logging
 import requests
@@ -159,6 +161,7 @@ class MCPContainerManager:
         db.add(instance)
         db.commit()
         db.refresh(instance)
+        self.reconcile_instance(instance, db)
 
         logger.info(f"MCP instance {instance.id} created in database")
 
@@ -309,6 +312,20 @@ class MCPContainerManager:
             logger.error(f"Failed to ensure container on tsushin network: {e}")
             # Don't raise - container might still work via localhost fallback
 
+    def _ensure_container_dns_alias(self, container_name_or_id: str, dns_alias: str):
+        """Ensure the container is reachable on the tsushin network via a short DNS alias."""
+        network_name = self._resolve_network_name()
+        try:
+            self.runtime.ensure_container_on_network(
+                container_name_or_id,
+                network_name,
+                aliases=[dns_alias],
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to apply DNS alias '{dns_alias}' for {container_name_or_id}: {e}"
+            )
+
     def _get_container_ip(self, container_name_or_id: str) -> str:
         """Get container IP address on tsushin network"""
         network_name = self._resolve_network_name()
@@ -323,6 +340,22 @@ class MCPContainerManager:
             return None
         value = value.strip()
         return value or None
+
+    def _get_stack_alias(self) -> str:
+        stack_name = self._get_stack_name().lower()
+        stack_alias = stack_name[len("tsushin-"):] if stack_name.startswith("tsushin-") else stack_name
+        stack_alias = re.sub(r"[^a-z0-9]+", "-", stack_alias).strip("-")
+        return (stack_alias[:12] or "tsn")
+
+    def _build_runtime_dns_alias(self, instance: WhatsAppMCPInstance) -> str:
+        tenant_hash = hashlib.md5((instance.tenant_id or "").encode("utf-8")).hexdigest()[:8]
+        instance_kind = (instance.instance_type or "agent").strip().lower()
+        if instance_kind not in {"agent", "tester"}:
+            instance_kind = "agent"
+        alias = f"mcp-{self._get_stack_alias()}-{instance_kind}-{tenant_hash}-{instance.id}"
+        alias = re.sub(r"[^a-z0-9-]", "-", alias.lower())
+        alias = re.sub(r"-+", "-", alias).strip("-")
+        return alias[:63].rstrip("-")
 
     def _get_dns_servers(self) -> Optional[list[str]]:
         raw_value = os.getenv(self.DNS_FALLBACK_ENV, "").strip()
@@ -394,9 +427,10 @@ class MCPContainerManager:
         """
         changes: Dict[str, Any] = {}
 
+        expected_dns_alias = self._build_runtime_dns_alias(instance)
         expected_session_path = self._canonical_session_data_path(instance)
         expected_messages_db_path = self._canonical_messages_db_path(instance)
-        expected_api_url = f"http://{instance.container_name}:8080/api"
+        expected_api_url = f"http://{expected_dns_alias}:8080/api"
 
         normalized_container_id = self._sanitize_container_ref(instance.container_id)
         if instance.container_id != normalized_container_id:
@@ -411,10 +445,6 @@ class MCPContainerManager:
             instance.messages_db_path = expected_messages_db_path
             changes["messages_db_path"] = expected_messages_db_path
 
-        if instance.mcp_api_url != expected_api_url:
-            instance.mcp_api_url = expected_api_url
-            changes["mcp_api_url"] = expected_api_url
-
         container, container_ref = self._resolve_container(instance, db)
         if container_ref:
             changes["container_ref"] = container_ref
@@ -427,12 +457,23 @@ class MCPContainerManager:
 
             try:
                 attrs = self.runtime.get_container_attrs(container_ref)
+                network_settings = attrs.get("NetworkSettings") or attrs.get("network_settings") or {}
+                networks = network_settings.get("Networks", {}) if isinstance(network_settings, dict) else {}
+                current_aliases = networks.get(self._resolve_network_name(), {}).get("Aliases", []) or []
+                if expected_dns_alias not in current_aliases:
+                    self._ensure_container_dns_alias(container_ref, expected_dns_alias)
+                    changes["mcp_dns_alias"] = expected_dns_alias
                 host_port = self._extract_host_port(attrs)
                 if host_port and instance.mcp_port != host_port:
                     instance.mcp_port = host_port
                     changes["mcp_port"] = host_port
             except Exception as e:
                 logger.debug(f"Could not inspect attrs for {instance.container_name}: {e}")
+
+        if instance.mcp_api_url != expected_api_url:
+            instance.mcp_api_url = expected_api_url
+            changes["mcp_api_url"] = expected_api_url
+            changes["mcp_dns_alias"] = expected_dns_alias
 
         if db is not None and changes:
             db.commit()
@@ -1075,7 +1116,8 @@ class MCPContainerManager:
                 tester_instance = db.query(WhatsAppMCPInstance).filter(
                     WhatsAppMCPInstance.tenant_id == self.tenant_id,
                     WhatsAppMCPInstance.instance_type == "tester",
-                    WhatsAppMCPInstance.is_active == True
+                    WhatsAppMCPInstance.status.in_(["running", "starting"]),
+                    WhatsAppMCPInstance.container_name.isnot(None),
                 ).order_by(WhatsAppMCPInstance.id.desc()).first()
                 if tester_instance and tester_instance.container_name:
                     try:

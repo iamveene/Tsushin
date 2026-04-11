@@ -361,7 +361,7 @@ export default function HubPage() {
     idle_timeout_seconds: 300,
   })
   const [mcpServerActionLoading, setMcpServerActionLoading] = useState<number | null>(null)
-  const [allowedBinaries, setAllowedBinaries] = useState<string[]>(['uvx', 'npx', 'node'])
+  const [allowedBinaries, setAllowedBinaries] = useState<string[]>(['uvx'])
 
   // v0.6.0: Vector Store Instances
   const [vectorStoreInstances, setVectorStoreInstances] = useState<VectorStoreInstance[]>([])
@@ -373,6 +373,8 @@ export default function HubPage() {
   // UI state
   const [loading, setLoading] = useState(true)
   const [showApiKeyModal, setShowApiKeyModal] = useState(false)
+  const [apiKeyDeleteTarget, setApiKeyDeleteTarget] = useState<string | null>(null)
+  const [deletingApiKeyService, setDeletingApiKeyService] = useState<string | null>(null)
   const [showMcpCreateModal, setShowMcpCreateModal] = useState(false)
   const [showCreateModeSelector, setShowCreateModeSelector] = useState(false)
   const [showQRModal, setShowQRModal] = useState(false)
@@ -1277,9 +1279,11 @@ export default function HubPage() {
     }
   }
 
-  const deleteAPIKey = async (service: string) => {
-    if (!confirm(`Remove the ${service} integration?`)) return
+  const deleteAPIKey = async () => {
+    if (!apiKeyDeleteTarget) return
 
+    const service = apiKeyDeleteTarget
+    setDeletingApiKeyService(service)
     setError(null)
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
@@ -1294,11 +1298,14 @@ export default function HubPage() {
       }
 
       await fetchAPIKeys()
+      setApiKeyDeleteTarget(null)
       setSuccessMessage('API key removed')
       setTimeout(() => setSuccessMessage(null), 3000)
     } catch (error: any) {
       console.error('Error deleting API key:', error)
       setError(error.message || 'Failed to remove API key')
+    } finally {
+      setDeletingApiKeyService(null)
     }
   }
 
@@ -1987,7 +1994,12 @@ export default function HubPage() {
   const runtimeTesterInstances = testerMcpInstances.filter(instance => instance.status !== 'deleted')
   const communicationMcpInstances = mcpInstances
   const testerControlSource = testerStatus?.source ?? (runtimeTesterInstances.length > 0 ? 'runtime' : 'compose')
-  const showDedicatedTesterCard = testerControlSource === 'compose'
+  const showDedicatedTesterCard = Boolean(testerStatus) || runtimeTesterInstances.length > 0
+  const testerSourceLabel = testerControlSource === 'runtime' ? 'Runtime-managed tester' : 'Compose-managed tester'
+  const testerContainerLabel = testerStatus?.name || runtimeTesterInstances[0]?.container_name || 'tester-mcp'
+  const apiKeyDeleteLabel = apiKeyDeleteTarget
+    ? [...AI_PROVIDERS, ...TOOL_APIS].find(item => item.value === apiKeyDeleteTarget)?.label ?? apiKeyDeleteTarget
+    : null
 
   // Render integration card based on status
   const renderIntegrationCard = (
@@ -2044,7 +2056,7 @@ export default function HubPage() {
                   Edit
                 </button>
                 <button
-                  onClick={() => deleteAPIKey(apiKey.service)}
+                  onClick={() => setApiKeyDeleteTarget(apiKey.service)}
                   className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
                 >
                   Remove
@@ -2894,18 +2906,30 @@ export default function HubPage() {
                             <BeakerIcon size={16} className="text-orange-400" /> QA Tester
                           </h3>
                           <p className="text-xs text-tsushin-slate mt-1">
-                            Compose-managed tester instance for WhatsApp QA, QR validation, and watcher diagnostics.
+                            {testerSourceLabel} shortcuts for WhatsApp QA, QR validation, and watcher diagnostics.
                           </p>
                           <p className="text-xs text-tsushin-slate/70 mt-2">
-                            Container: {testerStatus?.name || 'tester-mcp'}
+                            Container: {testerContainerLabel}
                           </p>
-                          {runtimeTesterInstances.length > 0 && (
+                          {testerControlSource === 'compose' && runtimeTesterInstances.length > 0 && (
                             <p className="text-xs text-amber-300/90 mt-2">
                               Compose tester controls remain active. Runtime tester rows are still listed below for cleanup and visibility.
                             </p>
                           )}
+                          {testerControlSource === 'runtime' && (
+                            <p className="text-xs text-emerald-300/90 mt-2">
+                              Tester shortcut endpoints are currently resolved to the runtime tester, so QR, health, and reset actions stay aligned with the active container.
+                            </p>
+                          )}
                         </div>
                         <div className="flex flex-col items-end gap-1">
+                          <span className={`px-2 py-1 text-[11px] font-medium rounded-full border ${
+                            testerControlSource === 'runtime'
+                              ? 'bg-emerald-600/20 text-emerald-300 border-emerald-600/40'
+                              : 'bg-sky-600/20 text-sky-300 border-sky-600/40'
+                          }`}>
+                            Source: {testerControlSource}
+                          </span>
                           <span className={getStatusBadge(testerStatus?.container_state || 'stopped')}>
                             {testerStatus?.container_state || 'unknown'}
                           </span>
@@ -3986,7 +4010,7 @@ export default function HubPage() {
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     MCP (Model Context Protocol) servers expose tools that your agents can use. Connect via SSE, HTTP, or Stdio transport.
-                    Stdio transport runs MCP binaries (uvx, npx, node) inside your tenant toolbox container for maximum isolation.
+                    Stdio transport runs approved launchers inside your tenant toolbox container for maximum isolation. This stack ships with `uvx` available by default.
                     After connecting, use &ldquo;Refresh Tools&rdquo; to discover available tools from the server.
                   </p>
                 </div>
@@ -4326,6 +4350,43 @@ export default function HubPage() {
           </div>
         </Modal>
       )}
+
+      <Modal
+        isOpen={Boolean(apiKeyDeleteTarget)}
+        onClose={() => {
+          if (!deletingApiKeyService) {
+            setApiKeyDeleteTarget(null)
+          }
+        }}
+        title="Remove Integration"
+        footer={
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={() => setApiKeyDeleteTarget(null)}
+              className="px-4 py-2 bg-gray-700 text-white rounded disabled:opacity-50"
+              disabled={Boolean(deletingApiKeyService)}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={deleteAPIKey}
+              className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50"
+              disabled={Boolean(deletingApiKeyService)}
+            >
+              {deletingApiKeyService ? 'Removing...' : 'Remove'}
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-3 text-sm text-tsushin-slate">
+          <p>
+            Remove the {apiKeyDeleteLabel || 'selected'} integration from this workspace?
+          </p>
+          <p className="text-xs text-tsushin-slate/80">
+            Agents will stop using this credential until you add a new key.
+          </p>
+        </div>
+      </Modal>
 
       {/* WhatsApp Create Mode Selector */}
       <WhatsAppCreateModeSelector

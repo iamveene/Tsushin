@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from agent.skills.base import SkillResult
 from models import CustomSkill, CustomSkillVersion, AgentCustomSkill, CustomSkillExecution
 from models_rbac import User
 from auth_dependencies import (
@@ -829,6 +830,14 @@ async def test_custom_skill(
                 arguments=payload.arguments or {},
                 config=config,
             )
+
+        if skill.skill_type_variant == 'script' and result.success and not (result.output or "").strip():
+            result = SkillResult(
+                success=False,
+                output="Script completed successfully but produced no usable output.",
+                metadata={**(result.metadata or {}), "error": "empty_script_output"},
+            )
+
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         # Update execution record

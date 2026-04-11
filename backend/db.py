@@ -1538,6 +1538,12 @@ def init_database(engine):
     session = SessionLocal()
 
     try:
+        from services.remote_access_config_service import backfill_remote_access_target_url
+        backfill_remote_access_target_url(session)
+    except Exception as e:
+        print(f"[Remote Access Backfill] Warning: {e}")
+
+    try:
         config = session.query(Config).first()
         if not config:
             default_config = Config(

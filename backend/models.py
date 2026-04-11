@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -5,6 +7,16 @@ from sqlalchemy.sql import func
 from datetime import datetime
 
 Base = declarative_base()
+
+
+def get_remote_access_stack_name() -> str:
+    """Return the current Compose stack name for Remote Access defaults."""
+    return (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+
+
+def get_remote_access_proxy_target_url() -> str:
+    """Return the stack-scoped Caddy proxy target used by Remote Access."""
+    return f"http://{get_remote_access_stack_name()}-proxy:80"
 
 class Config(Base):
     __tablename__ = "config"
@@ -3661,8 +3673,8 @@ class RemoteAccessConfig(Base):
     tunnel_hostname = Column(String(255), nullable=True)              # e.g. tsushin.archsec.io
     tunnel_dns_target = Column(String(255), nullable=True)            # *.cfargotunnel.com (informational)
 
-    # Target for the tunnel — defaults to the frontend container
-    target_url = Column(String(255), nullable=False, default="http://frontend:3030")
+    # Target for the tunnel — defaults to the stack-scoped Caddy proxy
+    target_url = Column(String(255), nullable=False, default=get_remote_access_proxy_target_url)
 
     # Cross-restart persistence (service may crash; admin needs visibility)
     last_started_at = Column(DateTime, nullable=True)

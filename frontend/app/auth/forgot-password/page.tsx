@@ -9,22 +9,32 @@ import React, { useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 import { Input } from '@/components/ui/form-input'
+import { validateEmailAddress } from '@/lib/validation'
 
 export default function ForgotPasswordPage() {
   const { forgotPassword } = useAuth()
   const [email, setEmail] = useState('')
   const [error, setError] = useState('')
+  const [emailError, setEmailError] = useState('')
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    setEmailError('')
     setSuccess(false)
+    const normalizedEmail = email.trim()
+    const emailValidationError = validateEmailAddress(normalizedEmail)
+    if (emailValidationError) {
+      setEmailError(emailValidationError)
+      return
+    }
+    setEmail(normalizedEmail)
     setLoading(true)
 
     try {
-      await forgotPassword(email)
+      await forgotPassword(normalizedEmail)
       setSuccess(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send reset email')
@@ -42,7 +52,7 @@ export default function ForgotPasswordPage() {
             Reset your password
           </h2>
           <p className="mt-2 text-center text-sm text-tsushin-slate">
-            Enter your email address and we'll send you a link to reset your password
+            Enter your email address and we&apos;ll send you a link to reset your password
           </p>
         </div>
 
@@ -61,11 +71,11 @@ export default function ForgotPasswordPage() {
                   Check your email
                 </h4>
                 <p className="text-sm text-tsushin-success-glow">
-                  We've sent a password reset link to <strong>{email}</strong>. Please check your
+                  We&apos;ve sent a password reset link to <strong>{email}</strong>. Please check your
                   inbox and follow the instructions.
                 </p>
                 <p className="text-xs text-tsushin-success/80 mt-2">
-                  Didn't receive the email? Check your spam folder or{' '}
+                  Didn&apos;t receive the email? Check your spam folder or{' '}
                   <button
                     type="button"
                     onClick={() => setSuccess(false)}
@@ -81,13 +91,20 @@ export default function ForgotPasswordPage() {
             {!success && (
               <>
                 <Input
-                  type="email"
+                  type="text"
                   label="Email address"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value)
+                    if (emailError) setEmailError('')
+                  }}
                   required
                   autoComplete="email"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   placeholder="you@example.com"
+                  error={emailError}
                 />
 
                 <button

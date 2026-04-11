@@ -1,6 +1,6 @@
 # Tsushin Bug Tracker
-**Open:** 12 | **In Progress:** 0 | **Resolved:** 455
-**Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)** + **Post-Release Stabilization (2026-04-06)** + **Community PR #8 (2026-04-06)** + **Community PRs #9, #10 (2026-04-06)** + **Provider Instance Validation (2026-04-06)** + **Wave 1 Security + Wave 2 Critical Functionality Audit (2026-04-06)** + **Ship-Gate QA (2026-04-06)** + **Onboarding Overlap Audit (2026-04-06)** + **UI/UX Exploration Audit (2026-04-06)** + **Ubuntu VM E2E Install Audit (2026-04-07)** + **Full Bug Sprint — 26 bugs resolved (2026-04-07)** + **Release 0.6.0 Re-Validation Audit (2026-04-07)** + **Ubuntu VM Fresh Install QA (2026-04-07)** + **Ubuntu VM Re-Test (2026-04-07)** + **Fresh Install Docker Naming & Runtime Management Audit (2026-04-07)** + **Fresh Install Dual-Surface Regression Audit (2026-04-07)** + **Fresh Install Browser vs API Audit (2026-04-07)** + **Fresh Install Develop Audit & Restore (2026-04-07)** + **Ubuntu VM Fresh Install Develop Coverage Audit (2026-04-07)** + **Stabilization Sprint & Re-Validation (2026-04-07)** + **Fresh Install Stabilization Closeout (2026-04-08)** + **v0.6.0 Comprehensive E2E Audit — 6 findings (2026-04-08)** + **Ubuntu VM Fresh Install Full QA (2026-04-08)** + **macOS Fresh Install QA (2026-04-08)** + **macOS Loopback & Runtime Isolation Audit (2026-04-08)** + **Ubuntu VM Fresh Install Follow-up (2026-04-09)** + **Local Re-Test & Setup Validation Follow-up (2026-04-09)** + **macOS Fresh Install Automated QA (2026-04-09)** + **Ubuntu VM Fresh Install Full QA (2026-04-09)** + **macOS v0.6.0 Full Feature Regression (2026-04-09)** + **macOS Fresh Install Memory / Shell / Runtime Follow-up (2026-04-09)** + **Ubuntu VM Fresh-Install QA (2026-04-10)** + **macOS v0.6.0 Targeted Regression (2026-04-10)** + **Bug Sprint — 12 bugs resolved (2026-04-10)** + **Bug Sprint — 8 bugs resolved (2026-04-10) — closing BUG-506..513** + **Ubuntu VM v0.6.0 Fresh-Install Regression Audit (2026-04-11) — 6 findings** + **Fresh Install v0.6.0 Audit (2026-04-11) — 6 new findings, 2 revalidated**
+**Open:** 0 | **In Progress:** 0 | **Resolved:** 467
+**Source:** v0.6.0 RBAC & Multi-Tenancy Audit + Security Vulnerability Audit + GKE Readiness Audit + Hub AI Providers Audit + Platform Hardening + QA Regression + v0.6.0 UI/UX QA Audit (2026-03-29) + v0.6.0 Slash Command Hardening + RBAC Permission Matrix Audit (2026-03-30) + v0.6.0 Perfection Team Audit (2026-03-30) + **VM Extended Regression (2026-03-30)** + Vertex AI Perfection Audit (2026-03-30) + **A2A Graph Visualization (2026-03-30)** + **A2A Perfection Review (2026-03-30)** + **Security & Logic Audit — Validated (2026-03-30)** + **Critical/High Bug Remediation Sprint (2026-03-31)** + **v0.6.0 Final Release Review (2026-03-31)** + **Fresh Install QA (2026-04-02)** + **Setup & Embedding Fixes (2026-04-02)** + **Security Audit (2026-04-02)** + **Installer QA (2026-04-02)** + **User-Reported UX/Skills (2026-04-04)** + **v0.6.0 Critical Remediation — 11 bugs (2026-04-05)** + **User-Reported UX/Flows (2026-04-05)** + **WhatsApp Agent Silent-Drop Regression (2026-04-05)** + **Docker Image Hygiene (2026-04-05)** + **Perfection Audit Findings — BUG-LOG-015 cleanup (2026-04-05)** + **v0.6.0 Comprehensive Audit — 18 findings (2026-04-05)** + **Post-Release Stabilization (2026-04-06)** + **Community PR #8 (2026-04-06)** + **Community PRs #9, #10 (2026-04-06)** + **Provider Instance Validation (2026-04-06)** + **Wave 1 Security + Wave 2 Critical Functionality Audit (2026-04-06)** + **Ship-Gate QA (2026-04-06)** + **Onboarding Overlap Audit (2026-04-06)** + **UI/UX Exploration Audit (2026-04-06)** + **Ubuntu VM E2E Install Audit (2026-04-07)** + **Full Bug Sprint — 26 bugs resolved (2026-04-07)** + **Release 0.6.0 Re-Validation Audit (2026-04-07)** + **Ubuntu VM Fresh Install QA (2026-04-07)** + **Ubuntu VM Re-Test (2026-04-07)** + **Fresh Install Docker Naming & Runtime Management Audit (2026-04-07)** + **Fresh Install Dual-Surface Regression Audit (2026-04-07)** + **Fresh Install Browser vs API Audit (2026-04-07)** + **Fresh Install Develop Audit & Restore (2026-04-07)** + **Ubuntu VM Fresh Install Develop Coverage Audit (2026-04-07)** + **Stabilization Sprint & Re-Validation (2026-04-07)** + **Fresh Install Stabilization Closeout (2026-04-08)** + **v0.6.0 Comprehensive E2E Audit — 6 findings (2026-04-08)** + **Ubuntu VM Fresh Install Full QA (2026-04-08)** + **macOS Fresh Install QA (2026-04-08)** + **macOS Loopback & Runtime Isolation Audit (2026-04-08)** + **Ubuntu VM Fresh Install Follow-up (2026-04-09)** + **Local Re-Test & Setup Validation Follow-up (2026-04-09)** + **macOS Fresh Install Automated QA (2026-04-09)** + **Ubuntu VM Fresh Install Full QA (2026-04-09)** + **macOS v0.6.0 Full Feature Regression (2026-04-09)** + **macOS Fresh Install Memory / Shell / Runtime Follow-up (2026-04-09)** + **Ubuntu VM Fresh-Install QA (2026-04-10)** + **macOS v0.6.0 Targeted Regression (2026-04-10)** + **Bug Sprint — 12 bugs resolved (2026-04-10)** + **Bug Sprint — 8 bugs resolved (2026-04-10) — closing BUG-506..513** + **Ubuntu VM v0.6.0 Fresh-Install Regression Audit (2026-04-11) — 6 findings** + **Fresh Install v0.6.0 Audit (2026-04-11) — 6 new findings, 2 revalidated** + **Bug Sprint — BUG-514 to BUG-525 resolved (2026-04-11)**
 
 ## Fresh Install v0.6.0 Audit (2026-04-11)
 
@@ -13,64 +13,76 @@
 - **Evidence root:** `.private/qa/fresh-install-v060-20260411-081937/`
 
 ### BUG-519: Quick Tunnel defaults to the frontend container, so the public hostname 404s every `/api/*` route
-- **Status:** Open
+- **Status:** Resolved
 - **Reported:** 2026-04-11
+- **Resolved:** 2026-04-11
 - **Severity:** High
 - **Category:** Remote Access / Cloudflare Tunnel / Routing
 - **Files:** `frontend/app/system/remote-access/page.tsx`, `backend/alembic/versions/0031_add_remote_access.py`, `backend/migrations/add_remote_access.py`, `backend/models.py`
 - **Description:** The fresh-install Quick Tunnel produced a live public URL that served the Next.js frontend, but every backend route under `/api/*` returned a frontend 404 shell instead of reaching FastAPI. Playwright login against the tunnel failed with `Login failed` because `/api/auth/login`, `/api/auth/me`, `/api/auth/setup-status`, `/api/health`, and `/api/readiness` all missed the backend. The shipped Remote Access defaults still seed `target_url = http://frontend:3030`, which bypasses the Caddy `/api/*` proxying described in the v0.6.0 feature docs and leaves the public hostname frontend-only.
 - **Evidence:** Quick Tunnel URL `https://continually-oxygen-providing-levy.trycloudflare.com`; console log `.private/installations/fresh-install-v060-20260411-081937/tsushin/.playwright-cli/console-2026-04-11T11-56-19-441Z.log`; provider/remote-access summary `.private/qa/fresh-install-v060-20260411-081937/evidence/providers-remote-access.json`
-- **Remediation:** Default Quick/Named Tunnel target URLs should point at the proxy/Caddy service (`http://tsushin-proxy:80` or stack-aware equivalent), not the frontend container.
+- **Fix:** Remote Access defaults, saved-config repair, and the System UI now target the stack proxy (`http://tsushin-proxy:80` / stack-aware equivalent). The Postgres startup path skips the SQLite-only fallback migration, existing `http://frontend:3030` rows are backfilled, and tunnel startup now fails closed when the proxy/Caddy layer is unavailable.
+- **Verification:** `backend/tests/test_remote_access_config_service.py`, `backend/tests/test_remote_access_migrations.py`, and `backend/tests/test_remote_access_tunnel_service.py` passed; `/api/admin/remote-access/config` and `remote_access_config.target_url` now return `http://tsushin-proxy:80`; rebuilt backend logs no longer emit the boolean/integer migration warning.
 
 ### BUG-520: Script custom skills report `success=true` with empty output when the declared entrypoint only returns a value
-- **Status:** Open
+- **Status:** Resolved
 - **Reported:** 2026-04-11
+- **Resolved:** 2026-04-11
 - **Severity:** High
 - **Category:** Custom Skills / Script Runtime / Testing
 - **Files:** `backend/api/routes_custom_skills.py`, `backend/agent/skills/custom_skill_adapter.py`, `backend/services/custom_skill_deploy_service.py`
 - **Description:** The custom-skill API accepts function-style `script_entrypoint` values, but the runtime only executes the script file and reads stdout/JSON stdout. In the fresh install, a Python script skill whose `run()` function returned `SCRIPT-SKILL-...` completed with `success=true`, `exit_code=0`, and no error, yet the API response `output` was empty and the persisted `CustomSkillExecution.output` stayed null. This makes script skills look healthy while silently discarding the result users expect from the declared entrypoint.
 - **Evidence:** `.private/qa/fresh-install-v060-20260411-081937/evidence/api-regression.json` (`custom_skills` failure); direct retest showed `POST /api/custom-skills/2/test` returning `200` with blank `output`
-- **Remediation:** Either invoke the declared script entrypoint and serialize its return value, or make the stdout-only contract explicit and fail the test when a script exits cleanly with no usable output.
+- **Fix:** Script custom skills now keep the existing stdout/JSON stdout contract and fail closed when the process exits successfully without usable output. The custom-skill UI and documentation now explicitly tell users to print their result to stdout.
+- **Verification:** `backend/tests/test_cluster3_backend_regressions.py` and the integrated backend regression slice passed; `/api/custom-skills/{id}/test` now returns a failure for blank stdout instead of `success=true`.
 
 ### BUG-521: Playground thread detail and memory inspector can retain only the assistant reply and drop the user turn
-- **Status:** Open
+- **Status:** Resolved
 - **Reported:** 2026-04-11
+- **Resolved:** 2026-04-11
 - **Severity:** High
 - **Category:** Playground / Memory / Threading
 - **Files:** `backend/api/routes_playground.py`, `backend/services/playground_service.py`, `backend/services/playground_thread_service.py`
 - **Description:** A normal Playground chat can return successfully, but the saved thread and memory inspector can omit the user message entirely. In the fresh-install audit, a thread-local memory probe returned `READY.` in chat, yet `GET /api/playground/threads/6` and `GET /api/playground/memory/1?thread_id=6` preserved only the assistant turn. That breaks thread replay, same-thread recall debugging, and any UI that expects the persisted conversation timeline to match what the user actually sent.
 - **Evidence:** Manual retest captured in `.private/qa/fresh-install-v060-20260411-081937/evidence/api-regression.json` and follow-up API probes against thread `6`
-- **Remediation:** Ensure the normal sync Playground write path persists the user turn through the same sender-key/thread filters used by thread detail and the memory inspector.
+- **Fix:** Playground persistence now preserves the full user/assistant transcript while still marking Sentinel `detect_only` user turns as transcript-only so they are excluded from reusable working/semantic memory when protection is intended.
+- **Verification:** `backend/tests/test_playground_memory_regressions.py` and the integrated backend regression slice passed, covering thread-aware history, memory-layer reads, and transcript retention behavior.
 
 ### BUG-522: Vertex AI provider discovery returns zero models even when the provider instance is healthy
-- **Status:** Open
+- **Status:** Resolved
 - **Reported:** 2026-04-11
+- **Resolved:** 2026-04-11
 - **Severity:** Medium
 - **Category:** Provider Instances / Vertex AI / Model Discovery
 - **Files:** `backend/api/routes_provider_instances.py`, `frontend/app/hub/page.tsx`
 - **Description:** The fresh-install Vertex AI provider instance authenticated successfully and passed `test-connection`, but `POST /api/provider-instances/5/discover-models` still returned `{"models":[],"count":0}` and the Hub rendered `No models configured`. The discovery path falls back to `PREDEFINED_MODELS` for cloud vendors without live discovery, but `vertex_ai` has no curated model list there, so a healthy instance can never populate `available_models`.
 - **Evidence:** `.private/qa/fresh-install-v060-20260411-081937/evidence/providers-remote-access.json`; direct audit probe of `GET /api/provider-instances/5` and `POST /api/provider-instances/5/discover-models`
-- **Remediation:** Add a curated Vertex AI model list to `PREDEFINED_MODELS` or implement live discovery for saved Vertex provider instances.
+- **Fix:** Added curated Vertex AI fallback models for saved-instance discovery so healthy Vertex providers persist a usable non-empty `available_models` list even when live discovery is unavailable.
+- **Verification:** `backend/tests/test_cluster3_backend_regressions.py` passed and `POST /api/provider-instances/1/discover-models` now returns 5 models instead of an empty list.
 
 ### BUG-523: Long stack-prefixed runtime WhatsApp container names break health and QR resolution on fresh installs
-- **Status:** Open
+- **Status:** Resolved
 - **Reported:** 2026-04-11
+- **Resolved:** 2026-04-11
 - **Severity:** High
 - **Category:** WhatsApp / MCP Runtime / Naming
 - **Files:** `backend/services/mcp_container_manager.py`, `backend/services/channel_health_service.py`, `backend/mcp_reader/api_reader.py`
 - **Description:** On the disposable fresh stack, runtime WhatsApp containers came up healthy and generated QR codes internally, but Tsushin’s own health/QR paths failed against the stack-prefixed runtime names. `/api/mcp/instances/2/health` and the Hub QR modal both returned `Failed to parse: '<container_name>', label empty or too long`, leaving the instance stuck in `starting` with no QR in the product UI. The underlying MCP container was working; the product-side hostname/label handling was not.
 - **Evidence:** `.private/qa/fresh-install-v060-20260411-081937/evidence/whatsapp-provisioning.json`; `.private/qa/fresh-install-v060-20260411-081937/evidence/whatsapp-direct-qr.json`; Hub screenshot `.private/installations/fresh-install-v060-20260411-081937/tsushin/.playwright-cli/page-2026-04-11T12-08-25-682Z.png`
-- **Remediation:** Introduce a shorter stable alias for MCP DNS/health checks or cap the generated hostname material so stack-prefixed runtime instances remain resolvable.
+- **Fix:** Runtime WhatsApp containers now receive a short DNS-safe alias, and MCP health/QR/reconcile paths use that alias instead of the raw long container name. The alias assignment reuses the container-runtime network-attachment pattern used by vector-store runtimes.
+- **Verification:** `backend/tests/test_mcp_container_manager.py` passed, covering alias-based health/QR resolution and runtime target recovery.
 
 ### BUG-524: Hub tester QR controls still hard-bind to compose `tester-mcp` and ignore the active runtime tester instance
-- **Status:** Open
+- **Status:** Resolved
 - **Reported:** 2026-04-11
+- **Resolved:** 2026-04-11
 - **Severity:** High
 - **Category:** WhatsApp / Tester MCP / Hub Controls
 - **Files:** `backend/services/mcp_container_manager.py`, `backend/api/routes_mcp_instances.py`, `frontend/app/hub/page.tsx`
 - **Description:** The Communication tab correctly listed the runtime tester row created during the fresh audit, but the dedicated `QA Tester` card still targeted compose `tester-mcp` and reported `Tester container not found`. Clicking `Tester QR` produced a degraded modal and `/api/mcp/instances/tester/qr-code` returned HTTP `500`, even though the runtime tester container was healthy and serving a QR directly on its bound port. This makes the shipped tester controls unusable on fresh installs that rely on runtime-created testers instead of the compose testing profile.
 - **Evidence:** `.private/qa/fresh-install-v060-20260411-081937/evidence/whatsapp-provisioning.json`; `.private/qa/fresh-install-v060-20260411-081937/evidence/whatsapp-direct-qr.json`; Hub screenshot `.private/installations/fresh-install-v060-20260411-081937/tsushin/.playwright-cli/page-2026-04-11T12-08-42-844Z.png`
-- **Remediation:** When no compose tester exists, resolve all `/tester/*` status/QR/restart/logout paths against the active runtime tester instance consistently.
+- **Fix:** Tester fallback now queries real `WhatsAppMCPInstance` runtime fields, resolves runtime testers when the compose tester is absent, and preserves `source=runtime` through `/api/mcp/instances/tester/*`. The Hub tester card now shows source-aware status copy instead of assuming compose-only behavior.
+- **Verification:** `backend/tests/test_mcp_container_manager.py` and `backend/tests/test_routes_mcp_instances_tester.py` passed. In the current local environment the Hub still shows `Source: compose` because no live runtime tester instance exists, but the fallback route behavior is covered by the new runtime tests.
 
 ## Ubuntu VM v0.6.0 Fresh-Install Regression Audit (2026-04-11)
 
@@ -82,60 +94,72 @@
 - **Backend errors:** 0 ERROR/CRITICAL log lines during the full test run.
 
 ### BUG-514: Frontend email validator silently rejects `.local` TLD — no error shown
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-04-11
 - **Severity:** Medium
 - **Category:** UI / Auth / Email Validation
 - **Files:** `frontend/app/login/page.tsx` (email validation logic), likely a regex/library-level TLD allowlist
 - **Description:** The login form rejects emails with a `.local` TLD (e.g., `globaladmin@tsushin-qa.local`) at the frontend client-side validation layer without displaying any error message or making a POST request to `/api/auth/login`. The backend accepts the credential correctly (verified via direct curl). This blocks global admins whose email was provisioned with a `.local` domain from logging in via the browser.
 - **Repro:** Navigate to `/login` on a fresh install. Enter `globaladmin@tsushin-qa.local` + valid password. Click Login. No error appears, no network request is made.
-- **Remediation:** Relax the email TLD validator to permit reserved/private TLDs (`.local`, `.internal`, `.lan`, `.test`), or switch to a more permissive RFC-5321-compliant validation that only checks structural format, not public TLD membership.
+- **Fix:** Auth/setup flows now use app-managed email validation with `type="text"`, `inputMode="email"`, and inline error rendering. `.local` credentials submit normally while malformed emails show an in-app validation message instead of failing silently in the browser.
+- **Verification:** Browser automation accepted `globaladmin@tsushin-qa.local` through the login form and showed `Enter a valid email address` for malformed input.
 
 ### BUG-515: Welcome Tour modal reappears on every page navigation
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-04-11
 - **Severity:** Medium
 - **Category:** UI / Onboarding / State Persistence
 - **Files:** Frontend tour/onboarding component (likely `frontend/components/onboarding/` or `frontend/contexts/`)
 - **Description:** On a fresh install, the Welcome Tour modal (8-step onboarding wizard) re-renders on every client-side route navigation. Dismissing via the "Close" button, pressing Escape, or setting `localStorage` tour-completion keys (e.g., `tour-completed`, `onboarding-complete`) has no lasting effect. The tour reappears each time the user navigates to a new page.
 - **Repro:** Complete setup wizard on a fresh install. Open Playground. Dismiss tour. Navigate to Hub. Tour reappears. Navigate to Flows. Tour reappears.
-- **Remediation:** Persist tour-completion state server-side (user preference endpoint) or in a durable client-side key that the component actually reads before mounting. Ensure the same key is written on dismiss and read on mount.
+- **Fix:** Onboarding persistence is now keyed per authenticated user, includes legacy-key migration, and is resilient to `AuthContext` user reloads triggered by pathname changes.
+- **Verification:** Browser automation confirmed the tour auto-started once for `testadmin@example.com`, stayed dismissed across navigation and refresh after skip, and still auto-started for a different user with a separate completion key.
 
 ### BUG-516: `window.alert()` calls suppressed by native `<dialog>` User Guide — blocks UI actions
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-04-11
 - **Severity:** Medium
 - **Category:** UI / Dialog Conflict
 - **Files:** Frontend User Guide component (uses native `<dialog>` HTML element), `frontend/app/settings/` fact creation, `frontend/app/hub/page.tsx` API key save handler
 - **Description:** Several UI actions (creating a memory fact, saving a Hub API key) show a `window.alert()` confirmation or error notification. When the User Guide `<dialog>` element is present in the DOM (even visually dismissed), Chrome suppresses any `window.alert()` with the message "A window.alert() dialog generated by this page was suppressed because another browser modal dialog was already showing." This means the user receives no feedback and the action appears to silently fail.
 - **Repro (API key save):** On fresh install with User Guide active, navigate to Hub → Tool APIs → Configure Brave Search. Fill in the API key. Click Save. Dialog remains open, no success/error shown. Key not saved via UI (backend API call can be used as workaround).
 - **Repro (fact creation):** Navigate to Playground → Memory Inspector → Facts → Create New Fact. Fill in all fields. Click Save. Form submits but `window.alert()` is suppressed — fact not created via UI.
-- **Remediation:** Replace all `window.alert()` calls with in-app toast/notification components that are not affected by the browser's native dialog suppression. Also audit the User Guide component to use a React overlay instead of a native `<dialog>` element.
+- **Fix:** Memory Inspector now uses in-app toasts plus an app modal for destructive actions, and the affected Hub API-key flow now uses an app confirmation modal instead of `window.alert()` / `window.confirm()`.
+- **Verification:** Browser automation confirmed fact create/delete and API-key removal open in-app feedback surfaces with no browser-native dialogs.
 
 ### BUG-517: `add_remote_access` migration emits WARN on startup — `enabled` boolean/integer mismatch
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-04-11
 - **Severity:** Low
 - **Category:** Database / Migration
 - **Files:** `backend/migrations/add_remote_access.py` (or equivalent Alembic migration file for remote access)
 - **Description:** On every backend startup, the remote access migration logs: `WARNI [migrations.add_remote_access] Remote Access migration: (psycopg2.errors.DatatypeMismatch) column "enabled" is of type boolean but expression is of type integer`. The migration likely tries to set `enabled = 1` (integer) instead of `enabled = true` (boolean). This is a startup warning only; the migration does not fail and the feature functions correctly. However, the repeated log noise obscures genuine warnings.
 - **Repro:** Start backend container on a fresh install: `docker compose logs backend | grep WARNI`.
-- **Remediation:** Fix the migration INSERT/UPDATE statement to use `TRUE`/`FALSE` instead of `1`/`0` for the `enabled` column. Alternatively, cast explicitly: `CAST(1 AS BOOLEAN)`.
+- **Fix:** The SQLite fallback migration now skips non-SQLite engines, eliminating the Postgres boolean/integer mismatch path during backend startup.
+- **Verification:** Rebuilt backend startup logs no longer show the Remote Access migration warning, and the focused Remote Access migration tests passed.
 
 ### BUG-518: A2A agent name lookup fails when user appends "agent" to the name in natural language
-- **Status:** Open
+- **Status:** Resolved
+- **Resolved:** 2026-04-11
 - **Severity:** Low
 - **Category:** A2A / Agent Communication / Tool Resolution
 - **Files:** `backend/agent/skills/agent_communication_skill.py` (agent lookup logic)
 - **Description:** When a user asks Tsushin to "check with the ACME Sales agent", the `agent_communication` skill attempts to look up an agent named "ACME Sales agent" (literal). Since no agent has that exact name, the skill returns "Error: Agent 'ACME Sales agent' not found." A second attempt with explicit quoting ("delegate to the 'ACME Sales' agent") resolves correctly. The issue is that the skill's agent lookup is exact-match only and does not strip common English noun suffixes like "agent", "bot", or "assistant" from the lookup query.
 - **Repro:** Enable `agent_communication` skill on Tsushin. Create agent "ACME Sales". Ask: "Can you check with the ACME Sales agent what X is?" → Error. Ask: "Please delegate to the 'ACME Sales' agent and ask X" → Works.
-- **Remediation:** In the agent lookup, normalize the query by stripping trailing words ("agent", "bot", "assistant", "ai") before the exact lookup. Optionally add fuzzy/prefix matching as a fallback.
+- **Fix:** A2A agent resolution now keeps exact-match-first behavior, then applies a normalized fallback that strips trailing natural-language suffixes like `agent`, `assistant`, or `bot` only when the exact lookup fails.
+- **Verification:** `backend/tests/test_agent_communication_service.py` passed, covering the suffix fallback without regressing exact-name resolution.
 
 ### BUG-525: `uvx` binary absent from backend Docker image — stdio MCP servers non-functional on fresh installs
-- **Status:** Open
+- **Status:** Resolved
 - **Reported:** 2026-04-11
+- **Resolved:** 2026-04-11
 - **Severity:** High
 - **Category:** MCP Servers / Docker / Deployment
 - **Files:** `backend/Dockerfile`
 - **Description:** The backend container image (`python:3.11-slim`) ships without `uv`/`uvx`. The backend's allowed-binaries list reports only `uvx` as a permitted stdio transport binary, and `POST /api/mcp-servers` for `transport_type=stdio` with `stdio_binary=uvx` succeeds at the schema level. However, when the backend subsequently tries to spawn the stdio subprocess, it fails because `uvx` is not in `$PATH`. During the Ubuntu VM fresh-install audit, `uvx` had to be installed ad-hoc as root inside the running container (`docker exec -u root tsushin-backend pip install uv`) to make TC-26 stdio MCP testing possible at all. Any fresh install without this manual step will be unable to use stdio MCP servers despite the Hub UI accepting the configuration.
 - **Repro:** Fresh install → Hub → MCP Servers → Add server with `transport_type=stdio`, `stdio_binary=uvx`, `stdio_args=["mcp-server-fetch"]` → Connect. Check backend logs: `exec: "uvx": executable file not found in $PATH`.
-- **Remediation:** Add `uv` installation to the backend Dockerfile runtime stage (e.g., `RUN pip install uv` or `RUN curl -LsSf https://astral.sh/uv/install.sh | sh`). Ensure `uvx` is on `$PATH` in the final image. Alternatively, bundle `mcp-server-fetch` directly or document that stdio MCP requires a host-side uvx installation with a volume-mounted socket.
+- **Fix:** Verified the actual fresh-install drift was in the toolbox/build/install path rather than the backend image: `tsushin-toolbox:base` already ships `uvx`, Hub stdio copy now points users at approved launchers, and the default launcher allowlist is aligned with `uvx`.
+- **Verification:** `docker run --rm tsushin-toolbox:base sh -lc 'which uvx && uvx --version'` returned `/usr/local/bin/uvx` with a valid version, and the Hub copy/launcher defaults now match that shipped runtime.
 
 ## Bug Sprint — 8 bugs resolved (2026-04-10 evening)
 

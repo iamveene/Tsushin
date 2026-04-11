@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Sprint — `BUG-514` to `BUG-525` resolved (`develop`, 2026-04-11)
+
+Closed the 12 open bugs from `BUGS.md` in four coordinated clusters covering frontend auth/onboarding UX, Remote Access, backend app logic, and MCP runtime/tester/toolbox behavior.
+
+- **Cluster 1 — Frontend UX/Auth (`BUG-514`, `BUG-515`, `BUG-516`):** Replaced browser-native email gating with app-managed validation that still preserves autofill/mobile keyboard behavior; made onboarding persistence user-scoped and resilient to auth-context reloads; replaced the affected Memory Inspector and Hub confirmation/alert flows with app toasts and modals.
+- **Cluster 2 — Remote Access (`BUG-517`, `BUG-519`):** Made the fallback migration Postgres-safe, changed defaults/backfills to the stack proxy target (`http://tsushin-proxy:80` / stack-aware equivalent), aligned the System UI copy, and fail-closed tunnel startup when the proxy/Caddy layer is unavailable.
+- **Cluster 3 — Backend app logic (`BUG-518`, `BUG-520`, `BUG-521`, `BUG-522`):** Added exact-match-first plus suffix-stripping fallback for A2A agent names; made blank-stdout script tests fail closed; preserved transcript integrity for Sentinel `detect_only` flows while still filtering transcript-only turns from reusable memory; added curated Vertex AI discovery fallbacks.
+- **Cluster 4 — MCP runtime / tester / toolbox (`BUG-523`, `BUG-524`, `BUG-525`):** Added short DNS-safe aliases for runtime WhatsApp containers, switched tester fallback to real runtime instance fields with `source=runtime` preservation, made the Hub tester card source-aware, and aligned the stdio launcher story around the shipped toolbox `uvx` runtime.
+
+**Validation:** Preflight disk/docker checks, safe no-cache rebuild of `backend` and `frontend`, health/readiness verification, focused backend suites plus an integrated 41-test regression slice, toolbox `uvx` verification inside `tsushin-toolbox:base`, browser automation for `.local` login/error handling, onboarding persistence across users/routes/refresh, Memory Inspector toast/modal flows, and Hub API-key confirmation modal behavior.
+
 ### Fresh Install v0.6.0 Audit (`develop`, 2026-04-11)
 
 Recorded the disposable fresh-install audit run from `.private/installations/fresh-install-v060-20260411-081937/tsushin`, including restore-manifest handling, API plus Playwright coverage, Quick Tunnel validation, provider/vector-store setup, and the user-directed skip of the final WhatsApp message exchange after QR blockers were reproduced.

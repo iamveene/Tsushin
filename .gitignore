@@ -248,6 +248,15 @@ backend/fix_agent_phone.py
 
 # Test infrastructure — all tests are local-only, not shipped to remote
 backend/tests/
+!backend/tests/
+backend/tests/*
+!backend/tests/test_remote_access_config_service.py
+!backend/tests/test_remote_access_migrations.py
+!backend/tests/test_remote_access_tunnel_service.py
+!backend/tests/test_cluster3_backend_regressions.py
+!backend/tests/test_playground_memory_regressions.py
+!backend/tests/test_mcp_container_manager.py
+!backend/tests/test_routes_mcp_instances_tester.py
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py
 ops/check_openrouter_agent.py

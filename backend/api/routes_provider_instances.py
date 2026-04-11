@@ -207,6 +207,13 @@ PREDEFINED_MODELS = {
         "google/gemini-2.5-flash", "anthropic/claude-sonnet-4",
         "openai/gpt-4o-mini", "meta-llama/llama-3.1-8b-instruct:free",
     ],
+    "vertex_ai": [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-latest",
+    ],
 }
 
 

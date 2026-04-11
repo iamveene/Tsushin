@@ -7,7 +7,7 @@ Provides hybrid memory:
 """
 
 import logging
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime
 import importlib.util
 
@@ -80,6 +80,21 @@ class SemanticMemoryService:
             self.vector_store = None
             self.logger.info("Semantic search disabled")
 
+    @staticmethod
+    def _is_transcript_only_message(message: Dict[str, Any]) -> bool:
+        """Return True when a message should stay in transcript history only."""
+        if not isinstance(message, dict):
+            return False
+
+        if message.get("playground_transcript_only"):
+            return True
+
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("playground_transcript_only"):
+            return True
+
+        return False
+
     async def add_message(
         self,
         sender_key: str,
@@ -102,9 +117,9 @@ class SemanticMemoryService:
         self.ring_buffer.add_message(sender_key, role, content, metadata, message_id)
 
         # Add to vector store if semantic search is enabled and it's a user message
-        if self.enable_semantic and role == 'user' and message_id:
+        if self.enable_semantic and role == 'user' and message_id and not self._is_transcript_only_message({"metadata": metadata or {}}):
             try:
-                msg_metadata = metadata or {}
+                msg_metadata = dict(metadata or {})
                 msg_metadata['timestamp'] = datetime.utcnow().isoformat() + "Z"
                 msg_metadata['role'] = role
 
@@ -149,7 +164,10 @@ class SemanticMemoryService:
         }
 
         # Get recent messages from ring buffer
-        recent = self.ring_buffer.get_messages(sender_key)
+        recent = [
+            msg for msg in self.ring_buffer.get_messages(sender_key)
+            if not self._is_transcript_only_message(msg)
+        ]
         context['recent_messages'] = recent
 
         # Determine if decay is active
@@ -190,6 +208,8 @@ class SemanticMemoryService:
                     # Build candidates with decayed scores
                     candidates = []
                     for idx, result in enumerate(results):
+                        if self._is_transcript_only_message(result):
+                            continue
                         distance = result['distance']
                         raw_similarity = 1 / (1 + distance)
 
@@ -265,6 +285,8 @@ class SemanticMemoryService:
                 else:
                     # Original behavior (no decay)
                     for result in results:
+                        if self._is_transcript_only_message(result):
+                            continue
                         distance = result['distance']
                         similarity = 1 / (1 + distance)
 
