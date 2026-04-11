@@ -9,7 +9,7 @@ servers, Ollama instances, or custom LLM gateways).
 
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import logging
@@ -21,6 +21,8 @@ from auth_dependencies import (
     TenantContext,
     get_tenant_context,
     require_permission,
+    get_current_user_optional_strict_from_request,
+    ensure_permission,
 )
 
 logger = logging.getLogger(__name__)
@@ -284,12 +286,22 @@ def get_predefined_models():
 
 
 @router.post("/provider-instances/discover-models-raw")
-async def discover_models_raw(data: DiscoverModelsRawRequest):
+async def discover_models_raw(
+    data: DiscoverModelsRawRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """
     Live-discover models from a provider endpoint using a raw API key
-    (no saved instance required). Public endpoint — intended to be called
-    during setup and during pre-save modal configuration, so the model
-    dropdown reflects what the provider actually exposes right now.
+    (no saved instance required). Used by the initial setup wizard AND by
+    the post-login "create provider instance" modal.
+
+    v0.6.0 Remote Access hardening: this endpoint is now gated based on
+    installation state. Before first-run setup (user_count == 0) it is
+    public so the setup wizard can populate its model dropdown. After
+    setup is complete, it requires ``org.settings.write`` — this closes
+    the unauthenticated outbound-proxy / reconnaissance vector on
+    instances exposed via Cloudflare Tunnel.
 
     The supplied API key is used only for this single outbound request
     and is never stored or logged.
@@ -299,6 +311,19 @@ async def discover_models_raw(data: DiscoverModelsRawRequest):
     on failure — callers should keep their static suggestions as a
     secondary fallback.
     """
+    # Gate: allow anonymous access ONLY while the instance is un-provisioned
+    # (zero users in the DB). Once at least one user exists, the endpoint
+    # requires a valid authenticated session — this prevents the endpoint
+    # from being used as an unauthenticated outbound HTTP proxy on a
+    # publicly-exposed instance.
+    from models_rbac import User as _User
+    user_count = db.query(_User).count()
+    if user_count > 0:
+        current_user = get_current_user_optional_strict_from_request(request, db)
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        ensure_permission(current_user, "org.settings.write", db)
+
     vendor = data.vendor.lower()
     if vendor not in VALID_VENDORS:
         raise HTTPException(status_code=400, detail="Invalid vendor")

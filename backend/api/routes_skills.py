@@ -13,8 +13,12 @@ import logging
 
 from agent.skills import get_skill_manager
 from models import AgentSkill, Agent
-from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from models_rbac import User
+from auth_dependencies import (
+    TenantContext,
+    get_tenant_context,
+    require_permission,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -89,9 +93,16 @@ def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent
 # API Endpoints
 
 @router.get("/skills/available")
-async def get_available_skills():
+async def get_available_skills(
+    _current_user = Depends(require_permission("agents.read")),
+):
     """
     Get list of all registered skill types.
+
+    v0.6.0 Remote Access hardening: requires ``agents.read``. This endpoint
+    enumerates every installed skill type (shell_beacon, code_executor,
+    web_search, etc.) along with its config schema, which is exactly the kind
+    of recon surface we do not want exposed on a publicly-tunneled instance.
 
     Returns:
         List of available skills with metadata:

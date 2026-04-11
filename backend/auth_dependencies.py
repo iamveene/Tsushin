@@ -43,79 +43,25 @@ def _extract_token(
     if credentials:
         return credentials.credentials
 
+    # Fallback for routes that call the strict helper directly without going
+    # through the HTTPBearer dependency.
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+        if token:
+            return token
+
     return None
 
 
-def get_current_user_optional(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db)
-) -> Optional[User]:
+def _resolve_current_user_strict_from_token(token: str, db: Session) -> User:
     """
-    Get current user from JWT token (optional - returns None if not authenticated)
-
-    SEC-005: Checks httpOnly cookie first, then Authorization Bearer header.
-
-    Args:
-        request: FastAPI request (for cookie access)
-        credentials: HTTP authorization credentials (optional)
-        db: Database session
-
-    Returns:
-        User object if authenticated, None otherwise
+    Resolve a JWT into an active user while enforcing the same checks used by
+    required auth: valid signature/expiry, active user, and password-change
+    invalidation via the token ``iat`` claim.
     """
-    token = _extract_token(request, credentials)
-    if not token:
-        return None
-
     auth_service = AuthService(db)
 
-    # Verify token
-    payload = auth_service.verify_token(token)
-    if not payload:
-        return None
-
-    # Get user
-    try:
-        user_id = int(payload.get("sub"))
-        user = auth_service.get_user_by_id(user_id)
-        return user
-    except (ValueError, TypeError):
-        return None
-
-
-def get_current_user_required(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db)
-) -> User:
-    """
-    Get current user from JWT token (required - raises 401 if not authenticated)
-
-    SEC-005: Checks httpOnly cookie first, then Authorization Bearer header.
-
-    Args:
-        request: FastAPI request (for cookie access)
-        credentials: HTTP authorization credentials
-        db: Database session
-
-    Returns:
-        User object
-
-    Raises:
-        HTTPException: 401 if not authenticated or token invalid
-    """
-    token = _extract_token(request, credentials)
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    auth_service = AuthService(db)
-
-    # Verify token
     payload = auth_service.verify_token(token)
     if not payload:
         raise HTTPException(
@@ -124,7 +70,6 @@ def get_current_user_required(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Get user
     try:
         user_id = int(payload.get("sub"))
         user = auth_service.get_user_by_id(user_id)
@@ -176,6 +121,149 @@ def get_current_user_required(
         )
 
 
+def _get_current_user_strict(
+    request: Request,
+    db: Session,
+    credentials: Optional[HTTPAuthorizationCredentials] = None,
+    required: bool = False,
+) -> Optional[User]:
+    """Shared strict auth path for optional/required session resolution."""
+    token = _extract_token(request, credentials)
+    if not token:
+        if required:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return None
+
+    return _resolve_current_user_strict_from_token(token, db)
+
+
+def get_current_user_optional(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db)
+) -> Optional[User]:
+    """
+    Get current user from JWT token (optional - returns None if not authenticated)
+
+    SEC-005: Checks httpOnly cookie first, then Authorization Bearer header.
+
+    Args:
+        request: FastAPI request (for cookie access)
+        credentials: HTTP authorization credentials (optional)
+        db: Database session
+
+    Returns:
+        User object if authenticated, None otherwise
+    """
+    token = _extract_token(request, credentials)
+    if not token:
+        return None
+
+    auth_service = AuthService(db)
+
+    # Verify token
+    payload = auth_service.verify_token(token)
+    if not payload:
+        return None
+
+    # Get user
+    try:
+        user_id = int(payload.get("sub"))
+        user = auth_service.get_user_by_id(user_id)
+        return user
+    except (ValueError, TypeError):
+        return None
+
+
+def get_current_user_optional_strict(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db)
+) -> Optional[User]:
+    """
+    Get the current user when present, but enforce the same validation rules as
+    required auth for any supplied token.
+
+    Returns:
+        User object if authenticated, ``None`` when no auth is present.
+
+    Raises:
+        HTTPException: 401/403 when an invalid or disabled-token path is supplied.
+    """
+    return _get_current_user_strict(request, db, credentials=credentials, required=False)
+
+
+def get_current_user_optional_strict_from_request(
+    request: Request,
+    db: Session,
+) -> Optional[User]:
+    """
+    Non-dependency variant of strict optional auth, used by routes that need to
+    choose between multiple auth mechanisms before enforcing session auth.
+    """
+    return _get_current_user_strict(request, db, required=False)
+
+
+def get_current_user_required(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """
+    Get current user from JWT token (required - raises 401 if not authenticated)
+
+    SEC-005: Checks httpOnly cookie first, then Authorization Bearer header.
+
+    Args:
+        request: FastAPI request (for cookie access)
+        credentials: HTTP authorization credentials
+        db: Database session
+
+    Returns:
+        User object
+
+    Raises:
+        HTTPException: 401 if not authenticated or token invalid
+    """
+    return _get_current_user_strict(request, db, credentials=credentials, required=True)
+
+
+def ensure_permission(current_user: User, permission: str, db: Session) -> User:
+    """
+    Enforce a permission for a resolved user outside the dependency system.
+    Reuses the same audit + error behavior as ``require_permission``.
+    """
+    from rbac_middleware import check_permission
+
+    if not check_permission(current_user, permission, db):
+        try:
+            from services.audit_service import log_tenant_event, TenantAuditActions
+            tenant_id = getattr(current_user, 'tenant_id', None)
+            if tenant_id:
+                log_tenant_event(
+                    db,
+                    tenant_id,
+                    current_user.id,
+                    TenantAuditActions.SECURITY_PERMISSION_DENIED,
+                    "permission",
+                    None,
+                    {"required_permission": permission, "user_email": current_user.email},
+                    severity="warning",
+                )
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission denied. Required: {permission}"
+        )
+
+    return current_user
+
+
 def require_permission(permission: str):
     """
     Dependency to check if current user has a specific permission
@@ -198,26 +286,7 @@ def require_permission(permission: str):
         current_user: User = Depends(get_current_user_required),
         db: Session = Depends(get_db)
     ) -> User:
-        from rbac_middleware import check_permission
-
-        if not check_permission(current_user, permission, db):
-            # Audit log the permission denial
-            try:
-                from services.audit_service import log_tenant_event, TenantAuditActions
-                tenant_id = getattr(current_user, 'tenant_id', None)
-                if tenant_id:
-                    log_tenant_event(db, tenant_id, current_user.id,
-                        TenantAuditActions.SECURITY_PERMISSION_DENIED, "permission", None,
-                        {"required_permission": permission, "user_email": current_user.email},
-                        severity="warning")
-            except Exception:
-                pass
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied. Required: {permission}"
-            )
-
-        return current_user
+        return ensure_permission(current_user, permission, db)
 
     return check
 

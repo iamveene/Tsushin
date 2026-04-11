@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Remote Access Auth Hardening Follow-up (`feature/remote-access-auth-hardening`, 2026-04-10)
+
+- Hardened `POST /api/provider-instances/discover-models-raw` so it stays anonymous only while `/api/auth/setup-status` reports `needs_setup=true`; once the first user exists it now requires a fully validated session with `org.settings.write`. The shared strict optional-auth helper now enforces the same disabled-user and password-invalidated-token checks as required auth, closing the old ad hoc token-decoding path.
+- Hardened `GET /api/skills/available` behind `agents.read`, removing an unauthenticated inventory endpoint that exposed installed skill types and schemas over public Remote Access deployments.
+- Hardened shell-beacon distribution endpoints: `GET /api/shell/beacon/version` now requires a valid `X-API-Key` for an active `ShellIntegration`, while `GET /api/shell/beacon/download` now accepts either that API key or a signed-in session with `shell.read` so the browser download button still works.
+- Hardened `GET /api/ollama/health` behind authenticated-session access and updated the Hub, Agents, and Playground callers to use the shared authenticated client path so same-origin tunneled requests keep sending the session cookie.
+- Updated the shell install snippets and beacon README to include `X-API-Key` on curl-based download flows, and documented the intentional public-vs-gated remote-access-adjacent endpoint allowlist plus the accepted UUID capability URLs for Playground audio/image assets.
+
 ### Remote Access (Cloudflare Tunnel) — v0.6.0 feature (`develop`, 2026-04-10)
 
 - Added a new enterprise-grade Remote Access feature that exposes Tsushin through a Cloudflare Tunnel (quick or named mode), managed entirely from the Global Admin UI and persisted in the database (no `.env` knobs). The tunnel runs as a supervised subprocess inside the backend container with a bounded restart policy (3 attempts, 5s/15s/30s backoff) and a real readiness probe via `cloudflared`'s Prometheus metrics endpoint (no more `sleep 1`).

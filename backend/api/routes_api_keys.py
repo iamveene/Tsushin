@@ -442,13 +442,14 @@ def delete_api_key(
 # ==================== Ollama Integration (Phase 5.2) ====================
 
 @router.get("/ollama/health")
-async def check_ollama_health(db: Session = Depends(get_db)):
+async def check_ollama_health(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_user_required),
+):
     """
     Check Ollama local LLM service health status.
     Returns online/offline status and available models.
     Phase 5.2.1: Uses configured base URL from Config table.
-
-    Note: This is a system-wide health check, no tenant isolation needed.
     """
     # Load from Config table if available, otherwise from env var
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")

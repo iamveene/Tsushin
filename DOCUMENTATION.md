@@ -2259,7 +2259,29 @@ Common errors surfaced in `last_error`:
 - **"Quick tunnel timed out waiting for URL"** — cloudflared couldn't reach the `trycloudflare.com` edge. Network / egress issue.
 - **"Supervisor gave up after 3 restart attempts"** — cloudflared keeps crashing. Check `docker logs tsushin-backend | grep cloudflared` for the underlying error; typical causes: invalid token, revoked route, stale DNS record.
 
-#### 22.5.7 Security considerations
+#### 22.5.7 Public vs gated endpoint policy
+
+Remote Access exposes the same Tsushin app over a public hostname, so the safe posture is "public only when the route is intentionally bootstrap-, docs-, or webhook-related; everything else is gated." After the v0.6.0 hardening follow-up, the expected anonymous/public surface is:
+
+- `GET /api/health` and `GET /api/readiness`
+- Auth/bootstrap flows such as `GET /api/auth/setup-status`, `POST /api/auth/setup-wizard`, login, Google callback exchange, and explicit password-reset flows
+- `GET /api/plans/` (public plan catalog)
+- Inbound webhook receivers that do not use session auth and instead enforce their own signature/secret validation, such as `POST /api/webhooks/{id}/inbound`
+- Static metadata/docs endpoints such as `/api/v1/openapi.json` and `/api/v1/docs`
+- `GET /api/provider-instances/predefined-models`
+- `POST /api/provider-instances/discover-models-raw` only before first-run provisioning (`needs_setup=true`)
+
+The routes specifically tightened for public Remote Access are now gated as follows:
+
+- `POST /api/provider-instances/discover-models-raw`: requires `org.settings.write` after the first user exists
+- `GET /api/skills/available`: requires `agents.read`
+- `GET /api/shell/beacon/version`: requires a valid active `ShellIntegration` API key in `X-API-Key`
+- `GET /api/shell/beacon/download`: requires either `X-API-Key` for an active `ShellIntegration` or a valid signed-in session with `shell.read`
+- `GET /api/ollama/health`: requires an authenticated session
+
+One accepted exception remains: Playground audio/image asset URLs (`/api/playground/audio/{uuid}` and `/api/playground/images/{uuid}`) are capability URLs. They intentionally stay unauthenticated because browsers cannot attach bearer/session headers to `<audio>` and `<img>` fetches in the same way, and the UUID itself is treated as the unguessable bearer capability. The hardening pass did not change that behavior.
+
+#### 22.5.8 Security considerations
 
 - **Token at rest:** Fernet (AES-128-CBC + HMAC-SHA256) with a per-feature key that's envelope-wrapped by `TSN_MASTER_KEY`. Rotating `TSN_MASTER_KEY` without re-encrypting the token will cause `_load_config` to throw and the tunnel will refuse to start — document the rotation procedure in your runbook.
 - **Token in transit:** never logged, never returned in any API response, never surfaced to the frontend beyond a boolean `tunnel_token_configured` flag.
@@ -2268,7 +2290,7 @@ Common errors surfaced in `last_error`:
 - **Audit:** every config change fires `remote_access.config.updated` on `GlobalAdminAuditLog`. Tenant entitlement changes fire on BOTH the global stream and the tenant-scoped stream. Denied logins fire `auth.remote_access.denied` on the tenant-scoped stream with `severity=warning`.
 - **Rotating the tunnel token:** paste a new token in the Config card and click Save. If the tunnel is currently running, the backend performs a stop→start cycle automatically (`reload_config()`).
 
-#### 22.5.8 Disabling the feature
+#### 22.5.9 Disabling the feature
 
 To fully disable remote access for every tenant without tearing the config down:
 
