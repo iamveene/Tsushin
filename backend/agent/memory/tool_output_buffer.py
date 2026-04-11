@@ -62,6 +62,14 @@ class ToolExecution:
     line_count: int  # Number of lines in output
     timestamp: datetime
     message_index: int  # Message count when tool was executed
+    # BUG-510: Optional metadata for async executions whose output lands later.
+    # ``pending`` is True while we're still waiting on a result (e.g. a queued
+    # /shell command that the beacon hasn't completed yet). ``source`` is a
+    # free-form tag a resolver uses to look the entry up (e.g. "shell_command").
+    # ``source_ref`` is the opaque id the source uses (e.g. the ShellCommand UUID).
+    pending: bool = False
+    source: Optional[str] = None
+    source_ref: Optional[str] = None
 
     def to_reference_string(self) -> str:
         """Format as lightweight reference (minimal tokens)."""
@@ -69,8 +77,9 @@ class ToolExecution:
         age_str = f"{int(age.total_seconds() / 60)}m ago" if age.total_seconds() < 3600 else f"{int(age.total_seconds() / 3600)}h ago"
         target_str = f" on {self.target}" if self.target else ""
         size_str = f"{self.output_size / 1024:.1f}KB" if self.output_size > 1024 else f"{self.output_size}B"
+        pending_str = " [pending]" if self.pending else ""
 
-        return f"#{self.execution_id}: {self.tool_name}.{self.command_name}{target_str} ({self.line_count} lines, {size_str}, {age_str})"
+        return f"#{self.execution_id}: {self.tool_name}.{self.command_name}{target_str} ({self.line_count} lines, {size_str}, {age_str}){pending_str}"
 
     def to_full_context(self) -> str:
         """Format full output for prompt injection."""
@@ -146,7 +155,10 @@ class ToolOutputBuffer:
         tool_name: str,
         command_name: str,
         output: str,
-        target: Optional[str] = None
+        target: Optional[str] = None,
+        pending: bool = False,
+        source: Optional[str] = None,
+        source_ref: Optional[str] = None,
     ) -> int:
         """
         Add a tool output to the buffer.
@@ -183,7 +195,10 @@ class ToolOutputBuffer:
             output_size=original_size,
             line_count=line_count,
             timestamp=datetime.utcnow(),
-            message_index=buffer.message_count
+            message_index=buffer.message_count,
+            pending=pending,
+            source=source,
+            source_ref=source_ref,
         )
 
         # Add to buffer (maintain max size, remove oldest)
@@ -239,6 +254,49 @@ class ToolOutputBuffer:
         )
         result["execution_id"] = execution_id
         return execution_id
+
+    def list_pending_executions(
+        self, agent_id: int, sender_key: str, source: Optional[str] = None
+    ) -> List[ToolExecution]:
+        """Return pending executions for a conversation, optionally filtered by source."""
+        key = self._get_buffer_key(agent_id, sender_key)
+        buffer = self._buffers.get(key)
+        if not buffer:
+            return []
+        return [
+            ex for ex in buffer.executions
+            if ex.pending and (source is None or ex.source == source)
+        ]
+
+    def update_execution_output(
+        self,
+        agent_id: int,
+        sender_key: str,
+        execution_id: int,
+        output: str,
+        pending: bool = False,
+    ) -> bool:
+        """Replace the output of an existing execution. Used by async resolvers."""
+        key = self._get_buffer_key(agent_id, sender_key)
+        buffer = self._buffers.get(key)
+        if not buffer:
+            return False
+        for execution in buffer.executions:
+            if execution.execution_id == execution_id:
+                original_size = len(output)
+                line_count = output.count('\n') + 1
+                truncated = output
+                if len(output) > buffer.MAX_OUTPUT_SIZE:
+                    truncated = (
+                        output[:buffer.MAX_OUTPUT_SIZE]
+                        + f"\n\n[... output truncated at {buffer.MAX_OUTPUT_SIZE} chars, original size: {original_size} chars ...]"
+                    )
+                execution.output = truncated
+                execution.output_size = original_size
+                execution.line_count = line_count
+                execution.pending = pending
+                return True
+        return False
 
     def increment_message_count(self, agent_id: int, sender_key: str) -> None:
         """Increment message count for a conversation."""

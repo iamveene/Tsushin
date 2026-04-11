@@ -656,7 +656,35 @@ class SkillManager:
 
             # Execute tool
             try:
+                import time as _time
+                _start = _time.time()
                 result = await skill_instance.execute_tool(arguments, message, config)
+                _elapsed_ms = int((_time.time() - _start) * 1000)
+
+                # BUG-509: Write CustomSkillExecution history for runtime tool calls
+                # so assigned custom-skill invocations (Playground/WhatsApp) show up
+                # in execution history just like /api/custom-skills/{id}/test calls.
+                try:
+                    from agent.skills.custom_skill_adapter import CustomSkillAdapter as _CustomSkillAdapter
+                    if isinstance(skill_instance, _CustomSkillAdapter) and getattr(skill_instance, '_record', None):
+                        from models import CustomSkillExecution as _CSE
+                        _rec = skill_instance._record
+                        _exec_row = _CSE(
+                            tenant_id=config.get('tenant_id') or _rec.tenant_id,
+                            agent_id=agent_id,
+                            custom_skill_id=_rec.id,
+                            skill_name=_rec.name,
+                            input_json=arguments or {},
+                            status='completed' if result.success else 'failed',
+                            output=(result.output[:4000] if result.output else None) if result.success else None,
+                            error=(result.output[:4000] if result.output else None) if not result.success else None,
+                            execution_time_ms=_elapsed_ms,
+                        )
+                        db.add(_exec_row)
+                        db.commit()
+                except Exception as _hist_err:
+                    logger.warning(f"Failed to write CustomSkillExecution history: {_hist_err}")
+
                 if return_full_result:
                     return result
                 return result.output if result.success else f"Error: {result.output}"
@@ -1478,18 +1506,22 @@ class SkillManager:
 
     def get_custom_skill_instructions(self, db, agent_id: int) -> str:
         """
-        Get concatenated instructions from instruction-type custom skills
+        Get concatenated instructions from passive instruction-type custom skills
         assigned to this agent.
 
-        Only includes skills that are enabled, have clean scan status,
-        and are of the 'instruction' type variant.
+        BUG-509: Only skills with ``execution_mode == 'passive'`` inject their raw
+        ``instructions_md`` into the system prompt. Tool/hybrid instruction skills
+        are exposed as callable tools instead and execute through the LLM adapter
+        at runtime (matching the /api/custom-skills/{id}/test behavior), so their
+        raw instructions must NOT be dumped back into the prompt (that is what
+        caused the Playground response to leak the instruction template verbatim).
 
         Args:
             db: Database session
             agent_id: Agent ID
 
         Returns:
-            Concatenated instruction markdown from all matching custom skills
+            Concatenated instruction markdown from matching passive custom skills
         """
         from models import AgentCustomSkill, CustomSkill
 
@@ -1500,6 +1532,7 @@ class SkillManager:
             AgentCustomSkill.is_enabled == True,
             CustomSkill.is_enabled == True,
             CustomSkill.skill_type_variant == 'instruction',
+            CustomSkill.execution_mode == 'passive',
             CustomSkill.scan_status == 'clean'
         ).all()
 

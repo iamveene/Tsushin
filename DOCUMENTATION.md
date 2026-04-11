@@ -659,9 +659,15 @@ At runtime, custom skills are adapted by `CustomSkillAdapter` (Source: `backend/
 
 Natural-language instructions executed by the LLM as a tool. The simplest custom skill type — no code required.
 
+**Runtime execution semantics (BUG-509, 2026-04-10):** Instruction skills behave differently depending on `execution_mode`:
+- `execution_mode: tool` or `hybrid` (the default) — the skill is exposed to the agent as a callable tool. When the LLM invokes it, `CustomSkillAdapter.execute_tool` routes through `execute_instruction_with_llm`, which runs the `instructions_md` as a system prompt against the tenant's LLM and returns the LLM's processed output. This is the same code path that the `/api/custom-skills/{id}/test` endpoint uses, so the `/test` and runtime paths now always agree. Every runtime invocation writes a `CustomSkillExecution` history row just like `/test`.
+- `execution_mode: passive` — the skill's `instructions_md` is concatenated into the agent's system prompt as always-on context and the skill is NOT exposed as a callable tool. Use this when you want the instructions to shape every response rather than be selectively invoked.
+
+Before 2026-04-10, all instruction skills had their raw `instructions_md` dumped into the system prompt regardless of execution mode, which caused the LLM to parrot the template back verbatim when invoked. Passive mode is now the only path that injects raw instructions.
+
 | Field | Type | Description |
 |---|---|---|
-| `instructions_md` | string (max 8,000 chars) | Markdown instructions injected into the LLM tool definition |
+| `instructions_md` | string (max 8,000 chars) | Markdown instructions executed by the LLM (tool/hybrid mode) or injected as always-on context (passive mode) |
 
 **Example — Create a "Policy Lookup" instruction skill:**
 
@@ -1861,6 +1867,8 @@ The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate
 **Sources:** `backend/hub/mcp/connection_manager.py`, `backend/hub/mcp/sse_transport.py`, `backend/hub/mcp/stdio_transport.py`, `backend/hub/mcp/transport_base.py`, `backend/hub/mcp/utils.py`
 Custom third-party MCP servers can be registered via stdio or SSE transports. The `connection_manager` maintains the active MCP client sessions and exposes them to agent skills.
 
+**Stdio transport toolbox bootstrap (BUG-512, 2026-04-10):** stdio MCP servers run their binary inside the tenant's toolbox container. `MCPConnectionManager.get_or_connect` now calls `ToolboxContainerService.ensure_container_running(tenant_id, db)` before constructing a stdio transport, so first-time `POST /api/mcp-servers/{id}/test` calls and first-time runtime invocations create or start the toolbox container on demand. Prior to this, fresh installs would error with `Container not found for tenant ... Please start it first` because there was no first-class UI action to bootstrap the toolbox. SSE and streamable_http transports are unaffected.
+
 ### 20.8 OAuth Token Refresh Worker
 
 **Source:** `backend/hub/oauth_token_refresh_worker.py`
@@ -2741,6 +2749,8 @@ Seed entries (`backend/db.py:830-1259`, all `tenant_id="_system"`, `handler_type
 /inject list                     — List buffered tool executions
 /inject clear                    — Clear inject buffer
 ```
+
+**Shell → `/inject` integration (BUG-510, 2026-04-10):** `/shell` executions are now visible to `/inject`. Fire-and-forget `/shell` writes a **pending stub** tagged `source='shell_command'` with the beacon command id stored in metadata; `wait_for_result=True` calls buffer the final stdout/stderr immediately. On every `/inject list` or `/inject <id>` call, `SlashCommandService._resolve_pending_shell_executions` pulls updated results via `ShellCommandService.get_command_result` for any pending shell entries (capped at 10 per call) and rewrites their buffered output once the beacon marks the command `completed`/`failed`/`timeout`. Pending entries render with a `[pending]` suffix in `to_reference_string()`.
 
 #### Flow commands
 ```

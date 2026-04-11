@@ -24,7 +24,13 @@ export default function AgentDetailPage() {
   const params = useParams()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const agentId = parseInt(params.id as string)
+  const rawId = params.id as string
+  const agentId = parseInt(rawId)
+  // BUG-508: The dynamic [id] route also catches URLs like /agents/communication
+  // where there is no matching sibling page. parseInt yields NaN, which used to
+  // hit /api/agents/NaN, surface an error alert, and redirect. Bail early and
+  // redirect cleanly for any non-numeric segment.
+  const hasValidId = Number.isFinite(agentId)
 
   const [agent, setAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(true)
@@ -34,19 +40,25 @@ export default function AgentDetailPage() {
   const [skillsCount, setSkillsCount] = useState<number>(0)
 
   useEffect(() => {
+    if (!hasValidId) {
+      router.replace('/agents')
+      return
+    }
     loadAgent()
-  }, [agentId])
+  }, [agentId, hasValidId])
 
   // Listen for global refresh events
   useEffect(() => {
+    if (!hasValidId) return
     const handleRefresh = () => {
       loadAgent()
     }
     window.addEventListener('tsushin:refresh', handleRefresh)
     return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [agentId])
+  }, [agentId, hasValidId])
 
   const loadAgent = async () => {
+    if (!hasValidId) return
     setLoading(true)
     try {
       const agentData = await api.getAgent(agentId)
@@ -67,6 +79,11 @@ export default function AgentDetailPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  if (!hasValidId) {
+    // Redirect effect is already scheduled; render nothing to avoid a doomed fetch.
+    return null
   }
 
   if (loading) {
