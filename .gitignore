@@ -93,6 +93,7 @@ frontend/build/
 frontend/tsconfig.tsbuildinfo
 
 # Dependencies
+/package-lock.json
 frontend/package-lock.json
 frontend/yarn.lock
 frontend/pnpm-lock.yaml
