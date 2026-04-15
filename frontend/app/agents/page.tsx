@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import StudioTabs from '@/components/studio/StudioTabs'
-import { api, Agent, TonePreset, Contact, Persona, ProviderInstance } from '@/lib/client'
+import { api, Agent, TonePreset, Contact, Persona, ProviderInstance, VENDOR_LABELS } from '@/lib/client'
 import { useToast } from '@/contexts/ToastContext'
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import EmptyState from '@/components/EmptyState'
@@ -40,42 +40,6 @@ interface AgentFormData {
 
 // AVAILABLE_TOOLS removed - legacy tools migrated to Skills system
 // Use AgentSkill table for web_search, web_scraping skills
-const MODEL_PROVIDERS = [
-  { value: 'anthropic', label: 'Anthropic', models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'] },
-  { value: 'openai', label: 'OpenAI', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'o4-mini', 'o3-mini'] },
-  { value: 'gemini', label: 'Google Gemini', models: ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'] },
-  { value: 'ollama', label: 'Ollama (Local)', models: [] as string[] },  // Populated dynamically from running Ollama instance
-  {
-    value: 'openrouter',
-    label: 'OpenRouter (100+ models)',
-    models: [
-      // Popular models on OpenRouter
-      'google/gemini-2.5-flash',
-      'google/gemini-2.5-pro',
-      'google/gemini-2.0-flash-thinking-exp',
-      'anthropic/claude-sonnet-4-5',
-      'anthropic/claude-3.5-sonnet',
-      'anthropic/claude-3-opus',
-      'openai/gpt-4o',
-      'openai/gpt-4-turbo',
-      'meta-llama/llama-3.3-70b-instruct',
-      'meta-llama/llama-3.1-405b-instruct',
-      'mistralai/mistral-large',
-      'mistralai/mixtral-8x22b-instruct',
-      'deepseek/deepseek-r1',
-      'deepseek/deepseek-r1:free',
-      'deepseek/deepseek-chat',
-      'qwen/qwen-2.5-72b-instruct',
-      'cohere/command-r-plus',
-      'perplexity/llama-3.1-sonar-huge-128k-online',
-      'x-ai/grok-2',
-      'nvidia/llama-3.1-nemotron-70b-instruct',
-      'microsoft/wizardlm-2-8x22b',
-      'databricks/dbrx-instruct',
-      'nousresearch/hermes-3-llama-3.1-405b'
-    ]
-  }
-]
 
 export default function AgentsPage() {
   const toast = useToast()
@@ -128,17 +92,11 @@ export default function AgentsPage() {
   useEffect(() => {
     if (providerInstances.length > 0 && !defaultsAppliedRef.current) {
       defaultsAppliedRef.current = true
-      const vendorMap: Record<string, string> = {
-        anthropic: 'anthropic', openai: 'openai', gemini: 'gemini',
-        google: 'gemini', ollama: 'ollama', openrouter: 'openrouter'
-      }
       const defaultInstance = providerInstances.find(p => p.is_default) || providerInstances[0]
       const vendor = defaultInstance.vendor?.toLowerCase() || ''
-      const mappedProvider = vendorMap[vendor]
-      if (mappedProvider) {
-        const instanceModel = defaultInstance.available_models?.[0]
-        const model = instanceModel || MODEL_PROVIDERS.find(p => p.value === mappedProvider)?.models[0] || ''
-        setFormData(prev => ({ ...prev, model_provider: mappedProvider, model_name: model }))
+      const model = defaultInstance.available_models?.[0] || ''
+      if (vendor) {
+        setFormData(prev => ({ ...prev, model_provider: vendor, model_name: model }))
       }
     }
   }, [providerInstances])
@@ -156,33 +114,24 @@ export default function AgentsPage() {
 
   useGlobalRefresh(() => { loadData(); checkOllamaHealth() })
 
+  // Vendors list derived live from configured hub instances — automatically includes any new provider
+  const availableVendors = [...new Set(providerInstances.map(i => i.vendor))]
+    .map(v => ({ value: v, label: VENDOR_LABELS[v] || v }))
+
   // BUG-346: Use the tenant's default provider instance (is_default=true) instead of [0]
   const getSmartDefaults = () => {
     if (providerInstances.length > 0) {
-      const vendorMap: Record<string, string> = {
-        anthropic: 'anthropic', openai: 'openai', gemini: 'gemini',
-        google: 'gemini', ollama: 'ollama', openrouter: 'openrouter'
-      }
-      // Prefer the tenant's default provider instance, fall back to first
       const defaultInstance = providerInstances.find(p => p.is_default) || providerInstances[0]
       const vendor = defaultInstance.vendor?.toLowerCase() || ''
-      const mappedProvider = vendorMap[vendor]
-      if (mappedProvider) {
-        if (mappedProvider === 'ollama') {
-          return { model_provider: 'ollama', model_name: ollamaModels[0] || '' }
-        }
-        // Use the instance's own available_models first, then fall back to static catalog
-        const instanceModel = defaultInstance.available_models?.[0]
-        if (instanceModel) {
-          return { model_provider: mappedProvider, model_name: instanceModel }
-        }
-        const provider = MODEL_PROVIDERS.find(p => p.value === mappedProvider)
-        if (provider) {
-          return { model_provider: mappedProvider, model_name: provider.models[0] || '' }
-        }
+      if (vendor === 'ollama') {
+        return { model_provider: 'ollama', model_name: ollamaModels[0] || '' }
+      }
+      const instanceModel = defaultInstance.available_models?.[0]
+      if (instanceModel) {
+        return { model_provider: vendor, model_name: instanceModel }
       }
     }
-    return { model_provider: 'anthropic', model_name: 'claude-sonnet-4-6' }
+    return { model_provider: '', model_name: '' }
   }
 
   const resetForm = () => {
@@ -213,8 +162,16 @@ export default function AgentsPage() {
     if (formData.model_provider === 'ollama') {
       return ollamaModels
     }
-    const provider = MODEL_PROVIDERS.find(p => p.value === formData.model_provider)
-    return provider?.models || []
+    // Get all models from all instances of the selected vendor (deduplicated)
+    const vendorModels = [
+      ...new Set(
+        providerInstances
+          .filter(i => i.vendor === formData.model_provider)
+          .flatMap(i => i.available_models)
+      )
+    ]
+    if (vendorModels.length > 0) return vendorModels
+    return formData.model_name ? [formData.model_name] : []
   }
 
   const loadData = async () => {
@@ -940,9 +897,11 @@ export default function AgentsPage() {
                     value={formData.model_provider}
                     onChange={(e) => {
                       const newProvider = e.target.value
+                      const vendorInsts = providerInstances.filter(i => i.vendor === newProvider)
+                      const defaultInst = vendorInsts.find(i => i.is_default) || vendorInsts[0]
                       const defaultModel = newProvider === 'ollama'
                         ? (ollamaModels[0] || '')
-                        : (MODEL_PROVIDERS.find(p => p.value === newProvider)?.models[0] || '')
+                        : (defaultInst?.available_models[0] || '')
                       setFormData({
                         ...formData,
                         model_provider: newProvider,
@@ -952,9 +911,13 @@ export default function AgentsPage() {
                     className="select"
                     required
                   >
-                    {MODEL_PROVIDERS.map(p => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
+                    {availableVendors.length === 0 ? (
+                      <option value="" disabled>No providers configured — set one up in Hub &gt; AI Providers</option>
+                    ) : (
+                      availableVendors.map(p => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))
+                    )}
                   </select>
                   {formData.model_provider === 'ollama' && !ollamaAvailable && (
                     <div className="mt-2 p-3 bg-tsushin-vermilion/10 border border-tsushin-vermilion/30 rounded-lg text-xs text-tsushin-vermilion">
@@ -973,8 +936,8 @@ export default function AgentsPage() {
                             checked={!useCustomModel}
                             onChange={() => {
                               setUseCustomModel(false)
-                              const provider = MODEL_PROVIDERS.find(p => p.value === formData.model_provider)
-                              setFormData({ ...formData, model_name: provider?.models[0] || '' })
+                              const firstModel = getAvailableModels()[0] || ''
+                              setFormData({ ...formData, model_name: firstModel })
                             }}
                             className="mr-2 accent-tsushin-indigo"
                           />

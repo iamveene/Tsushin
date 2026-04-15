@@ -1284,20 +1284,44 @@ class AIClient:
         total_tokens = {"prompt": 0, "completion": 0}
 
         try:
+            import asyncio
             async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
                 async with client.stream("POST", url, json=payload, headers=headers) as response:
-                    response.raise_for_status()
+                    if response.status_code != 200:
+                        error_body = await response.aread()
+                        error_text = error_body[:500].decode("utf-8", errors="replace")
+                        self.logger.error(f"Vertex AI Anthropic HTTP {response.status_code}: {error_text}")
+                        raise ValueError(f"Vertex AI HTTP {response.status_code}: {error_text}")
+
+                    # Absolute wall-clock timeout — guards against infinite keepalive streams
+                    stream_start = asyncio.get_event_loop().time()
+
                     async for line in response.aiter_lines():
-                        if not line.startswith("data: "):
+                        if asyncio.get_event_loop().time() - stream_start > 45:
+                            raise asyncio.TimeoutError(
+                                "Vertex AI stream exceeded 45 s absolute timeout (model may be unavailable)"
+                            )
+
+                        if not line:
                             continue
-                        data_str = line[6:]  # Remove "data: " prefix
+
+                        if not line.startswith("data: "):
+                            # Log non-data lines (keepalives, error frames from Vertex)
+                            self.logger.warning(f"Vertex AI non-SSE line: {line[:300]}")
+                            continue
+
+                        data_str = line[6:]
                         if data_str.strip() == "[DONE]":
                             break
                         try:
                             event = json.loads(data_str)
                             event_type = event.get("type", "")
 
-                            if event_type == "content_block_delta":
+                            if event_type == "error":
+                                err_msg = event.get("error", {}).get("message", str(event))
+                                self.logger.error(f"Vertex AI stream error event: {err_msg}")
+                                raise ValueError(f"Vertex AI stream error: {err_msg}")
+                            elif event_type == "content_block_delta":
                                 delta = event.get("delta", {})
                                 if delta.get("type") == "text_delta":
                                     yield {"type": "token", "content": delta["text"]}

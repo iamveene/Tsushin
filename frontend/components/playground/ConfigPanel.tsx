@@ -15,7 +15,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { api, Agent, PlaygroundSettings } from '@/lib/client'
+import { api, Agent, PlaygroundSettings, ProviderInstance } from '@/lib/client'
 import {
   SettingsIcon,
   BotIcon,
@@ -182,6 +182,7 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
   const [customModelInput, setCustomModelInput] = useState('')
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const [ollamaModels, setOllamaModels] = useState<{ value: string; label: string }[]>([])
+  const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
 
   // Load settings from parent props or fetch from API
   useEffect(() => {
@@ -224,6 +225,13 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
       const foundAgent = agents.find(a => a.id === agentId)
       if (foundAgent) {
         setAgent(foundAgent)
+        // Load provider instances for this agent's vendor to populate the model override selector
+        try {
+          const instances = await api.getProviderInstances(foundAgent.model_provider)
+          setProviderInstances(instances)
+        } catch {
+          setProviderInstances([])
+        }
       }
     } catch (error) {
       console.error('Failed to load agent config:', error)
@@ -376,8 +384,18 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                         )
                       })()}
 
-                      {/* Provider models with pricing */}
-                      {(agent.model_provider?.toLowerCase() === 'ollama' ? ollamaModels : MODEL_OPTIONS[agent.model_provider?.toLowerCase()])?.map(model => {
+                      {/* Provider models with pricing — sourced from configured instances */}
+                      {(() => {
+                        const isOllama = agent.model_provider?.toLowerCase() === 'ollama'
+                        // Build model list from configured instances; fall back to static MODEL_OPTIONS if none
+                        const instanceModels = [...new Set(providerInstances.flatMap(i => i.available_models))]
+                        const dynamicModels: { value: string; label: string }[] = isOllama
+                          ? ollamaModels
+                          : instanceModels.length > 0
+                            ? instanceModels.map(m => ({ value: m, label: m }))
+                            : (MODEL_OPTIONS[agent.model_provider?.toLowerCase()] || [])
+                        return dynamicModels
+                      })().map(model => {
                         const costInfo = getModelCostInfo(model.value, agent.model_provider)
                         const pricing = agent.model_provider?.toLowerCase() === 'ollama'
                           ? { prompt: 0.0, completion: 0.0 }
