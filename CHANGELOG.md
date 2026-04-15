@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fresh Install v0.6.0 E2E Validation — LAN/HTTP Mode (`develop`, 2026-04-15)
+
+Full fresh-install QA on macOS (LAN IP `192.168.15.2`, HTTP mode, stack name `tsushin-fi`). Install via `python install.py --defaults --http`. All AI providers configured via API (Anthropic, OpenAI, Gemini, Brave Search, Tavily).
+
+**API Test Results (43 tests via dedicated tester agent):**
+- Infrastructure, auth (tenant + admin + wrong-password rejection), agent CRUD, OAuth2 v1, sync/async chat with queue polling, flows, vector stores, and admin authorization: all PASS
+- Bugs found: BUG-531 (personas redirect drops auth header), BUG-532 (system personas/tones return empty for tenant), BUG-533 (6 documented API paths return 404), BUG-534 (admin pagination uses entity keys not `items`), BUG-535 (OAuth2 token requires explicit Content-Type)
+
+**Browser Test Results (Playwright):**
+- Login, Dashboard/Watcher, Agent Studio (all tabs: Agents, Contacts, Personas, Projects, Security/Sentinel, Builder, Custom Skills): PASS
+- Playground AI chat (`FRESH_INSTALL_OK` confirmed): PASS
+- Flows page, Integration Hub (all tabs incl. Vector Stores with Qdrant auto-provisioned): PASS
+- Settings, Shell Command Center (`/hub/shell`), Remote Access (`/system/remote-access`, cloudflared binary confirmed): PASS
+- New bugs found: BUG-536 (User Guide tour re-appears on every page navigation per new user), BUG-537 (tester MCP not in fresh install compose)
+
+**WhatsApp:** Skipped — tester MCP container not included in fresh install stack; WhatsApp instance provisioning UI confirmed functional (dialog loads, communication tab renders). Documented as BUG-537.
+
+**Verdict:** Fresh install is **PASSING** for all automated test categories. 7 new bugs logged (BUG-531 to BUG-537), all LOW/MEDIUM severity. Core functionality fully operational on fresh HTTP install.
+
+---
+
 ### Build Performance Quick-Wins (`develop`, 2026-04-15)
 
 Five Dockerfile optimizations to reduce cold-build times and BuildKit cache churn:
