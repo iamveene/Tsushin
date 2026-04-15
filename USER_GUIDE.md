@@ -40,6 +40,10 @@ When you open Tsushin for the first time, you will be greeted by the **Setup Wiz
 4. Enter your **organization name** -- this becomes your tenant in the system.
 5. Click **Complete Setup**. You are now logged in as the organization owner.
 
+During setup, Tsushin automatically creates provider instances for any supported API keys you enter and assigns the selected primary provider as the initial **System AI**. The completion screen also reveals an auto-generated **global admin** email/password pair for system-level administration, so make sure to capture it before you leave the page.
+
+After first login, an 8-step onboarding tour highlights Watcher, Studio, Hub, Channels, Flows, Playground, Security, and the final setup checklist.
+
 ### Creating Your Organization
 
 Your organization (also called a "tenant") is your isolated workspace. Everything you create -- agents, flows, knowledge bases, integrations -- lives inside it. The setup wizard creates it for you, but you can customize it later:

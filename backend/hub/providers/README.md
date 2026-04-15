@@ -1,19 +1,25 @@
-# Flight Search Providers
+# Hub Provider Registries
 
-This directory contains the provider abstraction layer for flight search.
+This package contains the provider abstraction layers used by Hub integrations and agent skills.
+
+## Provider Families
+
+| Family | Registry | Implemented providers | Notes |
+|--------|----------|-----------------------|-------|
+| Flight search | `registry.py` / `FlightProviderRegistry` | Amadeus, Google Flights | Shared request/response models live in `flight_search_provider.py` |
+| TTS | `tts_registry.py` / `TTSProviderRegistry` | OpenAI, Kokoro, ElevenLabs | Used by the Audio TTS skill and Hub TTS configuration |
+| Web search | `search_registry.py` / `SearchProviderRegistry` | Brave Search, Google (via SerpAPI) | Used by the Web Search skill |
 
 ## Quick Start
 
-### Using a Provider
+### Using a Flight Provider
 
 ```python
 from backend.hub.providers import FlightProviderRegistry
 from backend.hub.providers.flight_search_provider import FlightSearchRequest
 
-# Get provider instance
 provider = FlightProviderRegistry.get_provider("amadeus", db)
 
-# Create search request
 request = FlightSearchRequest(
     origin="GRU",
     destination="JFK",
@@ -22,32 +28,23 @@ request = FlightSearchRequest(
     currency="USD"
 )
 
-# Execute search
 response = await provider.search_flights(request)
 
-# Access results
 for offer in response.offers:
     print(f"{offer.airline}: {offer.currency} {offer.price}")
 ```
 
-### Adding a New Provider
+## Adding a Provider
 
-1. Create provider class implementing `FlightSearchProvider`
-2. Register in `registry.py` `initialize_providers()` method
-3. Create Hub integration model in `models.py`
-4. Add API configuration endpoints
+1. Implement the relevant base class (`FlightSearchProvider`, `TTSProvider`, or `SearchProvider`).
+2. Register the provider in the matching registry's `initialize_providers()` method.
+3. Add the supporting Hub integration model and API wiring if the provider needs tenant configuration.
+4. Expose any provider-specific configuration or health-check surface needed by the UI.
 
-See `FLIGHT_SEARCH_PROVIDER_ARCHITECTURE.md` for detailed instructions.
+## Key Files
 
-## Available Providers
-
-- **Amadeus**: Production-ready (OAuth2, test/production environments)
-- **Skyscanner**: Planned
-- **Google Flights**: Planned
-
-## Files
-
-- `flight_search_provider.py`: Abstract base class and data models
-- `amadeus_provider.py`: Amadeus API implementation
-- `registry.py`: Provider registration and discovery
+- `flight_search_provider.py`: Flight search base classes and data models
+- `registry.py`: Flight provider registration and discovery
+- `tts_provider.py` / `tts_registry.py`: TTS provider interfaces and registration
+- `search_provider.py` / `search_registry.py`: Web search provider interfaces and registration
 - `__init__.py`: Package exports

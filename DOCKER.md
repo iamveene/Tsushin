@@ -1,7 +1,5 @@
 # Tsushin Docker Deployment Guide
 
-**Phase 9: Application Containerization**
-
 This guide covers deploying Tsushin using Docker containers.
 
 ## Architecture Overview
@@ -40,26 +38,36 @@ This guide covers deploying Tsushin using Docker containers.
 ### 1. Clone and Configure
 
 ```bash
-cd /opt/tsushin
+git clone https://github.com/iamveene/Tsushin.git
+cd Tsushin
 
-# Copy environment template
+# Preferred: generate .env, network, and optional Caddy config automatically
+python3 install.py
+
+# Manual compose path: copy the environment template and edit it yourself
 cp env.example .env
 
-# Edit .env with your API keys
+# Edit .env with your infrastructure settings
 nano .env
 ```
 
 ### 2. Required Environment Variables
 
-At minimum, configure these in your `.env`:
+For manual compose deployments, configure these in `.env` at minimum:
 
 ```bash
-# AI Provider (at least one required)
-GEMINI_API_KEY=your-gemini-api-key
+# PostgreSQL
+POSTGRES_PASSWORD=change-me
 
-# Security (generate a secure key)
+# Security
 JWT_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+TSN_MASTER_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+
+# Docker-in-Docker bind mounts for runtime MCP/toolbox containers
+HOST_BACKEND_DATA_PATH=/absolute/path/to/Tsushin/backend/data
 ```
+
+Provider API keys are configured later through `/setup` and the Hub UI, not in `.env`.
 
 ### 3. Start Services
 
@@ -93,7 +101,7 @@ FastAPI application with:
 
 ### Frontend (tsushin-frontend)
 
-Next.js 14 application with:
+Next.js 16 application with:
 - Server-side rendering
 - Standalone output mode
 
@@ -112,7 +120,7 @@ docker compose up -d
 docker compose --profile tts up -d
 ```
 
-**Port:** 8088 (configurable via `TESTER_MCP_PORT`)
+**Port:** 8088 when a standalone legacy tester container is running
 
 ## Common Commands
 
@@ -138,7 +146,7 @@ docker compose --profile tts up -d
 # Stop all services without tearing down the shared network
 docker compose stop
 
-# Full reset (CAUTION: deletes data and removes containers)
+# Full reset (CAUTION: deletes data and removes compose containers; the external network remains)
 docker compose down -v
 
 # Stop specific service
@@ -346,5 +354,5 @@ sudo chown -R 1000:1000 logs/
 ## Version Information
 
 - Backend: Python 3.11, FastAPI
-- Frontend: Node 20, Next.js 14
+- Frontend: Node 20, Next.js 16
 - Tester MCP: Go 1.24, whatsmeow
