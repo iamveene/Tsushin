@@ -45,9 +45,9 @@ The backend Dockerfile exposes three ARG flags to control image size:
 ### Default build (backwards-compatible, full featured)
 
 ```bash
-cd /path/to/tsushin
-docker-compose build --no-cache backend
-docker-compose up -d backend
+# From the repository root
+docker compose build --no-cache backend
+docker compose up -d backend
 ```
 
 ### Lean build (no browser automation, no TTS)

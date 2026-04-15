@@ -46,14 +46,14 @@
 - **Python 3.8+** with **pip** (installer only)
 - **Git**
 
-> The Docker network `tsushin-network` must exist before `docker-compose up`. The installer creates it automatically. Manual: `docker network create tsushin-network`.
+> The Docker network `tsushin-network` must exist before `docker compose up`. The installer creates it automatically. Manual: `docker network create tsushin-network`.
 
 ### Installation
 
 ```bash
 # 1. Clone
-git clone https://github.com/iamveene/tsushin.git
-cd tsushin
+git clone https://github.com/iamveene/Tsushin.git
+cd Tsushin
 
 # 2. Run installer (interactive — prompts for ports, access type, SSL)
 python3 install.py
@@ -96,7 +96,7 @@ docker compose ps                          # Container states
 │                                                                              │
 │  ┌──────────────┐     ┌──────────────────┐     ┌──────────────────────────┐  │
 │  │ Frontend UI  │     │   Backend API    │     │      RBAC Layer          │  │
-│  │  Next.js 14  │◄───►│ FastAPI + PG 16  │◄───►│  Auth / Tenants / Roles  │  │
+│  │  Next.js 16  │◄───►│ FastAPI + PG 16  │◄───►│  Auth / Tenants / Roles  │  │
 │  └──────────────┘     └────────┬─────────┘     └──────────────────────────┘  │
 │                                │                                             │
 │         ┌──────────────────────┼──────────────────────────┐                  │
@@ -190,7 +190,7 @@ TSN_METRICS_ENABLED=true
 **LLM provider API keys are configured per-tenant through the Hub UI**, not in environment variables — this enables true multi-tenant isolation. See [DOCUMENTATION.md §19 LLM Providers](DOCUMENTATION.md#19-llm-providers).
 
 **Operational notes for WhatsApp:**
-- Prefer `docker-compose up -d --build --no-cache backend` / `frontend` for rebuilds instead of `docker-compose down`, so active WhatsApp sessions stay attached to `tsushin-network`.
+- Prefer `docker compose build --no-cache backend` followed by `docker compose up -d backend` (and the equivalent frontend commands) instead of `docker compose down`. The external `tsushin-network` now survives `down`, but routine rebuilds should still avoid tearing down the compose services.
 - Hub → Communication now exposes dedicated **QA Tester** controls for the current tester target and also lists runtime tester rows in the main WhatsApp table, so QA sessions stay visible without mixing them into normal agent operations.
 - Graph View now distinguishes explicit WhatsApp bindings, resolved-default bindings, and ambiguous/unassigned states; if an agent has WhatsApp enabled but no wire, check for the `WhatsApp Unassigned` warning node instead of assuming the graph failed to load.
 

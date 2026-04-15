@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Documentation Alignment Pass (`develop`, 2026-04-15)
+
+Aligned the repository docs with the current `develop` runtime and setup flow. Updated the README, comprehensive docs, user guide, Docker deployment guide, and backend service docs to reflect Next.js 16, the current `/setup` behavior, Docker Compose v2 rebuild syntax, the absence of a root `testing` profile, current provider/tester surfaces, and the external `tsushin-network` rebuild caveats.
+
 ### Fresh Install v0.6.0 E2E Validation — LAN/HTTP Mode (`develop`, 2026-04-15)
 
 Full fresh-install QA on macOS (LAN IP `192.168.15.2`, HTTP mode, stack name `tsushin-fi`). Install via `python install.py --defaults --http`. All AI providers configured via API (Anthropic, OpenAI, Gemini, Brave Search, Tavily).

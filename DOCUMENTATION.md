@@ -4,8 +4,8 @@
 
 This document is the exhaustive reference for configuring, deploying, operating, and using every feature of the platform. For a condensed overview, see [README.md](README.md).
 
-> **Version:** v0.6.0 (README) / `SERVICE_VERSION = "0.5.0"` (`backend/settings.py:136`).
-> **License:** MIT. **Author:** Vinicios Soares ([@iamveene](https://github.com/iamveene)).
+> **Version:** v0.6.0 (`README.md`, `backend/settings.py`).
+> **License:** MIT. **Author:** Marcos Vinicios Penha ([@iamveene](https://github.com/iamveene)).
 
 ---
 
@@ -45,13 +45,11 @@ This document is the exhaustive reference for configuring, deploying, operating,
 
 ---
 
-# Tsushin Platform Documentation — Writer-A Draft
-
 ## 1. Introduction & Audience
 
 **Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, agentic messaging framework that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, HTTP Webhook, Playground), a multi-layer semantic memory system, workflow automation ("Flows"), AI-powered security (Sentinel), and observability under a single self-hostable platform.
 
-Source: `/Users/vinicios/code/tsushin/README.md:11`, `/Users/vinicios/code/tsushin/backend/settings.py:136` (`SERVICE_VERSION = "0.5.0"`), README badge `version-v0.6.0`.
+Source: `README.md`, `backend/settings.py`, and the README version badge.
 
 **Audience for this document:**
 
@@ -62,7 +60,7 @@ Source: `/Users/vinicios/code/tsushin/README.md:11`, `/Users/vinicios/code/tsush
 | **Application developers** | Public API v1 reference, OAuth2 client-credentials + direct API-key auth, rate limiting, webhook integration. |
 | **Security engineers** | Sentinel profiles, permission scopes, HMAC-signed webhooks, envelope-encrypted secrets, docker-socket-proxy isolation. |
 
-Version under documentation: **v0.6.0** (README.md), with backend `SERVICE_VERSION = "0.5.0"` constant still in `settings.py:136`. Operators should treat `v0.6.0` as the marketing/release version.
+Version under documentation: **v0.6.0** in both the README and backend settings.
 
 ---
 
@@ -70,7 +68,7 @@ Version under documentation: **v0.6.0** (README.md), with backend `SERVICE_VERSI
 
 ### 2.1 Container topology (Docker Compose)
 
-Tsushin ships as a Docker Compose stack defined in `/Users/vinicios/code/tsushin/docker-compose.yml`. The core services:
+Tsushin ships as a Docker Compose stack defined in `docker-compose.yml`. The core services:
 
 | Service | Image / Build | Port | Purpose | Source |
 |---------|---------------|------|---------|--------|
@@ -80,7 +78,7 @@ Tsushin ships as a Docker Compose stack defined in `/Users/vinicios/code/tsushin
 | `tsushin-frontend` | Built from `./frontend/Dockerfile` | `${FRONTEND_PORT:-3030}` | Next.js 16 UI (Watcher, Hub, Studio, Playground, Settings). | `docker-compose.yml:173-195` |
 | `kokoro-tts` (profile `tts`) | `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4` | 8880 | Optional local text-to-speech. | `docker-compose.yml:200-224` |
 
-**Network:** All services attach to the **external** bridge network `tsushin-network`. The network is declared `external: true` in compose so that `docker-compose down` *cannot* tear it down — this is critical because MCP WhatsApp bot containers (spawned dynamically by `ToolboxContainerService` / `MCPContainerManager`) also join this network and would lose their WhatsApp sessions if the bridge were removed. Create the network once with `docker network create tsushin-network`; `install.py` handles this automatically. Source: `docker-compose.yml:229-237`.
+**Network:** All services attach to the **external** bridge network `tsushin-network`. The network is declared `external: true`, so `docker compose down` does not remove it. That matters because MCP WhatsApp bot containers (spawned dynamically by `ToolboxContainerService` / `MCPContainerManager`) also join this network. Create the network once with `docker network create tsushin-network`; `install.py` handles this automatically. Source: `docker-compose.yml:229-237`.
 
 **Multi-stack note:** When SSL/Caddy is enabled, proxy upstreams must target stack-scoped container names (for example `tsushin-frontend:3030`, `tsushin-backend:8081`) rather than generic Docker aliases like `frontend` / `backend`. On the shared `tsushin-network`, generic aliases can resolve to another running Tsushin stack.
 
@@ -119,7 +117,7 @@ Frontend (Next.js)  <--REST/WebSocket-->  Backend (FastAPI + PG 16)  <-->  RBAC 
               SANDBOXED TOOLS (per-tenant Docker)  |  CHANNELS (WA/TG/Slack/Discord/Webhook/Playground)
 ```
 
-Source: `/Users/vinicios/code/tsushin/README.md:289-328`.
+Source: `README.md` (Architecture section).
 
 ### 2.3 Dynamically-managed MCP containers
 
@@ -148,8 +146,8 @@ Sources: `README.md:17-22`, `DOCKER.md:33-36`.
 ### 3.2 Clone and install
 
 ```bash
-git clone https://github.com/iamveene/tsushin.git
-cd tsushin
+git clone https://github.com/iamveene/Tsushin.git
+cd Tsushin
 
 # Interactive install (prompts for ports, access type, SSL)
 python3 install.py
@@ -190,7 +188,7 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
 3. The wizard automatically creates **ProviderInstance** records for each supported provider key entered during setup. The selected primary provider is also assigned as the **System AI** — no manual post-setup Hub provisioning is required for the providers entered in the wizard.
 4. At completion, the wizard reveals an auto-generated **global admin** email/password pair. Record these credentials before leaving the completion screen; they are required for `/system/*` validation and system-level administration.
-5. On first login an **onboarding tour** (9 steps) walks through all platform areas: Watcher, Studio, Hub, Channels, Flows, Playground, Security, and a final setup checklist.
+5. On first login an **onboarding tour** (8 steps) walks through all platform areas: Watcher, Studio, Hub, Channels, Flows, Playground, Security, and a final setup checklist.
 6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp/Telegram) via the Hub to enable agent messaging.
 7. The **User Guide** is accessible anytime via the **?** button in the header.
 
@@ -225,8 +223,10 @@ cd /path/to/tsushin
 docker compose up -d
 
 # Rebuild specific service after code changes
-docker compose up -d --build --no-cache backend
-docker compose up -d --build --no-cache frontend
+docker compose build --no-cache backend
+docker compose up -d backend
+docker compose build --no-cache frontend
+docker compose up -d frontend
 
 # Logs
 docker compose logs -f backend
@@ -248,9 +248,9 @@ Source: `DOCKER.md:114-169`, `docker-compose.yml:220-226` (tts profile).
 
 ### 4.2 Container rebuild safety (SAFE vs UNSAFE)
 
-**SAFE:** `docker compose up -d --build --no-cache <service>` rebuilds individual services without touching the `tsushin-network` bridge. MCP WhatsApp bot containers keep their WebSocket sessions alive.
+**SAFE:** `docker compose build --no-cache <service>` followed by `docker compose up -d <service>` rebuilds individual services without touching the `tsushin-network` bridge. MCP WhatsApp bot containers keep their WebSocket sessions alive.
 
-**UNSAFE:** `docker compose down` — this used to tear down the network, killing every WhatsApp session and forcing a QR re-scan. To prevent this the compose file declares `tsushin-network` as `external: true` (`docker-compose.yml:229-237`), so `docker compose down` now leaves the network in place. You should still avoid `down` for routine rebuilds; only use it when you genuinely need to reset Postgres or recreate containers from scratch.
+**UNSAFE:** `docker compose down` — the external network now survives it, but it still stops and removes the compose-managed services. You should avoid `down` for routine rebuilds; only use it when you genuinely need to reset Postgres or recreate containers from scratch.
 
 **Session recovery if WhatsApp drops:**
 
@@ -261,7 +261,7 @@ docker restart mcp-agent-tenant_<id>          # Restart, then re-scan QR from ph
 
 ### 4.3 Kubernetes / GKE (Helm chart)
 
-Tsushin ships a Helm chart at `/Users/vinicios/code/tsushin/k8s/tsushin/`:
+Tsushin ships a Helm chart at `k8s/tsushin/`:
 
 ```
 k8s/tsushin/
@@ -589,7 +589,7 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `scheduler` | Scheduler | tool | Schedule reminders and AI-driven conversations via natural language | `scheduler_skill.py:40-43` |
 | `scheduler_query` | Scheduler Query | legacy | Query and list scheduled events via natural language (merged into `scheduler` list action) | `scheduler_query_skill.py:24-27` |
 | `flows` | Flows | tool | Schedule reminders, AI-driven conversations, and manage scheduled events | `flows_skill.py:62-65` |
-| `flight_search` | Flight Search | tool | Search for flights using configured provider (Amadeus, Skyscanner, etc.) | `flight_search_skill.py:42-45` |
+| `flight_search` | Flight Search | tool | Search for flights using configured providers such as Amadeus or Google Flights | `flight_search_skill.py:42-45` |
 | `shell` | Shell Commands | hybrid | Execute shell commands on registered remote hosts via secure beacon agents. Exempts `shell_malicious`. | `shell_skill.py:39-42` |
 | `sandboxed_tools` | Sandboxed Tools | passive | Gate for running security tools (nmap, dig, nuclei, httpx) inside isolated Docker containers | `sandboxed_tools_skill.py:29-36` |
 | `browser_automation` | Browser Automation | tool | Navigate, click, fill forms, extract content, capture screenshots | `browser_automation_skill.py:56-59` |
@@ -1735,9 +1735,6 @@ Service layer: `backend/services/message_queue_service.py`, `backend/services/qu
 - On completion, `onQueueMessageCompleted` replaces the placeholder with the real response and triggers a thread refresh.
 - Dead-letter retry is handled server-side by the queue worker on failed jobs.
 
----
-
-*End of Writer-B draft.*
 ## 19. LLM Providers
 
 **Sources:**
@@ -2418,8 +2415,11 @@ Two equivalent modes — choose whichever fits your client:
 
 ```bash
 curl -X POST http://localhost:8081/api/v1/oauth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET"
 # → { "access_token": "<jwt>", "token_type": "bearer", "expires_in": 3600 }
+# NOTE (BUG-535): The Content-Type header is required. Omitting it causes FastAPI to return
+# 422 "Field required: grant_type" even though the field is present in the body.
 
 curl -H "Authorization: Bearer <jwt>" http://localhost:8081/api/v1/agents
 ```
@@ -2555,6 +2555,19 @@ Tenant-scoped routes backing the frontend (require UI JWT). All routers are incl
 | `/api/webhooks*` | `routes_webhook_instances.py` | Tenant-scoped webhook instance CRUD |
 | `/api/team*` | `routes_team.py` | Team member management |
 | `/api/vector-stores*` | `routes_vector_stores.py` | External vector DB registration |
+
+> **BUG-533 — Path correction notice:** Several paths that appear in older docs or conventions return 404. Use the actual paths listed below:
+>
+> | Old / expected path (404) | Actual working path |
+> |---|---|
+> | `GET /api/tone-presets` | `GET /api/tones` (UI-facing) or `GET /api/v1/tone-presets` (public API v1) |
+> | `GET /api/security-profiles` | `GET /api/sentinel/profiles` |
+> | `GET /api/skills` | `GET /api/custom-skills` (custom) or `GET /api/v1/skills` (system, public) |
+> | `GET /api/knowledge-base` | `GET /api/agents/{id}/knowledge-base` (per-agent, not global) |
+> | `GET /api/hub/providers` | `GET /api/provider-instances` |
+> | `GET /api/slash-commands` | `GET /api/commands` |
+>
+> The `/api/*` namespace (UI-facing) is not versioned and is subject to change. For stable integrations, prefer the public `/api/v1/*` equivalents documented in §25.3.
 
 A few illustrative endpoints (grepped verbatim from `backend/api/routes_*.py`):
 
@@ -2789,6 +2802,14 @@ Seed entries (`backend/db.py:830-1259`, all `tenant_id="_system"`, `handler_type
 
 The Tester MCP is a containerized Go WhatsApp bridge dedicated to QA. It is configured with its own phone number and runs alongside production MCP containers on `tsushin-network`.
 
+> **Fresh-install note (BUG-537):** The tester MCP container is **not bundled** in the default compose stack (`docker-compose.yml`). On a fresh install, `GET /api/mcp/instances/tester/status` returns `container_state: "not_found"` and Hub → Communication → WhatsApp is empty. To provision a tester instance manually:
+> 1. Navigate to **Hub → Communication → WhatsApp**.
+> 2. Click **+ New Instance** and create a new runtime WhatsApp instance.
+> 3. Assign it a dedicated QA phone number (must differ from all tenant agent numbers).
+> 4. Scan the QR code to authenticate.
+> 5. The backend will automatically recognise the active tester instance for `/api/mcp/instances/tester/*` controls.
+> 6. Use `POST http://localhost:8088/api/send` (if the legacy compose tester is present) or call the runtime instance API for round-trip test sends.
+
 **Default port:** `8088` (host) → `8080` (container).
 
 **Env vars:**
@@ -2839,9 +2860,6 @@ curl -X POST http://localhost:8088/api/send \
 
 **Validation prerequisite:** do not scan the tester QR and the tenant agent QR with the same WhatsApp account. That topology can look healthy in status checks while making tester-to-agent round-trip validation impossible.
 
----
-
-*End of Writer-C draft.*
 ## 28. Troubleshooting
 
 ### 28.1 Container won't start
@@ -2869,7 +2887,7 @@ docker restart mcp-agent-tenant_<id>    # Restart container
 # Then re-scan QR on the linked phone.
 ```
 
-Prevention: never `docker compose down` for routine rebuilds — use `docker compose up -d --build --no-cache <service>` instead. The compose file now declares `tsushin-network` as `external: true` so even `down` cannot remove it.
+Prevention: never `docker compose down` for routine rebuilds — use `docker compose build --no-cache <service>` followed by `docker compose up -d <service>` instead. The compose file declares `tsushin-network` as `external: true`, so the network survives, but the compose services still restart if you tear them down.
 
 ### 28.3 Database issues
 
@@ -3119,7 +3137,7 @@ Role mapping summary (`add_rbac_tables.py:422-495`):
 | **Tenant** | An isolated organization — owns users, agents, flows, memory, knowledge, integrations. Represented by `tenant` table; id is a string like `tenant_20251202232822`. |
 | **Agent** | A configurable AI persona (provider + model + persona + skills + tools + security profile + channels + knowledge). Scoped to one tenant. |
 | **Flow** | A multi-step automated workflow. Types: Conversation, Notification, Workflow, Task. 7 step types (Conversation, Message, Notification, Tool, Skill, Summarization, Slash Command). |
-| **Skill** | A built-in agent capability (20 shipped: TTS, Transcription, Web Search, Scraping, Browser, Image Gen, Shell, Flows, Gmail, Calendar, Flight Search, etc.). |
+| **Skill** | A built-in agent capability (19 shipped: TTS, Transcription, Web Search, Scraping, Browser, Image Gen, Shell, Flows, Gmail, Calendar, Flight Search, etc.). |
 | **Custom Skill** | Tenant-authored skill — Instruction (prompt injection), Script (Python/Bash/Node in sandbox), or MCP-Server (external MCP connection). |
 | **Tool (Sandboxed)** | A security/utility binary (nmap, dig, nuclei, httpx, subfinder, katana, sqlmap, webhook, whois) executed in a per-tenant Docker container. |
 | **Persona** | A reusable personality template — role, tone preset, personality traits, per-persona skills/tools/knowledge, guardrails. |
@@ -3143,4 +3161,4 @@ Role mapping summary (`add_rbac_tables.py:422-495`):
 
 ---
 
-*End of Writer-A draft. Source citations reference files under `/Users/vinicios/code/tsushin/`.*
+*Source citations reference repository-relative files.*
