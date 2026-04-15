@@ -1,6 +1,6 @@
 # Tsushin User Guide
 
-This guide walks you through using the Tsushin platform from a user's perspective -- setting up channels, creating agents, building workflows, and everything in between. For the exhaustive technical reference (internal architecture, model schemas, environment variables, appendices), see [DOCUMENTATION.md](DOCUMENTATION.md).
+This guide walks you through using the Tsushin platform from a user's perspective -- setting up channels, creating agents, building workflows, and everything in between. For the exhaustive technical reference (internal architecture, model schemas, environment variables, appendices), see [documentation.md](documentation.md).
 
 ---
 
@@ -342,7 +342,7 @@ Security and utility tools running in isolated Docker containers. Invoke with:
 | **webhook** | `get`, `post` | `/tool webhook get url=https://api.github.com/users/octocat` |
 | **sqlmap** | `scan` | `/tool sqlmap scan target=http://example.com/page?id=1` |
 
-For full parameter details, see [DOCUMENTATION.md §9.4](DOCUMENTATION.md#94-sandboxed-tools).
+For full parameter details, see [documentation.md §9.4](documentation.md#94-sandboxed-tools).
 
 ---
 
