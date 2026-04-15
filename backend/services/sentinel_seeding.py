@@ -218,8 +218,8 @@ def migrate_sentinel_config_columns(db: Session) -> bool:
                 logger.debug(f"Column sentinel_config.{col_name} already exists")
                 continue
 
-            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
             # col_name/col_def come from the literal columns_to_add list at the top of this function.
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
             db.execute(text(
                 f"ALTER TABLE sentinel_config ADD COLUMN {col_name} {col_def}"
             ))
@@ -275,8 +275,8 @@ def migrate_sentinel_analysis_log(db: Session) -> bool:
                 logger.debug(f"Column sentinel_analysis_log.{col_name} already exists")
                 continue
 
-            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
             # col_name/col_def come from the literal columns_to_add list at the top of this function.
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
             db.execute(text(
                 f"ALTER TABLE sentinel_analysis_log ADD COLUMN {col_name} {col_def}"
             ))
@@ -483,8 +483,8 @@ def create_sentinel_profile_tables(db: Session) -> bool:
             # Use dialect-appropriate boolean literal (PostgreSQL: TRUE, SQLite: 1)
             dialect = db.get_bind().dialect.name
             bool_literal = "TRUE" if dialect == "postgresql" else "1"
-            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
             # bool_literal is one of two hardcoded string constants chosen from dialect.name.
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
             db.execute(text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_sentinel_profile_one_default "
                 f"ON sentinel_profile(COALESCE(tenant_id, '__system__')) WHERE is_default = {bool_literal}"
