@@ -141,7 +141,7 @@ Source: `docker-compose.yml:12-14`, `backend/services/toolbox_container_service.
 * At least 4 GB RAM available
 * A domain name (only if deploying with Let's Encrypt SSL)
 
-Sources: `README.md:17-22`, `docs/DOCKER.md:33-36`.
+Sources: `README.md:17-22`, `docs/docker.md:33-36`.
 
 ### 3.2 Clone and install
 
@@ -244,7 +244,7 @@ docker compose --profile tts up -d        # Add Kokoro TTS
 # or the active runtime tester instance for the tenant.
 ```
 
-Source: `docs/DOCKER.md:114-169`, `docker-compose.yml:220-226` (tts profile).
+Source: `docs/docker.md:114-169`, `docker-compose.yml:220-226` (tts profile).
 
 ### 4.2 Container rebuild safety (SAFE vs UNSAFE)
 
@@ -2872,7 +2872,7 @@ curl http://localhost:8081/api/health       # Liveness
 curl http://localhost:8081/api/readiness    # DB connectivity
 ```
 
-Source: `docs/DOCKER.md:260-272`.
+Source: `docs/docker.md:260-272`.
 
 ### 28.2 WhatsApp session dropped / QR re-auth loop
 
@@ -2896,7 +2896,7 @@ docker exec -it tsushin-postgres psql -U tsushin -d tsushin -c "\dt"     # List 
 docker exec -it tsushin-postgres psql -U tsushin -d tsushin              # Interactive shell
 ```
 
-Source: `docs/DOCKER.md:275-282`.
+Source: `docs/docker.md:275-282`.
 
 **Playground search note:** Postgres deployments do not use SQLite FTS5. Tsushin now falls back cleanly to LIKE-based conversation search on Postgres and rolls back failed search probes before continuing, so a failed search should not poison the rest of the request transaction.
 
@@ -2909,7 +2909,7 @@ docker exec tsushin-backend python -c \
   "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 ```
 
-Or raise Docker Desktop memory limit to ≥ 6 GB. Source: `docs/DOCKER.md:286-294`.
+Or raise Docker Desktop memory limit to ≥ 6 GB. Source: `docs/docker.md:286-294`.
 
 ### 28.5 Permission issues on bind mounts (Linux)
 
@@ -2918,7 +2918,7 @@ sudo chown -R 1000:1000 backend/data/
 sudo chown -R 1000:1000 logs/
 ```
 
-Source: `docs/DOCKER.md:298-301`.
+Source: `docs/docker.md:298-301`.
 
 ### 28.6 Disk space
 

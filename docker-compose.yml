@@ -112,7 +112,7 @@ services:
       # Shared images directory for ImageSkill (shared with MCP containers)
       - tsushin-images:/tmp/tsushin_images
       # User guide (served via /api/user-guide)
-      - ./docs/USER_GUIDE.md:/app/USER_GUIDE.md:ro
+      - ./docs/user-guide.md:/app/USER_GUIDE.md:ro
     security_opt:
       - label:disable
     environment:
