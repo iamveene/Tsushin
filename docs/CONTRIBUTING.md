@@ -20,8 +20,8 @@ By participating in this project, you agree to maintain a respectful and inclusi
 1. **Fork the repository** and create your branch from `develop`
 2. **Set up your development environment**:
    ```bash
-   git clone https://github.com/your-username/tsushin.git
-   cd tsushin
+   git clone https://github.com/your-username/Tsushin.git
+   cd Tsushin
    python3 install.py
    ```
 3. **Make your changes** following the code style guidelines below
@@ -115,7 +115,7 @@ Tsushin follows a multi-tenant architecture with these main components:
 
 > `docker compose up -d` spins up PostgreSQL, the backend, and the frontend automatically.
 
-See the main README for detailed architecture diagrams.
+See the root [README](../README.md) for detailed architecture diagrams.
 
 ## Areas for Contribution
 

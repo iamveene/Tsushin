@@ -10,9 +10,9 @@
 
 **Tsushin** (通信 — "Communication" in Japanese) is a multi-tenant agentic messaging platform that unifies AI agent orchestration, conversational channels, semantic memory, workflow automation, AI-powered security, and observability — self-hostable, with RBAC and full multi-tenancy.
 
-> 📖 **Full reference:** see **[DOCUMENTATION.md](DOCUMENTATION.md)** for the exhaustive technical guide covering every configuration item, feature, form field, channel, integration, API endpoint, and appendix.
+> 📖 **Full reference:** see **[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)** for the exhaustive technical guide covering every configuration item, feature, form field, channel, integration, API endpoint, and appendix.
 >
-> 📘 **User guide:** see **[USER_GUIDE.md](USER_GUIDE.md)** for a practical walkthrough of setting up channels, creating agents, configuring skills, building flows, using slash commands, and more.
+> 📘 **User guide:** see **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** for a practical walkthrough of setting up channels, creating agents, configuring skills, building flows, using slash commands, and more.
 
 ---
 
@@ -75,7 +75,7 @@ The installer handles infrastructure only (containers, networking, SSL, `.env` s
 
 For SSL installs, the generated Caddy config now targets stack-scoped upstreams such as `${TSN_STACK_NAME}-frontend` and `${TSN_STACK_NAME}-backend`. That keeps `https://localhost` pinned to the intended stack even when multiple Tsushin instances share `tsushin-network`.
 
-→ Full deployment options, GKE/Helm, GCP Secret Manager, and rebuild-safety rules: see [DOCUMENTATION.md §4 Deployment & Operations](DOCUMENTATION.md#4-deployment--operations).
+→ Full deployment options, GKE/Helm, GCP Secret Manager, and rebuild-safety rules: see [docs/DOCUMENTATION.md §4 Deployment & Operations](docs/DOCUMENTATION.md#4-deployment--operations).
 
 ### Verify
 
@@ -127,7 +127,7 @@ docker compose ps                          # Container states
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-→ Full container topology, data flow, and dynamically-managed MCP containers: see [DOCUMENTATION.md §2 Architecture Overview](DOCUMENTATION.md#2-architecture-overview).
+→ Full container topology, data flow, and dynamically-managed MCP containers: see [docs/DOCUMENTATION.md §2 Architecture Overview](docs/DOCUMENTATION.md#2-architecture-overview).
 
 ---
 
@@ -135,23 +135,23 @@ docker compose ps                          # Container states
 
 | Topic | Section |
 |-------|---------|
-| Deployment (Compose / GKE / GCP SM) | [§4](DOCUMENTATION.md#4-deployment--operations) |
-| Environment variable reference | [§5](DOCUMENTATION.md#5-system-configuration) + [Appendix A](DOCUMENTATION.md#29-appendix-a-complete-environment-variable-reference) |
-| Authentication, SSO, RBAC | [§6](DOCUMENTATION.md#6-authentication--access) + [Appendix B](DOCUMENTATION.md#30-appendix-b-permission-scopes) |
-| Agents, personas, tone presets | [§7](DOCUMENTATION.md#7-agents), [§8](DOCUMENTATION.md#8-personas--tone-presets) |
-| Skills (built-in + custom) & sandboxed tools | [§9](DOCUMENTATION.md#9-skills) |
-| Memory, knowledge, vector stores | [§10](DOCUMENTATION.md#10-memory--knowledge), [§11](DOCUMENTATION.md#11-vector-stores) |
-| Sentinel security | [§12](DOCUMENTATION.md#12-security--sentinel) |
-| Flows & scheduler | [§13](DOCUMENTATION.md#13-flows), [§14](DOCUMENTATION.md#14-scheduler--triggers) |
-| Channels (WhatsApp / Telegram / Slack / Discord / Webhook / Playground) | [§15](DOCUMENTATION.md#15-channels) |
-| Contacts, projects, playground | [§16](DOCUMENTATION.md#16-contacts--channel-mapping), [§17](DOCUMENTATION.md#17-projects-studio), [§18](DOCUMENTATION.md#18-playground) |
-| LLM providers & hub integrations | [§19](DOCUMENTATION.md#19-llm-providers), [§20](DOCUMENTATION.md#20-hub-integrations) |
-| Settings UI (every subpage) & system admin | [§21](DOCUMENTATION.md#21-settings--ui-taxonomy), [§22](DOCUMENTATION.md#22-system-admin-global-admin-only) |
-| Audit & syslog | [§23](DOCUMENTATION.md#23-audit-logging--compliance) |
-| Observability & metrics | [§24](DOCUMENTATION.md#24-observability) |
-| Public API v1 reference | [§25](DOCUMENTATION.md#25-public-api-v1) |
-| Slash commands (37 commands + usage examples) | [§26](DOCUMENTATION.md#26-slash-commands-system-wide-catalog) |
-| Troubleshooting | [§28](DOCUMENTATION.md#28-troubleshooting) |
+| Deployment (Compose / GKE / GCP SM) | [§4](docs/DOCUMENTATION.md#4-deployment--operations) |
+| Environment variable reference | [§5](docs/DOCUMENTATION.md#5-system-configuration) + [Appendix A](docs/DOCUMENTATION.md#29-appendix-a-complete-environment-variable-reference) |
+| Authentication, SSO, RBAC | [§6](docs/DOCUMENTATION.md#6-authentication--access) + [Appendix B](docs/DOCUMENTATION.md#30-appendix-b-permission-scopes) |
+| Agents, personas, tone presets | [§7](docs/DOCUMENTATION.md#7-agents), [§8](docs/DOCUMENTATION.md#8-personas--tone-presets) |
+| Skills (built-in + custom) & sandboxed tools | [§9](docs/DOCUMENTATION.md#9-skills) |
+| Memory, knowledge, vector stores | [§10](docs/DOCUMENTATION.md#10-memory--knowledge), [§11](docs/DOCUMENTATION.md#11-vector-stores) |
+| Sentinel security | [§12](docs/DOCUMENTATION.md#12-security--sentinel) |
+| Flows & scheduler | [§13](docs/DOCUMENTATION.md#13-flows), [§14](docs/DOCUMENTATION.md#14-scheduler--triggers) |
+| Channels (WhatsApp / Telegram / Slack / Discord / Webhook / Playground) | [§15](docs/DOCUMENTATION.md#15-channels) |
+| Contacts, projects, playground | [§16](docs/DOCUMENTATION.md#16-contacts--channel-mapping), [§17](docs/DOCUMENTATION.md#17-projects-studio), [§18](docs/DOCUMENTATION.md#18-playground) |
+| LLM providers & hub integrations | [§19](docs/DOCUMENTATION.md#19-llm-providers), [§20](docs/DOCUMENTATION.md#20-hub-integrations) |
+| Settings UI (every subpage) & system admin | [§21](docs/DOCUMENTATION.md#21-settings--ui-taxonomy), [§22](docs/DOCUMENTATION.md#22-system-admin-global-admin-only) |
+| Audit & syslog | [§23](docs/DOCUMENTATION.md#23-audit-logging--compliance) |
+| Observability & metrics | [§24](docs/DOCUMENTATION.md#24-observability) |
+| Public API v1 reference | [§25](docs/DOCUMENTATION.md#25-public-api-v1) |
+| Slash commands (37 commands + usage examples) | [§26](docs/DOCUMENTATION.md#26-slash-commands-system-wide-catalog) |
+| Troubleshooting | [§28](docs/DOCUMENTATION.md#28-troubleshooting) |
 
 ---
 
@@ -187,20 +187,20 @@ TSN_LOG_FORMAT=text               # text | json (structured)
 TSN_METRICS_ENABLED=true
 ```
 
-**LLM provider API keys are configured per-tenant through the Hub UI**, not in environment variables — this enables true multi-tenant isolation. See [DOCUMENTATION.md §19 LLM Providers](DOCUMENTATION.md#19-llm-providers).
+**LLM provider API keys are configured per-tenant through the Hub UI**, not in environment variables — this enables true multi-tenant isolation. See [docs/DOCUMENTATION.md §19 LLM Providers](docs/DOCUMENTATION.md#19-llm-providers).
 
 **Operational notes for WhatsApp:**
 - Prefer `docker compose build --no-cache backend` followed by `docker compose up -d backend` (and the equivalent frontend commands) instead of `docker compose down`. The external `tsushin-network` now survives `down`, but routine rebuilds should still avoid tearing down the compose services.
 - Hub → Communication now exposes dedicated **QA Tester** controls for the current tester target and also lists runtime tester rows in the main WhatsApp table, so QA sessions stay visible without mixing them into normal agent operations.
 - Graph View now distinguishes explicit WhatsApp bindings, resolved-default bindings, and ambiguous/unassigned states; if an agent has WhatsApp enabled but no wire, check for the `WhatsApp Unassigned` warning node instead of assuming the graph failed to load.
 
-→ Complete env-var reference (80+ variables, all defaults, all subsystems): [Appendix A](DOCUMENTATION.md#29-appendix-a-complete-environment-variable-reference).
+→ Complete env-var reference (80+ variables, all defaults, all subsystems): [Appendix A](docs/DOCUMENTATION.md#29-appendix-a-complete-environment-variable-reference).
 
 ---
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for branching strategy, code style, and PR guidelines. Pre-commit hooks protect against accidental secret commits:
+Contributions are welcome. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for branching strategy, code style, and PR guidelines. Pre-commit hooks protect against accidental secret commits:
 
 ```bash
 ./scripts/setup-hooks.sh
@@ -218,4 +218,4 @@ Tsushin is open-source software licensed under the [MIT License](LICENSE).
 
 ---
 
-**Version 0.6.0** · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Documentation](DOCUMENTATION.md) · [User Guide](USER_GUIDE.md)
+**Version 0.6.0** · [Docs Index](docs/README.md) · [Changelog](docs/CHANGELOG.md) · [Documentation](docs/DOCUMENTATION.md) · [User Guide](docs/USER_GUIDE.md)

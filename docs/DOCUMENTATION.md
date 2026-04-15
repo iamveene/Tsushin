@@ -2,7 +2,7 @@
 
 **Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, self-hostable agentic messaging platform that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, Webhook, Playground), multi-layer semantic memory, workflow automation (Flows), AI-powered security (Sentinel), and observability.
 
-This document is the exhaustive reference for configuring, deploying, operating, and using every feature of the platform. For a condensed overview, see [README.md](README.md).
+This document is the exhaustive reference for configuring, deploying, operating, and using every feature of the platform. For a condensed overview, see the root [README](../README.md).
 
 > **Version:** v0.6.0 (`README.md`, `backend/settings.py`).
 > **License:** MIT. **Author:** Marcos Vinicios Penha ([@iamveene](https://github.com/iamveene)).
@@ -141,7 +141,7 @@ Source: `docker-compose.yml:12-14`, `backend/services/toolbox_container_service.
 * At least 4 GB RAM available
 * A domain name (only if deploying with Let's Encrypt SSL)
 
-Sources: `README.md:17-22`, `DOCKER.md:33-36`.
+Sources: `README.md:17-22`, `docs/DOCKER.md:33-36`.
 
 ### 3.2 Clone and install
 
@@ -244,7 +244,7 @@ docker compose --profile tts up -d        # Add Kokoro TTS
 # or the active runtime tester instance for the tenant.
 ```
 
-Source: `DOCKER.md:114-169`, `docker-compose.yml:220-226` (tts profile).
+Source: `docs/DOCKER.md:114-169`, `docker-compose.yml:220-226` (tts profile).
 
 ### 4.2 Container rebuild safety (SAFE vs UNSAFE)
 
@@ -2872,7 +2872,7 @@ curl http://localhost:8081/api/health       # Liveness
 curl http://localhost:8081/api/readiness    # DB connectivity
 ```
 
-Source: `DOCKER.md:260-272`.
+Source: `docs/DOCKER.md:260-272`.
 
 ### 28.2 WhatsApp session dropped / QR re-auth loop
 
@@ -2896,7 +2896,7 @@ docker exec -it tsushin-postgres psql -U tsushin -d tsushin -c "\dt"     # List 
 docker exec -it tsushin-postgres psql -U tsushin -d tsushin              # Interactive shell
 ```
 
-Source: `DOCKER.md:275-282`.
+Source: `docs/DOCKER.md:275-282`.
 
 **Playground search note:** Postgres deployments do not use SQLite FTS5. Tsushin now falls back cleanly to LIKE-based conversation search on Postgres and rolls back failed search probes before continuing, so a failed search should not poison the rest of the request transaction.
 
@@ -2909,7 +2909,7 @@ docker exec tsushin-backend python -c \
   "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 ```
 
-Or raise Docker Desktop memory limit to ≥ 6 GB. Source: `DOCKER.md:286-294`.
+Or raise Docker Desktop memory limit to ≥ 6 GB. Source: `docs/DOCKER.md:286-294`.
 
 ### 28.5 Permission issues on bind mounts (Linux)
 
@@ -2918,7 +2918,7 @@ sudo chown -R 1000:1000 backend/data/
 sudo chown -R 1000:1000 logs/
 ```
 
-Source: `DOCKER.md:298-301`.
+Source: `docs/DOCKER.md:298-301`.
 
 ### 28.6 Disk space
 
