@@ -55,10 +55,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # ============================================================================
 # Stage 2: Runtime - Minimal production image
 # ============================================================================
-# Playwright base includes Chromium + all system dependencies pre-installed,
-# eliminating the ~1.1GB browser download and 14-package apt-get on every cold build.
-# Python 3.11 matches the builder stage (python:3.11-slim) for venv compatibility.
-FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy AS runtime
+# NOTE: mcr.microsoft.com/playwright/python:v1.48.0-jammy (Ubuntu 22.04) ships
+# Python 3.10 only — incompatible with the Python 3.11 venv built above.
+# Item 3 build-time saving is achieved instead via a BuildKit cache mount on the
+# playwright install step below, which caches the ~1.1GB Chromium download
+# between cold builds without requiring a base-image switch.
+FROM python:3.11-slim AS runtime
 
 # Phase 9.3: Architecture detection for multi-platform support
 ARG TARGETARCH
@@ -106,15 +108,58 @@ RUN if [ "$INSTALL_FFMPEG" = "true" ]; then \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Playwright system deps + Chromium binary are pre-installed in the base image.
-# No manual apt-get or playwright install step needed (removed for build speed).
+# Optional: Playwright Chromium system dependencies
+RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            libnss3 \
+            libnspr4 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libdbus-1-3 \
+            libxkbcommon0 \
+            libatspi2.0-0 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxrandr2 \
+            libgbm1 \
+            libpango-1.0-0 \
+            libcairo2 \
+            libasound2 \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 
 # Create non-root user for security
 # Also create docker group with same GID as host for Docker socket access (GID 999)
-RUN groupadd -g 1000 tsushin && \
-    useradd -u 1000 -g tsushin -m -s /bin/bash tsushin && \
-    groupadd -g 999 dockersock && \
+# Use rename-if-taken logic: Ubuntu Jammy base image pre-creates UID/GID 1000 as 'ubuntu'.
+RUN set -eux; \
+    # GID 1000: rename existing group to 'tsushin' or create fresh
+    if getent group 1000 >/dev/null 2>&1; then \
+        EXISTING_GRP=$(getent group 1000 | cut -d: -f1); \
+        [ "$EXISTING_GRP" = "tsushin" ] || groupmod -n tsushin "$EXISTING_GRP"; \
+    else \
+        groupadd -g 1000 tsushin; \
+    fi; \
+    # UID 1000: rename existing user to 'tsushin' or create fresh
+    if getent passwd 1000 >/dev/null 2>&1; then \
+        EXISTING_USR=$(getent passwd 1000 | cut -d: -f1); \
+        if [ "$EXISTING_USR" != "tsushin" ]; then \
+            usermod -l tsushin -d /home/tsushin -m "$EXISTING_USR"; \
+        fi; \
+    else \
+        useradd -u 1000 -g tsushin -m -s /bin/bash tsushin; \
+    fi; \
+    chsh -s /bin/bash tsushin 2>/dev/null || true; \
+    # GID 999: rename existing group to 'dockersock' or create fresh
+    if getent group 999 >/dev/null 2>&1; then \
+        EXISTING_GRP=$(getent group 999 | cut -d: -f1); \
+        [ "$EXISTING_GRP" = "dockersock" ] || groupmod -n dockersock "$EXISTING_GRP"; \
+    else \
+        groupadd -g 999 dockersock; \
+    fi; \
     usermod -aG dockersock tsushin
 
 # Copy virtual environment from builder
@@ -123,9 +168,20 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# BUG-315 fix: Point to the pre-installed Chromium in the Playwright base image.
-# The mcr.microsoft.com/playwright/python image stores browsers at /ms-playwright.
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# Install Playwright browser (Chromium only for smaller image size)
+# BUG-315 fix: Use shared path so non-root tsushin user can find browsers at runtime
+# Item 3 build perf: BuildKit cache mount on /opt/pw-cache avoids re-downloading
+# the ~1.1GB Chromium binary on every cold rebuild — only a fast local copy occurs
+# on warm builds. Gated by INSTALL_PLAYWRIGHT ARG.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN --mount=type=cache,target=/opt/pw-cache \
+    if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+        PLAYWRIGHT_BROWSERS_PATH=/opt/pw-cache playwright install chromium && \
+        playwright install-deps chromium && \
+        mkdir -p /opt/playwright-browsers && \
+        cp -r /opt/pw-cache/. /opt/playwright-browsers/ && \
+        chmod -R 755 /opt/playwright-browsers; \
+    fi
 
 # Set working directory
 WORKDIR /app
