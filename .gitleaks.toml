@@ -87,6 +87,12 @@ id = "vertex-ai-credentials-json"
 description = "Vertex AI / GCP service account credentials JSON (inline)"
 regex = '''"type"\s*:\s*"service_account"'''
 keywords = ["service_account"]
+[rules.allowlist]
+  # These files programmatically build credential dicts from variables — not actual secrets
+  paths = [
+    '''backend/api/routes_provider_instances\.py$''',
+    '''backend/agent/ai_client\.py$''',
+  ]
 
 # ============================================
 # Allowlist - files/patterns that should be ignored

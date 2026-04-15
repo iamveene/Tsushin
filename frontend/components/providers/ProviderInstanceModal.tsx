@@ -262,6 +262,11 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
           base_url: baseUrl || undefined,
           api_key: isVertexAi ? (vertexPrivateKey || undefined) : (apiKey || undefined),
           model: testModel,
+          extra_config: isVertexAi ? {
+            project_id: vertexProjectId,
+            region: vertexRegion,
+            sa_email: vertexSaEmail,
+          } : undefined,
         })
       }
       setTestResult(result)
