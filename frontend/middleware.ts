@@ -3,6 +3,19 @@ import type { NextRequest } from 'next/server'
 
 export function middleware(request: NextRequest) {
   const { nextUrl } = request
+
+  // Redirect /login to /auth/login (or straight to / if already authenticated)
+  if (nextUrl.pathname === '/login') {
+    const hasSession = request.cookies.has('tsushin_session')
+    const target = hasSession ? '/' : '/auth/login'
+    return NextResponse.redirect(new URL(target, request.url))
+  }
+
+  // Redirect authenticated users away from login page
+  if (nextUrl.pathname === '/auth/login' && request.cookies.has('tsushin_session')) {
+    return NextResponse.redirect(new URL('/', request.url))
+  }
+
   const sslMode = (process.env.TSN_SSL_MODE || '').toLowerCase()
   // BUG-444: SSL redirect depends solely on the runtime TSN_SSL_MODE env var.
   // Previously also checked NEXT_PUBLIC_API_URL.startsWith('https://'), but
