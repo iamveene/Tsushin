@@ -2523,6 +2523,21 @@ export interface UserUpdateRequest {
   role_name?: string
 }
 
+// Canonical vendor label map — used by any component that needs human-readable vendor names
+// Keep in sync with ProviderInstanceModal.tsx VENDORS array
+export const VENDOR_LABELS: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  gemini: 'Google Gemini',
+  groq: 'Groq',
+  grok: 'Grok (xAI)',
+  openrouter: 'OpenRouter',
+  deepseek: 'DeepSeek',
+  vertex_ai: 'Vertex AI (Google Cloud)',
+  ollama: 'Ollama (Local)',
+  custom: 'Custom',
+}
+
 // Provider Instances
 export interface ProviderInstance {
   id: number
@@ -6742,7 +6757,7 @@ export const api = {
     return res.json()
   },
 
-  async testProviderConnectionRaw(data: { vendor: string, base_url?: string, api_key?: string, model?: string }): Promise<{ success: boolean; message: string; latency_ms?: number }> {
+  async testProviderConnectionRaw(data: { vendor: string, base_url?: string, api_key?: string, model?: string, extra_config?: Record<string, string> }): Promise<{ success: boolean; message: string; latency_ms?: number }> {
     const res = await authenticatedFetch(`${API_URL}/api/provider-instances/test-connection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

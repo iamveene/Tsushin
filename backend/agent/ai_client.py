@@ -1223,7 +1223,7 @@ class AIClient:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
             response = await client.post(url, json=payload, headers=headers)
             if response.status_code != 200:
                 error_body = response.text[:500]
@@ -1284,7 +1284,7 @@ class AIClient:
         total_tokens = {"prompt": 0, "completion": 0}
 
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
                 async with client.stream("POST", url, json=payload, headers=headers) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():

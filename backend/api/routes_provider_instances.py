@@ -8,7 +8,7 @@ servers, Ollama instances, or custom LLM gateways).
 """
 
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -99,6 +99,7 @@ class TestConnectionRawRequest(BaseModel):
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     model: Optional[str] = None  # Model to test — avoids relying on hardcoded fallback
+    extra_config: Optional[Dict[str, Any]] = None  # Provider-specific config (e.g. Vertex AI project_id, sa_email, region)
 
 
 class TestConnectionSavedRequest(BaseModel):
@@ -705,6 +706,52 @@ async def test_provider_connection_raw(
             return TestConnectionResponse(
                 success=False,
                 message=f"Invalid base URL: {e}",
+            )
+
+    # Vertex AI raw test: validate credentials via OAuth token refresh (fast, no model call needed)
+    if vendor == "vertex_ai":
+        ec = data.extra_config or {}
+        project_id = ec.get("project_id", "")
+        region = ec.get("region", "us-east5")
+        sa_email = ec.get("sa_email", "")
+        private_key_raw = api_key or ""
+
+        if not project_id or not sa_email or not private_key_raw:
+            return TestConnectionResponse(
+                success=False,
+                message="Vertex AI requires project_id, service_account_email, and private_key in the form fields.",
+            )
+
+        start_time = time.time()
+        try:
+            from google.oauth2 import service_account as sa_module
+            from google.auth.transport.requests import Request as AuthRequest
+
+            formatted_key = private_key_raw.replace("\\n", "\n")
+            credentials_info = {
+                "type": "service_account",
+                "project_id": project_id,
+                "client_email": sa_email,
+                "private_key": formatted_key,
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+            creds = sa_module.Credentials.from_service_account_info(
+                credentials_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            creds.refresh(AuthRequest())
+            latency_ms = int((time.time() - start_time) * 1000)
+            return TestConnectionResponse(
+                success=True,
+                message=f"Vertex AI credentials valid — project={project_id}, region={region}",
+                latency_ms=latency_ms,
+            )
+        except Exception as e:
+            latency_ms = int((time.time() - start_time) * 1000)
+            logger.error(f"Vertex AI credential test failed: {e}")
+            return TestConnectionResponse(
+                success=False,
+                message=f"Vertex AI credential validation failed: {str(e)}",
+                latency_ms=latency_ms,
             )
 
     # Determine a test model: prefer user-supplied model, then hardcoded fallback
