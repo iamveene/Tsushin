@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Docs Structure Reorganization (`develop`, 2026-04-15)
+
+Moved the canonical markdown documentation set into `docs/` to keep the repository root focused on runtime and project-entry files. Added `docs/README.md` as the docs index, updated repository and tooling references to point at the canonical `docs/` paths, kept root compatibility stubs for older links, and repointed the backend help-panel mount so `/app/USER_GUIDE.md` still resolves inside containers.
+
 ### Bug Fixes — BUG-531 through BUG-537 (`develop`, 2026-04-15)
 
 Resolved all 7 open bugs surfaced by the fresh-install v0.6.0 regression audit.
@@ -20,9 +24,9 @@ Resolved all 7 open bugs surfaced by the fresh-install v0.6.0 regression audit.
 - **BUG-536** — The onboarding tour re-appeared on every page reload because `tourStartedRef` (an in-memory ref) was reset on each mount. Fixed by persisting a `tsushin_onboarding_started:{userId}` key to localStorage when the tour first auto-starts, reading it back on mount to restore `tourStartedRef`, and clearing it on dismiss/skip/complete. Fix in `frontend/contexts/OnboardingContext.tsx`.
 
 **Documentation fixes:**
-- **BUG-533** — Added a path-correction table to `documentation.md` §25.4 mapping each legacy 404 path to its actual working equivalent.
-- **BUG-535** — Added explicit `-H "Content-Type: application/x-www-form-urlencoded"` to the OAuth2 curl examples in both `CLAUDE.md` and `documentation.md` §25.1. Omitting this header causes FastAPI to return a misleading 422.
-- **BUG-537** — Added a "Fresh-install note" to `documentation.md` §27 explaining that the tester MCP is not bundled by default and documenting the manual provisioning steps via Hub → Communication → WhatsApp.
+- **BUG-533** — Added a path-correction table to `docs/DOCUMENTATION.md` §25.4 mapping each legacy 404 path to its actual working equivalent.
+- **BUG-535** — Added explicit `-H "Content-Type: application/x-www-form-urlencoded"` to the OAuth2 curl examples in both `CLAUDE.md` and `docs/DOCUMENTATION.md` §25.1. Omitting this header causes FastAPI to return a misleading 422.
+- **BUG-537** — Added a "Fresh-install note" to `docs/DOCUMENTATION.md` §27 explaining that the tester MCP is not bundled by default and documenting the manual provisioning steps via Hub → Communication → WhatsApp.
 
 ### Documentation Alignment Pass (`develop`, 2026-04-15)
 
