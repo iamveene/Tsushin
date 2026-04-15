@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Seed & Init Fixes (`develop`, 2026-04-15)
+
+- **Subscription plans not seeded on PostgreSQL fresh installs (CRITICAL):** Plans were only inserted via the SQLite-only migration (`migrations/add_plans_and_sso.py`), leaving the `subscription_plan` table empty on every Postgres-backed deployment. Added `backend/services/plan_seeding.py` with the canonical plan definitions and wired it into `db.init_database()` so plans are seeded idempotently on every startup for both backends. Migration `0033` backfills `tenant.plan_id` for tenants created before this fix.
+- **`tenant.plan_id` FK not set on signup:** `auth_service.signup()` set the legacy `plan` string but left `plan_id` NULL. Updated to resolve the `free` plan row and populate `plan_id` on tenant creation.
+- **Default agent limit raised to 10:** Existing tenants capped at 5 agents (old model default) are bumped to 10 via migration `0032`. `auth_service.py` and `models_rbac.py` defaults already reflect 10 for new installs.
+- **Dynamic provider/model dropdowns:** Provider and model selectors in all agent creation UIs (`/agents` Create modal, Studio `+` button, `AgentConfigurationManager`, Playground config panel) now fetch from configured Hub instances at runtime. No more hardcoded vendor lists — adding a new provider in Hub > AI Providers automatically makes it available everywhere. Shared `VENDOR_LABELS` map exported from `client.ts`.
+
 ### Ubuntu VM v0.6.0 Full E2E Audit (`develop`, 2026-04-15)
 
 Comprehensive fresh-install end-to-end QA on Ubuntu 24.04 aarch64 (VM `10.211.55.5`, HTTP mode). All AI providers configured: Gemini (default), OpenAI, Anthropic, Vertex AI (us-east5), Brave Search, Tavily.

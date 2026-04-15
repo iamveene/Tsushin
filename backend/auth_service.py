@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from models_rbac import User, Tenant, Role, UserRole, PasswordResetToken, UserInvitation
+from models_rbac import User, Tenant, Role, UserRole, PasswordResetToken, UserInvitation, SubscriptionPlan
 from auth_utils import (
     hash_password,
     hash_token,
@@ -146,12 +146,19 @@ class AuthService:
         tenant_id = f"tenant_{timestamp}_{random_suffix}"
         slug = self.generate_tenant_slug(org_name)
 
+        # Resolve the 'free' plan FK — plan_seeding runs before any signup so
+        # the row should always exist; fall back gracefully if it doesn't yet.
+        free_plan = self.db.query(SubscriptionPlan).filter_by(name='free').first()
+
         # Create tenant
+        # NOTE: max_users/max_agents/max_monthly_requests must stay in sync with
+        # models_rbac.py Tenant column defaults (lines 25-27).
         tenant = Tenant(
             id=tenant_id,
             name=org_name,
             slug=slug,
-            plan='free',  # Default plan
+            plan='free',
+            plan_id=free_plan.id if free_plan else None,
             max_users=5,
             max_agents=10,
             max_monthly_requests=10000,

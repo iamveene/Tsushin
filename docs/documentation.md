@@ -301,6 +301,38 @@ GCP provider features (`services/secret_provider.py:148-267`):
 
 **Secret naming:** A key `JWT_SECRET_KEY` with prefix `tsushin` becomes GCP secret `tsushin_JWT_SECRET_KEY` (or similar — confirm naming convention with `services/secret_provider.py`). Source: `backend/settings.py:142-144`.
 
+### 4.5 Startup & Seeding Sequence
+
+`db.init_database()` runs on every backend startup (called from `main.py`). It is fully idempotent — running it on an already-initialised DB is safe.
+
+**PostgreSQL path:**
+1. `alembic upgrade head` — applies any pending schema migrations.
+2. Fall-through to shared seeding block below.
+
+**SQLite path (dev / fallback):**
+1. `Base.metadata.create_all()` — creates tables from ORM metadata.
+2. Legacy inline migrations (FTS5, sentinel column, MCP auth, Discord/Slack, remote-access).
+3. Fall-through to shared seeding block below.
+
+**Shared seeding block (both backends):**
+
+| Step | Function | File | Notes |
+|---|---|---|---|
+| Default config | inline | `db.py` | Creates `Config` row if none exists. |
+| RBAC defaults | `seed_rbac_defaults()` | `db.py` | Roles + permissions; idempotent. |
+| RBAC upgrade | `ensure_rbac_permissions()` | `db.py` | Adds any permissions missing from older installs. |
+| Slash commands | `seed_slash_commands()` | `db.py` | 36 system-wide commands (en, pt, …). |
+| Project command patterns | `seed_project_command_patterns()` | `db.py` | 10 patterns. |
+| Personas | `seed_default_personas()` | `services/persona_seeding.py` | 4 system personas. |
+| Tone presets | `seed_default_tone_presets()` | `services/tone_preset_seeding.py` | 4 presets. |
+| Shell security patterns | `seed_default_security_patterns()` | `services/shell_pattern_seeding.py` | |
+| Sentinel config | `seed_sentinel_config()` + migrations | `services/sentinel_seeding.py` | Detection types, security profiles. |
+| **Subscription plans** | `seed_subscription_plans()` | `services/plan_seeding.py` | 4 plans: free / pro / team / enterprise. **Added v0.6.1** — fixes PostgreSQL fresh-install gap. |
+
+**Per-startup jobs** (called from `app.py` lifespan, not `init_database`):
+- `backfill_shell_skill_all_tenants()` — ensures every agent has a shell skill row.
+- `SandboxedToolSeeder.seed_all_tenants()` — upserts tool manifests from `backend/tools/manifests/*.yaml`.
+
 ---
 
 ---
@@ -389,8 +421,8 @@ Tenants are first-class entities defined by the `tenant` table (`backend/models_
 |---|---|
 | `id` (String(50)) | Tenant identifier (e.g. `tenant_20251202232822`). |
 | `slug` (unique) | URL-safe identifier. |
-| `plan` / `plan_id` | Legacy plan name or FK to `subscription_plan` row. |
-| `max_users`, `max_agents`, `max_monthly_requests` | Quota columns. |
+| `plan` / `plan_id` | Legacy plan string (`'free'`) **and** FK to `subscription_plan` row. Both are populated on signup. Plans are seeded at startup by `backend/services/plan_seeding.py`. |
+| `max_users`, `max_agents`, `max_monthly_requests` | Quota columns. Defaults: `max_users=5`, `max_agents=10`, `max_monthly_requests=10000`. |
 | `status` | `active`, `suspended`, or `trial`. |
 | `slash_commands_default_policy` | `enabled_for_known` (default) / `enabled_for_all` / `disabled`. |
 | `audit_retention_days` | Default 90. |
@@ -1781,7 +1813,13 @@ From `backend/services/provider_instance_service.py:20-32`:
 
 An Ollama default is auto-provisioned per tenant on demand via `ensure_ollama_instance()` (`provider_instance_service.py:37-65`), seeded from `Config.ollama_base_url` or the default. In Docker-on-Linux VM setups, `host.docker.internal` is the preferred endpoint; if that hostname is unavailable on the target host, point the provider instance at the Docker bridge gateway IP instead and retest from the Hub UI.
 
-### 19.3 Model Discovery
+### 19.3 Dynamic Provider & Model Dropdowns
+
+All agent creation and configuration UIs — the `/agents` Create Agent modal, the Studio `+` button (`StudioAgentSelector`), `AgentConfigurationManager`, and the Playground config panel — fetch the provider list **at runtime** from `GET /api/provider-instances`. The dropdown shows only vendors that have at least one active instance configured in Hub > AI Providers. Models shown for each vendor come from that instance's `available_models` list (set during hub configuration or model discovery).
+
+This means: adding a new provider in Hub automatically makes it available everywhere without any code change. The shared `VENDOR_LABELS` map (`frontend/lib/client.ts`) provides human-readable vendor names.
+
+### 19.4 Model Discovery
 
 `backend/services/model_discovery_service.py` auto-fetches the vendor's `/models` endpoint (for OpenAI-compatible providers) and populates `available_models`. Used by the frontend Provider form to let the user pick which models to expose.
 

@@ -11,6 +11,7 @@ from models_rbac import Role, Permission, RolePermission
 from services.persona_seeding import seed_default_personas
 from services.tone_preset_seeding import seed_default_tone_presets
 from services.shell_pattern_seeding import seed_default_security_patterns
+from services.plan_seeding import seed_subscription_plans
 
 
 def get_engine(database_url: str):
@@ -1587,6 +1588,9 @@ def init_database(engine):
         # Phase v1.6.0: Sentinel Security Profiles
         from services.sentinel_seeding import migrate_to_profiles
         migrate_to_profiles(session)
+
+        # Seed default subscription plans (idempotent — skips existing plans)
+        seed_subscription_plans(session)
 
         # Cleanup deprecated weather skill records
         try:
