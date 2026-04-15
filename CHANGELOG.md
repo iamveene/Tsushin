@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Build Performance Quick-Wins (`develop`, 2026-04-15)
+
+Five Dockerfile optimizations to reduce cold-build times and BuildKit cache churn:
+
+- **Item 1 — Toolbox pip cache mount:** Added `--mount=type=cache,target=/root/.cache/pip` to `Dockerfile.toolbox` pip install (previously used `--no-cache-dir`, defeating BuildKit layer caching).
+- **Item 2 — Split requirements (already done):** `requirements-base.txt`, `requirements-app.txt`, `requirements-optional.txt`, `requirements-phase4.txt` already in place; verified all user-listed optional packages (`kubernetes`, `google-cloud-secret-manager`, `qdrant-client`, `pinecone`, `pymongo`) are controlled by the existing `INSTALL_OPTIONAL_DEPS` ARG.
+- **Item 3 — Playwright base image:** Runtime stage switched from `python:3.11-slim` to `mcr.microsoft.com/playwright/python:v1.48.0-jammy`. Removes the 14-package Playwright system-dep `apt-get` block and the `playwright install chromium` step (~1.1 GB browser download) — Chromium + all deps are pre-installed in the base layer. `PLAYWRIGHT_BROWSERS_PATH` updated from `/opt/playwright-browsers` to `/ms-playwright` (base-image path).
+- **Item 4 — Optional deps behind build args (already done):** `INSTALL_OPTIONAL_DEPS=true` ARG confirmed to cover all five optional packages; no change needed.
+- **Item 5 — Nuclei (and all PD tools) download cache mount:** `Dockerfile.toolbox` now caches all four ProjectDiscovery binary downloads (nuclei, katana, httpx, subfinder) via `--mount=type=cache,target=/tmp/pd-cache` with a file-existence check. Subsequent builds reuse cached zips instead of re-downloading from GitHub Releases.
+
+Also added `# syntax=docker/dockerfile:1.4` header to `Dockerfile.toolbox` to enable BuildKit cache-mount syntax.
+
 ### Bug Sprint — `BUG-514` to `BUG-525` resolved (`develop`, 2026-04-11)
 
 Closed the 12 open bugs from `BUGS.md` in four coordinated clusters covering frontend auth/onboarding UX, Remote Access, backend app logic, and MCP runtime/tester/toolbox behavior.
