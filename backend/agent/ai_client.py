@@ -532,21 +532,34 @@ class AIClient:
             generation_config=generation_config,
         )
 
-        # Handle multi-part responses from Gemini (fix for "response.text quick accessor" error)
+        # Handle multi-part responses from Gemini (thinking models like 2.5 return
+        # thought parts + text parts; the .text quick accessor raises ValueError).
         try:
             answer = response.text
-        except ValueError:
-            # Multi-part response - extract text from all parts
+        except (ValueError, AttributeError):
             self.logger.warning("Gemini returned multi-part response, extracting text from parts")
             answer = ""
-            if hasattr(response, 'parts') and response.parts:
-                answer = "".join(part.text for part in response.parts if hasattr(part, 'text'))
-            elif hasattr(response, 'candidates') and response.candidates:
-                # Extract from candidates
-                for candidate in response.candidates:
-                    if hasattr(candidate, 'content') and candidate.content:
-                        if hasattr(candidate.content, 'parts'):
-                            answer += "".join(part.text for part in candidate.content.parts if hasattr(part, 'text'))
+            try:
+                candidates = getattr(response, 'candidates', None) or []
+                for candidate in candidates:
+                    content = getattr(candidate, 'content', None)
+                    if not content:
+                        continue
+                    for part in getattr(content, 'parts', []):
+                        if getattr(part, 'thought', False):
+                            continue
+                        text = getattr(part, 'text', None)
+                        if text:
+                            answer += text
+                if not answer:
+                    for part in getattr(response, 'parts', []):
+                        if getattr(part, 'thought', False):
+                            continue
+                        text = getattr(part, 'text', None)
+                        if text:
+                            answer += text
+            except Exception as e:
+                self.logger.error(f"Failed extracting text from Gemini response: {e}")
 
             if not answer:
                 self.logger.error("Could not extract text from multi-part Gemini response")
@@ -1194,11 +1207,17 @@ class AIClient:
 
     async def _call_vertex_anthropic(self, system_prompt: str, user_message: str) -> Dict:
         """Call Anthropic Claude via Vertex AI rawPredict endpoint."""
+        import time as _time
+        _t0 = _time.time()
         print(f"  📡 Calling Vertex AI (Anthropic): model={self.model_name}, region={self.vertex_region}")
 
-        # Refresh OAuth2 token
+        # Refresh OAuth2 token — NOTE: AuthRequest() is synchronous; run in executor to avoid blocking event loop
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
         if not self._vertex_credentials.valid:
-            self._vertex_credentials.refresh(self._vertex_auth_request)
+            print(f"  🔑 Vertex AI: token refresh needed (valid={self._vertex_credentials.valid}), t={int((_time.time()-_t0)*1000)}ms")
+            await loop.run_in_executor(None, self._vertex_credentials.refresh, self._vertex_auth_request)
+            print(f"  🔑 Vertex AI: token refresh done, t={int((_time.time()-_t0)*1000)}ms")
 
         # Build the rawPredict URL
         url = (
@@ -1223,8 +1242,10 @@ class AIClient:
             "Content-Type": "application/json",
         }
 
+        print(f"  📤 Vertex AI: sending POST request, payload_len={len(str(payload))}, t={int((_time.time()-_t0)*1000)}ms")
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
             response = await client.post(url, json=payload, headers=headers)
+            print(f"  📥 Vertex AI: got HTTP {response.status_code}, t={int((_time.time()-_t0)*1000)}ms")
             if response.status_code != 200:
                 error_body = response.text[:500]
                 self.logger.error(f"Vertex AI Anthropic error {response.status_code}: {error_body}")
@@ -1256,8 +1277,11 @@ class AIClient:
         """Stream tokens from Anthropic Claude via Vertex AI rawPredict with SSE streaming."""
         print(f"  📡 Streaming Vertex AI (Anthropic): model={self.model_name}")
 
+        import asyncio as _asyncio
         if not self._vertex_credentials.valid:
-            self._vertex_credentials.refresh(self._vertex_auth_request)
+            await _asyncio.get_event_loop().run_in_executor(
+                None, self._vertex_credentials.refresh, self._vertex_auth_request
+            )
 
         url = (
             f"https://{self.vertex_region}-aiplatform.googleapis.com/v1/"

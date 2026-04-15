@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Playground & AI Client Fixes (`develop`, 2026-04-15)
+
+- **Playground stuck at "Processing your message..." when WebSocket unavailable (CRITICAL):** The HTTP fallback path used async queue mode, which depends on WebSocket for result delivery. When `wss://` fails (e.g. self-signed cert not trusted for programmatic WebSocket connections), the queue result notification never reaches the frontend. Fixed: HTTP fallback now uses `?sync=true` when WebSocket is disconnected, so the LLM response returns inline in the HTTP response. No WebSocket dependency for basic chat functionality.
+- **Gemini 2.5 "thinking" models return empty responses:** Multi-part response extraction failed for Gemini 2.5 thinking models that return `thought` parts alongside text parts. The `response.text` quick accessor raises `ValueError`, and the fallback extraction used `hasattr(part, 'text')` which doesn't handle all SDK variations. Fixed: robust extraction that skips `thought` parts and uses `getattr()` safely with inner exception handling.
+
 ### Seed & Init Fixes (`develop`, 2026-04-15)
 
 - **Subscription plans not seeded on PostgreSQL fresh installs (CRITICAL):** Plans were only inserted via the SQLite-only migration (`migrations/add_plans_and_sso.py`), leaving the `subscription_plan` table empty on every Postgres-backed deployment. Added `backend/services/plan_seeding.py` with the canonical plan definitions and wired it into `db.init_database()` so plans are seeded idempotently on every startup for both backends. Migration `0033` backfills `tenant.plan_id` for tenants created before this fix.

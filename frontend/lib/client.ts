@@ -880,6 +880,10 @@ export interface Agent {
   // Phase 21: Provider Instance
   provider_instance_id?: number | null  // Link to a specific provider instance
 
+  // Vector Store (per-agent override)
+  vector_store_instance_id?: number | null
+  vector_store_mode?: string  // "override" | "complement" | "shadow"
+
   // Agent avatar
   avatar?: string | null
 
@@ -3145,6 +3149,8 @@ export const api = {
     webhook_integration_id: number | null
     is_active: boolean
     is_default: boolean
+    vector_store_instance_id: number | null
+    vector_store_mode: string
   }>): Promise<Agent> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${id}`, {
       method: 'PUT',
@@ -4695,8 +4701,11 @@ export const api = {
     return res.json()
   },
 
-  async sendPlaygroundMessage(agent_id: number, message: string, thread_id?: number): Promise<PlaygroundChatResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/playground/chat`, {
+  async sendPlaygroundMessage(agent_id: number, message: string, thread_id?: number, sync?: boolean): Promise<PlaygroundChatResponse> {
+    const url = sync
+      ? `${API_URL}/api/playground/chat?sync=true`
+      : `${API_URL}/api/playground/chat`
+    const res = await authenticatedFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent_id, message, thread_id }),

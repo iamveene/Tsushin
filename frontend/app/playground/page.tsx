@@ -1069,19 +1069,20 @@ export default function PlaygroundPage() {
         }
 
         if (!sentViaWebSocket) {
-          if (process.env.NODE_ENV === 'development') console.log('[Playground] Sending via HTTP (fallback)')
+          const wsAvailable = useWebSocket && websocketConnection.isConnected
+          if (process.env.NODE_ENV === 'development') console.log('[Playground] Sending via HTTP (fallback), sync:', !wsAvailable)
 
-          // Send as regular message to agent with thread isolation (HTTP fallback)
+          // When WebSocket is unavailable, use sync mode so the response
+          // comes back inline — no WebSocket needed for delivery.
           const response = await api.sendPlaygroundMessage(
             selectedAgentId,
             userMessage,
-            activeThreadId || undefined  // Phase 14.1: Thread-specific messaging
+            activeThreadId || undefined,
+            !wsAvailable
           )
 
           if (response.status === 'queued' && response.queue_id) {
-            // Message Queue: message was enqueued for async processing
             console.log('[Playground] Message queued:', response.queue_id, 'position:', response.position)
-            // Show a queued indicator as a temporary assistant message
             const queueMsgId = `queue_${response.queue_id}`
             const queueMsg: PlaygroundMessage = {
               role: 'assistant',
@@ -1092,8 +1093,6 @@ export default function PlaygroundPage() {
               message_id: queueMsgId,
             }
             setMessages((prev) => [...prev, queueMsg])
-            // The queue worker will send the actual response via WebSocket
-            // (queue_message_completed event) which will replace this placeholder
           } else if (response.status === 'success' && response.message) {
           // Phase 14.2 FIX: Refresh messages from backend to get correct message_ids
           // This ensures edit/regenerate operations use the IDs stored in the database
