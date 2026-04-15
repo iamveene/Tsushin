@@ -58,7 +58,7 @@ export default function GlobalUsersPage() {
         page,
         page_size: pageSize,
       })
-      setUsers(response.users)
+      setUsers(response.items)
       setTotal(response.total)
     } catch (err: any) {
       console.error('Failed to fetch users:', err)
@@ -76,7 +76,7 @@ export default function GlobalUsersPage() {
         api.getTenants({ page_size: 100 }),
       ])
       setStats(statsRes)
-      setTenants(tenantsRes.tenants)
+      setTenants(tenantsRes.items)
     } catch (err) {
       console.error('Failed to fetch stats/tenants:', err)
     }

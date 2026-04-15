@@ -75,7 +75,7 @@ class TenantResponse(BaseModel):
 
 
 class TenantListResponse(BaseModel):
-    tenants: List[TenantResponse]
+    items: List[TenantResponse]
     total: int
     page: int
     page_size: int
@@ -196,7 +196,7 @@ async def list_tenants(
     tenants = query.order_by(Tenant.created_at.desc()).offset(offset).limit(page_size).all()
 
     return TenantListResponse(
-        tenants=[tenant_to_response(t, db) for t in tenants],
+        items=[tenant_to_response(t, db) for t in tenants],
         total=total,
         page=page,
         page_size=page_size,

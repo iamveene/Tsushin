@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Bug Fixes — BUG-531 through BUG-537 (`develop`, 2026-04-15)
+
+Resolved all 7 open bugs surfaced by the fresh-install v0.6.0 regression audit.
+
+**Backend fixes:**
+- **BUG-531** — `GET /api/personas` (no trailing slash) was issuing a 307 redirect that dropped the `Authorization` header. Fixed by stacking a second `@router.get("", include_in_schema=False)` decorator on the list endpoint in `routes_personas.py` and setting `redirect_slashes=False` on the router. Both `/api/personas` and `/api/personas/` now return 200 directly.
+- **BUG-532** — `GET /api/personas/` and `GET /api/tones` returned empty lists because the `filter_by_tenant` call was missing `include_shared=True`, excluding system presets with `tenant_id = NULL`. Added `include_shared=True` to `routes_personas.py:184` and `routes_agents.py:286`.
+- **BUG-534** — `GET /api/tenants/` and `GET /api/admin/users/` returned entity-keyed pagination objects (`tenants`, `users`) instead of the standard `items` key. Renamed fields in `TenantListResponse` and `GlobalUserListResponse` and updated all callers in the frontend (`client.ts`, `system/tenants/page.tsx`, `system/users/page.tsx`).
+
+**Frontend fixes:**
+- **BUG-536** — The onboarding tour re-appeared on every page reload because `tourStartedRef` (an in-memory ref) was reset on each mount. Fixed by persisting a `tsushin_onboarding_started:{userId}` key to localStorage when the tour first auto-starts, reading it back on mount to restore `tourStartedRef`, and clearing it on dismiss/skip/complete. Fix in `frontend/contexts/OnboardingContext.tsx`.
+
+**Documentation fixes:**
+- **BUG-533** — Added a path-correction table to `documentation.md` §25.4 mapping each legacy 404 path to its actual working equivalent.
+- **BUG-535** — Added explicit `-H "Content-Type: application/x-www-form-urlencoded"` to the OAuth2 curl examples in both `CLAUDE.md` and `documentation.md` §25.1. Omitting this header causes FastAPI to return a misleading 422.
+- **BUG-537** — Added a "Fresh-install note" to `documentation.md` §27 explaining that the tester MCP is not bundled by default and documenting the manual provisioning steps via Hub → Communication → WhatsApp.
+
 ### Documentation Alignment Pass (`develop`, 2026-04-15)
 
 Aligned the repository docs with the current `develop` runtime and setup flow. Updated the README, comprehensive docs, user guide, Docker deployment guide, and backend service docs to reflect Next.js 16, the current `/setup` behavior, Docker Compose v2 rebuild syntax, the absence of a root `testing` profile, current provider/tester surfaces, and the external `tsushin-network` rebuild caveats.

@@ -61,7 +61,7 @@ export default function TenantsPage() {
         status: filterStatus !== 'all' ? filterStatus : undefined,
         plan: filterPlan !== 'all' ? filterPlan : undefined,
       })
-      setTenants(response.tenants)
+      setTenants(response.items)
       setTotal(response.total)
     } catch (err) {
       console.error('Failed to fetch tenants:', err)

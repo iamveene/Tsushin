@@ -2489,7 +2489,7 @@ export interface GlobalUser {
 }
 
 export interface GlobalUserListResponse {
-  users: GlobalUser[]
+  items: GlobalUser[]
   total: number
   page: number
   page_size: number
@@ -5063,7 +5063,7 @@ export const api = {
     status?: string
     plan?: string
   }): Promise<{
-    tenants: TenantInfo[]
+    items: TenantInfo[]
     total: number
     page: number
     page_size: number

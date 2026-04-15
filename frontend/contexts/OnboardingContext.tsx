@@ -45,12 +45,17 @@ const OnboardingContext = createContext<OnboardingContextType | undefined>(undef
 // BUG-319: Reduced from 9 to 8 (step 9 "Setup Checklist" removed — it duplicated GettingStartedChecklist)
 const TOTAL_STEPS = 8
 const LEGACY_STORAGE_KEY = 'tsushin_onboarding_completed'
+const STARTED_KEY_PREFIX = 'tsushin_onboarding_started'
 
 function getStorageKey(userId: number | null): string | null {
   if (userId === null) {
     return null
   }
   return `${LEGACY_STORAGE_KEY}:${userId}`
+}
+
+function getStartedKey(storageKey: string): string {
+  return storageKey.replace(LEGACY_STORAGE_KEY, STARTED_KEY_PREFIX)
 }
 
 function getCompletedForUser(storageKey: string): boolean {
@@ -173,10 +178,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     }
 
     const completed = getCompletedForUser(storageKey)
+    // BUG-536: Restore "started" state from localStorage so page reloads don't restart the tour
+    const previouslyStarted = !completed && localStorage.getItem(getStartedKey(storageKey)) === 'true'
 
     tourDismissedRef.current = completed
     if (!completed) {
-      tourStartedRef.current = false
+      tourStartedRef.current = previouslyStarted
     }
     queueMicrotask(() => {
       setState(prev => {
@@ -195,6 +202,10 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
           return
         }
         tourStartedRef.current = true
+        // BUG-536: Persist "started" state so page reloads don't restart the tour from scratch
+        if (activeStorageKeyRef.current) {
+          localStorage.setItem(getStartedKey(activeStorageKeyRef.current), 'true')
+        }
         setState(prev => {
           if (!prev.hasCompletedOnboarding) {
             return { ...prev, isActive: true, currentStep: 1, isMinimized: false }
@@ -250,6 +261,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const storageKey = activeStorageKeyRef.current
     if (storageKey) {
       localStorage.setItem(storageKey, 'true')
+      localStorage.removeItem(getStartedKey(storageKey))  // BUG-536: clear started flag
     }
     tourDismissedRef.current = true
     clearAutoStartTimer()
@@ -269,6 +281,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const storageKey = activeStorageKeyRef.current
     if (storageKey) {
       localStorage.setItem(storageKey, 'true')
+      localStorage.removeItem(getStartedKey(storageKey))  // BUG-536: clear started flag
     }
     tourDismissedRef.current = true
     clearAutoStartTimer()
@@ -285,6 +298,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const storageKey = activeStorageKeyRef.current
     if (storageKey) {
       localStorage.setItem(storageKey, 'true')
+      localStorage.removeItem(getStartedKey(storageKey))  // BUG-536: clear started flag
     }
     tourDismissedRef.current = true
     clearAutoStartTimer()

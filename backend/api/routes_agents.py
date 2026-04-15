@@ -283,7 +283,7 @@ def list_tone_presets(
     Phase 7.9.2: Returns presets for user's tenant AND shared (NULL tenant_id) presets.
     """
     query = db.query(TonePreset)
-    query = ctx.filter_by_tenant(query, TonePreset.tenant_id)
+    query = ctx.filter_by_tenant(query, TonePreset.tenant_id, include_shared=True)
     tones = query.order_by(TonePreset.is_system.desc(), TonePreset.name).all()
     return tones
 

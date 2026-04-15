@@ -24,7 +24,7 @@ from auth_dependencies import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/personas", tags=["personas"])
+router = APIRouter(prefix="/api/personas", tags=["personas"], redirect_slashes=False)
 
 # Global engine reference (set by main app.py)
 _engine = None
@@ -166,6 +166,7 @@ def to_persona_response(persona: Persona, db: Session) -> PersonaResponse:
 
 
 @router.get("/", response_model=List[PersonaResponse])
+@router.get("", response_model=List[PersonaResponse], include_in_schema=False)
 def get_personas(
     active_only: bool = False,
     db: Session = Depends(get_db),
@@ -181,7 +182,7 @@ def get_personas(
     query = db.query(Persona)
 
     # Apply tenant filtering - include tenant's personas AND shared (NULL tenant_id)
-    query = ctx.filter_by_tenant(query, Persona.tenant_id)
+    query = ctx.filter_by_tenant(query, Persona.tenant_id, include_shared=True)
 
     if active_only:
         query = query.filter(Persona.is_active == True)

@@ -50,7 +50,7 @@ class GlobalUserResponse(BaseModel):
 
 
 class GlobalUserListResponse(BaseModel):
-    users: List[GlobalUserResponse]
+    items: List[GlobalUserResponse]
     total: int
     page: int
     page_size: int
@@ -187,7 +187,7 @@ async def list_users(
     users = query.order_by(User.created_at.desc()).offset(offset).limit(page_size).all()
 
     return GlobalUserListResponse(
-        users=[user_to_response(u, db) for u in users],
+        items=[user_to_response(u, db) for u in users],
         total=total,
         page=page,
         page_size=page_size,
