@@ -55,7 +55,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # ============================================================================
 # Stage 2: Runtime - Minimal production image
 # ============================================================================
-FROM python:3.11-slim AS runtime
+# Playwright base includes Chromium + all system dependencies pre-installed,
+# eliminating the ~1.1GB browser download and 14-package apt-get on every cold build.
+# Python 3.11 matches the builder stage (python:3.11-slim) for venv compatibility.
+FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy AS runtime
 
 # Phase 9.3: Architecture detection for multi-platform support
 ARG TARGETARCH
@@ -103,28 +106,8 @@ RUN if [ "$INSTALL_FFMPEG" = "true" ]; then \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Optional: Playwright Chromium system dependencies
-RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
-        apt-get update && apt-get install -y --no-install-recommends \
-            libnss3 \
-            libnspr4 \
-            libatk1.0-0 \
-            libatk-bridge2.0-0 \
-            libcups2 \
-            libdrm2 \
-            libdbus-1-3 \
-            libxkbcommon0 \
-            libatspi2.0-0 \
-            libxcomposite1 \
-            libxdamage1 \
-            libxfixes3 \
-            libxrandr2 \
-            libgbm1 \
-            libpango-1.0-0 \
-            libcairo2 \
-            libasound2 \
-        && rm -rf /var/lib/apt/lists/*; \
-    fi
+# Playwright system deps + Chromium binary are pre-installed in the base image.
+# No manual apt-get or playwright install step needed (removed for build speed).
 
 
 # Create non-root user for security
@@ -140,14 +123,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install Playwright browser (Chromium only for smaller image size)
-# BUG-315 fix: Use shared path so non-root tsushin user can find browsers at runtime
-# Gated by INSTALL_PLAYWRIGHT ARG — Chromium binary is ~1.1GB
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
-        playwright install chromium && playwright install-deps chromium && \
-        chmod -R 755 /opt/playwright-browsers; \
-    fi
+# BUG-315 fix: Point to the pre-installed Chromium in the Playwright base image.
+# The mcr.microsoft.com/playwright/python image stores browsers at /ms-playwright.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Set working directory
 WORKDIR /app
