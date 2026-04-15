@@ -246,6 +246,8 @@ class ConversationSearchService:
 
         # Count total results
         # Note: SQL structure is static, only parameterized values vary
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+        # where_clause is built by _build_fts5_filter() with whitelist + regex validation (MED-003).
         count_sql = text(f"""
             SELECT COUNT(*)
             FROM conversation_search_fts
@@ -256,6 +258,8 @@ class ConversationSearchService:
 
         # Get results with highlighting
         # Note: SQL structure is static, only parameterized values vary
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+        # where_clause is built by _build_fts5_filter() with whitelist + regex validation (MED-003).
         search_sql = text(f"""
             SELECT
                 thread_id,

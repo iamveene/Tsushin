@@ -719,6 +719,8 @@ async def remove_team_member(
         ("telegram_bot_instance", "created_by"),
         ("google_oauth_credentials", "created_by"),
     ]:
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+        # tbl/col come from the literal (table, column) tuple above; uid is parameterized.
         ctx.db.execute(text(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = :uid"), {"uid": user_id})
     ctx.db.execute(text("UPDATE system_integration SET configured_by_global_admin = NULL WHERE configured_by_global_admin = :uid"), {"uid": user_id})
     ctx.db.execute(text("UPDATE tenant SET created_by_global_admin = NULL WHERE created_by_global_admin = :uid"), {"uid": user_id})

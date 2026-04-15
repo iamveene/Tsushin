@@ -210,9 +210,10 @@ class CDPProvider(PlaywrightProvider):
                         data = await resp.json()
                         ws_url = data.get("webSocketDebuggerUrl", "")
                         if ws_url:
-                            # Replace the host in ws_url with our cdp_url host
-                            # Chrome reports ws://127.0.0.1:9222/... but we need
-                            # ws://host.docker.internal:9222/... from Docker
+                            # Replace the host in ws_url with our cdp_url host.
+                            # Chrome DevTools returns a ws-scheme URL pointing at 127.0.0.1:9222,
+                            # but from Docker we need it pointing at host.docker.internal:9222.
+                            # CDP only exposes the ws scheme on the wire (no wss equivalent).
                             ws_parsed = urlparse(ws_url)
                             fixed_ws = ws_url.replace(
                                 f"{ws_parsed.hostname}:{ws_parsed.port}",

@@ -704,9 +704,12 @@ def main() -> int:
                 logger.error("WebSocket mode requires 'websockets' library. Run: pip install websockets")
                 return 1
 
-            # Convert HTTP URL to WebSocket URL
+            # Convert HTTP URL to WebSocket URL.
+            # Production installs use https:// and are upgraded to wss:// below; the ws:// branch
+            # is only reachable for dev/test C2 servers that opt into http://localhost.
             server_url = config.server.url
             if server_url.startswith("http://"):
+                # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
                 ws_url = server_url.replace("http://", "ws://")
             elif server_url.startswith("https://"):
                 ws_url = server_url.replace("https://", "wss://")

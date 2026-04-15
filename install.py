@@ -1308,6 +1308,9 @@ KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             for i in range(20):
                 try:
+                    # nosemgrep: python.requests.security.disabled-cert-validation.disabled-cert-validation
+                    # Local loopback health-check against Caddy `tls internal` self-signed cert.
+                    # No credentials transmitted; only status code is consumed.
                     response = requests.get(proxy_url, timeout=3, verify=False)
                     if response.status_code in [200, 308, 404]:
                         print_success("SSL proxy is healthy")
