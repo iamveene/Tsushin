@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { api, Agent, TonePreset, Persona, ProviderInstance } from '@/lib/client'
+import { useEffect, useMemo, useState } from 'react'
+import { api, Agent, TonePreset, Persona, ProviderInstance, VENDOR_LABELS } from '@/lib/client'
 import {
   InfoIcon, TargetIcon, TheaterIcon, BotIcon, KeyIcon, LightbulbIcon,
   SettingsIcon, ClipboardIcon, SparklesIcon, ScaleIcon, LinkIcon
@@ -10,55 +10,6 @@ import {
 interface Props {
   agentId: number
 }
-
-// Legacy tools (google_search, web_scraping) removed
-// Now handled by Skills system: web_search, web_scraping skills
-
-const MODEL_PROVIDERS = [
-  { value: 'anthropic', label: 'Anthropic', models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'] },
-  { value: 'openai', label: 'OpenAI', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'o4-mini', 'o3-mini'] },
-  { value: 'gemini', label: 'Google Gemini', models: ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'] },
-  { value: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { value: 'ollama', label: 'Ollama (Local)', models: [] as string[] },  // Populated dynamically from running Ollama instance
-  {
-    value: 'openrouter',
-    label: 'OpenRouter (100+ models)',
-    models: [
-      // Top 20 most popular models on OpenRouter
-      'google/gemini-2.5-flash',
-      'google/gemini-2.5-pro',
-      'anthropic/claude-3.5-sonnet',
-      'anthropic/claude-3-opus',
-      'openai/gpt-4o',
-      'openai/gpt-4-turbo',
-      'meta-llama/llama-3.3-70b-instruct',
-      'meta-llama/llama-3.1-405b-instruct',
-      'mistralai/mistral-large',
-      'mistralai/mixtral-8x22b-instruct',
-      'deepseek/deepseek-r1',
-      'deepseek/deepseek-chat',
-      'qwen/qwen-2.5-72b-instruct',
-      'cohere/command-r-plus',
-      'perplexity/llama-3.1-sonar-huge-128k-online',
-      'x-ai/grok-2',
-      'nvidia/llama-3.1-nemotron-70b-instruct',
-      'microsoft/wizardlm-2-8x22b',
-      'databricks/dbrx-instruct',
-      'nousresearch/hermes-3-llama-3.1-405b'
-    ]
-  },
-  {
-    value: 'vertex_ai',
-    label: 'Vertex AI (Google Cloud)',
-    models: [
-      'gemini-2.5-flash',
-      'gemini-2.5-pro',
-      'gemini-2.0-flash',
-      'claude-sonnet-4-6',
-      'claude-haiku-4-5-latest',
-    ]
-  }
-]
 
 export default function AgentConfigurationManager({ agentId }: Props) {
   const [agent, setAgent] = useState<Agent | null>(null)
@@ -77,6 +28,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   const [modelName, setModelName] = useState('gemini-2.5-pro')
   const [providerInstanceId, setProviderInstanceId] = useState<number | null>(null)
   const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
+  const [allInstances, setAllInstances] = useState<ProviderInstance[]>([])
   const [isActive, setIsActive] = useState(true)
   const [isDefault, setIsDefault] = useState(false)
 
@@ -98,9 +50,10 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [agentData, personasData] = await Promise.all([
+      const [agentData, personasData, allInstancesData] = await Promise.all([
         api.getAgent(agentId),
         api.getPersonas(true), // Only active personas
+        api.getProviderInstances(),  // All configured provider instances (no vendor filter)
       ])
 
       setAgent(agentData)
@@ -124,13 +77,9 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       setIsActive(agentData.is_active)
       setIsDefault(agentData.is_default)
 
-      // Load provider instances for the selected vendor
-      try {
-        const instances = await api.getProviderInstances(agentData.model_provider)
-        setProviderInstances(instances)
-      } catch {
-        setProviderInstances([])
-      }
+      // Store all instances and filter for the agent's current vendor
+      setAllInstances(allInstancesData)
+      setProviderInstances(allInstancesData.filter(i => i.vendor === agentData.model_provider))
 
       // Trigger configuration
       setTriggerDmEnabled(agentData.trigger_dm_enabled ?? null)
@@ -241,6 +190,16 @@ export default function AgentConfigurationManager({ agentId }: Props) {
     }
   }
 
+  // Vendors that have at least one configured instance, plus always include the current agent's vendor
+  const availableVendors = useMemo(() => {
+    const configured = [...new Set(allInstances.map(i => i.vendor))]
+    // Always include the agent's current vendor (even if it has no instances, to avoid breaking existing agents)
+    if (modelProvider && !configured.includes(modelProvider)) {
+      configured.push(modelProvider)
+    }
+    return configured.map(v => ({ value: v, label: VENDOR_LABELS[v] || v }))
+  }, [allInstances, modelProvider])
+
   const getAvailableModels = () => {
     // If an instance is selected and it has models, use those
     if (providerInstanceId) {
@@ -253,9 +212,11 @@ export default function AgentConfigurationManager({ agentId }: Props) {
     if (modelProvider === 'ollama') {
       return ollamaModels
     }
-    // Fall back to static MODEL_PROVIDERS list
-    const provider = MODEL_PROVIDERS.find(p => p.value === modelProvider)
-    return provider?.models || []
+    // Use all models from all configured instances for this vendor (deduplicated)
+    const vendorModels = [...new Set(providerInstances.flatMap(i => i.available_models))]
+    if (vendorModels.length > 0) return vendorModels
+    // Last resort: keep current model so the dropdown is never empty
+    return modelName ? [modelName] : []
   }
 
   if (loading) {
@@ -372,31 +333,28 @@ export default function AgentConfigurationManager({ agentId }: Props) {
               <label className="block text-sm font-medium mb-2">Provider</label>
               <select
                 value={modelProvider}
-                onChange={async (e) => {
+                onChange={(e) => {
                   const newVendor = e.target.value
                   setModelProvider(newVendor)
                   setProviderInstanceId(null)
+                  // Filter from already-loaded allInstances — no extra API call needed
+                  const vendorInsts = allInstances.filter(i => i.vendor === newVendor)
+                  setProviderInstances(vendorInsts)
                   if (newVendor === 'ollama') {
                     setModelName(ollamaModels[0] || '')
                   } else {
-                    const provider = MODEL_PROVIDERS.find(p => p.value === newVendor)
-                    if (provider && provider.models.length > 0) {
-                      setModelName(provider.models[0])
+                    const defaultInst = vendorInsts.find(i => i.is_default) || vendorInsts[0]
+                    if (defaultInst && defaultInst.available_models.length > 0) {
+                      setModelName(defaultInst.available_models[0])
+                      setProviderInstanceId(defaultInst.id)
                     }
-                  }
-                  // Fetch instances for the new vendor
-                  try {
-                    const instances = await api.getProviderInstances(newVendor)
-                    setProviderInstances(instances)
-                  } catch {
-                    setProviderInstances([])
                   }
                 }}
                 className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
               >
-                {MODEL_PROVIDERS.map((provider) => (
-                  <option key={provider.value} value={provider.value}>
-                    {provider.label}
+                {availableVendors.map((vendor) => (
+                  <option key={vendor.value} value={vendor.value}>
+                    {vendor.label}
                   </option>
                 ))}
               </select>
@@ -452,7 +410,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
               </select>
             ) : (
               <div className="px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-xs text-tsushin-slate">
-                No instances configured for {MODEL_PROVIDERS.find(p => p.value === modelProvider)?.label || modelProvider}.
+                No instances configured for {VENDOR_LABELS[modelProvider] || modelProvider}.
                 <a href="/hub" className="text-teal-400 hover:underline ml-1">Configure in Hub &gt; AI Providers</a>
               </div>
             )}

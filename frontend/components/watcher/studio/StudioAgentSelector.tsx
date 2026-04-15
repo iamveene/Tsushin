@@ -1,9 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Modal from '@/components/ui/Modal'
-import { api } from '@/lib/client'
-import type { Agent } from '@/lib/client'
+import { api, VENDOR_LABELS } from '@/lib/client'
+import type { Agent, ProviderInstance } from '@/lib/client'
 import { AgentAvatarIcon } from './avatars/AgentAvatars'
 
 interface StudioAgentSelectorProps {
@@ -17,20 +17,60 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newAgentName, setNewAgentName] = useState('')
-  const [newAgentModel, setNewAgentModel] = useState('openrouter')
+  const [newAgentVendor, setNewAgentVendor] = useState('')
+  const [newAgentModel, setNewAgentModel] = useState('')
+  const [newAgentInstanceId, setNewAgentInstanceId] = useState<number | null>(null)
   const [createError, setCreateError] = useState('')
+  const [allInstances, setAllInstances] = useState<ProviderInstance[]>([])
   const selectedAgent = agents.find(a => a.id === selectedAgentId)
+
+  // Fetch all configured provider instances once on mount
+  useEffect(() => {
+    api.getProviderInstances().then(instances => {
+      setAllInstances(instances)
+      // Default to the first configured vendor
+      if (instances.length > 0) {
+        const first = instances.find(i => i.is_default) || instances[0]
+        setNewAgentVendor(first.vendor)
+        setNewAgentModel(first.available_models[0] || '')
+        setNewAgentInstanceId(first.id)
+      }
+    }).catch(() => {})
+  }, [])
+
+  // Vendors that have at least one configured instance
+  const configuredVendors = [...new Set(allInstances.map(i => i.vendor))]
+    .map(v => ({ value: v, label: VENDOR_LABELS[v] || v }))
+
+  // Instances for the currently selected vendor
+  const vendorInstances = allInstances.filter(i => i.vendor === newAgentVendor)
+
+  const handleVendorChange = (vendor: string) => {
+    setNewAgentVendor(vendor)
+    const instances = allInstances.filter(i => i.vendor === vendor)
+    const defaultInst = instances.find(i => i.is_default) || instances[0]
+    if (defaultInst) {
+      setNewAgentModel(defaultInst.available_models[0] || '')
+      setNewAgentInstanceId(defaultInst.id)
+    } else {
+      setNewAgentModel('')
+      setNewAgentInstanceId(null)
+    }
+  }
 
   const handleCreate = async () => {
     if (!newAgentName.trim()) { setCreateError('Agent name is required'); return }
+    if (!newAgentVendor) { setCreateError('Select a provider — configure one in Hub > AI Providers first'); return }
+    if (!newAgentModel.trim()) { setCreateError('Model name is required'); return }
     setCreating(true); setCreateError('')
     try {
       const defaultContactId = agents[0]?.contact_id || 1
       const agent = await api.createAgent({
         contact_id: defaultContactId,
         system_prompt: `You are ${newAgentName.trim()}, a helpful AI assistant.`,
-        model_provider: newAgentModel,
-        model_name: newAgentModel === 'openrouter' ? 'google/gemini-2.0-flash-001' : 'gpt-4o-mini',
+        model_provider: newAgentVendor,
+        model_name: newAgentModel,
+        provider_instance_id: newAgentInstanceId ?? undefined,
         is_active: true,
       })
       setShowCreateModal(false); setNewAgentName(''); onAgentCreated(agent.id)
@@ -76,12 +116,56 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
               className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo" autoFocus />
           </div>
           <div>
-            <label className="block text-sm font-medium text-tsushin-slate mb-1">Model Provider</label>
-            <select value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)}
-              className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo">
-              <option value="openrouter">OpenRouter</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
-            </select>
+            <label className="block text-sm font-medium text-tsushin-slate mb-1">Provider</label>
+            {configuredVendors.length === 0 ? (
+              <div className="px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-xs text-tsushin-slate">
+                No providers configured.{' '}
+                <a href="/hub" className="text-teal-400 hover:underline">Set one up in Hub &gt; AI Providers</a>
+              </div>
+            ) : (
+              <select value={newAgentVendor} onChange={(e) => handleVendorChange(e.target.value)}
+                className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo">
+                {configuredVendors.map(v => (
+                  <option key={v.value} value={v.value}>{v.label}</option>
+                ))}
+              </select>
+            )}
           </div>
+          {vendorInstances.length > 1 && (
+            <div>
+              <label className="block text-sm font-medium text-tsushin-slate mb-1">Instance</label>
+              <select value={newAgentInstanceId ?? ''} onChange={(e) => {
+                const id = e.target.value ? parseInt(e.target.value) : null
+                setNewAgentInstanceId(id)
+                if (id) {
+                  const inst = vendorInstances.find(i => i.id === id)
+                  if (inst && inst.available_models.length > 0) setNewAgentModel(inst.available_models[0])
+                }
+              }} className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo">
+                {vendorInstances.map(inst => (
+                  <option key={inst.id} value={inst.id}>{inst.instance_name}{inst.is_default ? ' (default)' : ''}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {newAgentVendor && (
+            <div>
+              <label className="block text-sm font-medium text-tsushin-slate mb-1">Model</label>
+              {(() => {
+                const inst = vendorInstances.find(i => i.id === newAgentInstanceId) || vendorInstances[0]
+                const models = inst?.available_models || []
+                return models.length > 0 ? (
+                  <select value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)}
+                    className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo">
+                    {models.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                ) : (
+                  <input type="text" value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)}
+                    placeholder="e.g., gemini-2.5-flash" className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo" />
+                )
+              })()}
+            </div>
+          )}
           {createError && <p className="text-sm text-red-400">{createError}</p>}
         </div>
       </Modal>
