@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Ubuntu VM v0.6.0 Full E2E Audit (`develop`, 2026-04-15)
+
+Comprehensive fresh-install end-to-end QA on Ubuntu 24.04 aarch64 (VM `10.211.55.5`, HTTP mode). All AI providers configured: Gemini (default), OpenAI, Anthropic, Vertex AI (us-east5), Brave Search, Tavily.
+
+**Test Coverage (all TCs completed):**
+
+| TC | Feature | Result |
+|----|---------|--------|
+| TC-1 | Health/readiness/metrics | PASS |
+| TC-2/3 | Auth — tenant admin + global admin | PASS |
+| TC-4–11 | Core UI pages (Dashboard, Agents, Playground, Flows, Hub, Settings, System) | PASS |
+| TC-14/21 | LLM provider matrix (Gemini, OpenAI, Anthropic, Vertex AI, Brave, Tavily) | PASS |
+| TC-15 | Web Search (Brave Search — 5 results) | PASS |
+| TC-16 | Image Generation | PASS |
+| TC-17 | ACME Sales KB — CSV upload + price recall | PASS |
+| TC-18/19 | A2A delegation (Tsushin → ACME Sales) | PASS |
+| TC-25 | Sentinel — injection + poisoning detected | PASS |
+| TC-26 | Custom Skills — instruction, script, MCP-backed | PASS |
+| TC-27 | Shell beacon + slash commands (/shell, /inject, /tool, /status, /clear) | PASS |
+| TC-28 | API v1 — OAuth2, sync/async chat, thread retrieval | PASS |
+| TC-29 | Flows — notification + agentic | PASS |
+| TC-30 | Projects KB — upload + semantic recall (similarity=0.85) | PASS |
+| TC-23 | Memory isolation — isolated PASS; shared PARTIAL (OKG vector store gap) | PARTIAL |
+| TC-24 | Vector Stores — auto-provisioned Qdrant healthy, manual instance created | PASS |
+| TC-31 | A2A Graph View — 9 nodes, 14 connections | PASS |
+
+**New bugs filed:** BUG-538 (toolbox not built by installer), BUG-539 (Sentinel DetachedInstanceError in shell), BUG-540 (OKG no vector store provider on fresh install).
+**Previously fixed confirmed:** BUG-531, BUG-532, BUG-534 — all PASS.
+
+---
+
 ### Docs Structure Reorganization (`develop`, 2026-04-15)
 
 Moved the canonical markdown documentation set into `docs/` to keep the repository root focused on runtime and project-entry files. Added `docs/README.md` as the docs index, standardized canonical markdown filenames under `docs/` to lowercase kebab-case, updated repository and tooling references to point at the canonical `docs/` paths, kept root compatibility stubs for older links, and repointed the backend help-panel mount so `/app/USER_GUIDE.md` still resolves inside containers.
