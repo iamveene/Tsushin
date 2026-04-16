@@ -10,9 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Email/Calendar & Hub Integration Fixes (`develop`, 2026-04-16)
 
 - **BUG-558 fix (Hub integrations endpoint 500):** `/api/hub/integrations` crashed with 500 when a `shell` type integration existed (leftover from BUG-510 probe). The `IntegrationResponse` model only handles asana/calendar/gmail. Now skips unknown types.
-- **BUG-559 partial fix (Scheduler skill_type mismatch):** `SchedulerSkill` passed `skill_type="scheduler"` to the provider factory, but `AgentSkillIntegration` stores records with `skill_type="flows"`. Fixed the query. Google Calendar provider still resolves to Built-in Flows — provider resolution chain in `FlowsSkill._get_provider()` needs deeper investigation.
+- **BUG-559 fix (Google Calendar provider ignored):** Two issues: (1) `SchedulerSkill` passed `skill_type="scheduler"` to the factory but DB stores `"flows"`. (2) `FlowsSkill._get_provider()` checked `config.get('scheduler_provider')` before DB lookup, but `get_default_config()` hardcodes `scheduler_provider="flows"`, so the DB record (with `google_calendar`) was never reached. Fixed by always querying `AgentSkillIntegration` first. Now Google Calendar events return correctly (5 real events verified).
 - **Gmail Email skill tested E2E:** Gemini1 agent with Gmail (mv@archsec.io) successfully listed real emails via Playground UI.
-- **Files changed:** `backend/api/routes_hub.py`, `backend/agent/skills/scheduler_skill.py`
+- **Google Calendar tested E2E:** Gemini1 agent with Calendar (movl2007@gmail.com) listed 5 real events (Visit Mother's Day, Lavar carro, Sync Kees, Consulta Dr Eliud, Consulta Dr Giovanni Grossi).
+- **Files changed:** `backend/api/routes_hub.py`, `backend/agent/skills/scheduler_skill.py`, `backend/agent/skills/flows_skill.py`
 
 ### Automation Skill Quote-Stripping Fix (`develop`, 2026-04-16)
 
