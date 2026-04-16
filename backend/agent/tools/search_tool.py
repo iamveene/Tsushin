@@ -59,6 +59,9 @@ class SearchTool:
             }
 
         try:
+            self.logger.info(f"🔍 Web search: provider=brave, query={query.strip()[:120]}")
+            print(f"🔍 Web search: provider=brave, query={query.strip()[:120]}", flush=True)
+
             headers = {
                 "Accept": "application/json",
                 "Accept-Encoding": "gzip",

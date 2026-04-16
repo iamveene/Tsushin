@@ -121,14 +121,16 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
     setError(null)
 
     try {
-      const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/memory/${agentId}`)
+      const params = new URLSearchParams()
       if (threadId) {
-        url.searchParams.set('thread_id', String(threadId))
+        params.set('thread_id', String(threadId))
       } else if (senderKey) {
-        url.searchParams.set('sender_key', senderKey)
+        params.set('sender_key', senderKey)
       }
+      const qs = params.toString()
+      const path = `/api/playground/memory/${agentId}${qs ? `?${qs}` : ''}`
 
-      const response = await authenticatedFetch(url.toString())
+      const response = await authenticatedFetch(path)
 
       if (response.ok) {
         const data = await response.json()
@@ -216,9 +218,9 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
       let url: string
 
       if (fact.fact_type === 'project' && fact.project_id) {
-        url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/projects/${fact.project_id}/memory/facts/${fact.id}`
+        url = `${''}/api/projects/${fact.project_id}/memory/facts/${fact.id}`
       } else {
-        url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/agents/${agentId}/knowledge/${fact.id}`
+        url = `${''}/api/agents/${agentId}/knowledge/${fact.id}`
       }
 
       const response = await authenticatedFetch(url, {
@@ -259,7 +261,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
       let body: any
 
       if (fact.fact_type === 'project' && fact.project_id) {
-        url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/projects/${fact.project_id}/memory/facts`
+        url = `${''}/api/projects/${fact.project_id}/memory/facts`
         body = {
           topic: editingTopic,
           key: editingKey,
@@ -271,7 +273,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
       } else {
         // Use the resolved sender_key from backend stats to match the key used when loading facts
         const resolvedUserId = memoryData?.stats.sender_key || senderKey || 'playground'
-        url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/agents/${agentId}/knowledge`
+        url = `${''}/api/agents/${agentId}/knowledge`
         body = {
           user_id: resolvedUserId,
           topic: editingTopic,
@@ -327,7 +329,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
 
       if (projectId) {
         // Create project fact
-        url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/projects/${projectId}/memory/facts`
+        url = `${''}/api/projects/${projectId}/memory/facts`
         body = {
           topic: newTopic,
           key: newKey,
@@ -340,7 +342,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
         // Create user fact
         // Use the resolved sender_key from backend stats to match the key used when loading facts
         const resolvedUserId = memoryData?.stats.sender_key || senderKey || 'playground'
-        url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/agents/${agentId}/knowledge`
+        url = `${''}/api/agents/${agentId}/knowledge`
         body = {
           user_id: resolvedUserId,
           topic: newTopic,

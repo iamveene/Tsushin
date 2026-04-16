@@ -5,7 +5,7 @@ import Modal from './ui/Modal'
 import { api } from '@/lib/client'
 import { UsersIcon, SmartphoneIcon, LightbulbIcon } from '@/components/ui/icons'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+const API_URL = ''
 
 // Phase 10.2: Channel Mapping
 interface ChannelMapping {

@@ -1300,11 +1300,6 @@ class TsushinInstaller:
         """Generate .env file with user configuration"""
         print_header("Generating Configuration")
 
-        # Auto-generate security keys
-        jwt_secret = secrets.token_urlsafe(32)
-        asana_encryption_key = Fernet.generate_key().decode()
-        postgres_password = secrets.token_urlsafe(24)
-
         # Get absolute path for HOST_BACKEND_DATA_PATH
         host_backend_data_path = str(self.backend_data_dir.absolute())
 
@@ -1313,13 +1308,35 @@ class TsushinInstaller:
         # NEXT_PUBLIC_* values into the static build at image-build time — a
         # cached image carries the old URL forever and silently routes API
         # calls to the wrong host.
+        #
+        # Also reuse the parsed values below to PRESERVE existing secrets
+        # (POSTGRES_PASSWORD, JWT_SECRET_KEY, ASANA_ENCRYPTION_KEY) across
+        # installer re-runs. Regenerating these on every run orphans the
+        # postgres volume (wrong password) and invalidates every issued JWT
+        # plus every Fernet-encrypted secret stored in the DB.
         previous_api_url = ""
+        previous_env_vars: Dict[str, str] = {}
         if self.env_file.exists():
             try:
                 previous_env_vars = self._read_env_file_vars()
                 previous_api_url = previous_env_vars.get('NEXT_PUBLIC_API_URL', '')
             except Exception:
                 previous_api_url = ""
+                previous_env_vars = {}
+
+        # Preserve existing secrets when re-running the installer; only
+        # generate fresh values on a true first install (or when a key
+        # was missing from the previous .env for any reason).
+        postgres_password = previous_env_vars.get('POSTGRES_PASSWORD') or secrets.token_urlsafe(24)
+        jwt_secret = previous_env_vars.get('JWT_SECRET_KEY') or secrets.token_urlsafe(32)
+        asana_encryption_key = previous_env_vars.get('ASANA_ENCRYPTION_KEY') or Fernet.generate_key().decode()
+
+        if previous_env_vars.get('POSTGRES_PASSWORD'):
+            print_info("Preserved existing POSTGRES_PASSWORD from .env")
+        if previous_env_vars.get('JWT_SECRET_KEY'):
+            print_info("Preserved existing JWT_SECRET_KEY from .env")
+        if previous_env_vars.get('ASANA_ENCRYPTION_KEY'):
+            print_info("Preserved existing ASANA_ENCRYPTION_KEY from .env")
 
         # Determine URLs based on SSL mode
         ssl_mode = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))

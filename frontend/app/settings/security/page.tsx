@@ -58,7 +58,7 @@ export default function SecuritySettingsPage() {
   const [encryptionKeySuccess, setEncryptionKeySuccess] = useState<string | null>(null)
   const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(null)
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+  const apiUrl = ''
 
   // Fetch Google credentials from centralized location
   const fetchGoogleCredentials = useCallback(async () => {
