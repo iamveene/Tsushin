@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Docs sweep — close v0.6.0 coverage gaps (`develop`, 2026-04-16)
+
+Targeted documentation patch so `docs/documentation.md` and `docs/user-guide.md` reflect headline v0.6.0 features that the README already advertises. No code changes.
+
+**`docs/documentation.md` additions:**
+- §7.5 Multi-Agent Orchestration — corrected Agent Switcher `execution_mode` to `hybrid` (v0.6.0 default) and added a mode matrix (`tool` / `legacy` / `hybrid`).
+- §13 Flows — BUG-559 callout: `flows_skill` now queries `AgentSkillIntegration` first, so per-agent provider bindings (e.g., Google Calendar) take precedence over config defaults.
+- §15.1.1 (new) Migration: LID support (v0.6.0) — contact auto-linking, UserAgentSession phone-number fallback, ContactAgentMapping dual-key lookup.
+- §19.6 (new) Anthropic Prompt Caching — 3-breakpoint `cache_control` with relocation trick, 40–65% input-token cost cut, default model `claude-haiku-4-5`.
+- §19.4/19.5 — fixed duplicate numbering (Model Pricing is now §19.5).
+
+**`docs/user-guide.md` additions:**
+- §1 — new "For Administrators: Installer Options" callout covering `--le-staging`, IP-address SAN handling, and frontend rebuild on `NEXT_PUBLIC_API_URL` change.
+- §2 — Anthropic prompt caching note in the provider section; default model reference to `claude-haiku-4-5`.
+- §3 Multi-Agent Orchestration — Agent Switcher hybrid mode callout.
+- §6 WhatsApp — "Upgrading from 0.5.x — WhatsApp LID migration" callout with re-linking steps.
+- §18 (new) Remote Access (System Administrators) — Cloudflare Tunnel pointer with Quick vs Named mode table, setup steps, and security posture.
+- TOC updated to include §18.
+
+**Files changed:**
+- `docs/documentation.md` (+~60 lines, additive)
+- `docs/user-guide.md` (+~60 lines, additive)
+- `docs/changelog.md` (this entry)
+
 ## v0.6.0-patch.4 (2026-04-16)
 
 Promotion of `develop` → `main`. Consolidates all post-patch.3 work (channels, installer SSL, memory scoping, sentinel parser, skill fixes, UX wizards, regression results) into the v0.6.0 release line. README refreshed with v0.6.0 highlights.

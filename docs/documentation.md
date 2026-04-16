@@ -590,11 +590,21 @@ Cloning is performed via the agents API (`api.deleteAgent`, `api.updateAgent` ex
 
 Two skills drive inter-agent behavior:
 
-- **Agent Switcher Skill** — `skill_type="agent_switcher"`, `execution_mode="tool"`. "Allows users to switch their default agent for direct messages via natural language commands." Claims detection-type exemption for `agent_takeover`.
-  Source: `backend/agent/skills/agent_switcher_skill.py:39-42`
+- **Agent Switcher Skill** — `skill_type="agent_switcher"`, `execution_mode="hybrid"` (default as of v0.6.0). "Allows users to switch their default agent for direct messages via natural language commands." Claims detection-type exemption for `agent_takeover`.
+  Source: `backend/agent/skills/agent_switcher_skill.py:37-43`
 
 - **Agent Communication Skill (A2A)** — `skill_type="agent_communication"`, `execution_mode="tool"`. "Ask other agents questions, discover available agents, or delegate tasks."
   Source: `backend/agent/skills/agent_communication_skill.py:28-31`
+
+**Agent Switcher execution modes** (v0.6.0):
+
+| Mode | Behavior |
+|---|---|
+| `tool` | LLM decides via MCP tool schema only. No keyword scanning. |
+| `legacy` | Keyword-only path (e.g., "Switch me to Support"). |
+| `hybrid` | **Default.** Both paths active — keyword triggers fire deterministically, and the LLM can also call the tool by name. Prevents keyword-only misses while keeping tool-calling precision. |
+
+Set the mode per-agent in Studio → Skills → Agent Switcher → Config. The schema is defined at `backend/agent/skills/agent_switcher_skill.py:505-509`.
 
 The Studio → Agent Communication page (`frontend/app/agents/communication/page.tsx`) mounts `AgentCommunicationManager` to manage inter-agent messaging permissions and monitor communication sessions.
 
@@ -1154,6 +1164,8 @@ Per-agent security UI: `frontend/app/agents/security/page.tsx` mounts per-agent 
 Unified execution engine for reusable workflows. DB: `flow_definition`, `flow_node`, `flow_run`, `flow_node_run`.
 Source: `backend/flows/flow_engine.py`, `backend/models.py:1528-1728`.
 
+> **v0.6.0 — Integration resolution (BUG-559):** `flows_skill` now queries `AgentSkillIntegration` first when resolving provider accounts (e.g., Google Calendar, Gmail). This means flows respect the agent's per-skill integration binding set in Studio, and only fall back to system-wide config defaults if no binding exists. Previously the Google Calendar provider was ignored in favor of the config default, causing calendar steps to write to the wrong account.
+
 ### 13.1 Flow Types
 
 `flow_definition.flow_type` values (Source: `backend/models.py:1563`): `conversation`, `notification`, `workflow`, `task`.
@@ -1385,6 +1397,24 @@ The wizard can also be launched manually from the Hub Communication tab or auto-
 **Hub Integration Summary:** A compact status strip above the Hub tab bar shows connection counts for AI Providers, WhatsApp, Telegram, Slack, Discord, and Webhooks at a glance.
 
 **Settings Progressive Disclosure:** The Settings page groups cards into "Essential" (Organization, Team Members, System AI, Integrations) always visible, and "Advanced" collapsed by default.
+
+#### 15.1.1 Migration: LID support (v0.6.0)
+
+WhatsApp is rolling out **Linked Device IDs (LIDs)** — a new identifier format that replaces the historical phone-number-based JID for many participants (especially in group chats, where privacy rules now obscure direct phone numbers). v0.6.0 ships three coordinated changes so existing Tsushin tenants upgrading from 0.5.x don't lose contact continuity:
+
+1. **Contact auto-linking** — when an inbound message arrives with a new LID, the adapter looks up the existing `Contact` row by phone number (if the phone number is still exposed) and attaches the LID as an alternate identifier on the contact's `ContactChannelMapping`. No manual merge required.
+   Source: `backend/channels/whatsapp/adapter.py` + `backend/services/contact_service.py`.
+
+2. **UserAgentSession fallback via phone number** — `UserAgentSession` lookups (used for per-contact default agent resolution) now try LID-keyed rows first, then fall back to phone-number-keyed rows. Sessions created before the migration keep working until they're rewritten on next contact, at which point they get upgraded to LID keys.
+   Source: `backend/services/user_agent_session_service.py`.
+
+3. **ContactAgentMapping dual-key lookup** — `ContactAgentMapping` resolution accepts either a LID or a phone-number key and returns the first match. This keeps slash-command permissions, default-agent assignments, and DM trigger rules pointing at the right contact even as WhatsApp phases in LIDs for groups.
+   Source: `backend/services/contact_agent_mapping_service.py`.
+
+**Operational notes:**
+- No migration script is required — the upgrade is transparent. Existing contacts continue to work; LIDs are attached on the fly as they arrive.
+- If you see a group member that Tsushin treats as a new contact after the upgrade (because WhatsApp switched them to LID-only exposure), open the contact modal and add the previous phone number as an alternate identifier. The bot will then recognize both.
+- Sentinel audit events for WhatsApp continue to log the original raw identifier (LID or phone), so the audit trail survives the transition.
 
 ### 15.2 Telegram
 
@@ -1886,7 +1916,7 @@ This means: adding a new provider in Hub automatically makes it available everyw
 
 `backend/services/model_discovery_service.py` auto-fetches the vendor's `/models` endpoint (for OpenAI-compatible providers) and populates `available_models`. Used by the frontend Provider form to let the user pick which models to expose.
 
-### 19.4 Model Pricing
+### 19.5 Model Pricing
 
 **Source:** `frontend/app/settings/model-pricing/page.tsx`, `backend/api/routes_model_pricing.py`
 
@@ -1900,6 +1930,32 @@ UI table columns (`model-pricing/page.tsx:326-347`):
 - Actions (Edit / Save)
 
 Filters: "All" or a provider badge filter (`page.tsx:292-323`). Tenants without `org.settings.write` see read-only mode (gate at top of file).
+
+### 19.6 Anthropic Prompt Caching — v0.6.0
+
+v0.6.0 enables Anthropic's **prompt caching** across all Claude requests. Caching reuses Anthropic-side computation of stable prompt prefixes (system prompt, persona, skill instructions, knowledge snippets) across subsequent requests, so the LLM only re-processes the dynamic tail of the conversation. Tenants with chat-heavy workloads see a **40–65% reduction in input token cost** with no behavioral change.
+
+**How it works (3 breakpoints + relocation trick):**
+
+Anthropic supports up to four `cache_control` breakpoints per request. Tsushin uses three, strategically placed to maximize hit rate:
+
+| # | Position | Cached content | Rationale |
+|---|---|---|---|
+| 1 | End of system prompt | Persona, tone preset, agent rules, skill catalog | Stable across every turn of the same agent |
+| 2 | End of tool definitions block | MCP schemas, sandboxed tool defs, custom skill descriptors | Changes only when skills are added/removed |
+| 3 | Just before the current user turn | Conversation history + any retrieved-knowledge context | The "relocation trick" — cache point moves forward as the conversation grows, so each prior turn gets cached on its way past breakpoint 3 |
+
+**Default Anthropic model:** `claude-haiku-4-5` (v0.6.0 bump). The default is set in `backend/services/provider_instance_service.py` and surfaces in the agent Create modal under Hub → AI Providers → Anthropic → Default Model. Override per-agent in the agent config UI.
+
+**Sources:**
+- `backend/providers/anthropic_provider.py` — breakpoint placement and `cache_control` injection
+- `backend/services/token_tracker.py` — cache-hit accounting in the Watcher billing dashboard
+
+**Requirements & caveats:**
+- Requires Anthropic API access with prompt caching enabled (on by default for all Anthropic accounts in 2025+).
+- Cache hits appear in the Playground debug panel and in `/api/usage` token summaries under `cache_read_input_tokens` / `cache_creation_input_tokens`.
+- Cache TTL is Anthropic-managed (5 minutes idle, or evicted under load). Tsushin does not persist anything client-side.
+- No configuration is required — it's always on for Anthropic requests. To disable for a specific agent (rare — e.g., if you want to rehearse a cold token count), set `provider_config.cache_enabled = false` in the agent config JSON.
 
 ---
 
