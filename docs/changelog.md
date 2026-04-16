@@ -15,10 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BUG-562 fix (WhatsApp LID sender format breaking contact identification):** WhatsApp transitioned from phone-based sender IDs (e.g., `5527999616279`) to Linked IDs (e.g., `259029628641423`). This broke contact lookup, UserAgentSession matching, and agent switching. Fixed with three changes: (1) auto-link LID as `whatsapp_id` on Contact when resolved via name matching, (2) UserAgentSession lookup falls back to contact's phone number and migrates the session identifier to the current LID, (3) `_sync_user_agent_session` searches by both phone and LID.
 - **Files changed:** `agent_switcher_skill.py`, `router.py`, `routes_agents.py`
 
-### Graph View Glowing Regression Fix (`develop`, 2026-04-16)
+### Graph View Glowing & A2A Edge Regression Fix (`develop`, 2026-04-16)
 
-- **BUG-555 fix (WebSocket never-give-up reconnection):** Graph View glow animations stopped working after backend restarts because the WebSocket reconnection logic gave up after 5 attempts. Removed the reconnection limit — WebSocket now retries indefinitely with 10s backoff cap. Added `visibilitychange` listener to auto-reconnect when user switches back to the tab.
+- **BUG-555 fix (WebSocket TLS + reconnection):** Graph View glow animations stopped working because Chrome's self-signed TLS cert trust didn't extend to WebSocket `wss://` connections (close code 1006). Fixed by importing Caddy root CA into macOS system Keychain. Also removed WebSocket reconnection limit — now retries indefinitely with 10s backoff cap. Added `visibilitychange` listener to auto-reconnect when user switches back to the tab.
 - **BUG-556 fix (streaming event cleanup):** Playground streaming path emitted an orphaned `agent_processing: start` event before delegating to `send_message()`, which emitted its own start/end pair. Removed the duplicate; `send_message()` now solely manages AI-path events. Added explicit start for skill-only streaming path.
+- **BUG-559 fix (stale A2A edges):** Removing the `agent_communication` skill from an agent left orphan A2A permission records, causing the Graph View to show stale amber edges to the old agent. Added auto-cleanup: disabling the A2A skill now deletes all related permissions.
+- **BUG-558 fix (tester delete button):** Added Delete button to QA Tester card in Hub for both runtime instances and compose-managed orphans.
 - **BUG-557 fix (glow brightness):** Increased all glow animation brightness 33% (opacity 0.6→0.8 close, 0.3→0.4 far). Added `inset` inner glow and `border-width: 2px` during active state for better visibility on dark backgrounds.
 - **BUG-558 fix (tester delete button):** Added Delete button to QA Tester card in Hub. Handles runtime tester instances (API delete) and compose-managed orphans (dismiss card). Resolves catch-22 where container was gone but config card remained without any way to remove it.
 
