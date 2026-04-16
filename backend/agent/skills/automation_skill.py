@@ -611,6 +611,8 @@ Need more help? Check the documentation or use `/help automation`
                 )
 
             flow_identifier = arguments.get("flow_identifier")
+            if isinstance(flow_identifier, str):
+                flow_identifier = flow_identifier.strip().strip('"').strip("'")
             if not flow_identifier:
                 return SkillResult(
                     success=False,
