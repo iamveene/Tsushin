@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Email/Calendar & Hub Integration Fixes (`develop`, 2026-04-16)
+
+- **BUG-558 fix (Hub integrations endpoint 500):** `/api/hub/integrations` crashed with 500 when a `shell` type integration existed (leftover from BUG-510 probe). The `IntegrationResponse` model only handles asana/calendar/gmail. Now skips unknown types.
+- **BUG-559 partial fix (Scheduler skill_type mismatch):** `SchedulerSkill` passed `skill_type="scheduler"` to the provider factory, but `AgentSkillIntegration` stores records with `skill_type="flows"`. Fixed the query. Google Calendar provider still resolves to Built-in Flows — provider resolution chain in `FlowsSkill._get_provider()` needs deeper investigation.
+- **Gmail Email skill tested E2E:** Gemini1 agent with Gmail (mv@archsec.io) successfully listed real emails via Playground UI.
+- **Files changed:** `backend/api/routes_hub.py`, `backend/agent/skills/scheduler_skill.py`
+
 ### Automation Skill Quote-Stripping Fix (`develop`, 2026-04-16)
 
 - **BUG-557 fix (Automation flow_identifier with embedded quotes):** LLMs frequently send `flow_identifier` as `"\"3\""` instead of `"3"`, causing "Flow not found" errors. Added quote-stripping before flow lookup.
