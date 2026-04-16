@@ -171,11 +171,11 @@ def list_agent_knowledge(
             min_confidence=min_confidence
         )
     else:
-        # Get all facts for agent (across all users)
-        facts = []
-        # This would require a new method in KnowledgeService
-        # For now, return empty if no user_id specified
-        pass
+        facts = knowledge_service.get_all_agent_facts(
+            agent_id=agent_id,
+            topic=topic,
+            min_confidence=min_confidence
+        )
 
     return FactsListResponse(
         facts=[FactResponse(**f) for f in facts],

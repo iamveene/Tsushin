@@ -1283,6 +1283,12 @@ async def get_memory_layers(
             user_id=facts_user_id,
             decay_config=decay_config
         )
+        if not user_facts and not facts_user_id.startswith('sender_'):
+            user_facts = knowledge_service.get_user_facts(
+                agent_id=agent_id,
+                user_id=f"sender_{facts_user_id}",
+                decay_config=decay_config
+            )
         for fact in user_facts:
             fact_entry = {
                 "id": fact.get("id"),

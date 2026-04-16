@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fact Extraction Visibility Fix (`develop`, 2026-04-16)
+
+- **BUG-546 fix:** Knowledge list endpoint (`GET /api/agents/{id}/knowledge`) now returns all facts across all users when no `user_id` filter is provided. Previously returned empty due to unimplemented stub.
+- **BUG-547 fix:** Playground Memory Inspector now correctly displays extracted facts. The inspector queried facts using the bare sender key (`playground_u1_a17_t44`) while facts were stored with a `sender_` prefix (`sender_playground_u1_a17_t44`). Added fallback prefix resolution to match both formats.
+- **New method:** `KnowledgeService.get_all_agent_facts()` for bulk fact retrieval across all users.
+
 ### UX Wizards & Skill Error Handling (`develop`, 2026-04-15)
 
 - **Per-Agent Vector Store Selector:** Added a "Vector Store" section to the Agent Configuration page (Studio > Agent > Configuration) with a dropdown to select a specific vector store instance for the agent, overriding the tenant default. Includes a mode selector (Override/Complement/Shadow) and a status indicator showing whether the agent uses a per-agent override, tenant default, or built-in ChromaDB.

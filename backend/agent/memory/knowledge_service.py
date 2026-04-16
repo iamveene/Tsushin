@@ -135,6 +135,29 @@ class KnowledgeService:
             self.logger.error(f"Failed to get user facts: {e}")
             return []
 
+    def get_all_agent_facts(
+        self,
+        agent_id: int,
+        topic: Optional[str] = None,
+        min_confidence: float = 0.0
+    ) -> List[Dict]:
+        try:
+            query = self.db.query(SemanticKnowledge).filter(
+                SemanticKnowledge.agent_id == agent_id,
+                SemanticKnowledge.confidence >= min_confidence
+            )
+            if topic:
+                query = query.filter(SemanticKnowledge.topic == topic)
+            facts = query.order_by(
+                SemanticKnowledge.updated_at.desc(),
+                SemanticKnowledge.topic,
+                SemanticKnowledge.key
+            ).all()
+            return [self._fact_to_dict(f) for f in facts]
+        except Exception as e:
+            self.logger.error(f"Failed to get all agent facts: {e}")
+            return []
+
     def get_fact(
         self,
         agent_id: int,
