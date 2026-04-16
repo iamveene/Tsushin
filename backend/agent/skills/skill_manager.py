@@ -299,6 +299,23 @@ class SkillManager:
                     is_enabled = skill_instance.is_tool_enabled(config)
                     logger.info(f"[SKILL TOOLS] Skill '{skill_type}' is_tool_enabled={is_enabled}")
                     if is_enabled:
+                        # Multi-tool skills (e.g., OKG with okg_store/okg_recall/okg_forget)
+                        if hasattr(skill_instance, 'get_all_mcp_tool_definitions'):
+                            all_defs = skill_instance.get_all_mcp_tool_definitions()
+                            if len(all_defs) > 1:
+                                for mcp_def in all_defs:
+                                    tool_def = {
+                                        "type": "function",
+                                        "function": {
+                                            "name": mcp_def["name"],
+                                            "description": mcp_def.get("description", ""),
+                                            "parameters": mcp_def.get("inputSchema", {"type": "object", "properties": {}})
+                                        }
+                                    }
+                                    tool_definitions.append(tool_def)
+                                logger.info(f"Added {len(all_defs)} tools from multi-tool skill '{skill_type}'")
+                                continue
+
                         tool_def = None
 
                         # Phase 4: Try new MCP format first (get_mcp_tool_definition)
@@ -816,7 +833,10 @@ class SkillManager:
             if expected_type == "boolean" and not isinstance(value, bool):
                 return f"Field '{field}' must be a boolean"
             if expected_type == "array" and not isinstance(value, list):
-                return f"Field '{field}' must be an array"
+                if isinstance(value, str):
+                    arguments[field] = [v.strip() for v in value.split(",") if v.strip()] if value else []
+                else:
+                    return f"Field '{field}' must be an array"
             if expected_type == "object" and not isinstance(value, dict):
                 return f"Field '{field}' must be an object"
 
