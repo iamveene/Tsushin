@@ -87,7 +87,7 @@ class MCPConnectionManager:
         if config.server_url:
             from utils.ssrf_validator import validate_url, SSRFValidationError
             try:
-                validate_url(config.server_url)
+                validate_url(config.server_url, allow_private=True)
             except SSRFValidationError as e:
                 raise ValueError(f"SSRF blocked: {e}")
 

@@ -831,7 +831,10 @@ class SkillManager:
                         pass
                 return f"Field '{field}' must be an integer"
             if expected_type == "boolean" and not isinstance(value, bool):
-                return f"Field '{field}' must be a boolean"
+                if isinstance(value, str) and value.lower() in ("true", "false"):
+                    arguments[field] = value.lower() == "true"
+                else:
+                    return f"Field '{field}' must be a boolean"
             if expected_type == "array" and not isinstance(value, list):
                 if isinstance(value, str):
                     arguments[field] = [v.strip() for v in value.split(",") if v.strip()] if value else []
