@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Automation Skill Quote-Stripping Fix (`develop`, 2026-04-16)
+
+- **BUG-557 fix (Automation flow_identifier with embedded quotes):** LLMs frequently send `flow_identifier` as `"\"3\""` instead of `"3"`, causing "Flow not found" errors. Added quote-stripping before flow lookup.
+- **Files changed:** `backend/agent/skills/automation_skill.py`
+
 ### Knowledge Sharing Post-Response Hook Fix (`develop`, 2026-04-16)
 
 - **BUG-556 fix (Knowledge sharing not firing from Playground UI):** The WebSocket streaming service (`playground_websocket_service.py`) never invoked `_invoke_post_response_hooks()`, so knowledge sharing fact extraction and OKG auto-capture never ran when chatting via the Playground. Only the HTTP sync fallback had the hook. Added hook invocation after streaming completes.
