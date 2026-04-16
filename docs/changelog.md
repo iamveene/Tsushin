@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Skills Ship with Empty Default Keywords (`develop`, 2026-04-16)
 
 - **Cleared default keyword arrays** in `get_default_config()` across 6 skills: `flows_skill`, `gmail_skill`, `agent_switcher_skill`, `browser_automation_skill`, `flight_search_skill`, `search_skill`. Keywords are now a legacy mechanism — with tool-based execution (LLM decides), they caused false-positive skill activations. Users can still configure their own keywords if needed.
-- **Web search / flight search provider resolution verified:** These skills read provider directly from `AgentSkill.config` (not `AgentSkillIntegration`), so the calendar-style DB override bug does not apply.
+- **Web search provider switching tested E2E:** Brave Search (5 results from usatoday.com, nextspaceflight.com) then switched to Google/SerpAPI (5 results from wikipedia.org, reuters.com, uefa.com). Provider config correctly persisted and both providers returned different result sets.
+- **Flight search tested E2E:** Google Flights provider via SerpAPI returned 23 real flight options for JFK→LHR on 2026-05-15 with pricing (BRL 2000-2071), durations (6h 55m direct), and recommendations.
 
 ### Email/Calendar & Hub Integration Fixes (`develop`, 2026-04-16)
 
