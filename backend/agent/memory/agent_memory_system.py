@@ -120,6 +120,12 @@ class AgentMemorySystem:
             query = self.db.query(Memory).filter(Memory.agent_id == self.agent_id)
             if tenant_id:
                 query = query.filter(Memory.tenant_id == tenant_id)
+            else:
+                # BUG-LOG-015: audit trail for any read that skips the tenant_id
+                # filter (should never happen post-alembic 0024; guard only).
+                self.logger.warning(
+                    f"Memory load skipping tenant_id filter: agent {self.agent_id} has no resolvable tenant_id"
+                )
             memory_records = query.all()
 
             loaded_count = 0
@@ -654,6 +660,12 @@ class AgentMemorySystem:
             )
             if tenant_id:
                 query = query.filter(Memory.tenant_id == tenant_id)
+            else:
+                # BUG-LOG-015: audit trail for any read that skips the tenant_id
+                # filter (should never happen post-alembic 0024; guard only).
+                self.logger.warning(
+                    f"Memory lookup skipping tenant_id filter: agent {self.agent_id} has no resolvable tenant_id (sender={user_id})"
+                )
             memory_record = query.first()
 
             if memory_record:
@@ -705,6 +717,12 @@ class AgentMemorySystem:
             )
             if tenant_id:
                 query = query.filter(Memory.tenant_id == tenant_id)
+            else:
+                # BUG-LOG-015: audit trail for any delete that skips the tenant_id
+                # filter (should never happen post-alembic 0024; guard only).
+                self.logger.warning(
+                    f"Memory delete skipping tenant_id filter: agent {self.agent_id} has no resolvable tenant_id (sender={user_id})"
+                )
             query.delete(synchronize_session=False)
             self.db.commit()
             self.logger.info(f"Cleared memory for agent {self.agent_id}, user {user_id}")

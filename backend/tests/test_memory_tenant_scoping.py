@@ -120,7 +120,7 @@ def test_cross_tenant_wiring_returns_empty(db, two_tenants_memory):
     )
 
 
-def test_agent_id_only_filter_would_leak_without_tenant_scope(db, two_tenants_memory):
+def test_fixture_data_integrity_cross_tenant(db, two_tenants_memory):
     """
     Negative control: filtering by ``agent_id`` alone returns just one row
     because each agent is tenant-scoped at the data layer too. But the same

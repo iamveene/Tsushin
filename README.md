@@ -64,6 +64,9 @@ python3 install.py --defaults
 # Unattended with Let's Encrypt SSL
 python3 install.py --defaults --domain app.example.com --email you@example.com
 
+# Let's Encrypt staging (for testing, avoids production rate limits)
+python3 install.py --defaults --domain app.example.com --email you@example.com --le-staging
+
 # See all options
 python3 install.py --help
 
