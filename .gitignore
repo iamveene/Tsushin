@@ -260,6 +260,7 @@ backend/tests/*
 !backend/tests/test_routes_mcp_instances_tester.py
 !backend/tests/test_sentinel_unified_parse.py
 !backend/tests/test_memory_tenant_scoping.py
+!backend/tests/test_installer_ssl.py
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py
 ops/check_openrouter_agent.py
