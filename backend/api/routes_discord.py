@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 from cryptography.fernet import Fernet
 
 from db import get_db
+from hub.security import TokenEncryption
 from models import DiscordIntegration
 from models_rbac import User
 from auth_dependencies import get_current_user_required, require_permission, get_tenant_context, TenantContext
@@ -134,14 +135,20 @@ async def create_discord_integration(
     context: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db)
 ):
-    """Create a new Discord bot integration with per-integration public_key (BUG-311/313 fix)."""
+    """Create a new Discord bot integration with per-integration public_key (BUG-311/313 fix).
+
+    V060-CHN-002 FIX: Use TokenEncryption with per-tenant key derivation so the
+    AgentRouter (which decrypts via TokenEncryption) can read the token back.
+    Previously create used raw Fernet while the consumer used per-tenant-derived
+    Fernet, causing silent decrypt failures when an agent tried to send.
+    """
     try:
         encryption_key = get_discord_encryption_key(db)
         if not encryption_key:
             raise HTTPException(status_code=500, detail="Discord encryption key not available")
 
-        cipher = Fernet(encryption_key.encode())
-        bot_token_encrypted = cipher.encrypt(data.bot_token.encode()).decode()
+        enc = TokenEncryption(encryption_key.encode())
+        bot_token_encrypted = enc.encrypt(data.bot_token, current_user.tenant_id)
 
         integration = DiscordIntegration(
             tenant_id=current_user.tenant_id,
@@ -225,8 +232,8 @@ async def update_discord_integration(
             encryption_key = get_discord_encryption_key(db)
             if not encryption_key:
                 raise HTTPException(status_code=500, detail="Discord encryption key not available")
-            cipher = Fernet(encryption_key.encode())
-            integration.bot_token_encrypted = cipher.encrypt(data.bot_token.encode()).decode()
+            enc = TokenEncryption(encryption_key.encode())
+            integration.bot_token_encrypted = enc.encrypt(data.bot_token, integration.tenant_id)
 
         if data.public_key is not None:
             integration.public_key = data.public_key

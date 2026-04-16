@@ -33,6 +33,11 @@ class Tenant(Base):
     # v0.6.0 Remote Access: per-tenant entitlement gate. When False, users from this
     # tenant cannot authenticate via the public Cloudflare tunnel hostname.
     remote_access_enabled = Column(Boolean, default=False, nullable=False, index=True)
+    # v0.6.0 Channels: publicly-reachable HTTPS base URL for Slack HTTP Events and
+    # Discord Interactions endpoints. Used by the Hub UI to render the exact webhook
+    # URL the tenant must paste into Slack/Discord. Nullable — when unset, the UI
+    # shows a "configure this first" warning before allowing HTTP-mode setup.
+    public_base_url = Column(String(512), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)

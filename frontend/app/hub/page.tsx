@@ -22,6 +22,7 @@ import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
 import SlackSetupModal from '@/components/SlackSetupModal'
 import DiscordSetupModal from '@/components/DiscordSetupModal'
+import PublicBaseUrlCard from '@/components/PublicBaseUrlCard'
 import WebhookSetupModal from '@/components/WebhookSetupModal'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
@@ -2747,6 +2748,9 @@ export default function HubPage() {
                     + Create WhatsApp Instance
                   </button>
                 </div>
+
+                {/* v0.6.0 V060-CHN-002: Public Base URL setting (used by Slack HTTP + Discord) */}
+                <PublicBaseUrlCard canEdit={canEditSettings} />
 
                 {/* WhatsApp Instances */}
                 <div className="space-y-4">

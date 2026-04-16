@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import React from 'react'
-import { api, Agent, WhatsAppMCPInstance, TelegramBotInstance, WebhookIntegration } from '@/lib/client'
-import { GamepadIcon, WhatsAppIcon, TelegramIcon, WebhookIcon, CheckCircleIcon, CircleIcon, IconProps } from '@/components/ui/icons'
+import { api, Agent, WhatsAppMCPInstance, TelegramBotInstance, WebhookIntegration, SlackIntegration, DiscordIntegration } from '@/lib/client'
+import { GamepadIcon, WhatsAppIcon, TelegramIcon, WebhookIcon, SlackIcon, DiscordIcon, CheckCircleIcon, CircleIcon, IconProps } from '@/components/ui/icons'
 import InfoTooltip from '@/components/ui/InfoTooltip'
 
 interface Props {
@@ -14,6 +14,8 @@ const AVAILABLE_CHANNELS: { id: string; name: string; Icon: React.FC<IconProps>;
   { id: 'playground', name: 'Playground', Icon: GamepadIcon, description: 'Web UI chat interface' },
   { id: 'whatsapp', name: 'WhatsApp', Icon: WhatsAppIcon, description: 'WhatsApp messaging' },
   { id: 'telegram', name: 'Telegram', Icon: TelegramIcon, description: 'Telegram messaging' },  // Phase 10.1.1: Now available!
+  { id: 'slack', name: 'Slack', Icon: SlackIcon, description: 'Slack workspace integration (Socket Mode or HTTP Events)' },  // v0.6.0 V060-CHN-002
+  { id: 'discord', name: 'Discord', Icon: DiscordIcon, description: 'Discord bot via Interactions endpoint' },  // v0.6.0 V060-CHN-002
   { id: 'webhook', name: 'Webhook', Icon: WebhookIcon, description: 'HTTP webhook integration (bidirectional, HMAC-signed)' },  // v0.6.0
 ]
 
@@ -22,6 +24,8 @@ export default function AgentChannelsManager({ agentId }: Props) {
   const [mcpInstances, setMcpInstances] = useState<WhatsAppMCPInstance[]>([])
   const [telegramInstances, setTelegramInstances] = useState<TelegramBotInstance[]>([])  // Phase 10.1.1
   const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])  // v0.6.0
+  const [slackIntegrations, setSlackIntegrations] = useState<SlackIntegration[]>([])  // v0.6.0 V060-CHN-002
+  const [discordIntegrations, setDiscordIntegrations] = useState<DiscordIntegration[]>([])  // v0.6.0 V060-CHN-002
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -30,31 +34,48 @@ export default function AgentChannelsManager({ agentId }: Props) {
   const [whatsappIntegrationId, setWhatsappIntegrationId] = useState<number | null>(null)
   const [telegramIntegrationId, setTelegramIntegrationId] = useState<number | null>(null)  // Phase 10.1.1
   const [webhookIntegrationId, setWebhookIntegrationId] = useState<number | null>(null)  // v0.6.0
+  const [slackIntegrationId, setSlackIntegrationId] = useState<number | null>(null)  // v0.6.0 V060-CHN-002
+  const [discordIntegrationId, setDiscordIntegrationId] = useState<number | null>(null)  // v0.6.0 V060-CHN-002
 
   useEffect(() => {
     loadData()
   }, [agentId])
 
+  const buildIntegrationFields = (channels: string[]) => ({
+    enabled_channels: channels,
+    whatsapp_integration_id: channels.includes('whatsapp') ? whatsappIntegrationId : null,
+    telegram_integration_id: channels.includes('telegram') ? telegramIntegrationId : null,
+    slack_integration_id: channels.includes('slack') ? slackIntegrationId : null,
+    discord_integration_id: channels.includes('discord') ? discordIntegrationId : null,
+    webhook_integration_id: channels.includes('webhook') ? webhookIntegrationId : null,
+  })
+
   const loadData = async () => {
     setLoading(true)
     try {
-      const [agentData, instancesData, telegramData, webhookData] = await Promise.all([
+      const [agentData, instancesData, telegramData, webhookData, slackData, discordData] = await Promise.all([
         api.getAgent(agentId),
         api.getMCPInstances(),
         api.getTelegramInstances(),  // Phase 10.1.1
         api.listWebhookIntegrations(),  // v0.6.0
+        api.getSlackIntegrations().catch(() => []),  // v0.6.0 V060-CHN-002
+        api.getDiscordIntegrations().catch(() => []),  // v0.6.0 V060-CHN-002
       ])
 
       setAgent(agentData)
       setMcpInstances(instancesData.filter(i => i.instance_type === 'agent'))
       setTelegramInstances(telegramData)  // Phase 10.1.1
       setWebhookIntegrations(webhookData)  // v0.6.0
+      setSlackIntegrations(slackData)  // v0.6.0 V060-CHN-002
+      setDiscordIntegrations(discordData)  // v0.6.0 V060-CHN-002
 
       // Populate form
       setEnabledChannels(agentData.enabled_channels || ['playground', 'whatsapp'])
       setWhatsappIntegrationId(agentData.whatsapp_integration_id || null)
       setTelegramIntegrationId(agentData.telegram_integration_id || null)  // Phase 10.1.1
       setWebhookIntegrationId(agentData.webhook_integration_id || null)  // v0.6.0
+      setSlackIntegrationId(agentData.slack_integration_id || null)  // v0.6.0 V060-CHN-002
+      setDiscordIntegrationId(agentData.discord_integration_id || null)  // v0.6.0 V060-CHN-002
     } catch (err) {
       console.error('Failed to load data:', err)
       alert('Failed to load channel configuration')
@@ -72,12 +93,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
 
     // Auto-save immediately like Skills tab
     try {
-      await api.updateAgent(agentId, {
-        enabled_channels: newChannels,
-        whatsapp_integration_id: newChannels.includes('whatsapp') ? whatsappIntegrationId : null,
-        telegram_integration_id: newChannels.includes('telegram') ? telegramIntegrationId : null,
-        webhook_integration_id: newChannels.includes('webhook') ? webhookIntegrationId : null,
-      })
+      await api.updateAgent(agentId, buildIntegrationFields(newChannels))
       await loadData()
     } catch (err) {
       console.error('Failed to save channel toggle:', err)
@@ -91,12 +107,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
 
     setSaving(true)
     try {
-      await api.updateAgent(agentId, {
-        enabled_channels: enabledChannels,
-        whatsapp_integration_id: enabledChannels.includes('whatsapp') ? whatsappIntegrationId : null,
-        telegram_integration_id: enabledChannels.includes('telegram') ? telegramIntegrationId : null,  // Phase 10.1.1
-        webhook_integration_id: enabledChannels.includes('webhook') ? webhookIntegrationId : null,  // v0.6.0
-      })
+      await api.updateAgent(agentId, buildIntegrationFields(enabledChannels))
 
       // Reload to confirm
       await loadData()
@@ -307,6 +318,123 @@ export default function AgentChannelsManager({ agentId }: Props) {
                         : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300'
                   }`}>
                     {instance.status}
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* v0.6.0 V060-CHN-002: Slack Integration Selection */}
+      {enabledChannels.includes('slack') && (
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+          <h2 className="text-lg font-semibold text-white mb-4">
+            Slack Integration
+          </h2>
+          <p className="text-sm text-tsushin-slate mb-4">
+            Select which Slack workspace this agent should use to send and receive messages. Create the integration in Hub → Communication → Slack first.
+          </p>
+
+          {slackIntegrations.length === 0 ? (
+            <div className="text-center py-6 text-tsushin-muted">
+              <p>No Slack integrations available.</p>
+              <p className="text-sm mt-1">Go to Hub → Communication → Slack to create one.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {slackIntegrations.map(integration => (
+                <label
+                  key={integration.id}
+                  className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${
+                    slackIntegrationId === integration.id
+                      ? 'bg-purple-50 dark:bg-purple-900/20 border-purple-300 dark:border-purple-700'
+                      : 'bg-tsushin-surface border-tsushin-border hover:border-purple-200 dark:hover:border-purple-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="slack_integration"
+                      checked={slackIntegrationId === integration.id}
+                      onChange={() => setSlackIntegrationId(integration.id)}
+                      className="h-4 w-4 text-purple-600 focus:ring-purple-500"
+                    />
+                    <div>
+                      <div className="font-medium text-white">
+                        {integration.workspace_name || integration.workspace_id || `Slack #${integration.id}`}
+                        <span className="ml-2 text-xs px-2 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 rounded-full uppercase">
+                          {integration.mode}
+                        </span>
+                      </div>
+                      <div className="text-sm text-tsushin-muted">
+                        {integration.status} · health: {integration.health_status || 'unknown'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={`px-2 py-1 text-xs font-medium rounded-full ${
+                    integration.is_active
+                      ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                      : 'bg-tsushin-elevated text-tsushin-fog'
+                  }`}>
+                    {integration.is_active ? 'active' : 'inactive'}
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* v0.6.0 V060-CHN-002: Discord Integration Selection */}
+      {enabledChannels.includes('discord') && (
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+          <h2 className="text-lg font-semibold text-white mb-4">
+            Discord Integration
+          </h2>
+          <p className="text-sm text-tsushin-slate mb-4">
+            Select which Discord bot this agent should use. Discord uses an Interactions endpoint that requires a publicly-reachable HTTPS URL — see the Slack/Discord setup notes in the Hub.
+          </p>
+
+          {discordIntegrations.length === 0 ? (
+            <div className="text-center py-6 text-tsushin-muted">
+              <p>No Discord bots available.</p>
+              <p className="text-sm mt-1">Go to Hub → Communication → Discord to create one.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {discordIntegrations.map(integration => (
+                <label
+                  key={integration.id}
+                  className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${
+                    discordIntegrationId === integration.id
+                      ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-300 dark:border-indigo-700'
+                      : 'bg-tsushin-surface border-tsushin-border hover:border-indigo-200 dark:hover:border-indigo-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="discord_integration"
+                      checked={discordIntegrationId === integration.id}
+                      onChange={() => setDiscordIntegrationId(integration.id)}
+                      className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <div className="font-medium text-white">
+                        Application <code className="font-mono text-xs">{integration.application_id}</code>
+                      </div>
+                      <div className="text-sm text-tsushin-muted">
+                        {integration.status} · health: {integration.health_status || 'unknown'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={`px-2 py-1 text-xs font-medium rounded-full ${
+                    integration.is_active
+                      ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                      : 'bg-tsushin-elevated text-tsushin-fog'
+                  }`}>
+                    {integration.is_active ? 'active' : 'inactive'}
                   </div>
                 </label>
               ))}

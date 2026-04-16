@@ -12,12 +12,13 @@ Provides REST API endpoints for Slack workspace integration management:
 import logging
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, field_validator, model_validator
 from cryptography.fernet import Fernet
 
 from db import get_db
+from hub.security import TokenEncryption
 from models import SlackIntegration
 from models_rbac import User
 from auth_dependencies import get_current_user_required, require_permission, get_tenant_context, TenantContext
@@ -29,6 +30,33 @@ router = APIRouter(
     tags=["Slack Integrations"],
     redirect_slashes=False
 )
+
+
+async def _restart_socket_worker_if_needed(request: Request, integration_id: int) -> None:
+    """V060-CHN-002: When a socket-mode integration is created/updated, (re)start
+    its Slack Socket Mode WebSocket worker. No-op if the manager is unavailable
+    (e.g. during tests) or if the integration is HTTP-mode."""
+    manager = getattr(request.app.state, "slack_socket_mode_manager", None)
+    if manager is None:
+        return
+    try:
+        await manager.restart_one(integration_id)
+    except Exception as e:
+        logger.warning(
+            f"Failed to (re)start Slack Socket Mode worker for integration {integration_id}: {e}"
+        )
+
+
+async def _stop_socket_worker_if_running(request: Request, integration_id: int) -> None:
+    manager = getattr(request.app.state, "slack_socket_mode_manager", None)
+    if manager is None:
+        return
+    try:
+        await manager.stop_one(integration_id)
+    except Exception as e:
+        logger.warning(
+            f"Failed to stop Slack Socket Mode worker for integration {integration_id}: {e}"
+        )
 
 
 # ============================================================================
@@ -160,27 +188,36 @@ def _to_response(integration: SlackIntegration) -> SlackIntegrationResponse:
 @router.post("/", response_model=SlackIntegrationResponse)
 async def create_slack_integration(
     data: SlackIntegrationCreate,
+    request: Request,
     current_user: User = Depends(get_current_user_required),
     _: None = Depends(require_permission("integrations.slack.write")),
     context: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db)
 ):
-    """Create a new Slack workspace integration (BUG-312 fix: signing_secret required for HTTP mode)."""
+    """Create a new Slack workspace integration (BUG-312 fix: signing_secret required for HTTP mode).
+
+    V060-CHN-002 FIX: Use TokenEncryption with per-tenant key derivation so the
+    SlackSocketModeManager and AgentRouter (which decrypt via TokenEncryption)
+    can actually read the tokens back. Previously routes_slack used raw Fernet
+    while the consumers used per-tenant-derived Fernet, causing silent decrypt
+    failures the moment anything tried to use the tokens.
+    """
     try:
         encryption_key = get_slack_encryption_key(db)
         if not encryption_key:
             raise HTTPException(status_code=500, detail="Slack encryption key not available")
 
-        cipher = Fernet(encryption_key.encode())
-        bot_token_encrypted = cipher.encrypt(data.bot_token.encode()).decode()
+        enc = TokenEncryption(encryption_key.encode())
+        tenant_key = current_user.tenant_id
+        bot_token_encrypted = enc.encrypt(data.bot_token, tenant_key)
 
         signing_secret_encrypted = None
         if data.signing_secret:
-            signing_secret_encrypted = cipher.encrypt(data.signing_secret.encode()).decode()
+            signing_secret_encrypted = enc.encrypt(data.signing_secret, tenant_key)
 
         app_token_encrypted = None
         if data.app_level_token:
-            app_token_encrypted = cipher.encrypt(data.app_level_token.encode()).decode()
+            app_token_encrypted = enc.encrypt(data.app_level_token, tenant_key)
 
         integration = SlackIntegration(
             tenant_id=current_user.tenant_id,
@@ -201,6 +238,11 @@ async def create_slack_integration(
         db.refresh(integration)
 
         logger.info(f"Created Slack integration {integration.id} (mode={data.mode}, tenant={current_user.tenant_id})")
+
+        # V060-CHN-002: Spin up the Socket Mode worker for socket-mode integrations.
+        if integration.mode == "socket":
+            await _restart_socket_worker_if_needed(request, integration.id)
+
         return _to_response(integration)
 
     except HTTPException:
@@ -249,6 +291,7 @@ async def get_slack_integration(
 async def update_slack_integration(
     integration_id: int,
     data: SlackIntegrationUpdate,
+    request: Request,
     current_user: User = Depends(get_current_user_required),
     _: None = Depends(require_permission("integrations.slack.write")),
     context: TenantContext = Depends(get_tenant_context),
@@ -265,16 +308,17 @@ async def update_slack_integration(
 
     try:
         encryption_key = get_slack_encryption_key(db)
-        cipher = Fernet(encryption_key.encode()) if encryption_key else None
+        enc = TokenEncryption(encryption_key.encode()) if encryption_key else None
+        tenant_key = integration.tenant_id
 
-        if data.bot_token is not None and cipher:
-            integration.bot_token_encrypted = cipher.encrypt(data.bot_token.encode()).decode()
+        if data.bot_token is not None and enc:
+            integration.bot_token_encrypted = enc.encrypt(data.bot_token, tenant_key)
 
-        if data.signing_secret is not None and cipher:
-            integration.signing_secret_encrypted = cipher.encrypt(data.signing_secret.encode()).decode()
+        if data.signing_secret is not None and enc:
+            integration.signing_secret_encrypted = enc.encrypt(data.signing_secret, tenant_key)
 
-        if data.app_level_token is not None and cipher:
-            integration.app_token_encrypted = cipher.encrypt(data.app_level_token.encode()).decode()
+        if data.app_level_token is not None and enc:
+            integration.app_token_encrypted = enc.encrypt(data.app_level_token, tenant_key)
 
         if data.mode is not None:
             integration.mode = data.mode
@@ -291,6 +335,14 @@ async def update_slack_integration(
         db.refresh(integration)
 
         logger.info(f"Updated Slack integration {integration_id} (tenant={current_user.tenant_id})")
+
+        # V060-CHN-002: React to mode/active/token changes by restarting (or stopping)
+        # the Slack Socket Mode worker for this integration.
+        if integration.mode == "socket" and integration.is_active:
+            await _restart_socket_worker_if_needed(request, integration.id)
+        else:
+            await _stop_socket_worker_if_running(request, integration.id)
+
         return _to_response(integration)
 
     except HTTPException:
@@ -304,6 +356,7 @@ async def update_slack_integration(
 @router.delete("/{integration_id}")
 async def delete_slack_integration(
     integration_id: int,
+    request: Request,
     current_user: User = Depends(get_current_user_required),
     _: None = Depends(require_permission("integrations.slack.write")),
     context: TenantContext = Depends(get_tenant_context),
@@ -317,6 +370,10 @@ async def delete_slack_integration(
 
     if not integration:
         raise HTTPException(status_code=404, detail="Slack integration not found")
+
+    # V060-CHN-002: Stop the Socket Mode worker before deleting the row so we
+    # don't leak a WebSocket connection for a row that no longer exists.
+    await _stop_socket_worker_if_running(request, integration_id)
 
     db.delete(integration)
     db.commit()

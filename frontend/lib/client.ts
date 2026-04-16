@@ -872,9 +872,11 @@ export interface Agent {
   default_asana_assignee_gid?: string  // Default Asana user GID
 
   // Phase 10: Channel Configuration
-  enabled_channels?: string[]  // ["playground", "whatsapp", "telegram", "webhook"]
+  enabled_channels?: string[]  // ["playground", "whatsapp", "telegram", "slack", "discord", "webhook"]
   whatsapp_integration_id?: number  // Specific MCP instance
-  telegram_integration_id?: number  // Future: Telegram bot instance
+  telegram_integration_id?: number  // Telegram bot instance
+  slack_integration_id?: number | null  // v0.6.0 Item 33: Slack workspace integration
+  discord_integration_id?: number | null  // v0.6.0 Item 34: Discord bot integration
   webhook_integration_id?: number | null  // v0.6.0: Webhook integration
 
   // Phase 21: Provider Instance
@@ -1796,23 +1798,34 @@ export interface WebhookSecretRotateResponse {
 export interface SlackIntegration {
   id: number
   tenant_id: string
-  workspace_id: string
+  workspace_id: string | null
   workspace_name: string | null
+  app_id: string | null
   mode: 'socket' | 'http'
-  bot_user_id: string | null
+  bot_user_id?: string | null
   is_active: boolean
   status: 'inactive' | 'connected' | 'error'
-  dm_policy: 'open' | 'allowlist' | 'disabled'
-  allowed_channels: string[]
+  health_status: 'unknown' | 'healthy' | 'unhealthy'
+  has_signing_secret: boolean
+  has_app_level_token: boolean
+  events_endpoint_url?: string | null  // Relative path, e.g. /api/channels/slack/{id}/events
+  dm_policy?: 'open' | 'allowlist' | 'disabled'
+  allowed_channels?: string[]
   created_at: string
   updated_at: string | null
 }
 
 export interface SlackIntegrationCreate {
   bot_token: string
-  app_token?: string
+  // v0.6.0 V060-CHN-002 FIX: backend Pydantic field is `app_level_token`
+  // (not `app_token`). The frontend was previously sending the wrong field
+  // which silently broke Socket Mode setup.
+  app_level_token?: string
   signing_secret?: string
   mode?: 'socket' | 'http'
+  app_id?: string  // Required when mode='http' for url_verification
+  workspace_id?: string
+  workspace_name?: string
   dm_policy?: 'open' | 'allowlist' | 'disabled'
   allowed_channels?: string[]
 }
@@ -1822,12 +1835,15 @@ export interface DiscordIntegration {
   id: number
   tenant_id: string
   application_id: string
+  public_key?: string | null  // 64-char hex Ed25519 (BUG-313: per-integration)
   bot_user_id: string | null
   is_active: boolean
   status: 'inactive' | 'connected' | 'error'
-  dm_policy: 'open' | 'allowlist' | 'disabled'
-  allowed_guilds: string[]
-  guild_channel_config: Record<string, any>
+  health_status?: 'unknown' | 'healthy' | 'unhealthy'
+  interactions_endpoint_url?: string | null  // Relative path, e.g. /api/channels/discord/{id}/interactions
+  dm_policy?: 'open' | 'allowlist' | 'disabled'
+  allowed_guilds?: string[]
+  guild_channel_config?: Record<string, any>
   created_at: string
   updated_at: string | null
 }
@@ -1835,7 +1851,16 @@ export interface DiscordIntegration {
 export interface DiscordIntegrationCreate {
   bot_token: string
   application_id: string
-  dm_policy?: 'open' | 'allowlist' | 'disabled'
+  // v0.6.0 BUG-313 FIX: backend now requires public_key on create. Previously
+  // the frontend modal omitted this field and the API call would fail.
+  public_key: string
+}
+
+// v0.6.0 V060-CHN-002: Tenant self-service settings (read by Hub UI to render
+// the exact webhook URL the user must paste into Slack/Discord).
+export interface TenantSelfSettings {
+  tenant_id: string
+  public_base_url: string | null
 }
 
 // Playground Feature
@@ -4691,6 +4716,25 @@ export const api = {
   async getDiscordGuilds(id: number): Promise<any[]> {
     const res = await authenticatedFetch(`${API_URL}/api/discord/integrations/${id}/guilds`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch Discord guilds')
+    return res.json()
+  },
+
+  // v0.6.0 V060-CHN-002: Tenant self-service settings
+  // Used by the Hub UI to read/write the publicly-reachable HTTPS base URL that
+  // Slack HTTP Events and Discord Interactions endpoints must paste into.
+  async getMyTenantSettings(): Promise<TenantSelfSettings> {
+    const res = await authenticatedFetch(`${API_URL}/api/tenant/me/settings`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch tenant settings')
+    return res.json()
+  },
+
+  async updateMyTenantSettings(data: { public_base_url?: string | null }): Promise<TenantSelfSettings> {
+    const res = await authenticatedFetch(`${API_URL}/api/tenant/me/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update tenant settings')
     return res.json()
   },
 

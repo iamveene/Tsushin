@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Slack & Discord channels — first complete E2E (`develop`, 2026-04-16)
+
+First-ever end-to-end test of the Slack and Discord channels surfaced multiple regressions and design gaps that blocked production use. Closes V060-CHN-001/002/031, BUG-313 frontend half, plus a previously hidden token-encryption defect that affected both channels.
+
+**Slack — Socket Mode worker (V060-CHN-002)**
+- New `backend/channels/slack/socket_worker.py` and `backend/services/slack_socket_mode_manager.py`. Spins up one `slack_sdk.socket_mode.aiohttp.SocketModeClient` per active `SlackIntegration` with `mode='socket'`. Wired into `app.py` lifespan (mirrors `TelegramWatcherManager`) and into `routes_slack.py` create/update/delete so workers start/stop on integration CRUD without a backend restart.
+- Listener signature fix: slack-sdk passes `(client, request)` to `socket_mode_request_listeners`, not `(request,)` — a one-arg callback raised `TypeError` on every event.
+- Filter: ignore non-message events, bot-authored messages (prevents reply loops), and events without `user`/`text`.
+
+**Slack — HTTP Events routing (V060-CHN-002 partial → fully wired)**
+- `routes_channel_webhooks.py` `slack_events()` now enqueues `event_callback` payloads to `message_queue` with `channel='slack'` (was a no-op TODO). Added the same bot/empty-message filter as Socket Mode.
+
+**Slack — `thread_ts` preservation (V060-CHN-031)**
+- `AgentRouter.route_message()` now stashes the inbound message's `thread_ts` (or `ts` if not already in a thread) on the router instance. `_send_message()` auto-injects `thread_ts` for outbound Slack adapter calls so replies thread under the original message instead of starting a new one. Verified visually in #new-channel ("Test 4 → Hello from Slack!" delivered as a threaded reply).
+
+**Discord — Interactions endpoint routing (was a stub)**
+- `routes_channel_webhooks.py` `discord_interactions()` was returning a Type 5 deferred ack and dropping the message. Now resolves the bound agent (via `Agent.discord_integration_id`), enqueues to `message_queue` with `channel='discord'`, then ACKs Discord within the 3-second window. The QueueWorker `_process_discord_message` dispatcher routes to AgentRouter via the existing DiscordChannelAdapter.
+
+**Token encryption symmetry (silent multi-tenant decrypt failure)**
+- `routes_slack.py` and `routes_discord.py` had been encrypting tokens with raw `Fernet(master_key)` while `AgentRouter._register_slack_adapter` / `_register_discord_adapter` and the new Slack Socket Mode worker decrypt via `TokenEncryption(master_key).decrypt(token, tenant_id)` (which derives a per-tenant Fernet key via PBKDF2). Net result: every saved Slack/Discord token failed to decrypt at use time with `Token decryption failed (invalid key or corrupted data)`. This was hidden until something actually tried to *use* the tokens. All four call sites (Slack create, Slack update, Discord create, Discord update) and the Slack signing-secret decryption in `routes_channel_webhooks.py` now use `TokenEncryption` consistently.
+
+**Queue worker message envelope (Slack/Discord dead-lettered with KeyError 'id')**
+- `_process_slack_message` and `_process_discord_message` now inject `id`, `chat_id`, and `timestamp` into the router message envelope. The router uses `message["id"]` as `MessageCache.source_id` (raised `KeyError: 'id'`) and `chat_id`-with-fallback-to-`sender` to pick the outbound recipient (was sending replies to the user-key namespace, not the Slack channel/Discord channel).
+
+**Tenant `public_base_url` (no in-app tunnel; clear UX guidance)**
+- New `tenant.public_base_url` column (nullable, alembic migration `0034_add_tenant_public_base_url.py`). New `/api/tenant/me/settings` endpoints (`GET` + `PATCH`) for tenant-self-service config, gated by `org.settings.write` for writes.
+- New `frontend/components/PublicBaseUrlCard.tsx` rendered in Hub → Communication. Tells the user: HTTPS URL where Slack HTTP Events / Discord Interactions can reach the backend; explicitly notes Socket Mode does not need this; suggests `cloudflared tunnel --url http://localhost:8081` for local dev.
+- The Slack and Discord setup modals query `/api/tenant/me/settings` on open and render the exact webhook URL (`{public_base_url}/api/channels/slack/<id>/events` and `…/discord/<id>/interactions`) the user must paste back into the third-party portal. Modals show a yellow inline warning when `public_base_url` is unset and HTTP/Interactions mode is selected.
+
+**Discord modal — missing `public_key` field (BUG-313 frontend gap)**
+- The Discord setup modal didn't collect `public_key`. Backend `DiscordIntegrationCreate` requires it (64 hex chars, Ed25519). Form submissions silently failed. Field added with format validation; instructions updated to point users to Discord Dev Portal → General Information → Public Key. `DiscordIntegrationCreate` TS type updated.
+
+**Slack modal — wrong field name `app_token` vs `app_level_token`**
+- Frontend was sending `app_token` but backend Pydantic field is `app_level_token`, so Socket Mode setup silently dropped the token. Fixed in `client.ts` interface and in the modal form payload.
+
+**Agent assignment UI — Slack & Discord were missing**
+- `frontend/components/AgentChannelsManager.tsx` only knew about playground/whatsapp/telegram/webhook in `AVAILABLE_CHANNELS`. Slack and Discord cards were never rendered, so users could not bind an agent to a Slack workspace or Discord bot via the UI even though the backend FKs (`Agent.slack_integration_id`, `Agent.discord_integration_id`) had existed since v0.6.0. Both channels now appear with the same instance-selector pattern as Telegram (loads `getSlackIntegrations()` / `getDiscordIntegrations()`, renders a radio list, persists via `api.updateAgent()`). `Agent` interface in `client.ts` gained `slack_integration_id` and `discord_integration_id`.
+
+**Branch hygiene + Next.js 16 config delta cherry-pick**
+- Cherry-picked the missing 5-file Next.js 16 config delta from the abandoned `codex-next16-upgrade` branch onto `develop` (commit 6888a2f): `next.config.mjs` adds `outputFileTracingRoot` and `turbopack.root` to silence workspace-detection warnings; `next-env.d.ts` adds the typed-routes reference. Build script and TS config were already on develop.
+- Deleted three stale local branches that had diverged from old `main`: `feature/remote-access-auth-hardening` (already an ancestor of develop), `pr-4` (image analysis skill — already in develop as commit 9d3a8ef), `codex-next16-upgrade` (config delta cherry-picked above).
+
+**Verification**
+- Slack Socket Mode end-to-end round-trip in #new-channel of the Archsec workspace, four sequential messages — final reply correctly threaded. `slack_socket_mode_manager` started a `SocketModeClient` for integration id=3 immediately on POST; backend log: `[STARTUP] Slack Socket Mode Manager initialized` then per-event ACK + enqueue.
+- Discord app `1494431647062298664` created with Public Key captured (Ed25519, 64 hex chars) and Message Content Intent enabled. Bot token reset and integration setup (E2E) require Discord MFA password reauth — left to the operator since the safety policy forbids auto-typing passwords.
+
+**Files changed (backend):** `backend/api/routes_channel_webhooks.py`, `backend/api/routes_slack.py`, `backend/api/routes_discord.py`, `backend/api/routes_tenant_settings.py` (new), `backend/agent/router.py`, `backend/services/queue_worker.py`, `backend/services/slack_socket_mode_manager.py` (new), `backend/channels/slack/socket_worker.py` (new), `backend/app.py`, `backend/models_rbac.py`, `backend/alembic/versions/0034_add_tenant_public_base_url.py` (new).
+
+**Files changed (frontend):** `frontend/lib/client.ts`, `frontend/components/SlackSetupModal.tsx`, `frontend/components/DiscordSetupModal.tsx`, `frontend/components/AgentChannelsManager.tsx`, `frontend/components/PublicBaseUrlCard.tsx` (new), `frontend/app/hub/page.tsx`, `frontend/next-env.d.ts`, `frontend/next.config.mjs`.
+
 ### Installer SSL/TLS hardening (`feature/installer-ssl-validation`, 2026-04-16)
 
 Addresses concrete gaps in `install.py`'s HTTP, self-signed, Let's Encrypt, and manual-CA SSL modes. Reverse proxy remains Caddy — no certbot introduced (Caddy's built-in ACME client continues to handle Let's Encrypt issuance and renewal).
