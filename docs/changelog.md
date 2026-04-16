@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Knowledge Sharing Post-Response Hook Fix (`develop`, 2026-04-16)
+
+- **BUG-556 fix (Knowledge sharing not firing from Playground UI):** The WebSocket streaming service (`playground_websocket_service.py`) never invoked `_invoke_post_response_hooks()`, so knowledge sharing fact extraction and OKG auto-capture never ran when chatting via the Playground. Only the HTTP sync fallback had the hook. Added hook invocation after streaming completes.
+- **Files changed:** `backend/services/playground_websocket_service.py`
+
 ### A2A Graph View Target Node Glow (`develop`, 2026-04-16)
 
 - **BUG-555 fix (A2A target node not glowing):** During inter-agent communication, the target agent's node in Graph View did not glow — only the A2A edge glowed amber. Now the target agent node pulses (`animate-pulse`) for the duration of the A2A session, with proper min-glow duration and coordinated fade-out.
