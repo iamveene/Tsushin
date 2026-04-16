@@ -57,7 +57,7 @@ export default function ModelPricingPage() {
   const [editValues, setEditValues] = useState<{ input: string; output: string }>({ input: '', output: '' })
   const [filterProvider, setFilterProvider] = useState<string>('all')
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+  const apiUrl = ''
 
   const fetchPricing = useCallback(async () => {
     try {

@@ -82,6 +82,8 @@ Tsushin ships as a Docker Compose stack defined in `docker-compose.yml`. The cor
 
 **Multi-stack note:** When SSL/Caddy is enabled, proxy upstreams must target stack-scoped container names (for example `tsushin-frontend:3030`, `tsushin-backend:8081`) rather than generic Docker aliases like `frontend` / `backend`. On the shared `tsushin-network`, generic aliases can resolve to another running Tsushin stack.
 
+**Browser → backend request path (v0.6.1):** the Next.js frontend proxies `/api/*` and `/ws/*` to the backend via `rewrites()` declared at `frontend/next.config.mjs`. The destination is read at request time from the `BACKEND_INTERNAL_URL` env var (defaults to `http://backend:8081`, the compose service DNS). This keeps every browser request same-origin with the frontend, so the httpOnly `tsushin_session` cookie (domain-scoped to the frontend) rides along automatically — including the Watcher activity WebSocket at `/ws/watcher/activity`. Replaces the v0.6.0 pattern of baking an absolute `NEXT_PUBLIC_API_URL` into the build, which dropped the cookie on cross-origin access.
+
 **Persistent data:**
 
 | Volume / bind | Container path | Contents |
@@ -236,6 +238,8 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 For remote Ubuntu VM installs that use a host-level Ollama daemon, start with `http://host.docker.internal:11434` inside Tsushin. If the Docker engine on that host does not resolve `host.docker.internal`, use the container bridge gateway instead (for example `http://172.18.0.1:11434`) and re-test the provider instance from the Hub.
 
 For repetitive QA runs, auth throttling can be raised or temporarily disabled without code changes by setting `TSN_AUTH_RATE_LIMIT` or `TSN_DISABLE_AUTH_RATE_LIMIT=true` in `.env` before recreating the backend container. This is intended for test automation and should not be left enabled on public production installs.
+
+**Installer re-runs are idempotent (v0.6.1):** running `python3 install.py` a second time against an existing install preserves `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, and `ASANA_ENCRYPTION_KEY` from the current `.env`. Fresh values are only generated on true first installs (no existing `.env`) or when a specific key is missing. This prevents the pre-v0.6.1 failure mode where re-runs rotated the postgres password while the postgres data volume still carried the old one — producing `FATAL: password authentication failed for user "tsushin"` and a backend crash loop. Source: `install.py:1317-1339`.
 
 ### 3.4 Verify health
 
@@ -3143,6 +3147,15 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `TSN_LOG_FILE` | `logs/tsushin.log` | Log file path. | `LOG_FILE` | `settings.py:96` |
 | `TSN_LOG_LEVEL` | `INFO` | Root log level. | `LOG_LEVEL` | `settings.py:97` |
 | `TSN_LOG_FORMAT` | `text` | `text` or `json` (structured logs for K8s). | — | `settings.py:98` |
+
+**Notable emitted log lines** (useful grep patterns for operators):
+
+| Pattern | Purpose | Source |
+|---|---|---|
+| `🤖 AIClient.generate(): provider=…` | Every LLM call records provider + model + operation type. | `backend/agent/ai_client.py:377` |
+| `🔍 Web search: provider=…, query=…` | Every web search records which provider (Brave / SerpAPI / Tavily / etc.) handled the query. Query is truncated to 120 chars. Emitted from all three search code paths (slash command, skill, legacy tool). v0.6.1 BUG-9. | `backend/services/search_command_service.py:146`, `backend/agent/skills/search_skill.py:210`, `backend/agent/tools/search_tool.py:62` |
+| `⚡ Emitted agent_processing: agent=…, status=start/end, listeners=…` | Watcher activity WebSocket emits. `listeners=0` means no Graph View is subscribed for that tenant; `listeners≥1` means the Graph View glow will fire on the node. | `backend/services/watcher_activity_service.py` |
+| `⚡ Graph View WS registered: tenant=…, total=…` | A new browser subscribed to `/ws/watcher/activity`. | `backend/api/watcher_activity_websocket.py` |
 
 ### A.4 Security / Auth
 

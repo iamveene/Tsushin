@@ -103,7 +103,7 @@ export default function AIConfigurationPage() {
   const [selectedModel, setSelectedModel] = useState<string>('')
   const [testResult, setTestResult] = useState<TestResult | null>(null)
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+  const apiUrl = ''
 
   const fetchData = useCallback(async () => {
     try {

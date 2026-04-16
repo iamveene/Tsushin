@@ -29,7 +29,7 @@ from auth_password_policy import get_password_min_length_error
 from models_rbac import User, UserInvitation, UserRole, Role, Tenant, TenantSSOConfig
 from models import GoogleOAuthCredentials, OAuthState
 from auth_utils import hash_password, verify_password, hash_token, create_access_token
-from auth_dependencies import get_current_user_required
+from auth_dependencies import get_current_user_required, get_current_user_optional
 from auth_google import GoogleSSOService, GoogleSSOError, get_google_sso_service
 from services.audit_service import log_tenant_event, TenantAuditActions
 import settings
@@ -1074,16 +1074,22 @@ async def change_password(
 
 
 @router.post("/logout")
-async def logout(request: Request, current_user: User = Depends(get_current_user_required), db: Session = Depends(get_db)):
+async def logout(request: Request, current_user: Optional[User] = Depends(get_current_user_optional), db: Session = Depends(get_db)):
     """
-    Logout endpoint
+    Logout endpoint.
+
+    v0.6.1 BUG-4: auth is OPTIONAL here. A stale/expired JWT must still be
+    cleared so the frontend can escape the middleware ↔ AuthContext redirect
+    loop that happens when the cookie is present-but-invalid. Deleting a
+    cookie is a no-op for callers who don't have one, so making this endpoint
+    unauthenticated has no security cost.
 
     In JWT implementation, logout is handled client-side by deleting the token.
     This endpoint exists for compatibility and can be extended for token blacklisting.
     """
-    if current_user.tenant_id:
+    if current_user is not None and current_user.tenant_id:
         log_tenant_event(db, current_user.tenant_id, current_user.id, TenantAuditActions.AUTH_LOGOUT, "user", str(current_user.id), {"email": current_user.email}, request)
-    # SEC-005: Clear the httpOnly session cookie
+    # SEC-005: Clear the httpOnly session cookie (always — even for stale JWTs)
     response = JSONResponse(content={"message": "Logged out successfully"})
     response.delete_cookie(key="tsushin_session", path="/")
     return response

@@ -136,6 +136,21 @@ class SearchCommandService:
 
             provider, config = self._get_search_provider(agent_id)
 
+            # Log the resolved provider so ops can quickly confirm which
+            # search backend handled a given query (Brave vs SerpAPI vs ...).
+            provider_name = (
+                getattr(provider, 'provider_name', None)
+                or provider.__class__.__name__.replace('SearchProvider', '').lower()
+                or 'unknown'
+            )
+            self.logger.info(
+                f"🔍 Web search: provider={provider_name}, query={query.strip()[:120]}"
+            )
+            print(
+                f"🔍 Web search: provider={provider_name}, query={query.strip()[:120]}",
+                flush=True,
+            )
+
             # Create search request
             from hub.providers import SearchRequest
 
