@@ -14,6 +14,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **MCP Server Creation Wizard:** After creating a new MCP server in Hub > MCP Servers, a 3-step wizard guides users through: (1) reviewing discovered tools, (2) creating a custom skill linked to an MCP tool, and (3) assigning the skill to agents. Each step is skippable.
 - **Improved Skill Error Handling:** Backend skill operations now return specific error messages (ValueError for validation issues) instead of a generic "Skill operation failed" message. Frontend displays the actual error detail to users.
 
+### Comprehensive Regression Results (`develop`, 2026-04-15)
+
+Full platform regression covering infrastructure, auth, Studio, Hub, Flows, Playground, Settings, API v1, and WhatsApp.
+
+| Phase | Scope | Result |
+|-------|-------|--------|
+| A | Infrastructure (health, readiness, metrics) | PASS |
+| A | Auth — tenant owner, global admin, member RBAC | PASS |
+| A | Navigation — all 6 nav links | PASS |
+| B | Studio — agent list, configuration (inc. new Vector Store section), all 7 tabs | PASS |
+| B | Studio — add every built-in skill to agent | PASS |
+| B | Studio — agent creation, sub-pages (contacts, personas, projects, security, builder, custom skills) | PASS |
+| C | Hub — all tabs (AI Providers, WhatsApp, Telegram, Slack, Discord, Webhooks, MCP, Vector Stores) | PASS |
+| C | Flows — list, detail/editor | PASS |
+| C | Playground — agent chat (sync HTTP) | PASS |
+| C | Settings — all sub-pages (org, team, integrations, system-ai, sentinel, vector-stores, slash-commands, api-clients, billing, advanced) | PASS |
+| API | v1 — OAuth2 token, agents, chat, skills, personas, tone-presets, security-profiles, tools | 8/8 PASS |
+| WhatsApp | Session active, messages processing | PASS |
+
+**Issues found:** BUG-543 (Hub integrations 500, pre-existing), BUG-544 (logout redirect, pre-existing, low).
+
 ### Playground & AI Client Fixes (`develop`, 2026-04-15)
 
 - **Playground stuck at "Processing your message..." when WebSocket unavailable (CRITICAL):** The HTTP fallback path used async queue mode, which depends on WebSocket for result delivery. When `wss://` fails (e.g. self-signed cert not trusted for programmatic WebSocket connections), the queue result notification never reaches the frontend. Fixed: HTTP fallback now uses `?sync=true` when WebSocket is disconnected, so the LLM response returns inline in the HTTP response. No WebSocket dependency for basic chat functionality.
