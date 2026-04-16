@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Skills Ship with Empty Default Keywords (`develop`, 2026-04-16)
+
+- **Cleared default keyword arrays** in `get_default_config()` across 6 skills: `flows_skill`, `gmail_skill`, `agent_switcher_skill`, `browser_automation_skill`, `flight_search_skill`, `search_skill`. Keywords are now a legacy mechanism — with tool-based execution (LLM decides), they caused false-positive skill activations. Users can still configure their own keywords if needed.
+- **Web search / flight search provider resolution verified:** These skills read provider directly from `AgentSkill.config` (not `AgentSkillIntegration`), so the calendar-style DB override bug does not apply.
+
 ### Email/Calendar & Hub Integration Fixes (`develop`, 2026-04-16)
 
 - **BUG-558 fix (Hub integrations endpoint 500):** `/api/hub/integrations` crashed with 500 when a `shell` type integration existed (leftover from BUG-510 probe). The `IntegrationResponse` model only handles asana/calendar/gmail. Now skips unknown types.
