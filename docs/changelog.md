@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### A2A Graph View Target Node Glow (`develop`, 2026-04-16)
+
+- **BUG-555 fix (A2A target node not glowing):** During inter-agent communication, the target agent's node in Graph View did not glow — only the A2A edge glowed amber. Now the target agent node pulses (`animate-pulse`) for the duration of the A2A session, with proper min-glow duration and coordinated fade-out.
+- **Files changed:** `frontend/hooks/useWatcherActivity.ts`
+
 ### Agent Switching & WhatsApp LID Migration Fix (`develop`, 2026-04-16)
 
 - **BUG-559 fix (Kira can't switch agents):** Agent switcher's `execution_mode` was set to `"tool"` (LLM-only), disabling the keyword trigger path. When AI fallback classification failed (e.g., missing API key), the switch silently dropped. Changed default to `"hybrid"` so both keyword and LLM tool paths work. Also improved `_identify_sender` to normalize `@s.whatsapp.net` suffixes before contact lookup.
