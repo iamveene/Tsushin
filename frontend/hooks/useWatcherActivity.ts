@@ -122,7 +122,6 @@ export function useWatcherActivity(
   const reconnectAttemptsRef = useRef(0)
   // connectRef ensures the reconnect timer always calls the latest connect, not a stale closure
   const connectRef = useRef<() => void>(() => {})
-  const maxReconnectAttempts = 15
   const pingIntervalMs = 30000 // 30 seconds
 
   // Timeout refs
@@ -555,10 +554,11 @@ export function useWatcherActivity(
           pingIntervalRef.current = null
         }
 
-        // Attempt reconnect if not intentionally closed
-        if (options.enabled && event.code !== 1000 && reconnectAttemptsRef.current < maxReconnectAttempts) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 10000)
-          console.log(`[WatcherActivity] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current + 1})`)
+        // Attempt reconnect if not intentionally closed — never give up
+        if (options.enabled && event.code !== 1000) {
+          const attempt = reconnectAttemptsRef.current
+          const delay = Math.min(1000 * Math.pow(2, Math.min(attempt, 4)), 10000)
+          console.log(`[WatcherActivity] Reconnecting in ${delay}ms (attempt ${attempt + 1})`)
           reconnectAttemptsRef.current++
 
           reconnectTimeoutRef.current = setTimeout(() => {
@@ -610,6 +610,7 @@ export function useWatcherActivity(
   // Connect on mount, disconnect on unmount
   useEffect(() => {
     if (options.enabled) {
+      reconnectAttemptsRef.current = 0
       connect()
     }
 
@@ -619,6 +620,24 @@ export function useWatcherActivity(
   // connect/disconnect intentionally omitted from deps — effect re-runs on enabled changes
   // which is the only condition that should trigger reconnection; connectRef handles stale closure
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options.enabled])
+
+  // Reconnect when page becomes visible (user switches back to tab)
+  useEffect(() => {
+    if (!options.enabled) return
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' &&
+          wsRef.current?.readyState !== WebSocket.OPEN &&
+          wsRef.current?.readyState !== WebSocket.CONNECTING) {
+        console.log('[WatcherActivity] Page visible — reconnecting')
+        reconnectAttemptsRef.current = 0
+        connectRef.current()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
   }, [options.enabled])
 
   return {

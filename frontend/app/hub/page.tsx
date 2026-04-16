@@ -2967,7 +2967,7 @@ export default function HubPage() {
                         )}
                       </div>
 
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-4 gap-2">
                         <button
                           onClick={handleShowTesterQR}
                           className="px-3 py-1.5 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded text-xs"
@@ -2985,6 +2985,29 @@ export default function HubPage() {
                           className="px-3 py-1.5 bg-orange-600/20 text-orange-400 border border-orange-600/50 rounded text-xs"
                         >
                           Reset Auth
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const testerInstance = runtimeTesterInstances[0]
+                            if (testerInstance) {
+                              if (!confirm(`Delete tester instance "${testerInstance.instance_name}"? You can recreate it later.`)) return
+                              try {
+                                await api.deleteMCPInstance(testerInstance.id, true)
+                                toast.success('Tester instance deleted')
+                                loadMcpInstances()
+                                loadTesterStatus()
+                              } catch (err: any) {
+                                toast.error(err.message || 'Failed to delete tester instance')
+                              }
+                            } else {
+                              if (!confirm('Dismiss orphan tester card? The container is already gone.')) return
+                              setTesterStatus(null)
+                              toast.success('Tester card dismissed. Create a new tester instance when ready.')
+                            }
+                          }}
+                          className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs"
+                        >
+                          Delete
                         </button>
                       </div>
                     </div>

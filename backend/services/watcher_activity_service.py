@@ -67,7 +67,7 @@ class WatcherActivityService:
         if tenant_id not in self.tenant_connections:
             self.tenant_connections[tenant_id] = set()
         self.tenant_connections[tenant_id].add(websocket)
-        logger.info(f"Graph View connection registered: tenant={tenant_id}, total={len(self.tenant_connections[tenant_id])}")
+        print(f"⚡ Graph View WS registered: tenant={tenant_id}, total={len(self.tenant_connections[tenant_id])}")
 
     def unregister_connection(self, tenant_id: str, websocket: WebSocket):
         """
@@ -81,7 +81,7 @@ class WatcherActivityService:
             self.tenant_connections[tenant_id].discard(websocket)
             if not self.tenant_connections[tenant_id]:
                 del self.tenant_connections[tenant_id]
-            logger.info(f"Graph View connection unregistered: tenant={tenant_id}")
+            print(f"⚡ Graph View WS unregistered: tenant={tenant_id}, remaining={len(self.tenant_connections.get(tenant_id, set()))}")
 
     def get_connection_count(self, tenant_id: Optional[str] = None) -> int:
         """Get number of active connections, optionally filtered by tenant."""
@@ -142,7 +142,8 @@ class WatcherActivityService:
             channel: Optional channel type (e.g. "whatsapp", "playground")
         """
         if tenant_id not in self.tenant_connections:
-            return  # No listeners, skip
+            print(f"⚡ Watcher activity SKIPPED (no listeners): agent={agent_id}, status={status}, channel={channel}, tenant={tenant_id}, registered_tenants={list(self.tenant_connections.keys())}")
+            return
 
         message = {
             "type": "agent_processing",
@@ -155,7 +156,7 @@ class WatcherActivityService:
             message["channel"] = channel
 
         await self._broadcast_to_tenant(tenant_id, message)
-        logger.info(f"Emitted agent_processing: agent={agent_id}, status={status}, channel={channel}")
+        print(f"⚡ Emitted agent_processing: agent={agent_id}, status={status}, channel={channel}, listeners={len(self.tenant_connections.get(tenant_id, set()))}")
 
     async def emit_skill_used(
         self,
