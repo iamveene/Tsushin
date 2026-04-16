@@ -16,7 +16,7 @@ import { useOnboarding } from '@/contexts/OnboardingContext'
 import { useToast } from '@/contexts/ToastContext'
 
 // Use relative paths in the browser to avoid mixed-content (HTTPS page → HTTP API)
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
+const API_URL = ''
 
 // Navigation items configuration
 interface NavItem {
@@ -185,7 +185,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
   }
 
   // Loading state with premium spinner
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -202,6 +202,15 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
         </div>
       </div>
     )
+  }
+
+  // BUG-4: distinguish "still loading" from "checked and unauthenticated".
+  // AuthContext (and middleware, as a server-side fallback) has already
+  // triggered a hard redirect to /auth/login. Render null while the
+  // navigation completes to avoid flashing protected UI or stalling on
+  // the spinner indefinitely.
+  if (!user) {
+    return null
   }
 
   return (

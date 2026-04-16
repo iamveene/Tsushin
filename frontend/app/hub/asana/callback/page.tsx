@@ -32,7 +32,7 @@ export default function AsanaCallbackPage() {
     }
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/callback`, {
         method: 'POST',
         body: JSON.stringify({ code, state })

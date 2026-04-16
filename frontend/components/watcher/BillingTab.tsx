@@ -68,7 +68,7 @@ export default function BillingTab() {
     setLoading(true)
     try {
       console.log('[BillingTab] Loading analytics data...')
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const API_URL = ''
       const [statsRes, agentsRes] = await Promise.all([
         authenticatedFetch(`${API_URL}/api/analytics/token-usage/summary?days=${days}`).then(r => r.json()),
         authenticatedFetch(`${API_URL}/api/analytics/token-usage/by-agent?days=${days}`).then(r => r.json())

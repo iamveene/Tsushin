@@ -1,42 +1,32 @@
 /**
- * API_URL is the base URL for all API fetch calls, resolved from NEXT_PUBLIC_API_URL.
+ * API_URL is the base URL for all API fetch calls.
  *
- * In SSL/HTTPS installs: NEXT_PUBLIC_API_URL = https://domain (Caddy endpoint).
- * In HTTP-only installs: NEXT_PUBLIC_API_URL = http://host:8081 (direct backend).
+ * v0.6.1 BUG-5/7/8 fix: in the browser we return '' so that all existing
+ * `${API_URL}/api/foo` call sites become relative URLs (`/api/foo`). Next.js
+ * `rewrites()` (see next.config.mjs) proxies `/api/*` and `/ws/*` to the
+ * backend over the internal Docker network. Because every request is now
+ * same-origin with the frontend, the httpOnly session cookie always rides
+ * along — fixing the 401 cascade on Hub, Playground Debug/Memory, and the
+ * Watcher Activity WebSocket.
  *
- * Using the absolute URL ensures HTTP-only installs work correctly without a
- * Caddy reverse-proxy (fixes BUG-202: relative paths 404 on port 3030).
- */
-/**
- * BUG-460: For HTTP installs, the build-time API URL may use a LAN IP while
- * the user accesses the frontend via localhost (or vice-versa). httpOnly
- * cookies are scoped to the browser's hostname, so cross-origin API calls on
- * plain HTTP silently drop the session cookie → 401 cascade.
+ * The previous v0.6.0 Remote Access logic (HTTPS origin swap +
+ * window.location hostname rewrite for BUG-460) is gone: the rewrite layer
+ * makes those workarounds unnecessary because relative URLs always match
+ * the page origin.
  *
- * Fix: on the client side, replace the API hostname with window.location.hostname
- * so cookies always match. Server-side (SSR) keeps the configured URL.
+ * Server-side (SSR) keeps the absolute URL so Next.js can reach the backend
+ * over the internal compose network during render.
  */
 function resolveApiUrl(): string {
-  const envUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
-  if (typeof window === 'undefined') return envUrl
-
-  // v0.6.0 Remote Access: when the page is loaded over HTTPS, all API calls
-  // must also go over HTTPS on the same origin (no explicit port). This covers
-  // both the local https://localhost Caddy proxy and the public Cloudflare
-  // Tunnel hostname (e.g. https://tsushin.archsec.io). In both cases Caddy
-  // routes /api/* → tsushin-backend:8081 internally.
-  if (window.location.protocol === 'https:') {
-    return `${window.location.protocol}//${window.location.host}`
+  // SSR: use the absolute URL so Next.js can reach the backend over the
+  // internal Docker network (compose service DNS). Falls back to the in-network
+  // service name if no env var is provided.
+  if (typeof window === 'undefined') {
+    return process.env.NEXT_PUBLIC_API_URL || 'http://backend:8081'
   }
-
-  try {
-    const apiUrl = new URL(envUrl)
-    if (apiUrl.protocol === 'http:' && apiUrl.hostname !== window.location.hostname) {
-      apiUrl.hostname = window.location.hostname
-      return apiUrl.toString().replace(/\/$/, '')
-    }
-  } catch { /* URL parse error — fall through */ }
-  return envUrl
+  // Browser: empty string → existing `${API_URL}/api/foo` becomes `/api/foo`.
+  // Same-origin requests preserve the httpOnly session cookie.
+  return ''
 }
 
 const API_URL = resolveApiUrl()

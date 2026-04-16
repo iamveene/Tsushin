@@ -234,7 +234,7 @@ export default function CustomToolsPage() {
     setToolForm({ ...toolForm, commands: updatedCommands })
   }
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+  const apiUrl = ''
 
   // Auto-refresh container status every 15 seconds when page is visible
   useEffect(() => {

@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.1 (2026-04-16)
+
+Post-install bug sweep. Nine bugs surfaced by a clean `python3 install.py --defaults --http` run on commit `5bf7b03` of `develop`, grouped into four remediation phases and validated end-to-end in real Chrome before ship.
+
+### Backend — installer idempotency, missing migrations, search observability
+
+- **BUG-1 — Installer now preserves secrets across re-runs.** `install.py:1299-1339` reads the existing `.env` (via the pre-existing `_read_env_file_vars()` helper at `install.py:241-255`) and only generates fresh values for `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, and `ASANA_ENCRYPTION_KEY` when those keys are missing. Previously every re-run rolled the postgres password while the postgres data volume still had the old one — producing `FATAL: password authentication failed for user "tsushin"` and a backend crash loop. Also protects every Fernet-encrypted secret in the DB from being orphaned by a rotated `ASANA_ENCRYPTION_KEY`.
+- **BUG-2 + BUG-3 — Missing Alembic migration for two live model columns.** New migration `backend/alembic/versions/0035_add_missing_provider_whatsapp_columns.py` idempotently adds `provider_instance.extra_config` (JSON, default `{}`) and `whatsapp_mcp_instance.display_name` (VARCHAR(100)) using the `Inspector.get_columns()` guard pattern from `0006_add_provider_instances.py:81-88`. Fresh installs were masked by `0001_initial_baseline.py`'s call to `Base.metadata.create_all()`; upgrades from any prior version 500'd on Hub → add-LLM-provider, on agent config loading, and on the channel health monitor crash-looping every cycle.
+- **BUG-9 — Web search now logs the provider.** A single `🔍 Web search: provider={name}, query={query[:120]}` line is emitted at INFO level (plus `print()` for docker-stdout visibility) from all three search code paths: `backend/services/search_command_service.py:146`, `backend/agent/skills/search_skill.py:210/594`, and `backend/agent/tools/search_tool.py:62`. Matches the existing `🤖 AIClient.generate(): provider=…` convention at `backend/agent/ai_client.py:377`. Ops can now tell whether a query went to Brave, SerpAPI, or Tavily without digging through provider-registry state.
+
+### Frontend — cross-origin cookie fix (BUG-5, BUG-7, BUG-8) and WebSocket same-origin
+
+Root cause for all three was `NEXT_PUBLIC_API_URL` being baked into the build as an absolute URL (e.g. `http://127.0.0.1:8081`). Browser requests went cross-origin when the user accessed the frontend on a different host/port, and the httpOnly session cookie was silently dropped → 401 cascade. Fix makes all client-side API calls **same-origin relative** through a Next.js 16.2.2 rewrite layer.
+
+- `frontend/next.config.mjs` — new `async rewrites()` proxies `/api/:path*` and `/ws/:path*` to `BACKEND_INTERNAL_URL` (defaults to `http://backend:8081`) over the internal Docker network. Works for both HTTP and WebSocket upgrades.
+- `frontend/lib/client.ts:19-30` — `resolveApiUrl()` returns `''` in the browser so every existing `${API_URL}/api/foo` call becomes a relative `/api/foo` request with zero call-site changes. SSR keeps the absolute URL for internal-network rendering.
+- `frontend/hooks/useWatcherActivity.ts:197-205` and `frontend/lib/websocket.ts:38-50` — build WS URLs from `window.location.host` so the upgrade stays same-origin. `WebSocket('')` is guarded.
+- **20 files** updated to drop the baked `process.env.NEXT_PUBLIC_API_URL || 'http://…:8081'` prefix: all of `app/hub/**/page.tsx`, `app/settings/{security,model-pricing,integrations,ai-configuration}/page.tsx`, `app/playground/page.tsx`, `app/auth/sso-callback/page.tsx`, every component in `components/playground/*`, `components/{LayoutContent,ContactManager,ApiKeyManager}.tsx`, and `components/watcher/BillingTab.tsx`.
+- `frontend/components/playground/MemoryInspector.tsx:124-131` — replaced `new URL(…)` (which throws `Invalid URL` when the base is an empty string) with `URLSearchParams` + plain-string path construction.
+- `docker-compose.yml` — added `BACKEND_INTERNAL_URL` to the frontend service environment.
+
+With the rewrite layer in place, **Bug 6 (Graph View activity glow) required no code change** — the Watcher activity WebSocket at `/ws/watcher/activity` now rides the session cookie through the proxy and the frontend hook (`useWatcherActivity`) registers as a listener. Backend emits `agent_processing start/end` events with `listeners=1`, and the React Flow canvas at `components/watcher/graph/GraphCanvas.tsx` applies the `animate-pulse` glow class to the active agent node. Verified live: glow appeared on `agent-1` during a Playground message and cleared when processing ended.
+
+### Frontend — auth redirect (BUG-4) + stale-cookie loop
+
+The root spinner ("Loading Tsushin…") stalled indefinitely whenever `/api/auth/me` returned 401 because `LayoutContent` treated `loading=false, user=null` identically to `loading=true`, and never redirected to `/auth/login`.
+
+- `frontend/lib/public-paths.ts` **(new)** — shared `PUBLIC_PATH_PREFIXES = ['/auth', '/setup']` and `isPublicPath(pathname)` helper used by both the client-side AuthContext and the Edge-runtime middleware. Framework-agnostic (no `'use client'`, no `next/*` imports).
+- `frontend/contexts/AuthContext.tsx:85-114` — on 401 in `loadUser()`, hard-redirect to `/auth/login` via `window.location.href` (matches the logout pattern referenced by BUG-544, avoids `router.push` races with the spinner). **Critical loop fix:** when the cookie is STALE (present-but-invalid — typical on a reinstall where the DB got wiped but the browser still has the old JWT), the middleware redirects `/auth/login` → `/` while AuthContext would redirect `/` → `/auth/login`, ping-ponging forever. The fix calls `api.logout()` before the hard redirect so the backend sets `Set-Cookie: tsushin_session=""; Max-Age=0` — the next request is truly unauthenticated and the middleware stops bouncing. Required making the backend `/api/auth/logout` endpoint auth-OPTIONAL at `backend/auth_routes.py:1076-1091` (from `get_current_user_required` → `get_current_user_optional`) so the clear-cookie call works when the JWT is already expired.
+- `frontend/components/LayoutContent.tsx:187-214` — spinner condition split: `if (loading)` renders the premium spinner; `if (!user)` returns `null` (hard redirect is already in flight).
+- `frontend/middleware.ts:20-33` — server-side belt-and-braces redirect: if `tsushin_session` cookie is absent and the path is not public / `_next/*` / `favicon.ico`, respond with `307 → /auth/login` before client JS even runs. `isPublicPath` short-circuits both sides so no loop is possible.
+- `frontend/contexts/AuthContext.tsx:252-260` — `useRequireAuth()` is now a no-op (AuthContext is the single redirect source).
+
+### Files changed
+
+Backend: `install.py`, `backend/auth_routes.py`, `backend/services/search_command_service.py`, `backend/agent/skills/search_skill.py`, `backend/agent/tools/search_tool.py`, new `backend/alembic/versions/0035_add_missing_provider_whatsapp_columns.py`, new `backend/dev_tests/test_env_preservation.py` (gitignored).
+
+Frontend: `frontend/next.config.mjs`, `frontend/lib/client.ts`, `frontend/lib/websocket.ts`, `frontend/hooks/useWatcherActivity.ts`, `frontend/middleware.ts`, `frontend/contexts/AuthContext.tsx`, `frontend/components/LayoutContent.tsx`, new `frontend/lib/public-paths.ts`, and the 20 `NEXT_PUBLIC_API_URL` migrations listed above.
+
+Ops: `docker-compose.yml` (frontend gains `BACKEND_INTERNAL_URL`).
+
+### Verification evidence
+
+- Infrastructure: `/api/health` 200, `/api/readiness` 200, backend `/metrics` 200.
+- Auth: tenant login 200, admin login 200, API v1 OAuth2 `client_credentials` grant 200.
+- API v1 sweep: `agents`, `skills`, `tools`, `personas`, `tone-presets`, `security-profiles` — all 200.
+- Tenant UI walk (Hub, Playground Debug + Memory, Agents, Flows, Settings, Watcher → Graph View): 153 API calls, 151 returned 200. The two pre-existing 500s (`/api/mcp/instances/tester/status`, `/api/hub/integrations?refresh_health=true`) predate this patch and are unrelated.
+- Sandboxed tool: `/tool dig lookup domain=example.com` → 200 with IPs, 125 ms execution.
+- WhatsApp round-trip: tester (5527999616279) → bot (5527988290533) → bot responded "Hello Vini! How can I help you today?" → stored back on tester.
+- Per-bug: env preservation unit test PASS, `alembic current = 0035`, schema probes show both new columns, search provider log emits, Graph View glow appears on `agent-1` for 3s during `agent_processing start/end` and clears immediately after.
+
+### Docs sweep — close v0.6.0 coverage gaps (`develop`, 2026-04-16)
+
+Targeted documentation patch so `docs/documentation.md` and `docs/user-guide.md` reflect headline v0.6.0 features that the README already advertises. No code changes.
+
+**`docs/documentation.md` additions:**
+- §7.5 Multi-Agent Orchestration — corrected Agent Switcher `execution_mode` to `hybrid` (v0.6.0 default) and added a mode matrix (`tool` / `legacy` / `hybrid`).
+- §13 Flows — BUG-559 callout: `flows_skill` now queries `AgentSkillIntegration` first, so per-agent provider bindings (e.g., Google Calendar) take precedence over config defaults.
+- §15.1.1 (new) Migration: LID support (v0.6.0) — contact auto-linking, UserAgentSession phone-number fallback, ContactAgentMapping dual-key lookup.
+- §19.6 (new) Anthropic Prompt Caching — 3-breakpoint `cache_control` with relocation trick, 40–65% input-token cost cut, default model `claude-haiku-4-5`.
+- §19.4/19.5 — fixed duplicate numbering (Model Pricing is now §19.5).
+
+**`docs/user-guide.md` additions:**
+- §1 — new "For Administrators: Installer Options" callout covering `--le-staging`, IP-address SAN handling, and frontend rebuild on `NEXT_PUBLIC_API_URL` change.
+- §2 — Anthropic prompt caching note in the provider section; default model reference to `claude-haiku-4-5`.
+- §3 Multi-Agent Orchestration — Agent Switcher hybrid mode callout.
+- §6 WhatsApp — "Upgrading from 0.5.x — WhatsApp LID migration" callout with re-linking steps.
+- §18 (new) Remote Access (System Administrators) — Cloudflare Tunnel pointer with Quick vs Named mode table, setup steps, and security posture.
+- TOC updated to include §18.
+
+**Files changed:**
+- `docs/documentation.md` (+~60 lines, additive)
+- `docs/user-guide.md` (+~60 lines, additive)
+- `docs/changelog.md` (this entry)
+
 ## v0.6.0-patch.4 (2026-04-16)
 
 Promotion of `develop` → `main`. Consolidates all post-patch.3 work (channels, installer SSL, memory scoping, sentinel parser, skill fixes, UX wizards, regression results) into the v0.6.0 release line. README refreshed with v0.6.0 highlights.

@@ -13,7 +13,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+const API_URL = ''
 
 function SSOCallbackContent() {
   const router = useRouter()

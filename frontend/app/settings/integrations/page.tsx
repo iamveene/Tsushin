@@ -36,7 +36,7 @@ export default function IntegrationsSettingsPage() {
   const [googleClientId, setGoogleClientId] = useState('')
   const [googleClientSecret, setGoogleClientSecret] = useState('')
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+  const apiUrl = ''
 
   // ---- Google OAuth functions ----
 

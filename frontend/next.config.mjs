@@ -15,6 +15,18 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  // v0.6.1 BUG-5/7/8 fix: proxy /api/* and /ws/* to the backend over the
+  // internal Docker network so browser requests stay same-origin with the
+  // frontend (cookie-scoped). BACKEND_INTERNAL_URL is read at request time
+  // from the Node.js process (NOT a build arg). Default targets the compose
+  // service `backend` on its in-network port 8081.
+  async rewrites() {
+    const backend = process.env.BACKEND_INTERNAL_URL || 'http://backend:8081'
+    return [
+      { source: '/api/:path*', destination: `${backend}/api/:path*` },
+      { source: '/ws/:path*', destination: `${backend}/ws/:path*` },
+    ]
+  },
 }
 
 export default nextConfig

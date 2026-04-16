@@ -207,6 +207,8 @@ class SearchSkill(BaseSkill):
             )
 
             # Perform search
+            logger.info(f"🔍 Web search: provider={provider_name}, query={query.strip()[:120]}")
+            print(f"🔍 Web search: provider={provider_name}, query={query.strip()[:120]}", flush=True)
             response = await provider.search(request)
 
             if not response.success:
@@ -590,6 +592,8 @@ Search query:"""
             )
 
             # Perform search
+            logger.info(f"🔍 Web search: provider={provider_name}, query={query.strip()[:120]}")
+            print(f"🔍 Web search: provider={provider_name}, query={query.strip()[:120]}", flush=True)
             response = await provider.search(request)
 
             if not response.success:

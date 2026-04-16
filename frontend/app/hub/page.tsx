@@ -685,7 +685,7 @@ export default function HubPage() {
 
   const fetchAPIKeys = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/api-keys`)
       if (!response.ok) {
         const errorText = await response.text()
@@ -868,7 +868,7 @@ export default function HubPage() {
 
   const fetchKokoroHealth = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/tts-providers/kokoro/status`)
       if (response.ok) {
         const data = await response.json()
@@ -921,7 +921,7 @@ export default function HubPage() {
       const retryInterval = 3000 // 3 seconds
       for (let i = 0; i < maxRetries; i++) {
         await new Promise(r => setTimeout(r, retryInterval))
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+        const apiUrl = ''
         try {
           const resp = await authenticatedFetch(`${apiUrl}/api/tts-providers/kokoro/status`)
           if (resp.ok) {
@@ -1059,7 +1059,7 @@ export default function HubPage() {
 
   const fetchToolboxStatus = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/toolbox/status`)
       if (response.ok) {
         const data = await response.json()
@@ -1093,7 +1093,7 @@ export default function HubPage() {
 
   const loadHubIntegrations = async (refreshHealth: boolean = false) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const url = refreshHealth
         ? `${apiUrl}/api/hub/integrations?refresh_health=true`
         : `${apiUrl}/api/hub/integrations`
@@ -1203,7 +1203,7 @@ export default function HubPage() {
     }
     setVertexSaving(true)
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/api-keys`, {
         method: 'POST',
         body: JSON.stringify({
@@ -1249,7 +1249,7 @@ export default function HubPage() {
     setVertexTesting(true)
     setVertexTestResult(null)
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/integrations/vertex_ai/test`, {
         method: 'POST',
         body: JSON.stringify({})
@@ -1272,7 +1272,7 @@ export default function HubPage() {
     setSaving(true)
     setError(null)
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/api-keys`, {
         method: 'POST',
         body: JSON.stringify(modalData)
@@ -1303,7 +1303,7 @@ export default function HubPage() {
     setDeletingApiKeyService(service)
     setError(null)
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/api-keys/${service}`, {
         method: 'DELETE'
       })
@@ -1798,7 +1798,7 @@ export default function HubPage() {
     if (!workspaceName?.trim()) return
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/authorize`, {
         method: 'POST',
         body: JSON.stringify({ redirect_url: '/hub', workspace_name: workspaceName.trim() })
@@ -1824,7 +1824,7 @@ export default function HubPage() {
     if (!confirm('Disconnect Asana integration?')) return
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
@@ -1839,7 +1839,7 @@ export default function HubPage() {
   // Google OAuth Credentials handlers
   const loadGoogleCredentials = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/hub/google/credentials`)
       if (response.ok) {
         const data = await response.json()
@@ -1868,7 +1868,7 @@ export default function HubPage() {
     }
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const params = new URLSearchParams({ redirect_url: '/hub' })
       const response = await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/authorize?${params}`, {
         method: 'POST'
@@ -1894,7 +1894,7 @@ export default function HubPage() {
     if (!confirm('Disconnect Google Calendar integration?')) return
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
@@ -1915,7 +1915,7 @@ export default function HubPage() {
     }
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const params = new URLSearchParams({ redirect_url: '/hub' })
       const response = await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/authorize?${params}`, {
         method: 'POST'
@@ -1941,7 +1941,7 @@ export default function HubPage() {
     if (!confirm('Disconnect Gmail integration?')) return
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
@@ -1956,7 +1956,7 @@ export default function HubPage() {
   // Re-authorize an expired/revoked integration
   const handleReauthorize = async (integrationId: number) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const params = new URLSearchParams({ redirect_url: '/hub' })
       const response = await authenticatedFetch(`${apiUrl}/api/hub/google/reauthorize/${integrationId}?${params}`, {
         method: 'POST'

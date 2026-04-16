@@ -15,7 +15,7 @@ interface SupportedServices {
   services: Record<string, string>
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+const API_BASE = ''
 
 export default function ApiKeyManager() {
   const [keys, setKeys] = useState<ApiKey[]>([])

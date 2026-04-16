@@ -59,7 +59,7 @@ export default function AsanaManagePage() {
 
   const fetchIntegration = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/hub/integrations`)
       if (!response.ok) throw new Error('Failed to fetch')
 
@@ -75,7 +75,7 @@ export default function AsanaManagePage() {
 
   const fetchHealth = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/${integrationId}/health`)
       if (!response.ok) throw new Error('Failed to fetch health')
 
@@ -88,7 +88,7 @@ export default function AsanaManagePage() {
 
   const fetchTools = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/${integrationId}/tools`)
       if (!response.ok) throw new Error('Failed to fetch tools')
 
@@ -103,7 +103,7 @@ export default function AsanaManagePage() {
     if (!confirm('Disconnect this Asana integration?')) return
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
@@ -119,7 +119,7 @@ export default function AsanaManagePage() {
     setAssigneeMessage('')
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/${integrationId}/default-assignee`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -153,7 +153,7 @@ export default function AsanaManagePage() {
     setAssigneeMessage('')
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+      const apiUrl = ''
       const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/${integrationId}/default-assignee`, {
         method: 'PATCH',
         body: JSON.stringify({ assignee_name: null })
