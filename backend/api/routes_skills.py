@@ -352,6 +352,19 @@ async def disable_skill(
                 detail=f"Skill '{skill_type}' not found for agent {agent_id}"
             )
 
+        if skill_type == "agent_communication":
+            from models import AgentCommunicationPermission
+            stale = db.query(AgentCommunicationPermission).filter(
+                AgentCommunicationPermission.tenant_id == ctx.tenant_id,
+                (AgentCommunicationPermission.source_agent_id == agent_id) |
+                (AgentCommunicationPermission.target_agent_id == agent_id)
+            ).all()
+            for perm in stale:
+                db.delete(perm)
+            if stale:
+                db.commit()
+                logger.info(f"Auto-cleaned {len(stale)} A2A permissions for agent {agent_id} after skill removal")
+
         logger.info(f"Disabled skill '{skill_type}' for agent {agent_id}")
 
         return {
