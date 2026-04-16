@@ -20,8 +20,14 @@ import { useToast } from '@/contexts/ToastContext'
 import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
-import SlackSetupModal from '@/components/SlackSetupModal'
-import DiscordSetupModal from '@/components/DiscordSetupModal'
+// V060-CHN-002: SlackSetupModal/DiscordSetupModal replaced by guided wizards.
+// The bare modals dumped users into a 5-field form with no idea where to get a
+// bot token, what scopes were needed, or how to wire the webhook back. The
+// wizards (mirrors WhatsAppSetupWizard) walk through every Discord/Slack
+// portal click, show the exact manifest/perms list, and surface the webhook
+// URL with a copy button after save.
+import SlackSetupModal from '@/components/SlackSetupWizard'
+import DiscordSetupModal from '@/components/DiscordSetupWizard'
 import PublicBaseUrlCard from '@/components/PublicBaseUrlCard'
 import WebhookSetupModal from '@/components/WebhookSetupModal'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
@@ -3152,9 +3158,9 @@ export default function HubPage() {
                           </div>
 
                           <div className="text-xs text-tsushin-slate mb-3 space-y-1">
-                            <p>DM Policy: <span className="text-white capitalize">{integration.dm_policy}</span></p>
-                            {integration.allowed_channels.length > 0 && (
-                              <p>Channels: <span className="text-white">{integration.allowed_channels.length} allowed</span></p>
+                            <p>DM Policy: <span className="text-white capitalize">{integration.dm_policy ?? 'allowlist'}</span></p>
+                            {(integration.allowed_channels?.length ?? 0) > 0 && (
+                              <p>Channels: <span className="text-white">{integration.allowed_channels!.length} allowed</span></p>
                             )}
                           </div>
 
@@ -3233,9 +3239,9 @@ export default function HubPage() {
                           </div>
 
                           <div className="text-xs text-tsushin-slate mb-3 space-y-1">
-                            <p>DM Policy: <span className="text-white capitalize">{integration.dm_policy}</span></p>
-                            {integration.allowed_guilds && integration.allowed_guilds.length > 0 && (
-                              <p>Servers: <span className="text-white">{integration.allowed_guilds.length} allowed</span></p>
+                            <p>DM Policy: <span className="text-white capitalize">{integration.dm_policy ?? 'allowlist'}</span></p>
+                            {(integration.allowed_guilds?.length ?? 0) > 0 && (
+                              <p>Servers: <span className="text-white">{integration.allowed_guilds!.length} allowed</span></p>
                             )}
                           </div>
 
