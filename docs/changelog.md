@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Graph View Glowing Regression Fix (`develop`, 2026-04-16)
+
+- **BUG-555 fix (WebSocket never-give-up reconnection):** Graph View glow animations stopped working after backend restarts because the WebSocket reconnection logic gave up after 5 attempts. Removed the reconnection limit — WebSocket now retries indefinitely with 10s backoff cap. Added `visibilitychange` listener to auto-reconnect when user switches back to the tab.
+- **BUG-556 fix (streaming event cleanup):** Playground streaming path emitted an orphaned `agent_processing: start` event before delegating to `send_message()`, which emitted its own start/end pair. Removed the duplicate; `send_message()` now solely manages AI-path events. Added explicit start for skill-only streaming path.
+- **BUG-557 fix (glow brightness):** Increased all glow animation brightness 33% (opacity 0.6→0.8 close, 0.3→0.4 far). Added `inset` inner glow and `border-width: 2px` during active state for better visibility on dark backgrounds.
+- **BUG-558 fix (tester delete button):** Added Delete button to QA Tester card in Hub. Handles runtime tester instances (API delete) and compose-managed orphans (dismiss card). Resolves catch-22 where container was gone but config card remained without any way to remove it.
+
 ### OKG & MCP Skill Regression Fixes (`develop`, 2026-04-16)
 
 - **BUG-551 fix (OKG multi-tool registration):** The deprecated `get_skill_tool_definitions()` method (used by the main agent pipeline) only registered `okg_store` via the single-tool `get_mcp_tool_definition()` call, leaving `okg_recall` and `okg_forget` invisible to the LLM. Added multi-tool branch that checks `get_all_mcp_tool_definitions()` and registers all tools when count > 1.
