@@ -5,6 +5,7 @@ Phase 15: Skill Projects - Added session management and agent access endpoints
 RESTful API for project management, knowledge bases, and conversations.
 """
 
+import logging
 import os
 import re
 from datetime import datetime
@@ -19,11 +20,56 @@ from auth_dependencies import get_current_user_required
 from services.project_service import ProjectService
 from services.project_command_service import ProjectCommandService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Projects"])
 
 # Security constants for file uploads
 MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB max file size
 MAX_FILENAME_LENGTH = 255
+
+# BUG-SEC-019: Magic bytes signatures for file type validation.
+# Maps file extension to a list of (offset, magic_bytes) tuples.
+# If extension not listed, content-type check is skipped (text-based formats).
+MAGIC_BYTES_SIGNATURES: Dict[str, list] = {
+    ".pdf":  [(0, b"%PDF")],
+    ".xlsx": [(0, b"PK\x03\x04")],      # OOXML ZIP container
+    ".xls":  [(0, b"\xD0\xCF\x11\xE0")],  # OLE2 compound document
+    ".docx": [(0, b"PK\x03\x04")],      # OOXML ZIP container
+    ".doc":  [(0, b"\xD0\xCF\x11\xE0")],  # OLE2 compound document
+    ".rtf":  [(0, b"{\\rtf")],
+}
+
+# Extensions that are plain text and don't have magic bytes
+TEXT_EXTENSIONS = {".txt", ".csv", ".json", ".md", ".markdown"}
+
+
+def validate_file_magic_bytes(file_data: bytes, extension: str) -> bool:
+    """
+    BUG-SEC-019: Validate that a file's content matches its declared extension
+    by checking magic bytes. Returns True if valid, False if mismatch detected.
+
+    Text-based formats (.txt, .csv, .json, .md) are always accepted since they
+    have no reliable magic bytes signature.
+    """
+    ext_lower = extension.lower()
+
+    # Text formats: no magic bytes to check
+    if ext_lower in TEXT_EXTENSIONS:
+        return True
+
+    # If we have a known signature, verify it
+    signatures = MAGIC_BYTES_SIGNATURES.get(ext_lower)
+    if not signatures:
+        # Unknown extension with no signature — allow (conservative)
+        return True
+
+    for offset, magic in signatures:
+        end = offset + len(magic)
+        if len(file_data) >= end and file_data[offset:end] == magic:
+            return True
+
+    # None of the signatures matched
+    return False
 
 
 def secure_filename(filename: str) -> str:
@@ -295,7 +341,15 @@ async def create_project(
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error"))
 
-    return ProjectResponse(**result["project"])
+    project_data = result.get("project")
+    if not project_data:
+        raise HTTPException(status_code=500, detail="Project created but response data missing")
+
+    try:
+        return ProjectResponse(**project_data)
+    except Exception as e:
+        logger.error(f"Project response serialization failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Response serialization error: {str(e)}")
 
 
 @router.get("/api/projects/{project_id}", response_model=ProjectResponse)
@@ -337,7 +391,15 @@ async def update_project(
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error"))
 
-    return ProjectResponse(**result["project"])
+    project_data = result.get("project")
+    if not project_data:
+        raise HTTPException(status_code=500, detail="Project updated but response data missing")
+
+    try:
+        return ProjectResponse(**project_data)
+    except Exception as e:
+        logger.error(f"Project response serialization failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Response serialization error: {str(e)}")
 
 
 @router.delete("/api/projects/{project_id}")
@@ -390,7 +452,7 @@ async def upload_project_document(
 
         # Verify tenant access (unless global admin)
         if not current_user.is_global_admin and project.tenant_id != current_user.tenant_id:
-            raise HTTPException(status_code=403, detail="Access denied to this project")
+            raise HTTPException(status_code=404, detail="Project not found")
 
         # Read file with size validation
         file_data = await file.read()
@@ -404,6 +466,15 @@ async def upload_project_document(
 
         # Sanitize filename to prevent path traversal
         filename = secure_filename(file.filename or "document")
+
+        # BUG-SEC-019: Validate file magic bytes match declared extension
+        ext = os.path.splitext(filename)[1].lower()
+        if not validate_file_magic_bytes(file_data, ext):
+            raise HTTPException(
+                status_code=400,
+                detail=f"File content does not match declared type '{ext}'. "
+                       f"The file may be corrupted or mislabeled."
+            )
 
         result = await service.upload_project_document(
             tenant_id=current_user.tenant_id or project.tenant_id,
@@ -423,7 +494,8 @@ async def upload_project_document(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Failed to upload project document: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload document. Check server logs for details.")
 
 
 @router.get("/api/projects/{project_id}/knowledge", response_model=List[DocumentResponse])
@@ -450,19 +522,24 @@ async def get_project_knowledge_chunks(
     current_user: User = Depends(get_current_user_required)
 ):
     """Get chunks for a project knowledge document."""
-    from models import ProjectKnowledgeChunk
+    from models import Project, ProjectKnowledge, ProjectKnowledgeChunk
 
-    service = ProjectService(db)
-
-    # Verify project access
-    project = await service.get_project(
-        tenant_id=current_user.tenant_id,
-        user_id=current_user.id,
-        project_id=project_id
-    )
-
+    # BUG-LOG-004 FIX: Defense-in-depth — verify project belongs to tenant
+    # at the DB level before accessing any child resources.
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.tenant_id == current_user.tenant_id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify doc_id belongs to this tenant-validated project (prevents cross-tenant IDOR)
+    doc = db.query(ProjectKnowledge).filter(
+        ProjectKnowledge.id == doc_id,
+        ProjectKnowledge.project_id == project_id
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found in this project")
 
     # Get chunks
     chunks = db.query(ProjectKnowledgeChunk).filter(
@@ -835,7 +912,7 @@ async def update_project_agents(
 
     Replaces all agent access with the provided list.
     """
-    from models import Project, AgentProjectAccess
+    from models import Agent as AgentModel, Project, AgentProjectAccess
 
     # Verify project exists in tenant
     project = db.query(Project).filter(
@@ -845,6 +922,18 @@ async def update_project_agents(
 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # BUG-LOG-014 FIX: Verify all agents belong to the caller's tenant
+    if data.agent_ids:
+        valid_agent_ids = set(
+            row[0] for row in db.query(AgentModel.id).filter(
+                AgentModel.id.in_(data.agent_ids),
+                AgentModel.tenant_id == current_user.tenant_id
+            ).all()
+        )
+        invalid_ids = set(data.agent_ids) - valid_agent_ids
+        if invalid_ids:
+            raise HTTPException(status_code=404, detail=f"Agents not found: {list(invalid_ids)}")
 
     # Remove existing access
     db.query(AgentProjectAccess).filter(

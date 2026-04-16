@@ -137,7 +137,7 @@ export default function EnhancedInputArea({
   }, [value])
 
   return (
-    <div className="relative p-4 bg-[#14141f] border-t border-white/10">
+    <div className="relative p-4 bg-tsushin-ink border-t border-white/10">
       {/* Inline Commands Dropdown */}
       <InlineCommands
         isOpen={showCommands}

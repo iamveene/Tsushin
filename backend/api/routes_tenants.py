@@ -15,7 +15,7 @@ from datetime import datetime
 import re
 
 from db import get_db
-from models_rbac import Tenant, User, UserRole, Role
+from models_rbac import Tenant, User, UserRole, Role, SubscriptionPlan
 from auth_dependencies import (
     get_current_user_required,
     require_global_admin,
@@ -37,17 +37,19 @@ class TenantCreate(BaseModel):
     owner_name: str
     plan: str = "free"
     max_users: int = 5
-    max_agents: int = 5
+    max_agents: int = 10
     max_monthly_requests: int = 10000
 
 
 class TenantUpdate(BaseModel):
     name: Optional[str] = None
+    slug: Optional[str] = None
     plan: Optional[str] = None
     max_users: Optional[int] = None
     max_agents: Optional[int] = None
     max_monthly_requests: Optional[int] = None
     status: Optional[str] = None  # active, suspended, trial
+    remote_access_enabled: Optional[bool] = None  # v0.6.0: per-tenant remote access gate
 
 
 class TenantResponse(BaseModel):
@@ -55,6 +57,8 @@ class TenantResponse(BaseModel):
     name: str
     slug: str
     plan: str
+    plan_display_name: Optional[str] = None
+    plan_price_monthly: Optional[int] = None  # cents
     max_users: int
     max_agents: int
     max_monthly_requests: int
@@ -62,6 +66,7 @@ class TenantResponse(BaseModel):
     status: str
     user_count: int = 0
     agent_count: int = 0
+    remote_access_enabled: bool = False  # v0.6.0: Cloudflare tunnel entitlement
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -70,7 +75,7 @@ class TenantResponse(BaseModel):
 
 
 class TenantListResponse(BaseModel):
-    tenants: List[TenantResponse]
+    items: List[TenantResponse]
     total: int
     page: int
     page_size: int
@@ -110,11 +115,28 @@ def tenant_to_response(tenant: Tenant, db: Session) -> TenantResponse:
         Agent.is_active == True
     ).count()
 
+    # Resolve plan pricing from SubscriptionPlan table
+    plan_display_name = None
+    plan_price_monthly = None
+    if tenant.plan_id and tenant.subscription_plan:
+        plan_display_name = tenant.subscription_plan.display_name
+        plan_price_monthly = tenant.subscription_plan.price_monthly
+    elif tenant.plan:
+        # Fallback: look up by legacy plan name string
+        sub_plan = db.query(SubscriptionPlan).filter(
+            SubscriptionPlan.name == tenant.plan
+        ).first()
+        if sub_plan:
+            plan_display_name = sub_plan.display_name
+            plan_price_monthly = sub_plan.price_monthly
+
     return TenantResponse(
         id=tenant.id,
         name=tenant.name,
         slug=tenant.slug,
         plan=tenant.plan,
+        plan_display_name=plan_display_name,
+        plan_price_monthly=plan_price_monthly,
         max_users=tenant.max_users,
         max_agents=tenant.max_agents,
         max_monthly_requests=tenant.max_monthly_requests,
@@ -122,6 +144,7 @@ def tenant_to_response(tenant: Tenant, db: Session) -> TenantResponse:
         status=tenant.status,
         user_count=user_count,
         agent_count=agent_count,
+        remote_access_enabled=bool(getattr(tenant, "remote_access_enabled", False)),
         created_at=tenant.created_at.isoformat() if tenant.created_at else None,
         updated_at=tenant.updated_at.isoformat() if tenant.updated_at else None,
     )
@@ -173,7 +196,7 @@ async def list_tenants(
     tenants = query.order_by(Tenant.created_at.desc()).offset(offset).limit(page_size).all()
 
     return TenantListResponse(
-        tenants=[tenant_to_response(t, db) for t in tenants],
+        items=[tenant_to_response(t, db) for t in tenants],
         total=total,
         page=page,
         page_size=page_size,
@@ -374,9 +397,23 @@ async def update_tenant(
             )
         is_owner = True
 
-    # Apply updates
+    # Apply updates (owners can change name and slug)
     if request.name is not None:
         tenant.name = request.name
+
+    if request.slug is not None:
+        # Validate and sanitize slug
+        new_slug = re.sub(r'[^a-z0-9-]', '', request.slug.lower().replace(' ', '-'))[:50]
+        if not new_slug:
+            raise HTTPException(status_code=400, detail="Invalid slug")
+        # Check uniqueness (exclude current tenant)
+        existing = db.query(Tenant).filter(
+            Tenant.slug == new_slug,
+            Tenant.id != tenant.id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="This slug is already taken")
+        tenant.slug = new_slug
 
     # Only global admins can change these
     if current_user.is_global_admin:
@@ -391,6 +428,19 @@ async def update_tenant(
         if request.status is not None:
             tenant.status = request.status
             tenant.is_active = request.status == "active"
+        # v0.6.0 Remote Access: per-tenant entitlement (global admin only).
+        # Delegates to the remote access service so both audit streams fire.
+        if request.remote_access_enabled is not None and bool(tenant.remote_access_enabled) != bool(request.remote_access_enabled):
+            from services.remote_access_config_service import set_tenant_entitlement
+            set_tenant_entitlement(
+                db=db,
+                admin=current_user,
+                tenant_id=tenant.id,
+                enabled=bool(request.remote_access_enabled),
+                reason=None,
+            )
+            # Refresh for the response
+            db.refresh(tenant)
 
     tenant.updated_at = datetime.utcnow()
     db.commit()

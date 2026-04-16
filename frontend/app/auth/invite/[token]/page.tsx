@@ -38,7 +38,7 @@ const GoogleIcon = () => (
 export default function AcceptInvitationPage() {
   const params = useParams()
   const router = useRouter()
-  const { loginWithGoogle } = useAuth()
+  const { loginWithGoogle, setAuthFromToken } = useAuth()
   const token = params.token as string
 
   const [invitationInfo, setInvitationInfo] = useState<InvitationInfo | null>(null)
@@ -105,8 +105,8 @@ export default function AcceptInvitationPage() {
       errors.push('Full name is required')
     }
 
-    if (formData.password.length < 8) {
-      errors.push('Password must be at least 8 characters')
+    if (formData.password.length < 6) {
+      errors.push('Password must be at least 6 characters')
     }
 
     if (formData.password !== formData.confirmPassword) {
@@ -131,10 +131,10 @@ export default function AcceptInvitationPage() {
         full_name: formData.full_name,
       })
 
-      // Store the token and redirect to home
-      localStorage.setItem('tsushin_auth_token', response.access_token)
+      // Store the token via AuthContext (handles localStorage + user state)
+      await setAuthFromToken(response.access_token)
 
-      // Show success briefly then redirect
+      // Redirect to home
       router.push('/')
     } catch (err: any) {
       setFormErrors([err.message || 'Failed to accept invitation'])
@@ -145,26 +145,26 @@ export default function AcceptInvitationPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="text-gray-600 dark:text-gray-400">Loading invitation...</div>
+      <div className="min-h-screen flex items-center justify-center bg-tsushin-ink">
+        <div className="text-tsushin-slate">Loading invitation...</div>
       </div>
     )
   }
 
   if (error || !invitationInfo) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
-        <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-lg shadow-md p-8 text-center">
-          <div className="mb-4"><svg className="w-10 h-10 mx-auto text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg></div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">
+      <div className="min-h-screen flex items-center justify-center bg-tsushin-ink p-4">
+        <div className="max-w-md w-full bg-tsushin-surface rounded-2xl shadow-elevated border border-tsushin-border p-8 text-center">
+          <div className="mb-4"><svg className="w-10 h-10 mx-auto text-tsushin-vermilion" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg></div>
+          <h1 className="text-2xl font-bold text-white mb-2">
             Invalid Invitation
           </h1>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">
+          <p className="text-tsushin-slate mb-6">
             {error || 'This invitation link is invalid or has expired.'}
           </p>
           <Link
             href="/auth/login"
-            className="text-blue-600 dark:text-blue-400 hover:underline"
+            className="text-teal-400 hover:underline"
           >
             Go to Login
           </Link>
@@ -175,19 +175,19 @@ export default function AcceptInvitationPage() {
 
   if (!invitationInfo.is_valid) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
-        <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-lg shadow-md p-8 text-center">
+      <div className="min-h-screen flex items-center justify-center bg-tsushin-ink p-4">
+        <div className="max-w-md w-full bg-tsushin-surface rounded-2xl shadow-elevated border border-tsushin-border p-8 text-center">
           <div className="mb-4"><svg className="w-10 h-10 mx-auto text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg></div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">
+          <h1 className="text-2xl font-bold text-white mb-2">
             Invitation Expired
           </h1>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">
+          <p className="text-tsushin-slate mb-6">
             This invitation has expired. Please contact{' '}
             <strong>{invitationInfo.inviter_name}</strong> to send a new invitation.
           </p>
           <Link
             href="/auth/login"
-            className="text-blue-600 dark:text-blue-400 hover:underline"
+            className="text-teal-400 hover:underline"
           >
             Go to Login
           </Link>
@@ -197,52 +197,52 @@ export default function AcceptInvitationPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-tsushin-ink p-4">
       <div className="max-w-md w-full">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2">
+          <h1 className="text-3xl font-bold text-white mb-2">
             Join {invitationInfo.tenant_name}
           </h1>
-          <p className="text-gray-600 dark:text-gray-400">
+          <p className="text-tsushin-slate">
             {invitationInfo.inviter_name} invited you to join as{' '}
             <strong>{invitationInfo.role_display_name}</strong>
           </p>
         </div>
 
         {/* Invitation Details Card */}
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
+        <div className="bg-teal-500/10 border border-teal-500/30 rounded-2xl p-4 mb-6">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <div className="text-blue-700 dark:text-blue-300 font-medium">Organization</div>
-              <div className="text-blue-900 dark:text-blue-100">{invitationInfo.tenant_name}</div>
+              <div className="text-teal-400 font-medium">Organization</div>
+              <div className="text-tsushin-fog">{invitationInfo.tenant_name}</div>
             </div>
             <div>
-              <div className="text-blue-700 dark:text-blue-300 font-medium">Role</div>
-              <div className="text-blue-900 dark:text-blue-100">
+              <div className="text-teal-400 font-medium">Role</div>
+              <div className="text-tsushin-fog">
                 {invitationInfo.role_display_name}
               </div>
             </div>
             <div>
-              <div className="text-blue-700 dark:text-blue-300 font-medium">Email</div>
-              <div className="text-blue-900 dark:text-blue-100">{invitationInfo.email}</div>
+              <div className="text-teal-400 font-medium">Email</div>
+              <div className="text-tsushin-fog">{invitationInfo.email}</div>
             </div>
             <div>
-              <div className="text-blue-700 dark:text-blue-300 font-medium">Invited by</div>
-              <div className="text-blue-900 dark:text-blue-100">{invitationInfo.inviter_name}</div>
+              <div className="text-teal-400 font-medium">Invited by</div>
+              <div className="text-tsushin-fog">{invitationInfo.inviter_name}</div>
             </div>
           </div>
         </div>
 
         {/* Registration Form */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+        <div className="bg-tsushin-surface rounded-2xl shadow-elevated border border-tsushin-border p-6">
+          <h2 className="text-lg font-semibold text-white mb-4">
             Create Your Account
           </h2>
 
           {formErrors.length > 0 && (
-            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
-              <ul className="text-sm text-red-800 dark:text-red-200 list-disc list-inside">
+            <div className="mb-4 p-3 bg-tsushin-vermilion/10 border border-tsushin-vermilion/30 rounded">
+              <ul className="text-sm text-tsushin-vermilion list-disc list-inside">
                 {formErrors.map((err, i) => (
                   <li key={i}>{err}</li>
                 ))}
@@ -257,7 +257,7 @@ export default function AcceptInvitationPage() {
                 type="button"
                 onClick={handleGoogleSignUp}
                 disabled={submitting || googleLoading}
-                className="w-full flex items-center justify-center gap-3 py-2 px-4 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="w-full flex items-center justify-center gap-3 py-2 px-4 border border-tsushin-border rounded-md shadow-sm text-sm font-medium text-tsushin-fog bg-tsushin-elevated hover:bg-tsushin-surface focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {googleLoading ? (
                   <svg className="animate-spin h-5 w-5 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -270,16 +270,16 @@ export default function AcceptInvitationPage() {
                 {googleLoading ? 'Connecting...' : 'Continue with Google'}
               </button>
 
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
+              <p className="text-xs text-tsushin-slate mt-2 text-center">
                 Use {invitationInfo.email} to sign in with Google
               </p>
 
               <div className="relative my-6">
                 <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-300 dark:border-gray-600" />
+                  <div className="w-full border-t border-tsushin-border" />
                 </div>
                 <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                  <span className="px-2 bg-tsushin-surface text-tsushin-slate">
                     Or create a password
                   </span>
                 </div>
@@ -290,23 +290,23 @@ export default function AcceptInvitationPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Email (readonly) */}
             <div>
-              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
+              <label className="block text-sm font-medium text-white mb-1">
                 Email
               </label>
               <input
                 type="email"
                 value={invitationInfo.email}
                 disabled
-                className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-900 cursor-not-allowed"
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-tsushin-slate bg-tsushin-ink cursor-not-allowed"
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <p className="text-xs text-tsushin-slate mt-1">
                 This email is linked to your invitation
               </p>
             </div>
 
             {/* Full Name */}
             <div>
-              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
+              <label className="block text-sm font-medium text-white mb-1">
                 Full Name
               </label>
               <input
@@ -315,29 +315,29 @@ export default function AcceptInvitationPage() {
                 onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
                 placeholder="John Doe"
                 required
-                className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface focus:ring-2 focus:ring-teal-500"
               />
             </div>
 
             {/* Password */}
             <div>
-              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
+              <label className="block text-sm font-medium text-white mb-1">
                 Password
               </label>
               <input
                 type="password"
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                placeholder="Min 8 characters"
+                placeholder="Min 6 characters"
                 required
-                minLength={8}
-                className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500"
+                minLength={6}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface focus:ring-2 focus:ring-teal-500"
               />
             </div>
 
             {/* Confirm Password */}
             <div>
-              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
+              <label className="block text-sm font-medium text-white mb-1">
                 Confirm Password
               </label>
               <input
@@ -346,7 +346,7 @@ export default function AcceptInvitationPage() {
                 onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
                 placeholder="Re-enter password"
                 required
-                className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface focus:ring-2 focus:ring-teal-500"
               />
             </div>
 
@@ -354,23 +354,23 @@ export default function AcceptInvitationPage() {
             <button
               type="submit"
               disabled={submitting || googleLoading}
-              className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn-primary w-full flex justify-center py-2.5 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? 'Creating Account...' : 'Accept Invitation & Join'}
             </button>
           </form>
 
           {/* Already have account */}
-          <div className="mt-4 text-center text-sm text-gray-600 dark:text-gray-400">
+          <div className="mt-4 text-center text-sm text-tsushin-slate">
             Already have an account?{' '}
-            <Link href="/auth/login" className="text-blue-600 dark:text-blue-400 hover:underline">
+            <Link href="/auth/login" className="text-teal-400 hover:underline">
               Sign in
             </Link>
           </div>
         </div>
 
         {/* Terms */}
-        <p className="mt-4 text-center text-xs text-gray-500 dark:text-gray-400">
+        <p className="mt-4 text-center text-xs text-tsushin-slate">
           By accepting this invitation, you agree to our Terms of Service and Privacy Policy.
         </p>
       </div>

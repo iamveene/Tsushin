@@ -234,13 +234,35 @@ export default function SystemPerformanceSection({
               </div>
             </div>
             <div>
-              <p className="text-sm font-medium text-tsushin-indigo-glow">
-                Vector Embeddings
-              </p>
-              <p className="text-2xl font-display font-bold text-white mt-1">
-                <AnimatedCounter value={memoryStats.vector_store.total_embeddings} />
-              </p>
-              <p className="text-xs text-tsushin-slate">AI-indexed messages</p>
+              {memoryStats.vector_store.external_stores?.length ? (
+                <>
+                  <p className="text-sm font-medium text-tsushin-indigo-glow">
+                    Vector Store
+                  </p>
+                  <p className="text-2xl font-display font-bold text-white mt-1">
+                    {memoryStats.vector_store.total_embeddings > 0 ? (
+                      <AnimatedCounter value={memoryStats.vector_store.total_embeddings} />
+                    ) : (
+                      <span className="text-lg">Connected</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-tsushin-slate">
+                    {memoryStats.vector_store.external_stores.map((s: any) =>
+                      `${s.vendor} (${s.health_status})`
+                    ).join(', ')}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-tsushin-indigo-glow">
+                    Vector Embeddings
+                  </p>
+                  <p className="text-2xl font-display font-bold text-white mt-1">
+                    <AnimatedCounter value={memoryStats.vector_store.total_embeddings} />
+                  </p>
+                  <p className="text-xs text-tsushin-slate">AI-indexed messages</p>
+                </>
+              )}
             </div>
           </div>
         ) : (

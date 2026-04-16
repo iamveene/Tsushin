@@ -6,7 +6,9 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react'
-import { PlaygroundAgentInfo, PlaygroundMessage, SlashCommand, ProjectSession, Project, AudioCapabilities, PlaygroundThread } from '@/lib/client'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { PlaygroundAgentInfo, PlaygroundMessage, SlashCommand, ProjectSession, Project, AudioCapabilities, PlaygroundThread, authenticatedFetch } from '@/lib/client'
 import { ConnectionState } from '@/lib/websocket'
 import { formatTime } from '@/lib/dateUtils'
 import {
@@ -116,6 +118,8 @@ interface ExpertModeProps {
   // Phase 14.9: WebSocket streaming props
   streamingMessage?: Partial<PlaygroundMessage> | null
   connectionState?: ConnectionState
+  // Smart UX: paste handler
+  onPaste?: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void
 }
 
 interface QuickTool {
@@ -220,7 +224,9 @@ export default function ExpertMode({
   onExtractKnowledge,
   // Phase 14.9: WebSocket streaming props
   streamingMessage = null,
-  connectionState = 'disconnected'
+  connectionState = 'disconnected',
+  // Smart UX: paste handler
+  onPaste
 }: ExpertModeProps) {
   const [activeInspector, setActiveInspector] = useState<InspectorTab>('memory')
   const [leftCollapsed, setLeftCollapsed] = useState(false)
@@ -233,6 +239,7 @@ export default function ExpertMode({
   const [threadContextMenu, setThreadContextMenu] = useState<{ threadId: number; x: number; y: number } | null>(null)
   const [renamingThreadId, setRenamingThreadId] = useState<number | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Accordion state for left panel sections
@@ -245,6 +252,16 @@ export default function ExpertMode({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Lightbox: close on Escape key
+  useEffect(() => {
+    if (!lightboxImage) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxImage(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [lightboxImage])
+
   // BUG-012 Fix: Fetch agent-specific tools instead of global tools
   useEffect(() => {
     const loadAvailableTools = async () => {
@@ -256,15 +273,9 @@ export default function ExpertMode({
       setLoadingTools(true)
       try {
         const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
-        const token = localStorage.getItem('tsushin_auth_token')
 
         // Use agent-specific tools endpoint instead of global toolbox
-        const response = await fetch(`${baseUrl}/api/playground/tools/${selectedAgentId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        })
+        const response = await authenticatedFetch(`${baseUrl}/api/playground/tools/${selectedAgentId}`)
 
         if (response.ok) {
           const data = await response.json()
@@ -773,14 +784,37 @@ export default function ExpertMode({
                               ? 'bg-[var(--pg-accent)] text-[var(--pg-void)] rounded-tr-sm'
                               : 'bg-[var(--pg-surface)] border border-[var(--pg-border)] text-[var(--pg-text)] rounded-tl-sm'
                           }`}>
-                            <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                            {isUser ? (
+                              <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                            ) : (
+                              <div className="markdown-content break-words">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                              </div>
+                            )}
+                            {msg.image_urls && msg.image_urls.length > 0 ? (
+                              <div className={`mt-3 gap-2 ${msg.image_urls.length === 1 ? 'flex' : 'grid grid-cols-2'}`}>
+                                {msg.image_urls.map((url, imgIdx) => (
+                                  <img
+                                    key={imgIdx}
+                                    src={url}
+                                    alt={`Generated image ${imgIdx + 1}`}
+                                    className="rounded-lg max-w-full max-h-[400px] object-contain cursor-pointer border border-[var(--pg-border)] hover:opacity-90 transition-opacity"
+                                    onClick={() => setLightboxImage(url)}
+                                  />
+                                ))}
+                              </div>
+                            ) : msg.image_url ? (
+                              <img
+                                src={msg.image_url}
+                                alt="Generated image"
+                                className="mt-3 rounded-lg max-w-full max-h-[400px] object-contain cursor-pointer border border-[var(--pg-border)] hover:opacity-90 transition-opacity"
+                                onClick={() => setLightboxImage(msg.image_url!)}
+                              />
+                            ) : null}
                             {msg.audio_url && (
                               <audio
                                 controls
-                                src={msg.audio_url.startsWith('/api/')
-                                  ? `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}${msg.audio_url}`
-                                  : msg.audio_url
-                                }
+                                src={msg.audio_url}
                                 className="mt-2 h-8 w-full max-w-[200px]"
                               />
                             )}
@@ -953,6 +987,7 @@ export default function ExpertMode({
                     className="hidden"
                   />
                   <button
+                    type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isSending}
                     className="h-11 w-11 flex-shrink-0 rounded-lg bg-[var(--pg-surface)] border border-[var(--pg-border)] text-[var(--pg-text-secondary)] hover:text-[var(--pg-accent)] hover:border-[var(--pg-accent)]/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed relative flex items-center justify-center"
@@ -989,6 +1024,7 @@ export default function ExpertMode({
                   disabled={!selectedAgentId || isSending || isRecording}
                   onChange={onInputChange}
                   onKeyDown={onKeyDown}
+                  onPaste={onPaste}
                   className="w-full bg-[var(--pg-elevated)] border border-[var(--pg-border)] rounded-lg px-4 py-3 text-[var(--pg-text)] text-sm resize-none outline-none focus:border-[var(--pg-accent)] focus:ring-2 focus:ring-[var(--pg-accent-glow)] transition-all min-h-[44px] max-h-[120px]"
                   rows={1}
                   onInput={(e) => {
@@ -1072,6 +1108,7 @@ export default function ExpertMode({
                   <MemoryInspector
                     agentId={selectedAgentId}
                     senderKey={activeThread?.recipient}
+                    threadId={activeThread?.id}
                   />
                 )}
                 {activeInspector === 'skills' && <SkillsPanel agentId={selectedAgentId} />}
@@ -1202,16 +1239,14 @@ export default function ExpertMode({
       {threadContextMenu && (
         <>
           <div
-            className="fixed inset-0"
-            style={{ zIndex: 9998 }}
+            className="fixed inset-0 z-30"
             onClick={() => setThreadContextMenu(null)}
           />
           <div
-            className="fixed border border-[var(--pg-border)] rounded-lg shadow-2xl overflow-hidden"
+            className="fixed z-30 border border-[var(--pg-border)] rounded-lg shadow-2xl overflow-hidden"
             style={{
               left: threadContextMenu.x,
               top: threadContextMenu.y,
-              zIndex: 9999,
               minWidth: '180px',
               background: '#0D1117',
               opacity: 1
@@ -1266,13 +1301,12 @@ export default function ExpertMode({
       {renamingThreadId && (
         <>
           <div
-            className="fixed inset-0"
-            style={{ zIndex: 10000, backgroundColor: 'rgba(0, 0, 0, 0.5)', backdropFilter: 'blur(4px)' }}
+            className="fixed inset-0 z-50"
+            style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)', backdropFilter: 'blur(4px)' }}
             onClick={handleCancelRename}
           />
           <div
-            className="fixed inset-0 flex items-center justify-center p-4"
-            style={{ zIndex: 10001 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
           >
             <div
               className="border rounded-lg p-6 max-w-md w-full shadow-xl"
@@ -1339,6 +1373,29 @@ export default function ExpertMode({
             </div>
           </div>
         </>
+      )}
+      {/* Lightbox overlay for full-screen image viewing */}
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm cursor-pointer"
+          onClick={() => setLightboxImage(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors z-10"
+            onClick={(e) => { e.stopPropagation(); setLightboxImage(null) }}
+            aria-label="Close lightbox"
+          >
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+          <img
+            src={lightboxImage}
+            alt="Full size image"
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
       )}
     </div>
   )

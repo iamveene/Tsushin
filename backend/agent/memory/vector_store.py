@@ -54,7 +54,7 @@ class VectorStore:
 
         self.logger.info(f"VectorStore initialized. Collection size: {self.collection.count()}")
 
-    def add_message(
+    async def add_message(
         self,
         message_id: str,
         sender_key: str,
@@ -72,7 +72,7 @@ class VectorStore:
         """
         try:
             # Generate embedding
-            embedding = self.embedding_service.embed_text(text)
+            embedding = await self.embedding_service.embed_text_async(text)
 
             # Prepare metadata
             msg_metadata = {
@@ -96,7 +96,7 @@ class VectorStore:
             self.logger.error(f"Error adding message to vector store: {e}")
             raise
 
-    def search_similar(
+    async def search_similar(
         self,
         query_text: str,
         limit: int = 5,
@@ -124,7 +124,7 @@ class VectorStore:
                 return []
 
             # Generate query embedding
-            query_embedding = self.embedding_service.embed_text(query_text)
+            query_embedding = await self.embedding_service.embed_text_async(query_text)
 
             # Prepare query filters
             where_filter = None
@@ -204,6 +204,108 @@ class VectorStore:
             self.logger.info("Cleared all messages from vector store")
         except Exception as e:
             self.logger.error(f"Error clearing vector store: {e}")
+            raise
+
+    def update_access_time(self, message_ids: List[str]) -> None:
+        """
+        Update the last_accessed_at metadata field for the given message IDs.
+
+        Args:
+            message_ids: List of message IDs to update
+        """
+        if not message_ids:
+            return
+
+        try:
+            from datetime import datetime
+            now_iso = datetime.utcnow().isoformat() + "Z"
+
+            # Fetch existing metadata for these IDs
+            existing = self.collection.get(ids=message_ids, include=["metadatas"])
+
+            if not existing or not existing['ids']:
+                return
+
+            updated_metadatas = []
+            for metadata in existing['metadatas']:
+                meta = dict(metadata) if metadata else {}
+                meta['last_accessed_at'] = now_iso
+                updated_metadatas.append(meta)
+
+            self.collection.update(
+                ids=existing['ids'],
+                metadatas=updated_metadatas
+            )
+
+            self.logger.debug(f"Updated access time for {len(message_ids)} messages")
+
+        except Exception as e:
+            self.logger.error(f"Error updating access time: {e}")
+
+    async def search_similar_with_embeddings(
+        self,
+        query_text: str,
+        limit: int = 5,
+        sender_key: Optional[str] = None
+    ) -> tuple:
+        """
+        Search for similar messages and also return query embedding and result embeddings.
+
+        Used by temporal decay MMR reranking.
+
+        Args:
+            query_text: Text to search for
+            limit: Maximum number of results
+            sender_key: Optional filter by sender
+
+        Returns:
+            Tuple of (formatted_results, query_embedding, result_embeddings)
+            where result_embeddings is a list of embedding vectors aligned with results
+        """
+        try:
+            if self.collection.count() == 0:
+                return [], [], []
+
+            query_embedding = await self.embedding_service.embed_text_async(query_text)
+
+            where_filter = None
+            if sender_key:
+                where_filter = {"sender_key": sender_key}
+
+            results = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=limit,
+                where=where_filter,
+                include=["documents", "metadatas", "distances", "embeddings"]
+            )
+
+            formatted_results = []
+            result_embeddings = []
+
+            if results['ids'] and len(results['ids'][0]) > 0:
+                for i in range(len(results['ids'][0])):
+                    result = {
+                        'message_id': results['ids'][0][i],
+                        'text': results['documents'][0][i],
+                        'distance': results['distances'][0][i],
+                        'sender_key': results['metadatas'][0][i].get('sender_key'),
+                    }
+                    for key, value in results['metadatas'][0][i].items():
+                        if key not in ['sender_key', 'text']:
+                            result[key] = value
+
+                    formatted_results.append(result)
+
+                    # Collect embeddings
+                    if results.get('embeddings') and results['embeddings'][0] is not None and len(results['embeddings'][0]) > 0:
+                        result_embeddings.append(results['embeddings'][0][i])
+                    else:
+                        result_embeddings.append([])
+
+            return formatted_results, query_embedding, result_embeddings
+
+        except Exception as e:
+            self.logger.error(f"Error in search_similar_with_embeddings: {e}")
             raise
 
     def get_stats(self) -> Dict:

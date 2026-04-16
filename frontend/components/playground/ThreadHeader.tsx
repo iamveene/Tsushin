@@ -114,15 +114,6 @@ export default function ThreadHeader({ thread, onThreadUpdated, onThreadDeleted,
   }
 
   return (
-    <>
-      <style jsx>{`
-        .thread-menu-container {
-          background-color: #0D1117 !important;
-        }
-        .thread-menu-button {
-          background-color: #0D1117 !important;
-        }
-      `}</style>
     <div className="px-6 py-4 border-b border-tsushin-indigo/20 bg-tsushin-dark/40 backdrop-blur-sm">
       <div className="flex items-center justify-between gap-4">
         {isEditing ? (
@@ -211,20 +202,19 @@ export default function ThreadHeader({ thread, onThreadUpdated, onThreadDeleted,
               {showMenu && menuPosition && (
                 <>
                   <div
+                    className="z-30"
                     style={{
                       position: 'fixed',
                       inset: 0,
-                      zIndex: 9998
                     }}
                     onClick={() => setShowMenu(false)}
                   />
                   <div
-                    className="thread-menu-container"
+                    className="thread-menu-container z-30"
                     style={{
                       position: 'fixed',
                       left: `${menuPosition.x}px`,
                       top: `${menuPosition.y}px`,
-                      zIndex: 9999,
                       width: '12rem',
                       backgroundColor: '#0D1117',
                       border: '1px solid rgba(60, 90, 254, 0.2)',
@@ -370,6 +360,5 @@ export default function ThreadHeader({ thread, onThreadUpdated, onThreadDeleted,
         )}
       </div>
     </div>
-    </>
   )
 }

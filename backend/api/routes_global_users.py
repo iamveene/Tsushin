@@ -7,7 +7,7 @@ Allows viewing and managing users across all tenants.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from typing import Optional, List
@@ -15,7 +15,7 @@ from datetime import datetime
 import logging
 
 from db import get_db
-from models_rbac import User, Tenant, UserRole, Role
+from models_rbac import User, Tenant, UserRole, Role, PasswordResetToken, UserInvitation, GlobalAdminAuditLog
 from auth_dependencies import (
     get_current_user_required,
     require_global_admin,
@@ -50,7 +50,7 @@ class GlobalUserResponse(BaseModel):
 
 
 class GlobalUserListResponse(BaseModel):
-    users: List[GlobalUserResponse]
+    items: List[GlobalUserResponse]
     total: int
     page: int
     page_size: int
@@ -72,6 +72,11 @@ class UserUpdate(BaseModel):
     email_verified: Optional[bool] = None
     tenant_id: Optional[str] = None  # Transfer to different tenant
     role_name: Optional[str] = None
+
+
+class ResetPasswordRequest(BaseModel):
+    """BUG-053 FIX: Password transmitted in request body instead of URL query string."""
+    new_password: str = Field(..., min_length=8)
 
 
 class UserStatsResponse(BaseModel):
@@ -182,7 +187,7 @@ async def list_users(
     users = query.order_by(User.created_at.desc()).offset(offset).limit(page_size).all()
 
     return GlobalUserListResponse(
-        users=[user_to_response(u, db) for u in users],
+        items=[user_to_response(u, db) for u in users],
         total=total,
         page=page,
         page_size=page_size,
@@ -529,14 +534,49 @@ async def delete_user(
         )
 
     if hard_delete:
-        # Delete user roles first
+        # BUG-080 FIX: Clear all FK references before deletion
+        from models_rbac import AuditEvent
+        from models import UserContactMapping
+        from sqlalchemy import text as sa_text
+
+        # SET NULL on nullable FK columns
+        db.query(AuditEvent).filter(AuditEvent.user_id == user.id).update(
+            {AuditEvent.user_id: None}, synchronize_session=False
+        )
+        db.query(UserRole).filter(UserRole.assigned_by == user.id).update(
+            {UserRole.assigned_by: None}, synchronize_session=False
+        )
+        for tbl, col in [
+            ("shell_security_pattern", "created_by"), ("shell_security_pattern", "updated_by"),
+            ("sentinel_config", "created_by"), ("sentinel_config", "updated_by"),
+            ("sentinel_profile", "created_by"), ("sentinel_profile", "updated_by"),
+            ("sentinel_exception", "created_by"), ("sentinel_exception", "updated_by"),
+            ("api_client", "created_by"),
+            ("whatsapp_mcp_instance", "created_by"),
+            ("telegram_bot_instance", "created_by"),
+            ("google_oauth_credentials", "created_by"),
+        ]:
+            # tbl/col come from the literal (table, column) tuple above; uid is parameterized.
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+            db.execute(sa_text(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = :uid"), {"uid": user.id})
+        db.execute(sa_text("UPDATE system_integration SET configured_by_global_admin = NULL WHERE configured_by_global_admin = :uid"), {"uid": user.id})
+        db.execute(sa_text("UPDATE tenant SET created_by_global_admin = NULL WHERE created_by_global_admin = :uid"), {"uid": user.id})
+
+        # Delete from tables with non-nullable FK
         db.query(UserRole).filter(UserRole.user_id == user.id).delete()
+        db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
+        db.query(UserInvitation).filter(UserInvitation.invited_by == user.id).delete()
+        db.query(GlobalAdminAuditLog).filter(GlobalAdminAuditLog.global_admin_id == user.id).delete()
+        db.query(UserContactMapping).filter(UserContactMapping.user_id == user.id).delete()
+
         # Hard delete
         db.delete(user)
     else:
         # Soft delete
-        user.deleted_at = datetime.utcnow()
+        now = datetime.utcnow()
+        user.deleted_at = now
         user.is_active = False
+        user.email = f"{user.email}.deleted.{int(now.timestamp())}"
 
     db.commit()
 
@@ -557,13 +597,16 @@ async def delete_user(
 @router.post("/{user_id}/reset-password")
 async def admin_reset_password(
     user_id: int,
-    new_password: str = Query(..., min_length=8),
+    body: ResetPasswordRequest,
     current_user: User = Depends(get_current_user_required),
     db: Session = Depends(get_db),
     _: None = Depends(require_global_admin()),
 ):
     """
     Reset a user's password (global admin only).
+
+    BUG-053 FIX: Password is now transmitted in the request body
+    instead of as a URL query parameter to prevent exposure in logs.
     """
     user = db.query(User).filter(
         User.id == user_id,
@@ -577,7 +620,8 @@ async def admin_reset_password(
         )
 
     # Update password
-    user.password_hash = hash_password(new_password)
+    user.password_hash = hash_password(body.new_password)
+    user.password_changed_at = datetime.utcnow()
     user.updated_at = datetime.utcnow()
     db.commit()
 

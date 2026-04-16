@@ -53,6 +53,8 @@ class PlaygroundChatResponse(BaseModel):
     kb_used: Optional[List[KBUsageItem]] = None  # KB usage tracking
     action: Optional[str] = None  # For command actions (e.g., project_entered, project_exited)
     data: Optional[Dict[str, Any]] = None  # For command data (e.g., project info)
+    image_url: Optional[str] = None  # Phase 6: Generated image URL
+    image_urls: Optional[List[str]] = None  # Multiple generated image URLs
 
 
 class PlaygroundMessage(BaseModel):
@@ -66,6 +68,8 @@ class PlaygroundMessage(BaseModel):
     bookmarked_at: Optional[str] = None
     original_content: Optional[str] = None
     kb_used: Optional[List[KBUsageItem]] = None  # KB usage tracking
+    image_url: Optional[str] = None  # Phase 6: Generated image URL
+    image_urls: Optional[List[str]] = None  # Multiple generated image URLs
 
 
 class PlaygroundHistoryResponse(BaseModel):
@@ -78,6 +82,7 @@ class PlaygroundAgentInfo(BaseModel):
     name: str
     description: Optional[str] = None
     is_active: bool
+    is_default: bool = False
 
 
 class ClearHistoryResponse(BaseModel):
@@ -133,18 +138,21 @@ async def get_available_agents(
                 "id": agent.id,
                 "name": agent_name,
                 "description": description,
-                "is_active": agent.is_active
+                "is_active": agent.is_active,
+                "is_default": bool(getattr(agent, 'is_default', False))
             })
 
         return result
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch agents: {str(e)}")
+        logger.exception(f"Failed to fetch agents: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch agents. Check server logs for details.")
 
 
-@router.post("/api/playground/chat", response_model=PlaygroundChatResponse)
+@router.post("/api/playground/chat")
 async def send_chat_message(
     request: PlaygroundChatRequest,
+    sync: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_required)
 ):
@@ -152,12 +160,11 @@ async def send_chat_message(
     Send a message to an agent and get a response.
     Messages are stored in agent memory for consistency with WhatsApp.
     Supports project commands (/list, /enter, /exit, /help) when integrated with Skill Projects.
+
+    By default, messages are enqueued for async processing (returns queue_id).
+    Use ?sync=true for synchronous processing (backward compatibility / health checks).
     """
     try:
-        # Phase 15: Check for project commands first
-        # Create a sender_key for the Playground user
-        sender_key = f"playground_user_{current_user.id}"
-
         # HIGH-011: Get agent with tenant validation to prevent cross-tenant access
         agent = db.query(Agent).filter(
             Agent.id == request.agent_id,
@@ -165,6 +172,33 @@ async def send_chat_message(
         ).first()
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {request.agent_id} not found")
+
+        from services.playground_thread_service import (
+            PlaygroundThreadService,
+            get_agent_memory_isolation_mode,
+            resolve_playground_identity,
+        )
+
+        thread_service = PlaygroundThreadService(db)
+        thread = None
+        if request.thread_id is not None:
+            thread = thread_service.get_thread_record(
+                request.thread_id,
+                tenant_id=current_user.tenant_id,
+                user_id=current_user.id,
+                agent_id=request.agent_id,
+            )
+            if not thread:
+                raise HTTPException(status_code=404, detail=f"Thread {request.thread_id} not found")
+
+        identity = resolve_playground_identity(
+            user_id=current_user.id,
+            agent_id=request.agent_id,
+            isolation_mode=get_agent_memory_isolation_mode(agent),
+            thread_id=thread.id if thread else request.thread_id,
+            thread_recipient=thread.recipient if thread else None,
+        )
+        sender_key = identity["sender_key"] or f"playground_user_{current_user.id}"
 
         tenant_id = agent.tenant_id
 
@@ -262,6 +296,65 @@ async def send_chat_message(
                 )
 
         # Not a project command, proceed with normal message handling
+
+        # BUG-462/BUG-463: Check for slash commands before normal message processing.
+        # Previously only the WhatsApp/Telegram router intercepted slash commands;
+        # the Playground sync and async paths both skipped straight to send_message().
+        if request.message.strip().startswith('/'):
+            from services.slash_command_service import SlashCommandService
+            slash_service = SlashCommandService(db)
+            command_info = slash_service.detect_command(request.message, tenant_id)
+            if command_info:
+                slash_result = await slash_service.execute_command(
+                    message=request.message,
+                    tenant_id=tenant_id,
+                    agent_id=request.agent_id,
+                    sender_key=sender_key,
+                    channel="playground",
+                    user_id=current_user.id
+                )
+                if slash_result and slash_result.get("message"):
+                    return PlaygroundChatResponse(
+                        status="success",
+                        message=slash_result["message"],
+                        agent_name=agent_name,
+                        timestamp=datetime.utcnow().isoformat() + "Z"
+                    )
+                # Command was recognized but returned no message — don't forward to LLM
+                return PlaygroundChatResponse(
+                    status="success",
+                    message=slash_result.get("message", "Command executed.") if slash_result else "Unknown command.",
+                    agent_name=agent_name,
+                    timestamp=datetime.utcnow().isoformat() + "Z"
+                )
+
+        # Async mode (default): enqueue the message for background processing
+        if not sync:
+            from services.message_queue_service import MessageQueueService
+            queue_service = MessageQueueService(db)
+            queue_item = queue_service.enqueue(
+                channel="playground",
+                tenant_id=tenant_id,
+                agent_id=request.agent_id,
+                sender_key=sender_key,
+                payload={
+                    "user_id": current_user.id,
+                    "message": request.message,
+                    "thread_id": request.thread_id,
+                    "media_type": None,
+                },
+            )
+            position = queue_service.get_position(queue_item.id)
+            return {
+                "status": "queued",
+                "queue_id": queue_item.id,
+                "position": position,
+                "message": None,
+                "agent_name": agent_name,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+
+        # Sync mode (?sync=true): process synchronously for backward compatibility
         # Initialize playground service
         service = PlaygroundService(db)
 
@@ -278,25 +371,12 @@ async def send_chat_message(
         new_thread_title = None
 
         if request.thread_id and result.get("status") == "success":
-            from services.playground_thread_service import PlaygroundThreadService
-            from models import ConversationThread, Memory
-
-            # Check if this is the first user message
-            thread = db.query(ConversationThread).filter(
-                ConversationThread.id == request.thread_id
-            ).first()
-
             if thread:
-                # FIX: Count messages from Memory table (where they're actually stored)
-                # NOT from thread.conversation_history (which is always empty)
-                memory_sender_key = f"sender_{thread.recipient}"
-                memory = db.query(Memory).filter(
-                    Memory.agent_id == request.agent_id,
-                    Memory.sender_key == memory_sender_key
-                ).first()
-
-                message_count = len(memory.messages_json) if memory and memory.messages_json else 0
-                logger.info(f"[Auto-rename] Thread {request.thread_id}: memory_key={memory_sender_key}, message_count={message_count}")
+                message_count = thread_service.count_thread_messages(thread)
+                logger.info(
+                    f"[Auto-rename] Thread {request.thread_id}: "
+                    f"recipient={thread.recipient}, message_count={message_count}"
+                )
 
                 # Only auto-rename after first exchange (2 messages: user + assistant)
                 if message_count <= 2:
@@ -331,6 +411,7 @@ async def send_chat_message(
 async def get_conversation_history(
     agent_id: int,
     limit: int = 50,
+    thread_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_required)
 ):
@@ -359,7 +440,9 @@ async def get_conversation_history(
         messages = await service.get_conversation_history(
             user_id=current_user.id,
             agent_id=agent_id,
-            limit=limit
+            limit=limit,
+            thread_id=thread_id,
+            tenant_id=current_user.tenant_id,
         )
 
         return PlaygroundHistoryResponse(
@@ -370,12 +453,14 @@ async def get_conversation_history(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch history: {str(e)}")
+        logger.exception(f"Failed to fetch history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch history. Check server logs for details.")
 
 
 @router.delete("/api/playground/history/{agent_id}", response_model=ClearHistoryResponse)
 async def clear_conversation_history(
     agent_id: int,
+    thread_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_required)
 ):
@@ -399,7 +484,9 @@ async def clear_conversation_history(
         # Clear conversation history
         result = await service.clear_conversation_history(
             user_id=current_user.id,
-            agent_id=agent_id
+            agent_id=agent_id,
+            thread_id=thread_id,
+            tenant_id=current_user.tenant_id,
         )
 
         if not result.get("success"):
@@ -413,7 +500,8 @@ async def clear_conversation_history(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to clear history: {str(e)}")
+        logger.exception(f"Failed to clear history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear history. Check server logs for details.")
 
 
 class PlaygroundAudioResponse(BaseModel):
@@ -529,10 +617,11 @@ async def upload_audio(
 async def get_audio_file(
     audio_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
 ):
     """
     Serve TTS audio file by ID.
+    No auth required — the UUID itself acts as an unguessable access token.
+    Browsers cannot send Authorization headers for <audio> src requests.
 
     Phase 14.1: TTS Audio Responses
     """
@@ -562,6 +651,44 @@ async def get_audio_file(
         audio_path,
         media_type=content_type,
         filename=f"response.{ext}"
+    )
+
+
+@router.get("/api/playground/images/{image_id}")
+async def get_image_file(
+    image_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Serve generated image file by ID.
+
+    Phase 6: Image Generation for Playground
+    No auth required — the UUID itself acts as an unguessable access token.
+    Browsers cannot send Authorization headers for <img> src requests.
+    """
+    from fastapi.responses import FileResponse
+    import os
+
+    service = PlaygroundService(db)
+    image_path = service.get_image_path(image_id)
+
+    if not image_path or not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="Image file not found")
+
+    ext = image_path.rsplit(".", 1)[-1].lower() if "." in image_path else "png"
+    content_types = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+    }
+    content_type = content_types.get(ext, "image/png")
+
+    return FileResponse(
+        image_path,
+        media_type=content_type,
+        filename=f"generated.{ext}"
     )
 
 
@@ -982,6 +1109,7 @@ class DebugInfoResponse(BaseModel):
 async def get_memory_layers(
     agent_id: int,
     sender_key: Optional[str] = None,
+    thread_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_required)
 ):
@@ -995,6 +1123,11 @@ async def get_memory_layers(
     """
     from models import Memory, Agent, UserContactMapping, UserProjectSession
     from agent.memory.knowledge_service import KnowledgeService
+    from services.playground_thread_service import (
+        PlaygroundThreadService,
+        get_agent_memory_isolation_mode,
+        resolve_playground_identity,
+    )
 
     # Verify agent exists and user has access
     agent = db.query(Agent).filter(
@@ -1005,60 +1138,93 @@ async def get_memory_layers(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # BUG-PLAYGROUND-003 Fix: Improved sender_key resolution for playground
-    # When a specific sender_key is provided (from thread.recipient), use it FIRST
-    # This allows Memory Inspector to show thread-specific memory instead of shared contact memory
-    possible_keys = []
+    agent_memory_mode = get_agent_memory_isolation_mode(agent)
+    thread_service = PlaygroundThreadService(db)
 
-    # BUG-PLAYGROUND-003: User-provided sender_key takes FIRST priority
-    # This enables thread-isolated memory viewing in Memory Inspector
-    if sender_key:
-        # Try both with and without sender_ prefix
-        possible_keys.append(f"sender_{sender_key}")
-        possible_keys.append(sender_key)
-
-    # Try to find if user has a contact mapping - used for shared/contact-based memory
-    mapping = db.query(UserContactMapping).filter(
-        UserContactMapping.user_id == current_user.id
-    ).first()
-    if mapping:
-        contact = db.query(Contact).filter(Contact.id == mapping.contact_id).first()
-        if contact:
-            # Contact-based memory (shared across threads)
-            possible_keys.append(f"contact_{contact.id}")
-            # WhatsApp formats
-            if contact.phone_number:
-                possible_keys.append(f"sender_{contact.phone_number}@s.whatsapp.net")
-                possible_keys.append(f"sender_{contact.phone_number}")
-                possible_keys.append(contact.phone_number)
-            if contact.whatsapp_id:
-                possible_keys.append(f"sender_{contact.whatsapp_id}")
-                possible_keys.append(contact.whatsapp_id)
-
-    # Playground-specific formats (fallback)
-    possible_keys.append(f"sender_playground_user_{current_user.id}")
-    possible_keys.append(f"playground_user_{current_user.id}")
-    possible_keys.append(f"contact_{current_user.id}")
-
-    # Layer 1: Working Memory (recent messages)
-    # BUG-005 Fix: Try all possible sender_key formats
     working_memory = []
     memory_record = None
-    resolved_sender_key = possible_keys[0]
+    resolved_sender_key = sender_key or f"playground_user_{current_user.id}"
+    semantic_sender_key = resolved_sender_key
+    channel_id = None
 
-    for key in possible_keys:
-        memory_record = db.query(Memory).filter(
-            Memory.agent_id == agent_id,
-            Memory.sender_key == key
+    thread = None
+    if thread_id is not None:
+        thread = thread_service.get_thread_record(
+            thread_id,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            agent_id=agent_id,
+        )
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        identity = resolve_playground_identity(
+            user_id=current_user.id,
+            agent_id=agent_id,
+            isolation_mode=agent_memory_mode,
+            thread_id=thread.id,
+            thread_recipient=thread.recipient,
+        )
+        resolved_sender_key = identity["sender_key"] or thread.recipient
+        semantic_sender_key = (
+            thread.recipient if agent_memory_mode == "isolated" else resolved_sender_key
+        )
+        channel_id = identity["chat_id"]
+        memory_record = thread_service._find_memory_record(thread, agent_memory_mode)
+
+        if memory_record and memory_record.messages_json:
+            raw_messages = memory_record.messages_json or []
+            if agent_memory_mode in ("shared", "channel_isolated"):
+                working_memory = thread_service._filter_messages_for_thread(raw_messages, thread.id)[-20:]
+            else:
+                working_memory = raw_messages[-20:]
+    else:
+        possible_keys = [f"playground_u{current_user.id}_a{agent_id}"]
+        if agent_memory_mode == 'shared':
+            possible_keys.insert(0, 'shared')
+            possible_keys.insert(1, f"agent_{agent_id}:shared")
+
+        if sender_key:
+            possible_keys.append(f"sender_{sender_key}")
+            possible_keys.append(sender_key)
+
+        mapping = db.query(UserContactMapping).filter(
+            UserContactMapping.user_id == current_user.id
         ).first()
-        if memory_record:
-            resolved_sender_key = key
-            break
+        if mapping:
+            contact = db.query(Contact).filter(Contact.id == mapping.contact_id).first()
+            if contact:
+                possible_keys.append(f"contact_{contact.id}")
+                if contact.phone_number:
+                    possible_keys.append(f"sender_{contact.phone_number}@s.whatsapp.net")
+                    possible_keys.append(f"sender_{contact.phone_number}")
+                    possible_keys.append(contact.phone_number)
+                if contact.whatsapp_id:
+                    possible_keys.append(f"sender_{contact.whatsapp_id}")
+                    possible_keys.append(contact.whatsapp_id)
 
-    sender_key = resolved_sender_key
+        possible_keys.append(f"sender_playground_user_{current_user.id}")
+        possible_keys.append(f"playground_user_{current_user.id}")
+        possible_keys.append(f"contact_{current_user.id}")
 
-    if memory_record and memory_record.messages_json:
-        working_memory = memory_record.messages_json[-20:]  # Last 20 messages
+        # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
+        for key in possible_keys:
+            memory_record = db.query(Memory).filter(
+                Memory.agent_id == agent_id,
+                Memory.tenant_id == current_user.tenant_id,
+                Memory.sender_key == key
+            ).first()
+            if memory_record:
+                resolved_sender_key = key
+                break
+
+        semantic_sender_key = (
+            resolved_sender_key[len("sender_"):]
+            if isinstance(resolved_sender_key, str) and resolved_sender_key.startswith("sender_")
+            else resolved_sender_key
+        )
+        if memory_record and memory_record.messages_json:
+            working_memory = memory_record.messages_json[-20:]
 
     # Layer 2: Semantic Memory - BUG-005 Fix: Actually query ChromaDB
     semantic_results = []
@@ -1076,9 +1242,9 @@ async def get_memory_layers(
             last_message = working_memory[-1].get("content", "") if working_memory else ""
 
             if last_message and vector_store:
-                results = vector_store.search_similar(
+                results = await vector_store.search_similar(
                     query_text=last_message,
-                    sender_key=sender_key,
+                    sender_key=semantic_sender_key,
                     limit=10
                 )
 
@@ -1102,13 +1268,31 @@ async def get_memory_layers(
 
     try:
         knowledge_service = KnowledgeService(db)
-        # get_user_facts returns a list of fact dicts with topic, key, value, confidence, id
+
+        # Item 37: Apply temporal decay if enabled for this agent
+        decay_config = None
+        try:
+            from agent.memory.temporal_decay import DecayConfig
+            decay_config = DecayConfig.from_agent(agent)
+            if not decay_config.enabled:
+                decay_config = None
+        except Exception:
+            pass
+
+        facts_user_id = 'shared' if agent_memory_mode == 'shared' else semantic_sender_key
         user_facts = knowledge_service.get_user_facts(
             agent_id=agent_id,
-            user_id=sender_key
+            user_id=facts_user_id,
+            decay_config=decay_config
         )
+        if not user_facts and not facts_user_id.startswith('sender_'):
+            user_facts = knowledge_service.get_user_facts(
+                agent_id=agent_id,
+                user_id=f"sender_{facts_user_id}",
+                decay_config=decay_config
+            )
         for fact in user_facts:
-            facts.append({
+            fact_entry = {
                 "id": fact.get("id"),
                 "topic": fact.get("topic", "unknown"),
                 "key": fact.get("key", ""),
@@ -1116,20 +1300,45 @@ async def get_memory_layers(
                 "fact_type": "user",
                 "confidence": fact.get("confidence", 1.0),
                 "source": "learned"
-            })
-        logger.info(f"Found {len(facts)} user facts for sender_key={sender_key}, agent_id={agent_id}")
+            }
+            # Item 37: Include freshness data when decay is active
+            if fact.get("effective_confidence") is not None:
+                fact_entry["effective_confidence"] = fact["effective_confidence"]
+            if fact.get("freshness"):
+                fact_entry["freshness"] = fact["freshness"]
+            if fact.get("decay_factor") is not None:
+                fact_entry["decay_factor"] = fact["decay_factor"]
+            if fact.get("last_accessed_at"):
+                fact_entry["last_accessed_at"] = fact["last_accessed_at"]
+
+            facts.append(fact_entry)
+        logger.info(f"Found {len(facts)} user facts for sender_key={semantic_sender_key}, agent_id={agent_id}")
     except Exception as e:
         logger.warning(f"Could not load facts: {e}")
         pass  # Facts may not exist yet
 
     # BUG-005 Fix: Also check for project facts if user is in a project
     try:
-        project_session = db.query(UserProjectSession).filter(
-            UserProjectSession.tenant_id == current_user.tenant_id,
-            UserProjectSession.sender_key == sender_key,
-            UserProjectSession.agent_id == agent_id,
-            UserProjectSession.channel == "playground"
-        ).first()
+        project_session = None
+        project_session_keys = []
+        for candidate in (
+            semantic_sender_key,
+            channel_id,
+            sender_key,
+            f"playground_user_{current_user.id}",
+        ):
+            if candidate and candidate not in project_session_keys:
+                project_session_keys.append(candidate)
+
+        for project_sender_key in project_session_keys:
+            project_session = db.query(UserProjectSession).filter(
+                UserProjectSession.tenant_id == current_user.tenant_id,
+                UserProjectSession.sender_key == project_sender_key,
+                UserProjectSession.agent_id == agent_id,
+                UserProjectSession.channel == "playground"
+            ).first()
+            if project_session:
+                break
 
         if project_session and project_session.project_id:
             project_id = project_session.project_id
@@ -1159,7 +1368,8 @@ async def get_memory_layers(
         "working_memory_count": len(working_memory),
         "semantic_count": len(semantic_results),
         "facts_count": len(facts),
-        "sender_key": sender_key,
+        "sender_key": semantic_sender_key,
+        "memory_mode": agent_memory_mode,  # BUG-372/377: Show memory isolation mode
         "project_id": project_id  # Include project context for fact management
     }
 
@@ -1344,16 +1554,10 @@ async def get_available_tools(
         {"id": -1, "name": "search", "tool_type": "built_in", "description": "Web search using configured provider", "commands": [
             {"name": "search", "description": "Search the web", "parameters": [{"name": "query", "type": "string", "required": True}]}
         ]},
-        {"id": -2, "name": "weather", "tool_type": "built_in", "description": "Get weather information", "commands": [
-            {"name": "current", "description": "Get current weather", "parameters": [{"name": "location", "type": "string", "required": True}]}
-        ]},
-        {"id": -3, "name": "scraper", "tool_type": "built_in", "description": "Scrape web pages", "commands": [
-            {"name": "scrape", "description": "Extract content from URL", "parameters": [{"name": "url", "type": "string", "required": True}]}
-        ]},
     ]
 
     # Built-in tools removed - now handled by Skills system
-    # web_search, weather, web_scraping are now skills configured via AgentSkill table
+    # web_search, web_scraping are now skills configured via AgentSkill table
 
     # Sandboxed tools assigned to agent
     agent_tools = db.query(AgentSandboxedTool).filter(
@@ -1644,8 +1848,7 @@ async def edit_message(
 
     service = PlaygroundMessageService(db)
 
-    print(f"[DEBUG] Edit request: agent_id={agent_id}, thread_id={thread_id}, message_id={request.message_id}")
-    logger.warning(f"[EDIT API] Received request: agent_id={agent_id}, thread_id={thread_id}, message_id={request.message_id}")
+    logger.debug(f"Edit request: agent_id={agent_id}, thread_id={thread_id}, message_id={request.message_id}")
 
     result = await service.edit_message(
         tenant_id=current_user.tenant_id,
@@ -1681,8 +1884,7 @@ async def regenerate_message(
 
     service = PlaygroundMessageService(db)
 
-    print(f"[DEBUG REGENERATE] Query params: agent_id={agent_id}, thread_id={thread_id}")
-    logger.warning(f"[REGENERATE API] agent_id={agent_id}, thread_id={thread_id}, message_id={request.message_id}")
+    logger.debug(f"Regenerate request: agent_id={agent_id}, thread_id={thread_id}, message_id={request.message_id}")
 
     result = await service.regenerate_response(
         tenant_id=current_user.tenant_id,
@@ -1693,11 +1895,10 @@ async def regenerate_message(
     )
 
     if result.get("status") == "error":
-        print(f"[DEBUG REGENERATE] Service returned error: {result.get('error')}")
         logger.error(f"Regenerate failed: {result.get('error')}")
         raise HTTPException(status_code=400, detail=result.get("error"))
 
-    print(f"[DEBUG REGENERATE] Success!")
+    logger.debug("Regenerate completed successfully")
     return result
 
 
@@ -1747,12 +1948,7 @@ async def bookmark_message(
     Phase 14.2: Message Operations
     """
     try:
-        # Log request details
-        body = await raw_request.body()
-        print(f"[DEBUG BOOKMARK] Query params: agent_id={agent_id}, thread_id={thread_id}")
-        print(f"[DEBUG BOOKMARK] Request body: {body.decode('utf-8')}")
-        print(f"[DEBUG BOOKMARK] Parsed request: message_id={request.message_id}, bookmarked={request.bookmarked}")
-        logger.warning(f"[BOOKMARK API] agent_id={agent_id}, thread_id={thread_id}, message_id={request.message_id}, bookmarked={request.bookmarked}")
+        logger.debug(f"Bookmark request: agent_id={agent_id}, thread_id={thread_id}, message_id={request.message_id}, bookmarked={request.bookmarked}")
 
         from services.playground_message_service import PlaygroundMessageService
 
@@ -1768,18 +1964,16 @@ async def bookmark_message(
         )
 
         if result.get("status") == "error":
-            print(f"[DEBUG BOOKMARK] Service returned error: {result.get('error')}")
             logger.error(f"Bookmark failed: {result.get('error')}")
             raise HTTPException(status_code=400, detail=result.get("error"))
 
-        print(f"[DEBUG BOOKMARK] Success!")
+        logger.debug("Bookmark completed successfully")
         return result
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[DEBUG BOOKMARK] Unexpected error: {e}")
         logger.error(f"Bookmark unexpected error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Bookmark operation failed. Check server logs for details.")
 
 
 @router.post("/api/playground/messages/branch")
@@ -1918,7 +2112,7 @@ async def search_conversations_semantic(
     from services.conversation_search_service import ConversationSearchService
 
     service = ConversationSearchService(db)
-    result = service.search_semantic(
+    result = await service.search_semantic(
         query=q,
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
@@ -1949,7 +2143,7 @@ async def search_conversations_combined(
     from services.conversation_search_service import ConversationSearchService
 
     service = ConversationSearchService(db)
-    result = service.search_combined(
+    result = await service.search_combined(
         query=q,
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
@@ -2323,3 +2517,73 @@ async def export_thread_knowledge(
         raise HTTPException(status_code=400, detail=result.get("error"))
 
     return result
+
+
+# ============================================================================
+# SSE Streaming Endpoint (Feature #3: WebSocket Streaming SSE Fallback)
+# ============================================================================
+
+@router.get("/api/playground/stream")
+async def playground_sse_stream(
+    agent_id: int,
+    message: str,
+    thread_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user_required),
+    db: Session = Depends(get_db),
+):
+    """
+    SSE streaming endpoint for playground chat.
+
+    This provides an alternative to WebSocket for clients that don't support WS.
+    Returns Server-Sent Events with token-by-token streaming.
+
+    Event format:
+      data: {"type": "token", "content": "Hello"}
+      data: {"type": "thinking", "agent_id": 1}
+      data: {"type": "done", "message_id": 123, "token_usage": {...}}
+    """
+    from fastapi.responses import StreamingResponse
+    from services.playground_websocket_service import PlaygroundWebSocketService
+
+    if not message or not message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if len(message) > 10000:
+        raise HTTPException(status_code=400, detail="Message too long (max 10000 chars)")
+
+    # Verify agent exists and belongs to tenant
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == current_user.tenant_id
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+
+    ws_service = PlaygroundWebSocketService(db, current_user.id)
+
+    async def event_generator():
+        try:
+            async for chunk in ws_service.process_streaming_message(
+                agent_id=agent_id,
+                message=message,
+                websocket=None,
+                thread_id=thread_id,
+            ):
+                chunk_json = json_lib.dumps(chunk)
+                yield f"data: {chunk_json}\n\n"
+
+                if chunk.get("type") in ("done", "error"):
+                    break
+        except Exception as e:
+            logger.error(f"SSE streaming error: {e}", exc_info=True)
+            error_data = json_lib.dumps({"type": "error", "error": str(e)})
+            yield f"data: {error_data}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

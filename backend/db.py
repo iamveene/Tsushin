@@ -4,61 +4,61 @@ from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 import os
 import json
-from models import Base, Config, SlashCommand
+from models import Base, Config, SlashCommand, ProjectCommandPattern
 # Phase 7.6.3: Import RBAC models to register with Base.metadata
 import models_rbac  # noqa: F401
 from models_rbac import Role, Permission, RolePermission
 from services.persona_seeding import seed_default_personas
 from services.tone_preset_seeding import seed_default_tone_presets
 from services.shell_pattern_seeding import seed_default_security_patterns
+from services.plan_seeding import seed_subscription_plans
 
 
-def get_engine(db_path: str):
-    """Create SQLAlchemy engine for SQLite with connection pooling (Phase 6.11.1)
+def get_engine(database_url: str):
+    """Create SQLAlchemy engine. Supports PostgreSQL and SQLite (fallback).
 
-    IMPORTANT: Configured for WAL mode and proper transaction visibility
-    across sessions. This is critical for the shell C2 architecture where
-    one session queues commands and another session (beacon checkin) reads them.
+    PostgreSQL: Used in production (via DATABASE_URL env var).
+    SQLite: Used for local dev or legacy fallback (via INTERNAL_DB_PATH).
     """
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    is_postgres = database_url.startswith("postgresql")
 
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={
-            "check_same_thread": False,
-            "timeout": 30,
-        },
-        # Phase 6.11.1: Connection pooling configuration
-        poolclass=QueuePool,
-        pool_size=10,          # 10 connections in pool
-        max_overflow=20,       # Up to 30 total connections
-        pool_pre_ping=True,    # Verify connections before use
-        pool_recycle=3600      # Recycle connections after 1 hour
-    )
+    if is_postgres:
+        engine = create_engine(
+            database_url,
+            poolclass=QueuePool,
+            pool_size=20,
+            max_overflow=30,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+        )
+    else:
+        # SQLite fallback (local dev / legacy)
+        db_path = database_url.replace("sqlite:///", "")
+        if db_path:
+            os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
 
-    # Set up SQLite PRAGMAs on every new connection
-    @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_connection, connection_record):
-        """Configure SQLite for optimal concurrent access.
+        engine = create_engine(
+            database_url,
+            connect_args={
+                "check_same_thread": False,
+                "timeout": 30,
+            },
+            poolclass=QueuePool,
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+        )
 
-        FIX (2026-01-30): Changed from WAL mode to DELETE mode for the shell C2 architecture.
-        WAL mode causes session isolation issues where commands queued by one session
-        aren't immediately visible to the beacon checkin session. DELETE mode ensures
-        all committed changes are immediately visible to all connections.
-        """
-        cursor = dbapi_connection.cursor()
-        # Use DELETE mode (classic mode) for immediate visibility across sessions
-        # WAL mode causes session isolation issues in C2 architecture
-        cursor.execute("PRAGMA journal_mode=DELETE")
-        # Use NORMAL synchronous mode (good balance of safety and speed)
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        # Enable foreign keys
-        cursor.execute("PRAGMA foreign_keys=ON")
-        # Increase cache size for better performance (negative = KB)
-        cursor.execute("PRAGMA cache_size=-64000")  # 64MB
-        # Increase busy timeout for concurrent access
-        cursor.execute("PRAGMA busy_timeout=30000")  # 30 seconds
-        cursor.close()
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=DELETE")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA cache_size=-64000")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
 
     return engine
 
@@ -74,6 +74,15 @@ def seed_rbac_defaults(session):
     existing_roles = session.query(Role).first()
     if existing_roles:
         return  # Already seeded
+
+    # Guard against partial seeding: if permissions exist but no roles,
+    # a previous startup crashed mid-seed and committed permissions only.
+    # Clear the orphaned permissions so the batch insert can succeed.
+    existing_perms = session.query(Permission).first()
+    if existing_perms:
+        print("[RBAC] Detected partial seeding (permissions without roles) — clearing orphaned permissions...")
+        session.query(Permission).delete()
+        session.commit()
 
     print("[RBAC] Seeding default roles and permissions...")
 
@@ -111,6 +120,15 @@ def seed_rbac_defaults(session):
         ("telegram.instances.read", "telegram_instances", "read", "View Telegram bot instances"),
         ("telegram.instances.manage", "telegram_instances", "manage", "Start/stop Telegram instances"),
         ("telegram.instances.delete", "telegram_instances", "delete", "Delete Telegram bot instances"),
+        # Slack Integrations (v0.6.0 Item 33)
+        ("integrations.slack.read", "slack_integrations", "read", "View Slack integrations"),
+        ("integrations.slack.write", "slack_integrations", "write", "Create and manage Slack integrations"),
+        # Discord Integrations (v0.6.0 Item 34)
+        ("integrations.discord.read", "discord_integrations", "read", "View Discord integrations"),
+        ("integrations.discord.write", "discord_integrations", "write", "Create and manage Discord integrations"),
+        # Webhook Integrations (v0.6.0)
+        ("integrations.webhook.read", "webhook_integrations", "read", "View webhook integrations"),
+        ("integrations.webhook.write", "webhook_integrations", "write", "Create, rotate and delete webhook integrations"),
         # Hub Integrations
         ("hub.read", "hub", "read", "View hub integrations"),
         ("hub.write", "hub", "write", "Create and update hub integrations"),
@@ -130,7 +148,9 @@ def seed_rbac_defaults(session):
         ("analytics.read", "analytics", "read", "View analytics and reports"),
         # Audit logs
         ("audit.read", "audit", "read", "View audit logs"),
+        ("audit.export", "audit", "export", "Export audit logs to CSV"),
         # Custom Tools (Phase 9.3)
+        ("tools.read", "tools", "read", "View custom tools and their configurations"),
         ("tools.manage", "tools", "manage", "Manage custom tools (create, update, delete)"),
         ("tools.execute", "tools", "execute", "Execute custom tools"),
         # Shell/Beacon (Phase 18)
@@ -140,6 +160,17 @@ def seed_rbac_defaults(session):
         ("shell.approve", "shell", "approve", "Approve high-risk shell commands"),
         # Watcher (Dashboard)
         ("watcher.read", "watcher", "read", "View watcher dashboard, messages, and agent runs"),
+        # API Clients (Public API v1)
+        ("api_clients.read", "api_clients", "read", "View API clients"),
+        ("api_clients.write", "api_clients", "write", "Create and manage API clients"),
+        ("api_clients.delete", "api_clients", "delete", "Revoke API clients"),
+        # Scheduler (v0.6.0)
+        ("scheduler.read", "scheduler", "read", "View scheduled events"),
+        ("scheduler.create", "scheduler", "create", "Create scheduled events"),
+        ("scheduler.edit", "scheduler", "edit", "Edit scheduled events"),
+        ("scheduler.cancel", "scheduler", "cancel", "Cancel scheduled events"),
+        # MCP Server Management (v0.6.0 Item 25)
+        ("skills.mcp_server.manage", "mcp_servers", "manage", "Manage MCP server integrations"),
     ]
 
     # Create permissions
@@ -178,14 +209,20 @@ def seed_rbac_defaults(session):
             "knowledge.read", "knowledge.write", "knowledge.delete",
             "mcp.instances.read", "mcp.instances.create", "mcp.instances.manage", "mcp.instances.delete",
             "telegram.instances.create", "telegram.instances.read", "telegram.instances.manage", "telegram.instances.delete",  # Phase 10.1.1
+            "integrations.slack.read", "integrations.slack.write",  # v0.6.0 Item 33
+            "integrations.discord.read", "integrations.discord.write",  # v0.6.0 Item 34
+            "integrations.webhook.read", "integrations.webhook.write",  # v0.6.0 Webhook-as-Channel
             "hub.read", "hub.write", "hub.delete",
             "users.read", "users.invite", "users.manage", "users.remove",
             "org.settings.read", "org.settings.write",
             "billing.read", "billing.write",
-            "analytics.read", "audit.read",
-            "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
+            "analytics.read", "audit.read", "audit.export",
+            "tools.read", "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
+            "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
+            "scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel",  # v0.6.0: Scheduler
+            "skills.mcp_server.manage",  # v0.6.0 Item 25: MCP Server Management
         ],
         "admin": [
             "agents.read", "agents.write", "agents.delete", "agents.execute",
@@ -195,14 +232,20 @@ def seed_rbac_defaults(session):
             "knowledge.read", "knowledge.write", "knowledge.delete",
             "mcp.instances.read", "mcp.instances.create", "mcp.instances.manage", "mcp.instances.delete",
             "telegram.instances.create", "telegram.instances.read", "telegram.instances.manage", "telegram.instances.delete",  # Phase 10.1.1
+            "integrations.slack.read", "integrations.slack.write",  # v0.6.0 Item 33
+            "integrations.discord.read", "integrations.discord.write",  # v0.6.0 Item 34
+            "integrations.webhook.read", "integrations.webhook.write",  # v0.6.0 Webhook-as-Channel
             "hub.read", "hub.write", "hub.delete",
             "users.read", "users.invite", "users.manage", "users.remove",
             "org.settings.read", "org.settings.write",
             "billing.read",  # View only
-            "analytics.read", "audit.read",
-            "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
+            "analytics.read", "audit.read", "audit.export",
+            "tools.read", "tools.manage", "tools.execute",  # Phase 9.3: Custom Tools
             "shell.read", "shell.write", "shell.execute", "shell.approve",  # Phase 18: Shell/Beacon
             "watcher.read",  # Dashboard access
+            "api_clients.read", "api_clients.write", "api_clients.delete",  # Public API v1
+            "scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel",  # v0.6.0: Scheduler
+            "skills.mcp_server.manage",  # v0.6.0 Item 25: MCP Server Management
         ],
         "member": [
             "agents.read", "agents.write", "agents.execute",
@@ -212,19 +255,28 @@ def seed_rbac_defaults(session):
             "knowledge.read", "knowledge.write",
             "mcp.instances.read", "mcp.instances.create", "mcp.instances.manage",
             "telegram.instances.read", "telegram.instances.create", "telegram.instances.manage",  # Phase 10.1.1
+            "integrations.slack.read", "integrations.slack.write",  # v0.6.0 Item 33
+            "integrations.discord.read", "integrations.discord.write",  # v0.6.0 Item 34
+            "integrations.webhook.read", "integrations.webhook.write",  # v0.6.0 Webhook-as-Channel
             "hub.read", "hub.write",
             "users.read",
             "org.settings.read",
             "analytics.read",
-            "tools.execute",  # Phase 9.3: Members can execute but not manage tools
+            "tools.read", "tools.execute",  # Phase 9.3: Members can read and execute but not manage tools
             "watcher.read",  # Dashboard access
+            "scheduler.read", "scheduler.create", "scheduler.edit",  # v0.6.0: Scheduler (no cancel)
         ],
         "readonly": [
             "agents.read", "contacts.read", "memory.read", "flows.read",
             "knowledge.read", "mcp.instances.read", "telegram.instances.read",  # Phase 10.1.1
+            "integrations.slack.read",  # v0.6.0 Item 33
+            "integrations.discord.read",  # v0.6.0 Item 34
+            "integrations.webhook.read",  # v0.6.0 Webhook-as-Channel
             "hub.read",
             "users.read", "org.settings.read", "analytics.read",
+            "tools.read",  # Phase 9.3: Read-only can view tools
             "watcher.read",  # Dashboard access (view only)
+            "scheduler.read",  # v0.6.0: Scheduler (view only)
         ],
     }
 
@@ -387,6 +439,420 @@ def ensure_rbac_permissions(session):
         session.commit()
         print("[RBAC] Telegram permissions ensured successfully")
 
+    # Public API v1: Ensure API client permissions exist
+    api_client_permissions_data = [
+        ("api_clients.read", "api_clients", "read", "View API clients"),
+        ("api_clients.write", "api_clients", "write", "Create and manage API clients"),
+        ("api_clients.delete", "api_clients", "delete", "Revoke API clients"),
+    ]
+
+    api_client_perms_added = False
+    for name, resource, action, description in api_client_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+
+            # Assign API client permissions to owner and admin only
+            roles = session.query(Role).filter(Role.name.in_(["owner", "admin"])).all()
+            for role in roles:
+                rp = RolePermission(role_id=role.id, permission_id=perm.id)
+                session.add(rp)
+                print(f"[RBAC] Assigned {name} to role: {role.name}")
+
+            api_client_perms_added = True
+        else:
+            # Ensure permission is assigned to owner and admin
+            roles = session.query(Role).filter(Role.name.in_(["owner", "admin"])).all()
+            for role in roles:
+                existing_mapping = session.query(RolePermission).filter(
+                    RolePermission.role_id == role.id,
+                    RolePermission.permission_id == existing_perm.id
+                ).first()
+                if not existing_mapping:
+                    rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                    session.add(rp)
+                    print(f"[RBAC] Assigned {name} to role: {role.name}")
+                    api_client_perms_added = True
+
+    if api_client_perms_added:
+        session.commit()
+        print("[RBAC] API client permissions ensured successfully")
+
+    # Phase 22: Ensure custom skill permissions exist
+    custom_skill_permissions_data = [
+        ("skills.custom.create", "skills.custom", "create", "Create custom skills"),
+        ("skills.custom.read", "skills.custom", "read", "View custom skills"),
+        ("skills.custom.execute", "skills.custom", "execute", "Execute custom skills"),
+        ("skills.custom.delete", "skills.custom", "delete", "Delete custom skills"),
+    ]
+
+    custom_skill_role_assignments = {
+        "owner": ["skills.custom.create", "skills.custom.read", "skills.custom.execute", "skills.custom.delete"],
+        "admin": ["skills.custom.create", "skills.custom.read", "skills.custom.execute", "skills.custom.delete"],
+        "member": ["skills.custom.read", "skills.custom.execute"],
+    }
+
+    custom_skill_perms_added = False
+    for name, resource, action, description in custom_skill_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+
+            for role_name, role_perms in custom_skill_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        rp = RolePermission(role_id=role.id, permission_id=perm.id)
+                        session.add(rp)
+                        print(f"[RBAC] Assigned {name} to role: {role_name}")
+
+            custom_skill_perms_added = True
+        else:
+            for role_name, role_perms in custom_skill_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            custom_skill_perms_added = True
+
+    if custom_skill_perms_added:
+        session.commit()
+        print("[RBAC] Custom skill permissions ensured successfully")
+
+    # v0.6.0: Ensure audit.export permission exists
+    audit_export_perm = session.query(Permission).filter(Permission.name == "audit.export").first()
+    if not audit_export_perm:
+        print("[RBAC] Adding missing audit.export permission...")
+        audit_export_perm = Permission(name="audit.export", resource="audit", action="export", description="Export audit logs to CSV")
+        session.add(audit_export_perm)
+        session.flush()
+
+        roles = session.query(Role).filter(Role.name.in_(["owner", "admin"])).all()
+        for role in roles:
+            rp = RolePermission(role_id=role.id, permission_id=audit_export_perm.id)
+            session.add(rp)
+            print(f"[RBAC] Assigned audit.export to role: {role.name}")
+
+        session.commit()
+        print("[RBAC] audit.export permission added successfully")
+    else:
+        roles = session.query(Role).filter(Role.name.in_(["owner", "admin"])).all()
+        perms_added = False
+        for role in roles:
+            existing_mapping = session.query(RolePermission).filter(
+                RolePermission.role_id == role.id,
+                RolePermission.permission_id == audit_export_perm.id
+            ).first()
+            if not existing_mapping:
+                rp = RolePermission(role_id=role.id, permission_id=audit_export_perm.id)
+                session.add(rp)
+                print(f"[RBAC] Assigned audit.export to role: {role.name}")
+                perms_added = True
+        if perms_added:
+            session.commit()
+
+    # v0.6.0: Ensure scheduler permissions exist
+    scheduler_permissions_data = [
+        ("scheduler.read", "scheduler", "read", "View scheduled events"),
+        ("scheduler.create", "scheduler", "create", "Create scheduled events"),
+        ("scheduler.edit", "scheduler", "edit", "Edit scheduled events"),
+        ("scheduler.cancel", "scheduler", "cancel", "Cancel scheduled events"),
+    ]
+
+    # Role assignments: owner/admin get all, member gets read/create/edit, readonly gets read
+    scheduler_role_assignments = {
+        "owner": ["scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel"],
+        "admin": ["scheduler.read", "scheduler.create", "scheduler.edit", "scheduler.cancel"],
+        "member": ["scheduler.read", "scheduler.create", "scheduler.edit"],
+        "readonly": ["scheduler.read"],
+    }
+
+    scheduler_perms_added = False
+    for name, resource, action, description in scheduler_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+
+            for role_name, role_perms in scheduler_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        rp = RolePermission(role_id=role.id, permission_id=perm.id)
+                        session.add(rp)
+                        print(f"[RBAC] Assigned {name} to role: {role_name}")
+
+            scheduler_perms_added = True
+        else:
+            for role_name, role_perms in scheduler_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            scheduler_perms_added = True
+
+    if scheduler_perms_added:
+        session.commit()
+        print("[RBAC] Scheduler permissions ensured successfully")
+
+    # v0.6.0 Item 33: Ensure Slack integration permissions exist
+    slack_permissions_data = [
+        ("integrations.slack.read", "slack_integrations", "read", "View Slack integrations"),
+        ("integrations.slack.write", "slack_integrations", "write", "Create and manage Slack integrations"),
+    ]
+    slack_role_assignments = {
+        "owner": ["integrations.slack.read", "integrations.slack.write"],
+        "admin": ["integrations.slack.read", "integrations.slack.write"],
+        "member": ["integrations.slack.read", "integrations.slack.write"],
+        "readonly": ["integrations.slack.read"],
+    }
+    slack_perms_added = False
+    for name, resource, action, description in slack_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+            for role_name, role_perms in slack_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_rp = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == perm.id
+                        ).first()
+                        if not existing_rp:
+                            session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            slack_perms_added = True
+        else:
+            for role_name, role_perms in slack_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            slack_perms_added = True
+    if slack_perms_added:
+        session.commit()
+        print("[RBAC] Slack integration permissions ensured successfully")
+
+    # v0.6.0 Item 34: Ensure Discord integration permissions exist
+    discord_permissions_data = [
+        ("integrations.discord.read", "discord_integrations", "read", "View Discord integrations"),
+        ("integrations.discord.write", "discord_integrations", "write", "Create and manage Discord integrations"),
+    ]
+    discord_role_assignments = {
+        "owner": ["integrations.discord.read", "integrations.discord.write"],
+        "admin": ["integrations.discord.read", "integrations.discord.write"],
+        "member": ["integrations.discord.read", "integrations.discord.write"],
+        "readonly": ["integrations.discord.read"],
+    }
+    discord_perms_added = False
+    for name, resource, action, description in discord_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+            for role_name, role_perms in discord_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_rp = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == perm.id
+                        ).first()
+                        if not existing_rp:
+                            session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            discord_perms_added = True
+        else:
+            for role_name, role_perms in discord_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            discord_perms_added = True
+    if discord_perms_added:
+        session.commit()
+        print("[RBAC] Discord integration permissions ensured successfully")
+
+    # v0.6.0: Ensure Webhook integration permissions exist
+    webhook_permissions_data = [
+        ("integrations.webhook.read", "webhook_integrations", "read", "View webhook integrations"),
+        ("integrations.webhook.write", "webhook_integrations", "write", "Create, rotate and delete webhook integrations"),
+    ]
+    webhook_role_assignments = {
+        "owner": ["integrations.webhook.read", "integrations.webhook.write"],
+        "admin": ["integrations.webhook.read", "integrations.webhook.write"],
+        "member": ["integrations.webhook.read", "integrations.webhook.write"],
+        "readonly": ["integrations.webhook.read"],
+    }
+    webhook_perms_added = False
+    for name, resource, action, description in webhook_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+            for role_name, role_perms in webhook_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_rp = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == perm.id
+                        ).first()
+                        if not existing_rp:
+                            session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            webhook_perms_added = True
+        else:
+            for role_name, role_perms in webhook_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            webhook_perms_added = True
+    if webhook_perms_added:
+        session.commit()
+        print("[RBAC] Webhook integration permissions ensured successfully")
+
+    # v0.6.0 Item 25: Ensure MCP server permissions exist
+    mcp_server_permissions_data = [
+        ("skills.mcp_server.manage", "mcp_servers", "manage", "Manage MCP server integrations"),
+    ]
+    mcp_server_role_assignments = {
+        "owner": ["skills.mcp_server.manage"],
+        "admin": ["skills.mcp_server.manage"],
+    }
+    mcp_server_perms_added = False
+    for name, resource, action, description in mcp_server_permissions_data:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+            for role_name, role_perms in mcp_server_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        rp = RolePermission(role_id=role.id, permission_id=perm.id)
+                        session.add(rp)
+                        print(f"[RBAC] Assigned {name} to role: {role_name}")
+            mcp_server_perms_added = True
+        else:
+            for role_name, role_perms in mcp_server_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            rp = RolePermission(role_id=role.id, permission_id=existing_perm.id)
+                            session.add(rp)
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            mcp_server_perms_added = True
+    if mcp_server_perms_added:
+        session.commit()
+        print("[RBAC] MCP server permissions ensured successfully")
+
+    # v0.6.0: Ensure channel health, agent communication, and vector store permissions exist
+    v060_extra_permissions = [
+        ("channel_health.read", "channel_health", "read", "View channel health and circuit breaker status"),
+        ("channel_health.write", "channel_health", "write", "Reset circuit breakers and configure alerts"),
+        ("agent_communication.read", "agent_communication", "read", "View agent-to-agent communication sessions"),
+        ("agent_communication.write", "agent_communication", "write", "Manage agent communication permissions"),
+        ("vector_stores.read", "vector_stores", "read", "View vector store instances"),
+        ("vector_stores.write", "vector_stores", "write", "Create and manage vector store instances"),
+    ]
+    v060_extra_role_assignments = {
+        "owner": [p[0] for p in v060_extra_permissions],
+        "admin": [p[0] for p in v060_extra_permissions],
+        "member": [p[0] for p in v060_extra_permissions if ".read" in p[0]],
+        "readonly": [p[0] for p in v060_extra_permissions if ".read" in p[0]],
+    }
+    v060_perms_added = False
+    for name, resource, action, description in v060_extra_permissions:
+        existing_perm = session.query(Permission).filter(Permission.name == name).first()
+        if not existing_perm:
+            print(f"[RBAC] Adding missing {name} permission...")
+            perm = Permission(name=name, resource=resource, action=action, description=description)
+            session.add(perm)
+            session.flush()
+            for role_name, role_perms in v060_extra_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+                        print(f"[RBAC] Assigned {name} to role: {role_name}")
+            v060_perms_added = True
+        else:
+            for role_name, role_perms in v060_extra_role_assignments.items():
+                if name in role_perms:
+                    role = session.query(Role).filter(Role.name == role_name).first()
+                    if role:
+                        existing_mapping = session.query(RolePermission).filter(
+                            RolePermission.role_id == role.id,
+                            RolePermission.permission_id == existing_perm.id
+                        ).first()
+                        if not existing_mapping:
+                            session.add(RolePermission(role_id=role.id, permission_id=existing_perm.id))
+                            print(f"[RBAC] Assigned {name} to role: {role_name}")
+                            v060_perms_added = True
+    if v060_perms_added:
+        session.commit()
+        print("[RBAC] v0.6.0 extra permissions (channel_health, agent_communication, vector_stores) ensured")
+
 
 def seed_slash_commands(session):
     """
@@ -396,12 +862,10 @@ def seed_slash_commands(session):
     Commands are seeded with tenant_id="_system" to be available to all tenants.
     Tenant-specific commands can override these.
     """
-    # Check if commands already exist
-    existing = session.query(SlashCommand).filter(SlashCommand.tenant_id == "_system").first()
-    if existing:
-        return  # Already seeded
-
-    print("[Commands] Seeding default slash commands...")
+    # BUG-371: Idempotent seeding — insert any missing commands instead of
+    # returning early when *any* _system command exists.  This ensures
+    # later-added commands (e.g., /shell) are inserted on upgrade.
+    print("[Commands] Ensuring default slash commands are seeded...")
 
     # Define default commands
     commands_data = [
@@ -684,7 +1148,7 @@ def seed_slash_commands(session):
             "pattern": r"^/tool\s+(\w+)\s*(.*)$",
             "aliases": json.dumps([]),
             "description": "Execute a tool with arguments",
-            "help_text": "Usage: /tool <tool_name> [arguments]\nExample: /tool nmap quick_scan scanme.nmap.org\nExample: /tool weather New York",
+            "help_text": "Usage: /tool <tool_name> [arguments]\nExample: /tool nmap quick_scan scanme.nmap.org",
             "handler_type": "built-in",
             "sort_order": 46
         },
@@ -696,7 +1160,7 @@ def seed_slash_commands(session):
             "pattern": r"^/ferramenta\s+(\w+)\s*(.*)$",
             "aliases": json.dumps([]),
             "description": "Executar uma ferramenta com argumentos",
-            "help_text": "Uso: /ferramenta <nome_ferramenta> [argumentos]\nExemplo: /ferramenta nmap quick_scan scanme.nmap.org\nExemplo: /ferramenta weather São Paulo",
+            "help_text": "Uso: /ferramenta <nome_ferramenta> [argumentos]\nExemplo: /ferramenta nmap quick_scan scanme.nmap.org",
             "handler_type": "built-in",
             "sort_order": 47
         },
@@ -835,50 +1299,250 @@ def seed_slash_commands(session):
             "handler_type": "built-in",
             "sort_order": 64
         },
+        # Shell command (Phase 19: Playground shell execution)
+        {
+            "tenant_id": "_system",
+            "category": "tool",
+            "command_name": "shell",
+            "language_code": "en",
+            "pattern": r"^/shell\s+(?:([\w\-@]+):)?(.+)$",
+            "aliases": json.dumps([]),
+            "description": "Execute shell commands via the shell skill",
+            "help_text": "Usage: /shell <command>\nExample: /shell whoami\nExample: /shell ls -la /tmp\n\nRequires: Shell skill enabled and an active beacon connection.",
+            "handler_type": "built-in",
+            "sort_order": 70
+        },
     ]
 
-    # Create commands
+    # Create commands (idempotent — skip if already exists by name+language)
+    inserted = 0
     for cmd_data in commands_data:
-        cmd = SlashCommand(**cmd_data)
-        session.add(cmd)
+        existing = session.query(SlashCommand).filter(
+            SlashCommand.tenant_id == "_system",
+            SlashCommand.command_name == cmd_data["command_name"],
+            SlashCommand.language_code == cmd_data["language_code"],
+        ).first()
+        if not existing:
+            cmd = SlashCommand(**cmd_data)
+            session.add(cmd)
+            inserted += 1
 
-    session.commit()
-    print(f"[Commands] Seeded {len(commands_data)} default slash commands")
+    if inserted:
+        session.commit()
+        print(f"[Commands] Seeded {inserted} new slash commands (total defined: {len(commands_data)})")
+    else:
+        print(f"[Commands] All {len(commands_data)} slash commands already present")
+
+
+def seed_project_command_patterns(session):
+    """
+    Seed default project command patterns for all tenants.
+
+    These system patterns power project entry/exit/list/help on fresh installs
+    and provide a visible baseline that tenant-specific patterns can override.
+    """
+    print("[Projects] Ensuring default project command patterns are seeded...")
+
+    patterns_data = [
+        {
+            "tenant_id": "_system",
+            "command_type": "enter",
+            "language_code": "en",
+            "pattern": r"^(?:/enter|enter project)\s+(.+)$",
+            "response_template": '📁 Now working in project "{project_name}". Ask questions or send files to add documents.',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "enter",
+            "language_code": "pt",
+            "pattern": r"^(?:/entrar|entrar(?:\s+no)?\s+projeto)\s+(.+)$",
+            "response_template": '📁 Agora voce esta no projeto "{project_name}". Envie perguntas ou arquivos para adicionar documentos.',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "exit",
+            "language_code": "en",
+            "pattern": r"^(?:/exit|exit project)$",
+            "response_template": '✅ Left project "{project_name}". {summary}',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "exit",
+            "language_code": "pt",
+            "pattern": r"^(?:/sair|sair do projeto)$",
+            "response_template": '✅ Saiu do projeto "{project_name}". {summary}',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "list",
+            "language_code": "en",
+            "pattern": r"^(?:/list|list projects)$",
+            "response_template": "📋 Your projects:\n{project_list}",
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "list",
+            "language_code": "pt",
+            "pattern": r"^(?:/listar|listar projetos)$",
+            "response_template": "📋 Seus projetos:\n{project_list}",
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "upload",
+            "language_code": "en",
+            "pattern": r"^(?:/add\s+to\s+project|add to project)$",
+            "response_template": '📎 Document "{filename}" added to project ({chunks} chunks processed).',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "upload",
+            "language_code": "pt",
+            "pattern": r"^(?:/adicionar\s+ao\s+projeto|adicionar ao projeto)$",
+            "response_template": '📎 Documento "{filename}" adicionado ao projeto ({chunks} chunks processados).',
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "help",
+            "language_code": "en",
+            "pattern": r"^(?:/help|project help)$",
+            "response_template": """📚 Project Commands:
+• "enter project [name]" - Enter a project
+• "exit project" - Leave current project
+• "list projects" - See your projects
+• "add to project" - Add document (send with file)
+• "project help" - Show this help""",
+            "is_active": True,
+        },
+        {
+            "tenant_id": "_system",
+            "command_type": "help",
+            "language_code": "pt",
+            "pattern": r"^(?:/ajuda|ajuda do projeto)$",
+            "response_template": """📚 Comandos de Projeto:
+• "entrar projeto [nome]" - Entrar em um projeto
+• "sair do projeto" - Sair do projeto atual
+• "listar projetos" - Ver seus projetos
+• "adicionar ao projeto" - Adicionar documento (envie com arquivo)
+• "ajuda do projeto" - Mostrar esta ajuda""",
+            "is_active": True,
+        },
+    ]
+
+    existing = {
+        (item.tenant_id, item.command_type, item.language_code)
+        for item in session.query(ProjectCommandPattern).filter(
+            ProjectCommandPattern.tenant_id == "_system"
+        ).all()
+    }
+
+    inserted = 0
+    for pattern_data in patterns_data:
+        key = (
+            pattern_data["tenant_id"],
+            pattern_data["command_type"],
+            pattern_data["language_code"],
+        )
+        if key in existing:
+            continue
+        session.add(ProjectCommandPattern(**pattern_data))
+        inserted += 1
+
+    if inserted:
+        session.commit()
+        print(f"[Projects] Seeded {inserted} new project command patterns")
+    else:
+        print(f"[Projects] All {len(patterns_data)} project command patterns already present")
 
 
 def init_database(engine):
-    """Initialize all tables and default config"""
-    Base.metadata.create_all(engine)
+    """Initialize all tables and default config.
 
-    # Phase 14.5: Initialize FTS5 search index for conversation search
-    # This is a virtual table that must be created separately from SQLAlchemy ORM
-    try:
-        from migrations.create_conversation_search_fts5 import upgrade as create_fts5
-        db_path = engine.url.database
-        if db_path:
-            create_fts5(db_path)
-    except Exception as e:
-        print(f"[FTS5] Initialization skipped or already exists: {e}")
+    For PostgreSQL: Alembic handles schema creation (alembic upgrade head).
+    For SQLite (dev fallback): create_all handles schema + legacy inline migrations.
+    """
+    is_postgres = str(engine.url).startswith("postgresql")
 
-    # Phase 20: Add sentinel_protected column to existing shell_integration tables
-    try:
-        from migrations.add_sentinel_protected_column import upgrade_from_engine
-        upgrade_from_engine(engine)
-    except Exception as e:
-        print(f"[Sentinel Migration] Warning: {e}")
+    if is_postgres:
+        # On PostgreSQL, run Alembic migrations for schema management
+        try:
+            from alembic.config import Config as AlembicConfig
+            from alembic import command
+            import os
+            alembic_ini = os.path.join(os.path.dirname(__file__), "alembic.ini")
+            if os.path.exists(alembic_ini):
+                alembic_cfg = AlembicConfig(alembic_ini)
+                alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+                command.upgrade(alembic_cfg, "head")
+                print("[DB] Alembic migrations applied successfully")
+            else:
+                # Fallback: create tables from ORM metadata
+                Base.metadata.create_all(engine)
+                print("[DB] Tables created from ORM metadata (no alembic.ini found)")
+        except ImportError:
+            # Alembic not installed — fallback to ORM metadata
+            print("[DB] Alembic not available, creating tables from ORM metadata")
+            Base.metadata.create_all(engine)
+        except Exception as e:
+            print(f"[DB] FATAL: Alembic migration failed: {e}")
+            raise
+    else:
+        # SQLite: use legacy create_all + inline migrations
+        Base.metadata.create_all(engine)
 
-    # Phase Security-1: Add MCP API secret columns for SSRF prevention
+        # Legacy SQLite-only migrations (skipped on PostgreSQL)
+        try:
+            from migrations.create_conversation_search_fts5 import upgrade as create_fts5
+            db_path = engine.url.database
+            if db_path:
+                create_fts5(db_path)
+        except Exception as e:
+            print(f"[FTS5] Initialization skipped or already exists: {e}")
+
+        try:
+            from migrations.add_sentinel_protected_column import upgrade_from_engine
+            upgrade_from_engine(engine)
+        except Exception as e:
+            print(f"[Sentinel Migration] Warning: {e}")
+
+        try:
+            from migrations.add_mcp_api_secret import upgrade as upgrade_mcp_auth
+            db_path = engine.url.database
+            if db_path:
+                upgrade_mcp_auth(db_path)
+        except Exception as e:
+            print(f"[MCP Auth Migration] Warning: {e}")
+
+    # Phase 23: Discord & Slack channel integration tables (BUG-311, BUG-312, BUG-313)
     try:
-        from migrations.add_mcp_api_secret import upgrade as upgrade_mcp_auth
-        db_path = engine.url.database
-        if db_path:
-            upgrade_mcp_auth(db_path)
+        from migrations.add_discord_slack_integrations import upgrade_from_engine as upgrade_discord_slack
+        upgrade_discord_slack(engine)
     except Exception as e:
-        print(f"[MCP Auth Migration] Warning: {e}")
+        print(f"[Discord/Slack Migration] Warning: {e}")
+
+    # v0.6.0 Remote Access (Cloudflare Tunnel): config table + tenant entitlement column
+    try:
+        from migrations.add_remote_access import upgrade_from_engine as upgrade_remote_access
+        upgrade_remote_access(engine)
+    except Exception as e:
+        print(f"[Remote Access Migration] Warning: {e}")
 
     # Create default config if not exists
     SessionLocal = sessionmaker(bind=engine)
     session = SessionLocal()
+
+    try:
+        from services.remote_access_config_service import backfill_remote_access_target_url
+        backfill_remote_access_target_url(session)
+    except Exception as e:
+        print(f"[Remote Access Backfill] Warning: {e}")
 
     try:
         config = session.query(Config).first()
@@ -903,6 +1567,7 @@ def init_database(engine):
 
         # Phase 16: Seed default slash commands
         seed_slash_commands(session)
+        seed_project_command_patterns(session)
 
         # Seed default system personas (Persona Template Library)
         seed_default_personas(session)
@@ -919,6 +1584,36 @@ def init_database(engine):
 
         # Phase 20 Enhancement: Run Sentinel migrations (detection mode, exceptions)
         run_sentinel_migrations(session)
+
+        # Phase v1.6.0: Sentinel Security Profiles
+        from services.sentinel_seeding import migrate_to_profiles
+        migrate_to_profiles(session)
+
+        # Seed default subscription plans (idempotent — skips existing plans)
+        seed_subscription_plans(session)
+
+        # Cleanup deprecated weather skill records
+        try:
+            from models import AgentSkill, SlashCommand, ApiKey
+            weather_deleted = session.query(AgentSkill).filter(AgentSkill.skill_type == 'weather').delete()
+            weather_cmds = session.query(SlashCommand).filter(SlashCommand.command_name.in_(['weather', 'weather forecast'])).delete(synchronize_session='fetch')
+            session.query(ApiKey).filter(ApiKey.service == 'openweather').update({'is_active': False}, synchronize_session='fetch')
+            if weather_deleted or weather_cmds:
+                session.commit()
+                print(f"[Cleanup] Removed {weather_deleted} weather skill records, {weather_cmds} weather slash commands")
+        except Exception as e:
+            session.rollback()
+            print(f"[Cleanup] Weather cleanup skipped: {e}")
+
+        # Cleanup deprecated web_scraping skill records (replaced by browser_automation)
+        try:
+            ws_deleted = session.query(AgentSkill).filter(AgentSkill.skill_type == 'web_scraping').delete()
+            session.commit()
+            if ws_deleted:
+                print(f"[Cleanup] Removed {ws_deleted} web_scraping skill records (replaced by browser_automation)")
+        except Exception as e:
+            session.rollback()
+            print(f"[Cleanup] web_scraping cleanup skipped: {e}")
     finally:
         session.close()
 
@@ -945,6 +1640,11 @@ def set_global_engine(engine):
     """Set the global engine for FastAPI dependencies"""
     global _global_engine
     _global_engine = engine
+
+
+def get_global_engine():
+    """Get the global engine (for non-dependency contexts like middleware)."""
+    return _global_engine
 
 
 def get_db():

@@ -102,10 +102,13 @@ def create_test_users(db: Session):
         db.flush()  # Get user ID
 
         # Assign role if not global admin
-        if user_data["role"] is not None:
+        # BUG-350 FIX: Include required tenant_id in UserRole creation
+        if user_data["role"] is not None and user_data["tenant_id"] is not None:
             user_role = UserRole(
                 user_id=user.id,
-                role_id=user_data["role"].id
+                role_id=user_data["role"].id,
+                tenant_id=user_data["tenant_id"],
+                assigned_by=None
             )
             db.add(user_role)
 
@@ -131,12 +134,12 @@ def create_test_users(db: Session):
 
 
 def main():
-    # Get database path from environment or use default
-    db_path = os.getenv("DATABASE_PATH", "/app/data/agent.db")
-    logger.info(f"Using database: {db_path}")
+    # Get database URL from environment
+    import settings
+    logger.info(f"Using database: {settings.DATABASE_URL[:30]}...")
 
     # Initialize database
-    engine = get_engine(db_path)
+    engine = get_engine(settings.DATABASE_URL)
 
     # Create session and create users
     from sqlalchemy.orm import sessionmaker

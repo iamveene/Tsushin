@@ -121,14 +121,13 @@ def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent
         Agent object if access is granted
 
     Raises:
-        HTTPException 404 if agent not found
-        HTTPException 403 if tenant doesn't match
+        HTTPException 404 if agent not found or tenant doesn't match
     """
     agent = db.query(Agent).filter(Agent.id == agent_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     return agent
 
 
@@ -201,7 +200,7 @@ async def get_agent_skill_integrations(
         raise
     except Exception as e:
         logger.error(f"Error getting skill integrations for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.get("/agents/{agent_id}/skill-integrations/{skill_type}")
@@ -271,7 +270,7 @@ async def get_skill_integration(
 
     except Exception as e:
         logger.error(f"Error getting skill integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.put("/agents/{agent_id}/skill-integrations/{skill_type}")
@@ -399,7 +398,7 @@ async def update_skill_integration(
         raise
     except Exception as e:
         logger.error(f"Error updating skill integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.delete("/agents/{agent_id}/skill-integrations/{skill_type}")
@@ -448,7 +447,7 @@ async def delete_skill_integration(
         raise
     except Exception as e:
         logger.error(f"Error deleting skill integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.get("/skill-providers/{skill_type}")
@@ -659,4 +658,4 @@ async def get_available_providers(
         raise
     except Exception as e:
         logger.error(f"Error getting available providers: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")

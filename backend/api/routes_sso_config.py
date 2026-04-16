@@ -149,8 +149,8 @@ async def get_sso_config(
     """
     Get current tenant's SSO configuration.
     """
-    # For global admins, use their assigned tenant_id (not the context which is None)
-    tenant_id = current_user.tenant_id if current_user.is_global_admin else tenant_context.tenant_id
+    # BUG-081 FIX: Use tenant_context consistently (standard pattern)
+    tenant_id = tenant_context.tenant_id
 
     if not tenant_id:
         raise HTTPException(

@@ -101,8 +101,8 @@ class OpenAITTSProvider(TTSProvider):
     # Supported formats
     SUPPORTED_FORMATS = ["mp3", "opus", "aac", "flac", "wav", "pcm"]
 
-    def __init__(self, db=None, token_tracker=None):
-        super().__init__(db=db, token_tracker=token_tracker)
+    def __init__(self, db=None, token_tracker=None, tenant_id=None):
+        super().__init__(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
         self.client: Optional[OpenAI] = None
         self._api_key: Optional[str] = None
 
@@ -113,21 +113,14 @@ class OpenAITTSProvider(TTSProvider):
         return "OpenAI TTS"
 
     def _get_api_key(self) -> Optional[str]:
-        """Get OpenAI API key from database or environment."""
+        """Get OpenAI API key from database (tenant-specific or system-wide)."""
         if self._api_key:
             return self._api_key
 
-        # Try database first
         if self.db:
-            key = get_api_key("openai", self.db)
+            key = get_api_key("openai", self.db, tenant_id=self.tenant_id)
             if key:
                 self._api_key = key
-                return key
-
-        # Fall back to environment variable
-        key = os.getenv("OPENAI_API_KEY")
-        if key:
-            self._api_key = key
 
         return self._api_key
 

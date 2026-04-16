@@ -8,6 +8,7 @@ Phase: Item 10 - Contact-Based Memory
 Phase 10.2: Updated to use ContactChannelMappingService for scalable channel support.
 """
 
+import hashlib
 import logging
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -142,6 +143,21 @@ class ContactResolver:
             self.logger.error(f"Error resolving contact ID for sender {sender}: {e}")
             return None
 
+    @staticmethod
+    def deterministic_anonymous_id(identifier: str) -> str:
+        """
+        BUG-LOG-018: Generate a deterministic, collision-resistant anonymous ID.
+
+        Uses SHA-256 instead of Python's built-in hash() which is:
+        - Randomized per process (PYTHONHASHSEED)
+        - Platform-dependent (32-bit vs 64-bit)
+        - Non-reproducible across restarts
+
+        Returns:
+            16-character hex string, stable across processes and restarts.
+        """
+        return hashlib.sha256(identifier.encode("utf-8")).hexdigest()[:16]
+
     def get_or_create_anonymous_contact(
         self,
         sender: str,
@@ -169,9 +185,12 @@ class ContactResolver:
             if contact_id:
                 return contact_id
 
-            # Create anonymous contact
+            # BUG-LOG-018: Use deterministic hash for anonymous contact friendly_name
+            # so the same sender always maps to the same anonymous contact, even
+            # across process restarts.
             normalized_sender = sender.lstrip("+")
-            friendly_name = f"Unknown_{normalized_sender[:8]}"
+            stable_suffix = self.deterministic_anonymous_id(normalized_sender)
+            friendly_name = f"Unknown_{stable_suffix}"
 
             # Check if anonymous contact already exists
             contact = self.db.query(Contact).filter(
@@ -201,8 +220,8 @@ class ContactResolver:
 
         except Exception as e:
             self.logger.error(f"Error creating anonymous contact for sender {sender}: {e}")
-            # Fallback: return a hash-based ID
-            return hash(sender) % 1000000
+            self.db.rollback()
+            raise
 
     def get_memory_key(
         self,

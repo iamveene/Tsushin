@@ -43,7 +43,9 @@ class WindowsPersistenceManager(BasePersistenceManager):
         cmd = ["schtasks"] + list(args)
 
         try:
-            # Use shell=True on Windows for better compatibility
+            # Windows persistence installer: schtasks command constructed internally from beacon
+            # state (no user input). shell=True is needed for schtasks compatibility on Windows.
+            # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true
             result = subprocess.run(
                 cmd,
                 capture_output=True,

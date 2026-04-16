@@ -11,6 +11,7 @@ type EmptyStateVariant =
   | 'no-agents'
   | 'no-flows'
   | 'no-conversations'
+  | 'no-contacts'
   | 'no-results'
   | 'no-data'
   | 'error'
@@ -95,6 +96,30 @@ const illustrations: Record<EmptyStateVariant, React.ReactNode> = {
       {/* Lines in bubble 2 */}
       <line x1="70" y1="150" x2="130" y2="150" className="stroke-tsushin-indigo/30" strokeWidth="3" strokeLinecap="round" />
       <line x1="70" y1="165" x2="110" y2="165" className="stroke-tsushin-indigo/20" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  ),
+
+  'no-contacts': (
+    <svg className="w-full h-full" viewBox="0 0 200 200" fill="none">
+      {/* Address book */}
+      <rect x="50" y="30" width="100" height="140" rx="10" className="fill-tsushin-surface stroke-tsushin-border" strokeWidth="2" />
+      {/* Book spine */}
+      <rect x="50" y="30" width="15" height="140" rx="4" className="fill-tsushin-indigo/20 stroke-tsushin-indigo/40" strokeWidth="1" />
+      {/* Person icon */}
+      <circle cx="110" cy="80" r="18" className="fill-tsushin-deep stroke-tsushin-muted" strokeWidth="2" />
+      <circle cx="110" cy="73" r="8" className="fill-tsushin-indigo/30 stroke-tsushin-indigo" strokeWidth="1.5" />
+      <path d="M95 92 Q110 100 125 92" className="fill-tsushin-indigo/20 stroke-tsushin-indigo" strokeWidth="1.5" strokeLinecap="round" />
+      {/* Lines (contact info placeholder) */}
+      <line x1="80" y1="115" x2="140" y2="115" className="stroke-tsushin-muted" strokeWidth="2" strokeDasharray="4 4" strokeLinecap="round" />
+      <line x1="80" y1="130" x2="125" y2="130" className="stroke-tsushin-muted" strokeWidth="2" strokeDasharray="4 4" strokeLinecap="round" />
+      <line x1="80" y1="145" x2="115" y2="145" className="stroke-tsushin-muted" strokeWidth="2" strokeDasharray="4 4" strokeLinecap="round" />
+      {/* Plus badge */}
+      <circle cx="145" cy="45" r="14" className="fill-tsushin-indigo/10 stroke-tsushin-indigo" strokeWidth="2" />
+      <line x1="139" y1="45" x2="151" y2="45" className="stroke-tsushin-indigo" strokeWidth="2" strokeLinecap="round" />
+      <line x1="145" y1="39" x2="145" y2="51" className="stroke-tsushin-indigo" strokeWidth="2" strokeLinecap="round" />
+      {/* Sparkles */}
+      <circle cx="40" cy="60" r="2" className="fill-tsushin-accent/50 animate-pulse" />
+      <circle cx="165" cy="140" r="2" className="fill-tsushin-indigo/50 animate-pulse" style={{ animationDelay: '0.5s' }} />
     </svg>
   ),
 
@@ -206,6 +231,10 @@ const defaultContent: Record<EmptyStateVariant, { title: string; description: st
     title: 'No Conversations Yet',
     description: 'Conversations will appear here as your agents interact with users.',
   },
+  'no-contacts': {
+    title: 'No contacts yet',
+    description: 'Add contacts so your AI agent recognizes the people it talks to.',
+  },
   'no-results': {
     title: 'No Results Found',
     description: 'Try adjusting your search criteria or filters.',
@@ -220,7 +249,7 @@ const defaultContent: Record<EmptyStateVariant, { title: string; description: st
   },
   'welcome': {
     title: 'Welcome to Tsushin',
-    description: 'Your agentic messaging framework is ready. Let\'s get started!',
+    description: 'Think, Secure, Build. Let\'s get started!',
   },
   'coming-soon': {
     title: 'Coming Soon',

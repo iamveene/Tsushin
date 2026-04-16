@@ -245,3 +245,213 @@ class ContactAutoPopulateService:
         self.logger.info(f"Created WhatsApp channel mappings for contact {contact.id}")
 
         return contact
+
+    async def ensure_contact_from_slack(
+        self,
+        slack_user_id: str,
+        workspace_id: str,
+        display_name: Optional[str] = None,
+        username: Optional[str] = None,
+        tenant_id: str = "",
+        user_id: int = 1
+    ) -> Contact:
+        """
+        Create or update contact from Slack message metadata.
+
+        Uses ContactChannelMappingService for resolution.
+        No legacy columns exist for Slack — channel_mapping only.
+
+        Args:
+            slack_user_id: Slack user ID (e.g., U12345ABC)
+            workspace_id: Slack workspace/team ID (e.g., T12345ABC)
+            display_name: User's display name in Slack
+            username: Slack username
+            tenant_id: Tenant ID
+            user_id: System user ID for auto-created contacts
+
+        Returns:
+            Contact instance (existing or newly created)
+        """
+        mapping_service = ContactChannelMappingService(self.db)
+
+        # Slack identifiers are workspace-scoped, so use composite key
+        channel_identifier = f"{workspace_id}:{slack_user_id}"
+
+        contact = mapping_service.get_contact_by_channel(
+            channel_type='slack',
+            channel_identifier=channel_identifier,
+            tenant_id=tenant_id
+        )
+
+        if contact:
+            # Update metadata if display_name or username changed
+            mappings = mapping_service.get_channel_mappings(contact.id, 'slack')
+            if mappings:
+                slack_mapping = mappings[0]
+                current_meta = slack_mapping.channel_metadata or {}
+                new_meta = {
+                    'workspace_id': workspace_id,
+                    'username': username,
+                    'display_name': display_name,
+                }
+                # Only update if something changed
+                if (current_meta.get('username') != username or
+                        current_meta.get('display_name') != display_name):
+                    self.logger.info(
+                        f"Updating Slack metadata for {contact.friendly_name}: "
+                        f"{current_meta.get('display_name')} → {display_name}"
+                    )
+                    slack_mapping.channel_metadata = new_meta
+                    slack_mapping.updated_at = datetime.utcnow()
+                    self.db.commit()
+                    self.db.refresh(contact)
+
+            return contact
+
+        # Create new contact
+        friendly_name = display_name or (f"@{username}" if username else f"Slack User {slack_user_id}")
+
+        self.logger.info(
+            f"Auto-creating Slack contact: {friendly_name} "
+            f"(workspace={workspace_id}, user={slack_user_id})"
+        )
+
+        contact = Contact(
+            friendly_name=friendly_name,
+            role="user",
+            is_active=True,
+            is_dm_trigger=True,
+            tenant_id=tenant_id,
+            user_id=user_id
+        )
+
+        self.db.add(contact)
+        self.db.commit()
+        self.db.refresh(contact)
+
+        metadata = {
+            'workspace_id': workspace_id,
+            'username': username,
+            'display_name': display_name,
+        }
+
+        mapping_service.add_channel_mapping(
+            contact_id=contact.id,
+            channel_type='slack',
+            channel_identifier=channel_identifier,
+            channel_metadata=metadata,
+            tenant_id=tenant_id
+        )
+
+        self.logger.info(f"Created Slack channel mapping for contact {contact.id}")
+
+        return contact
+
+    async def ensure_contact_from_discord(
+        self,
+        discord_user_id: str,
+        display_name: Optional[str] = None,
+        username: Optional[str] = None,
+        discriminator: Optional[str] = None,
+        guild_id: Optional[str] = None,
+        tenant_id: str = "",
+        user_id: int = 1
+    ) -> Contact:
+        """
+        Create or update contact from Discord message metadata.
+
+        Uses ContactChannelMappingService for resolution.
+        No legacy columns exist for Discord — channel_mapping only.
+
+        Args:
+            discord_user_id: Discord user ID (snowflake, globally unique)
+            display_name: User's display name in Discord
+            username: Discord username
+            discriminator: Discord discriminator (e.g., "1234")
+            guild_id: Discord guild/server ID
+            tenant_id: Tenant ID
+            user_id: System user ID for auto-created contacts
+
+        Returns:
+            Contact instance (existing or newly created)
+        """
+        mapping_service = ContactChannelMappingService(self.db)
+
+        # Discord user IDs are globally unique snowflakes
+        channel_identifier = discord_user_id
+
+        contact = mapping_service.get_contact_by_channel(
+            channel_type='discord',
+            channel_identifier=channel_identifier,
+            tenant_id=tenant_id
+        )
+
+        if contact:
+            # Update metadata if display_name or username changed
+            mappings = mapping_service.get_channel_mappings(contact.id, 'discord')
+            if mappings:
+                discord_mapping = mappings[0]
+                current_meta = discord_mapping.channel_metadata or {}
+                new_meta = {
+                    'username': username,
+                    'discriminator': discriminator,
+                    'guild_id': guild_id,
+                    'display_name': display_name,
+                }
+                if (current_meta.get('username') != username or
+                        current_meta.get('display_name') != display_name):
+                    self.logger.info(
+                        f"Updating Discord metadata for {contact.friendly_name}: "
+                        f"{current_meta.get('display_name')} → {display_name}"
+                    )
+                    discord_mapping.channel_metadata = new_meta
+                    discord_mapping.updated_at = datetime.utcnow()
+                    self.db.commit()
+                    self.db.refresh(contact)
+
+            return contact
+
+        # Create new contact
+        if display_name:
+            friendly_name = display_name
+        elif username:
+            friendly_name = f"@{username}" + (f"#{discriminator}" if discriminator else "")
+        else:
+            friendly_name = f"Discord User {discord_user_id}"
+
+        self.logger.info(
+            f"Auto-creating Discord contact: {friendly_name} "
+            f"(user_id={discord_user_id}, guild={guild_id})"
+        )
+
+        contact = Contact(
+            friendly_name=friendly_name,
+            role="user",
+            is_active=True,
+            is_dm_trigger=True,
+            tenant_id=tenant_id,
+            user_id=user_id
+        )
+
+        self.db.add(contact)
+        self.db.commit()
+        self.db.refresh(contact)
+
+        metadata = {
+            'username': username,
+            'discriminator': discriminator,
+            'guild_id': guild_id,
+            'display_name': display_name,
+        }
+
+        mapping_service.add_channel_mapping(
+            contact_id=contact.id,
+            channel_type='discord',
+            channel_identifier=channel_identifier,
+            channel_metadata=metadata,
+            tenant_id=tenant_id
+        )
+
+        self.logger.info(f"Created Discord channel mapping for contact {contact.id}")
+
+        return contact

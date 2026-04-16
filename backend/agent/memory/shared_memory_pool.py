@@ -16,7 +16,8 @@ import logging
 from typing import Dict, List, Optional, Set
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc
+from sqlalchemy import and_, or_, desc, text, func, cast
+from sqlalchemy.types import Text
 
 from models import SharedMemory, Agent
 
@@ -77,8 +78,11 @@ class SharedMemoryPool:
                 self.logger.error(f"Invalid access level: {access_level}")
                 return False
 
-            # Validate agent exists
-            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+            # Validate agent exists (with tenant isolation)
+            agent_query = self.db.query(Agent).filter(Agent.id == agent_id)
+            if tenant_id is not None:
+                agent_query = agent_query.filter(Agent.tenant_id == tenant_id)
+            agent = agent_query.first()
             if not agent:
                 self.logger.error(f"Agent {agent_id} not found")
                 return False
@@ -128,7 +132,8 @@ class SharedMemoryPool:
         topic: Optional[str] = None,
         min_confidence: float = 0.0,
         limit: int = 20,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        decay_config=None
     ) -> List[Dict]:
         """
         Get knowledge accessible to a specific agent.
@@ -139,6 +144,7 @@ class SharedMemoryPool:
             min_confidence: Minimum confidence threshold
             limit: Maximum results
             tenant_id: Tenant ID for multi-tenancy filter (CRIT-010 security fix)
+            decay_config: Optional DecayConfig for temporal decay filtering
 
         Returns:
             List of knowledge items
@@ -157,11 +163,14 @@ class SharedMemoryPool:
             # 3. Knowledge where agent is in accessible_to list
             # Note: SQLite doesn't support JSON field access in WHERE clauses like PostgreSQL
             # so we filter access_level="public" in Python after the query
+            # PostgreSQL-compatible JSON comparison:
+            # - JSON == [] doesn't work on PG (no = operator for json type)
+            # - Use cast to text for empty array check, and text() for contains
             query = query.filter(
                 or_(
-                    SharedMemory.accessible_to == [],
+                    cast(SharedMemory.accessible_to, Text) == '[]',
                     SharedMemory.shared_by_agent == agent_id,
-                    SharedMemory.accessible_to.contains([agent_id])
+                    cast(SharedMemory.accessible_to, Text).like(f'%{agent_id}%')
                 )
             )
 
@@ -178,8 +187,15 @@ class SharedMemoryPool:
             # Execute query
             results = query.limit(limit * 2).all()  # Get extra for filtering
 
+            decay_enabled = (
+                decay_config is not None
+                and getattr(decay_config, 'enabled', False)
+            )
+
             # Convert to dict and apply confidence + access_level filters
             knowledge = []
+            accessed_ids = []
+
             for item in results:
                 # Check access level for items with empty accessible_to (public knowledge)
                 if item.accessible_to == []:
@@ -190,11 +206,51 @@ class SharedMemoryPool:
 
                 # Check confidence
                 confidence = item.meta_data.get("confidence", 1.0)
-                if confidence >= min_confidence:
-                    knowledge.append(self._to_dict(item))
+
+                if decay_enabled:
+                    from .temporal_decay import (
+                        apply_decay_to_confidence, compute_freshness_label, should_archive
+                    )
+                    now = datetime.utcnow()
+                    last_accessed = getattr(item, 'last_accessed_at', None)
+                    eff_confidence = apply_decay_to_confidence(
+                        confidence, last_accessed, now, decay_config.decay_lambda
+                    )
+                    if should_archive(eff_confidence, decay_config.archive_threshold):
+                        continue
+                    if eff_confidence < min_confidence:
+                        continue
+
+                    item_dict = self._to_dict(item)
+                    freshness = compute_freshness_label(
+                        last_accessed, now, decay_config.decay_lambda,
+                        decay_config.archive_threshold
+                    )
+                    item_dict['effective_confidence'] = round(eff_confidence, 4)
+                    item_dict['freshness'] = freshness['freshness']
+                    item_dict['decay_factor'] = freshness['decay_factor']
+                    knowledge.append(item_dict)
+                    accessed_ids.append(item.id)
+                else:
+                    if confidence >= min_confidence:
+                        knowledge.append(self._to_dict(item))
 
                 if len(knowledge) >= limit:
                     break
+
+            # Update last_accessed_at for returned items (when decay is enabled)
+            if decay_enabled and accessed_ids:
+                try:
+                    self.db.query(SharedMemory).filter(
+                        SharedMemory.id.in_(accessed_ids)
+                    ).update(
+                        {SharedMemory.last_accessed_at: datetime.utcnow()},
+                        synchronize_session='fetch'
+                    )
+                    self.db.commit()
+                except Exception as e:
+                    self.logger.warning(f"Failed to update last_accessed_at for shared knowledge: {e}")
+                    self.db.rollback()
 
             self.logger.info(
                 f"Retrieved {len(knowledge)} knowledge items for agent {agent_id}"
@@ -267,7 +323,8 @@ class SharedMemoryPool:
         content: Optional[str] = None,
         topic: Optional[str] = None,
         accessible_to: Optional[List[int]] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        tenant_id: Optional[str] = None
     ) -> bool:
         """
         Update shared knowledge (only by sharing agent).
@@ -284,10 +341,13 @@ class SharedMemoryPool:
             True if successful
         """
         try:
-            # Find knowledge
-            knowledge = self.db.query(SharedMemory).filter(
+            # Find knowledge (with tenant isolation)
+            query = self.db.query(SharedMemory).filter(
                 SharedMemory.id == knowledge_id
-            ).first()
+            )
+            if tenant_id is not None:
+                query = query.filter(SharedMemory.tenant_id == tenant_id)
+            knowledge = query.first()
 
             if not knowledge:
                 self.logger.warning(f"Knowledge {knowledge_id} not found")
@@ -326,7 +386,8 @@ class SharedMemoryPool:
     def delete_shared_knowledge(
         self,
         knowledge_id: int,
-        agent_id: int
+        agent_id: int,
+        tenant_id: Optional[str] = None
     ) -> bool:
         """
         Delete shared knowledge (only by sharing agent).
@@ -339,10 +400,13 @@ class SharedMemoryPool:
             True if successful
         """
         try:
-            # Find knowledge
-            knowledge = self.db.query(SharedMemory).filter(
+            # Find knowledge (with tenant isolation)
+            query = self.db.query(SharedMemory).filter(
                 SharedMemory.id == knowledge_id
-            ).first()
+            )
+            if tenant_id is not None:
+                query = query.filter(SharedMemory.tenant_id == tenant_id)
+            knowledge = query.first()
 
             if not knowledge:
                 self.logger.warning(f"Knowledge {knowledge_id} not found")
@@ -385,8 +449,16 @@ class SharedMemoryPool:
                 query = query.filter(SharedMemory.tenant_id == tenant_id)
 
             if agent_id:
-                # Stats for specific agent (what they shared)
-                query = query.filter(SharedMemory.shared_by_agent == agent_id)
+                # BUG-399 fix: Stats for knowledge accessible TO the agent (not just shared BY it).
+                # This matches the access filter used in get_accessible_knowledge() so that
+                # stat cards display counts consistent with the knowledge list below them.
+                query = query.filter(
+                    or_(
+                        cast(SharedMemory.accessible_to, Text) == '[]',
+                        SharedMemory.shared_by_agent == agent_id,
+                        cast(SharedMemory.accessible_to, Text).like(f'%{agent_id}%')
+                    )
+                )
 
             all_knowledge = query.all()
 

@@ -2,6 +2,10 @@ import sqlite3
 from typing import List, Dict
 import logging
 
+# NOTE: This module reads the WhatsApp MCP bridge's own SQLite database,
+# NOT the Tsushin application database (which uses PostgreSQL).
+# This is intentional and separate from the main DB migration.
+
 class MCPDatabaseReader:
     def __init__(self, db_path: str, contact_mappings: Dict = None):
         self.db_path = db_path

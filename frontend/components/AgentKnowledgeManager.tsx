@@ -174,7 +174,7 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
       {/* Upload Section */}
       <div
         className={`border-2 border-dashed rounded-lg p-8 text-center ${
-          dragActive ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900'
+          dragActive ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-tsushin-border bg-tsushin-ink'
         }`}
         onDragEnter={handleDrag}
         onDragLeave={handleDrag}
@@ -183,7 +183,7 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
       >
         <div className="mb-4"><UploadIcon size={40} className="mx-auto text-gray-400" /></div>
         <h3 className="text-lg font-semibold mb-2">Upload Knowledge Documents</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <p className="text-sm text-tsushin-slate mb-4">
           Drag & drop files here or click to browse
         </p>
         <input
@@ -196,17 +196,17 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
         />
         <label
           htmlFor="file-upload"
-          className="px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 cursor-pointer inline-block"
+          className="btn-primary px-6 py-3 rounded-md cursor-pointer inline-block"
         >
           {uploading ? 'Uploading...' : 'Browse Files'}
         </label>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+        <p className="text-xs text-tsushin-muted mt-3">
           Supported: TXT, CSV, JSON, PDF, DOCX | Max size: 10 MB per file
         </p>
       </div>
 
       {/* Knowledge Search Tester */}
-      <div className="border dark:border-gray-700 rounded-lg p-4 bg-purple-50 dark:bg-purple-900/20">
+      <div className="border border-tsushin-border rounded-lg p-4 bg-purple-50 dark:bg-purple-900/20">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><SearchIcon size={20} /> Test Knowledge Search</h3>
         <div className="flex gap-2 mb-4">
           <input
@@ -215,12 +215,12 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && searchKnowledge()}
             placeholder="Enter search query..."
-            className="flex-1 px-4 py-2 border dark:border-gray-700 rounded-md"
+            className="flex-1 px-4 py-2 border border-tsushin-border rounded-md"
           />
           <button
             onClick={searchKnowledge}
             disabled={searching || !searchQuery.trim()}
-            className="px-6 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50"
+            className="btn-primary px-6 py-2 rounded-md disabled:opacity-50"
           >
             {searching ? 'Searching...' : 'Search'}
           </button>
@@ -230,76 +230,76 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
           <div className="space-y-2">
             <h4 className="font-medium text-sm">Search Results:</h4>
             {searchResults.map((result, i) => (
-              <div key={i} className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded p-3">
+              <div key={i} className="bg-tsushin-surface border border-tsushin-border rounded p-3">
                 <div className="text-sm mb-1">
                   <span className="font-medium text-purple-600">Chunk {result.chunk_id}</span>
                   {result.metadata.source && (
-                    <span className="text-gray-500 dark:text-gray-400 ml-2">from {result.metadata.source}</span>
+                    <span className="text-tsushin-muted ml-2">from {result.metadata.source}</span>
                   )}
                 </div>
-                <p className="text-sm text-gray-700 dark:text-gray-300">{result.content}</p>
+                <p className="text-sm text-tsushin-fog">{result.content}</p>
               </div>
             ))}
           </div>
         )}
 
         {searchQuery && searchResults.length === 0 && !searching && (
-          <p className="text-sm text-gray-500 dark:text-gray-400">No results found for "{searchQuery}"</p>
+          <p className="text-sm text-tsushin-muted">No results found for "{searchQuery}"</p>
         )}
       </div>
 
       {/* Documents List */}
-      <div className="border dark:border-gray-700 rounded-lg overflow-hidden">
-        <div className="bg-gray-100 dark:bg-gray-800 px-4 py-3 border-b">
+      <div className="border border-tsushin-border rounded-lg overflow-hidden">
+        <div className="bg-tsushin-elevated px-4 py-3 border-b">
           <h3 className="text-lg font-semibold flex items-center gap-2"><BookOpenIcon size={20} /> Knowledge Base Documents</h3>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
-            <thead className="bg-gray-50 dark:bg-gray-900 border-b">
+            <thead className="bg-tsushin-ink border-b">
               <tr>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-400">Document Name</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-400">Type</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-400">Size</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-400">Chunks</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-400">Status</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-600 dark:text-gray-400">Uploaded</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600 dark:text-gray-400">Actions</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Document Name</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Type</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Size</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Chunks</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Status</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Uploaded</th>
+                <th className="px-4 py-3 text-right text-sm font-medium text-tsushin-slate">Actions</th>
               </tr>
             </thead>
             <tbody>
               {documents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
+                  <td colSpan={7} className="px-4 py-8 text-center text-tsushin-muted">
                     No documents uploaded yet. Upload documents to build agent's knowledge base.
                   </td>
                 </tr>
               ) : (
                 documents.map((doc) => (
-                  <tr key={doc.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-700 dark:bg-gray-900">
+                  <tr key={doc.id} className="border-b hover:bg-tsushin-surface bg-tsushin-ink">
                     <td className="px-4 py-3 font-medium">{doc.document_name}</td>
                     <td className="px-4 py-3 text-sm">
-                      <span className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded text-xs font-mono">
+                      <span className="px-2 py-1 bg-tsushin-elevated rounded text-xs font-mono">
                         {doc.document_type.toUpperCase()}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-sm">{formatBytes(doc.file_size_bytes)}</td>
                     <td className="px-4 py-3 text-sm">{doc.num_chunks || '-'}</td>
                     <td className="px-4 py-3">{getStatusBadge(doc.status)}</td>
-                    <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
+                    <td className="px-4 py-3 text-sm text-tsushin-slate">
                       {formatDate(doc.upload_date)}
                     </td>
                     <td className="px-4 py-3 text-right space-x-2">
                       {doc.status === 'completed' && (
                         <button
                           onClick={() => viewDocument(doc)}
-                          className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                          className="btn-primary px-3 py-1 text-sm rounded"
                         >
                           View
                         </button>
                       )}
                       <button
                         onClick={() => deleteDocument(doc.id)}
-                        className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                        className="btn-danger px-3 py-1 text-sm rounded"
                       >
                         Delete
                       </button>
@@ -315,17 +315,17 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
       {/* Document Detail Modal */}
       {selectedDoc && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="bg-gray-100 dark:bg-gray-800 px-6 py-4 border-b flex justify-between items-center">
+          <div className="bg-tsushin-surface rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="bg-tsushin-elevated px-6 py-4 border-b flex justify-between items-center">
               <div>
                 <h3 className="text-lg font-semibold">{selectedDoc.document_name}</h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
+                <p className="text-sm text-tsushin-slate">
                   {formatBytes(selectedDoc.file_size_bytes)} • {selectedDoc.num_chunks} chunks
                 </p>
               </div>
               <button
                 onClick={() => setSelectedDoc(null)}
-                className="text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 dark:text-gray-200"
+                className="text-tsushin-slate hover:text-white"
               >
                 ✕
               </button>
@@ -333,11 +333,11 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
 
             <div className="overflow-y-auto p-6 space-y-4 flex-1">
               {chunks.length === 0 ? (
-                <p className="text-center text-gray-500 dark:text-gray-400">Loading chunks...</p>
+                <p className="text-center text-tsushin-muted">Loading chunks...</p>
               ) : (
                 chunks.map((chunk, i) => (
-                  <div key={i} className="border dark:border-gray-700 rounded p-4 bg-gray-50 dark:bg-gray-900">
-                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                  <div key={i} className="border border-tsushin-border rounded p-4 bg-tsushin-ink">
+                    <div className="text-xs text-tsushin-muted mb-2">
                       Chunk {chunk.chunk_index} • {chunk.char_count} chars
                       {chunk.metadata_json?.page && ` • Page ${chunk.metadata_json.page}`}
                     </div>
@@ -347,10 +347,10 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
               )}
             </div>
 
-            <div className="bg-gray-100 dark:bg-gray-800 px-6 py-4 border-t">
+            <div className="bg-tsushin-elevated px-6 py-4 border-t">
               <button
                 onClick={() => setSelectedDoc(null)}
-                className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700"
+                className="px-4 py-2 bg-tsushin-elevated text-white rounded-md hover:bg-tsushin-surface"
               >
                 Close
               </button>

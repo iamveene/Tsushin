@@ -1,0 +1,206 @@
+# =============================================================================
+# Tsushin Helm Chart — Default Values
+# =============================================================================
+
+global:
+  project: ""          # GCP project ID (e.g. my-project-123)
+  region: ""           # GCP region (e.g. us-central1)
+
+# -----------------------------------------------------------------------------
+# Backend — FastAPI (Python 3.11)
+# -----------------------------------------------------------------------------
+backend:
+  image:
+    repository: ""     # e.g. us-central1-docker.pkg.dev/PROJECT/tsushin/backend
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicas: 2
+  port: 8081
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1500m"
+      memory: "2Gi"
+  serviceAccount:
+    create: true
+    annotations: {}
+    # iam.gke.io/gcp-service-account: tsushin-backend@PROJECT.iam.gserviceaccount.com
+  env:
+    TSN_APP_HOST: "0.0.0.0"
+    TSN_APP_PORT: "8081"
+    TSN_LOG_LEVEL: "INFO"
+    TSN_LOG_FORMAT: "json"
+    TSN_METRICS_ENABLED: "true"
+    TSN_POLL_INTERVAL_MS: "3000"
+    TSN_CONTAINER_RUNTIME: "kubernetes"
+    TSN_SECRET_BACKEND: "gcp"
+    TSN_K8S_NAMESPACE: "tsushin"
+    TSN_K8S_IMAGE_PULL_POLICY: "IfNotPresent"
+    TSN_CHROMA_DIR: "/app/data/chroma"
+    TSN_WORKSPACE_DIR: "/app/data/workspace"
+    TSN_BACKUPS_DIR: "/app/data/backups"
+    TSN_LOG_FILE: "/app/logs/tsushin.log"
+    INTERNAL_DB_PATH: "/app/data/agent.db"
+  probes:
+    liveness:
+      path: /api/health
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      path: /api/readiness
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    startup:
+      path: /api/health
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 5
+      failureThreshold: 30
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# -----------------------------------------------------------------------------
+# Frontend — Next.js 14 (standalone)
+# -----------------------------------------------------------------------------
+frontend:
+  image:
+    repository: ""     # e.g. us-central1-docker.pkg.dev/PROJECT/tsushin/frontend
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicas: 2
+  port: 3030
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  serviceAccount:
+    create: true
+    annotations: {}
+  env:
+    NODE_ENV: "production"
+    NEXT_TELEMETRY_DISABLED: "1"
+  probes:
+    liveness:
+      path: /
+      initialDelaySeconds: 10
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      path: /
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    startup:
+      path: /
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 5
+      failureThreshold: 20
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+# -----------------------------------------------------------------------------
+# Cloud SQL Proxy sidecar
+# -----------------------------------------------------------------------------
+cloudsql:
+  enabled: true
+  image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.3
+  instanceConnectionName: ""   # PROJECT:REGION:INSTANCE
+  port: 5432
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+# -----------------------------------------------------------------------------
+# Ingress (GKE)
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: true
+  host: ""             # e.g. app.tsushin.example.com
+  className: "gce"
+  tls:
+    enabled: true
+    managedCertName: "tsushin-managed-cert"
+  websocketTimeout: 3600
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# Persistence — PVC for /app/data
+# -----------------------------------------------------------------------------
+persistence:
+  data:
+    enabled: true
+    size: "20Gi"
+    storageClass: "premium-rwo"
+    accessModes:
+      - ReadWriteOnce
+
+# -----------------------------------------------------------------------------
+# Secrets — external secret placeholder
+# -----------------------------------------------------------------------------
+secrets:
+  # When using ExternalSecrets or Sealed Secrets, set external to true
+  # and provide the secretName that will be created by your external controller
+  external: false
+  externalSecretName: ""
+  # Placeholder values — override via Helm --set or external secret operator
+  # WARNING: Never pass secrets via --set on the CLI (visible in shell history).
+  # Use --set-file, external secrets operator, or sealed secrets in production.
+  data:
+    POSTGRES_PASSWORD: ""    # REQUIRED — Cloud SQL password
+    DATABASE_URL: ""
+    JWT_SECRET_KEY: ""
+    GEMINI_API_KEY: ""
+    OPENAI_API_KEY: ""
+    ANTHROPIC_API_KEY: ""
+    GROQ_API_KEY: ""
+    GROK_API_KEY: ""
+    ELEVENLABS_API_KEY: ""
+    BRAVE_API: ""
+    BRAVE_SEARCH_API_KEY: ""
+    AMADEUS_API_KEY: ""
+    AMADEUS_API_SECRET: ""
+    ASANA_ENCRYPTION_KEY: ""
+    GOOGLE_SSO_CLIENT_SECRET: ""
+
+# -----------------------------------------------------------------------------
+# Database migration (Alembic)
+# -----------------------------------------------------------------------------
+migration:
+  enabled: true
+
+# -----------------------------------------------------------------------------
+# Metrics / Monitoring
+# -----------------------------------------------------------------------------
+metrics:
+  enabled: true
+  serviceMonitor: false   # enable if using Prometheus Operator
+  port: 8081
+  path: /metrics
+
+# -----------------------------------------------------------------------------
+# Network policies
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: true

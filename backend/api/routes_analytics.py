@@ -56,13 +56,9 @@ def get_tenant_agent_ids(db: Session, ctx: TenantContext) -> List[int]:
         # Global admin can see all agents
         agents = db.query(Agent.id).all()
     else:
-        # Filter by tenant - include tenant's agents AND shared (NULL tenant_id)
-        from sqlalchemy import or_
+        # BUG-082 FIX: Only include tenant's own agents (no NULL-tenant leak)
         agents = db.query(Agent.id).filter(
-            or_(
-                Agent.tenant_id == ctx.tenant_id,
-                Agent.tenant_id.is_(None)
-            )
+            Agent.tenant_id == ctx.tenant_id
         ).all()
 
     return [a.id for a in agents]
@@ -79,7 +75,7 @@ def verify_agent_access(agent_id: int, db: Session, ctx: TenantContext) -> Agent
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     return agent
 
@@ -373,7 +369,7 @@ async def get_recent_token_usage(
     # Get tenant's agent IDs
     tenant_agent_ids = get_tenant_agent_ids(db, ctx)
 
-    query = db.query(TokenUsage).order_by(desc(TokenUsage.created_at)).limit(limit)
+    query = db.query(TokenUsage).order_by(desc(TokenUsage.created_at))
 
     if agent_id:
         query = query.filter(TokenUsage.agent_id == agent_id)
@@ -387,7 +383,7 @@ async def get_recent_token_usage(
             )
         )
 
-    usages = query.all()
+    usages = query.limit(limit).all()
 
     records = []
     for u in usages:

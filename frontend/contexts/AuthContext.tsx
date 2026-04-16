@@ -6,8 +6,8 @@
  * Phase 7.6.3 - Real Backend Authentication
  */
 
-import React, { createContext, useContext, useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 
 // User type matching backend response
@@ -16,6 +16,7 @@ interface User {
   email: string
   full_name: string
   tenant_id: number
+  tenant_name?: string | null
   is_global_admin: boolean
   is_active?: boolean
   email_verified?: boolean
@@ -44,49 +45,77 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-// Token storage utilities
-const TOKEN_KEY = 'tsushin_auth_token'
-
-const storeToken = (token: string) => {
-  localStorage.setItem(TOKEN_KEY, token)
-}
-
-const getToken = (): string | null => {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-const removeToken = () => {
-  localStorage.removeItem(TOKEN_KEY)
+// SEC-005 Phase 3: localStorage token storage removed entirely.
+// All auth now relies on httpOnly cookie (tsushin_session) set by backend.
+// localStorage cleanup for users upgrading from previous versions.
+const _cleanupLegacyToken = () => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('tsushin_auth_token')
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
+  const pathname = usePathname()
+  const skipNextSessionBootstrapRef = useRef(false)
 
-  // Load user from token on mount
+  // Load user from httpOnly cookie on mount
   useEffect(() => {
+    if (!pathname) {
+      return
+    }
+
+    const isPublicPage = pathname?.startsWith('/auth') || pathname?.startsWith('/setup')
+    if (isPublicPage) {
+      _cleanupLegacyToken()
+      setLoading(false)
+      return
+    }
+
+    if (skipNextSessionBootstrapRef.current && user) {
+      skipNextSessionBootstrapRef.current = false
+      setLoading(false)
+      return
+    }
+
+    let isCancelled = false
+
     const loadUser = async () => {
-      const token = getToken()
-      if (token) {
-        try {
-          const userData = await api.getCurrentUser(token)
+      // Clean up legacy localStorage token from previous versions
+      _cleanupLegacyToken()
+      setLoading(true)
+      try {
+        const userData = await api.getCurrentUser()
+        if (!isCancelled) {
           setUser(userData)
-        } catch (error) {
-          console.error('Failed to load user:', error)
-          removeToken()
+        }
+      } catch (error) {
+        // No valid session cookie — user is not authenticated
+        if (!isCancelled) {
+          console.debug('No active session:', error)
           setUser(null)
         }
+      } finally {
+        if (!isCancelled) {
+          setLoading(false)
+        }
       }
-      setLoading(false)
     }
+
     loadUser()
-  }, [])
+    return () => {
+      isCancelled = true
+    }
+  }, [pathname])
 
   const login = async (email: string, password: string) => {
     const response = await api.login(email, password)
-    storeToken(response.access_token)
+    // SEC-005: Cookie is set by backend response — no localStorage needed
+    skipNextSessionBootstrapRef.current = true
     setUser(response.user)
+    setLoading(false)
 
     // Redirect based on user type
     if (response.user.is_global_admin) {
@@ -111,18 +140,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const setAuthFromToken = async (token: string) => {
-    // Store the token
-    storeToken(token)
-
-    // Fetch user info
+  const setAuthFromToken = async (_token: string) => {
+    void _token
+    // SEC-005: The httpOnly cookie was already set by the backend response
+    // that returned this token. We just need to load the user profile via cookie.
     try {
-      const userData = await api.getCurrentUser(token)
+      const userData = await api.getCurrentUser()
+      skipNextSessionBootstrapRef.current = true
       setUser(userData)
-
+      setLoading(false)
       // Note: Redirect is handled by the SSO callback page
     } catch (error) {
-      removeToken()
       throw error
     }
   }
@@ -139,20 +167,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       full_name: data.name,
       org_name: data.orgName,
     })
-    storeToken(response.access_token)
+    // SEC-005: Cookie is set by backend response — no localStorage needed
+    skipNextSessionBootstrapRef.current = true
     setUser(response.user)
+    setLoading(false)
     router.push('/')
   }
 
   const logout = () => {
-    const token = getToken()
-    if (token) {
-      // Call logout endpoint (fire and forget)
-      api.logout(token).catch(console.error)
-    }
-    removeToken()
+    // SEC-005: Call logout endpoint — backend clears the httpOnly cookie
+    api.logout().catch(console.error)
+    _cleanupLegacyToken()
     setUser(null)
-    router.push('/auth/login')
+    // BUG-544: Hard navigation to /auth/login. router.push() raced the
+    // LayoutContent spinner branch (`if (loading || !user)` at
+    // LayoutContent.tsx:188) and could leave the user stuck on
+    // "Loading Tsushin..." forever when logging out from `/`.
+    if (typeof window !== 'undefined') {
+      window.location.href = '/auth/login'
+    } else {
+      router.push('/auth/login')
+    }
   }
 
   const forgotPasswordHandler = async (email: string) => {
@@ -202,12 +237,15 @@ export function useAuth() {
 export function useRequireAuth() {
   const { user, loading, hasPermission } = useAuth()
   const router = useRouter()
+  const pathname = usePathname() || ''
 
   useEffect(() => {
-    if (!loading && !user) {
+    // Skip auth redirect for public pages (login, signup, setup, etc.)
+    const isPublicPage = pathname.startsWith('/auth') || pathname.startsWith('/setup')
+    if (!loading && !user && !isPublicPage) {
       router.push('/auth/login')
     }
-  }, [user, loading, router])
+  }, [user, loading, router, pathname])
 
   return { user, loading, hasPermission }
 }
@@ -233,6 +271,5 @@ export function useRequireGlobalAdmin() {
   return { user, loading }
 }
 
-// Export types and utilities for use elsewhere
+// Export types for use elsewhere
 export type { User }
-export { getToken }

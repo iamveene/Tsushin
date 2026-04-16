@@ -1,6 +1,7 @@
 import logging
 import time
 import re
+from datetime import datetime
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 from .ai_client import AIClient
@@ -9,7 +10,6 @@ from .ai_client import AIClient
 
 # Legacy tools removed - migrated to Skills system:
 # - SearchTool → SearchSkill (web_search) with SearchProviderRegistry
-# - WeatherTool → WeatherSkill
 # - WebScrapingSkill → WebScrapingSkill
 # - FlightSearchTool → FlightSearchSkill with FlightProviderRegistry
 
@@ -33,7 +33,8 @@ class AgentService:
         persona_id: Optional[int] = None,
         on_tool_complete_callback=None,
         project_id: Optional[int] = None,
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        disable_skills: bool = False,
     ):
         """
         Initialize Agent Service.
@@ -51,7 +52,7 @@ class AgentService:
             user_id: User ID for combined KB (Phase 16)
 
         Note: Ring buffer memory deprecated - use Multi-Agent Memory Manager instead
-        Note: Legacy tools (search, weather, scraping) migrated to Skills system
+        Note: Legacy tools (search, scraping) migrated to Skills system
         """
         self.config = config
         self.contact_service = contact_service  # Phase 4.2
@@ -63,6 +64,7 @@ class AgentService:
         self.on_tool_complete_callback = on_tool_complete_callback
         self.project_id = project_id  # Phase 16: Project context
         self.user_id = user_id  # Phase 16: User context for combined KB
+        self.disable_skills = disable_skills  # A2A: prevent recursive tool use
         self.logger = logging.getLogger(__name__)
 
         # Phase 5.0: Initialize knowledge service if agent_id and db provided
@@ -79,15 +81,21 @@ class AgentService:
             self.combined_knowledge_service = CombinedKnowledgeService(db)
             self.logger.info(f"[KB FIX] ✅ CombinedKnowledgeService INITIALIZED for project {project_id}")
         else:
-            self.logger.warning(f"[KB FIX] ❌ CombinedKnowledgeService NOT initialized: db={db is not None}, project_id={project_id}")
+            # BUG-332: project_id=None is expected for agents not in a project — log at DEBUG
+            # Only warn if project_id is set but the service failed to initialize
+            if project_id:
+                self.logger.warning(f"[KB FIX] ❌ CombinedKnowledgeService NOT initialized: db={db is not None}, project_id={project_id}")
+            else:
+                self.logger.debug(f"[KB FIX] CombinedKnowledgeService not initialized (no project context): db={db is not None}")
 
         # Phase 6.1: Initialize sandboxed tools wrapper if db provided
         # Phase: Custom Tools Hub - Added tenant_id and callback for container/long-running support
         # Phase 9.3: Added persona_id for persona-based tool discovery
         # Skills-as-Tools Phase 6: Renamed from CustomToolWrapper to SandboxedToolWrapper
         # Gate on sandboxed_tools skill being enabled for this agent
+        # A2A: Skip all tool initialization when disable_skills=True
         self.sandboxed_tools = None
-        if db and agent_id:
+        if db and agent_id and not disable_skills:
             from models import AgentSkill
             sandboxed_tools_skill = db.query(AgentSkill).filter(
                 AgentSkill.agent_id == agent_id,
@@ -117,12 +125,12 @@ class AgentService:
             token_tracker=token_tracker,
             temperature=config.get("temperature"),
             max_tokens=config.get("max_tokens"),
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            provider_instance_id=config.get("provider_instance_id"),
         )
 
         # Legacy tools removed - now handled by Skills system:
         # - web_search skill (SearchSkill with Brave provider)
-        # - weather skill (WeatherSkill)
         # - web_scraping skill (WebScrapingSkill)
         # Skills are processed by SkillManager in router.py before reaching AgentService
 
@@ -357,6 +365,81 @@ class AgentService:
 
         return text
 
+    def _sanitize_unexecuted_tool_output(self, text: str) -> str:
+        """
+        Remove or normalize leaked tool-call markup before sending it to end users.
+
+        Some lighter/local models, especially via Ollama, may emit pseudo tool-call
+        blocks like:
+
+        [TOOL_CALL]
+        action: respond
+        message: Hello
+        [/TOOL_CALL]
+
+        If the block wasn't executed by our tool pipeline, we should never expose the
+        raw markup to WhatsApp/Slack/etc. In the special "action: respond" case, we can
+        safely extract the intended user-facing message.
+        """
+        if not text:
+            return text
+
+        cleaned = text
+
+        def _replace_tool_call_block(match: re.Match) -> str:
+            block = match.group(1).strip()
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            parsed = {}
+            for line in lines:
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                parsed[key.strip().lower()] = value.strip()
+
+            # Graceful fallback for local models that emit pseudo-actions instead of
+            # proper tool_name/command_name fields.
+            if parsed.get("action", "").lower() == "respond" and parsed.get("message"):
+                return parsed["message"]
+
+            self.logger.warning("Stripped unexecuted [TOOL_CALL] block from AI response")
+            return ""
+
+        cleaned = re.sub(
+            r"\[TOOL_CALL\](.*?)\[/TOOL_CALL\]",
+            _replace_tool_call_block,
+            cleaned,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
+        # Safety net for unresolved fenced tool blocks that also should not leak.
+        if "```tool:" in cleaned:
+            self.logger.warning("Stripped unresolved fenced tool block from AI response")
+            cleaned = re.sub(r"```tool:.*?```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+
+        cleaned = re.sub(r"\n\n\n+", "\n\n", cleaned).strip()
+        return cleaned
+
+    def _prefer_tool_result_when_response_empty(
+        self,
+        ai_response: Optional[str],
+        tool_result: Optional[str],
+    ) -> Optional[str]:
+        """Use the executed tool output when sanitization leaves no user-facing reply."""
+        if isinstance(ai_response, str) and ai_response.strip():
+            return ai_response
+
+        if tool_result is None:
+            return ai_response
+
+        if not isinstance(tool_result, str):
+            tool_result = str(tool_result)
+
+        if tool_result.strip():
+            self.logger.info("Using tool execution result as final agent response")
+            return tool_result
+
+        return ai_response
+
     async def process_message(
         self,
         sender_key: str,
@@ -377,7 +460,7 @@ class AgentService:
 
         Returns dict with: answer, tool_used, tokens, execution_time, error
 
-        Note: Legacy tool detection removed. Skills (web_search, weather, web_scraping)
+        Note: Legacy tool detection removed. Skills (web_search, web_scraping)
         are now processed by SkillManager in router.py before reaching this method.
         """
         start_time = time.time()
@@ -393,7 +476,7 @@ class AgentService:
             try:
                 from services.sentinel_service import SentinelService
                 from services.skill_context_service import SkillContextService
-                sentinel = SentinelService(self.db, self.tenant_id)
+                sentinel = SentinelService(self.db, self.tenant_id, token_tracker=self.token_tracker)
 
                 # Phase 20: Get skill context for this agent
                 # This provides Sentinel with information about expected behaviors
@@ -427,6 +510,19 @@ class AgentService:
                     self.logger.warning(
                         f"🛡️ SENTINEL: Message blocked - {sentinel_result.detection_type}: {sentinel_result.threat_reason}"
                     )
+                    # Audit log the security block
+                    if self.db and self.tenant_id:
+                        try:
+                            from services.audit_service import log_tenant_event, TenantAuditActions
+                            log_tenant_event(self.db, self.tenant_id, self.user_id,
+                                TenantAuditActions.SECURITY_SENTINEL_BLOCK, "message", None,
+                                {"detection_type": sentinel_result.detection_type,
+                                 "threat_score": sentinel_result.threat_score,
+                                 "reason": sentinel_result.threat_reason,
+                                 "channel": "playground", "agent_id": self.agent_id},
+                                severity="warning")
+                        except Exception:
+                            pass
                     # Send notification to the user who sent the blocked message
                     try:
                         config = sentinel.get_effective_config(self.agent_id)
@@ -459,8 +555,9 @@ class AgentService:
                     # Continue processing but log the warning
                 elif sentinel_result.is_threat_detected and sentinel_result.action == "allowed":
                     # detect_only mode: threat detected but allowed through
-                    self.logger.warning(
-                        f"⚠️ SENTINEL: Threat detected (detect-only) - {sentinel_result.detection_type}: {sentinel_result.threat_reason}"
+                    # BUG-328: Log at DEBUG to reduce noise from false positives in detect-only mode
+                    self.logger.debug(
+                        f"SENTINEL: Threat detected (detect-only) - {sentinel_result.detection_type}: {sentinel_result.threat_reason}"
                     )
                     # Send notification for detected-but-allowed message
                     try:
@@ -484,7 +581,7 @@ class AgentService:
         # Use original query for knowledge base search if provided
         search_query = original_query if original_query else message_text
 
-        # Legacy tool detection removed - skills now handle search, weather, scraping
+        # Legacy tool detection removed - skills now handle search, scraping
         # via SkillManager in router.py
 
         # Phase 4.8: Memory context now provided by Multi-Agent Memory Manager
@@ -533,7 +630,7 @@ class AgentService:
             # Original: Use agent-only KB
             try:
                 self.logger.info(f"Searching agent KB with query: {search_query[:100]}")
-                knowledge_results = self.knowledge_service.search_knowledge(
+                knowledge_results = await self.knowledge_service.search_knowledge(
                     agent_id=self.agent_id,
                     query=search_query,
                     max_results=3,  # Top 3 most relevant chunks
@@ -650,10 +747,11 @@ You can add a brief message AFTER the tool call block if needed.
                 ollama_tools = self.sandboxed_tools.get_ollama_tools()
 
         # Phase 18.3.8: Add skill-based tools (like shell) if in agentic mode
+        # A2A: Skip skill tools when disable_skills=True to prevent recursive tool use
         skill_manager = get_skill_manager()
         skill_tools = []
         shell_os_context = ""
-        if self.db and self.agent_id:
+        if self.db and self.agent_id and not self.disable_skills:
             try:
                 skill_tools, shell_os_context = await skill_manager.get_skill_tool_definitions(self.db, self.agent_id)
                 if skill_tools:
@@ -712,7 +810,7 @@ command_name: run_shell_command
 parameters:
   script: <the shell command to run>
   target: default
-  timeout: 60
+  timeout: 120
 [/TOOL_CALL]
 
 EXAMPLES:
@@ -724,7 +822,7 @@ command_name: run_shell_command
 parameters:
   script: df -h
   target: default
-  timeout: 60
+  timeout: 120
 [/TOOL_CALL]
 
 User: "what's the hostname?"
@@ -753,6 +851,44 @@ IMPORTANT: When the user asks for system information, server status, file listin
                         ollama_tools = skill_tools
             except Exception as e:
                 self.logger.warning(f"[SKILL TOOLS] Error getting skill tools: {e}")
+
+        # Phase 22: Custom Skills - Inject instruction-type custom skill content
+        try:
+            custom_instructions = skill_manager.get_custom_skill_instructions(self.db, self.agent_id)
+            if custom_instructions:
+                system_prompt_with_date = f"{system_prompt_with_date}\n\n{custom_instructions}"
+        except Exception as e:
+            self.logger.warning(f"Error loading custom skill instructions: {e}")
+
+        # BUG-353 FIX: Register custom skills in the skill_manager registry
+        # so that _find_skill_by_tool_name() can resolve custom_ prefixed tools.
+        # Previously, register_custom_skills() was never called, so custom skills
+        # were added to skill_tools but couldn't be found during execution.
+        try:
+            if self.tenant_id:
+                skill_manager.register_custom_skills(self.db, self.tenant_id)
+        except Exception as e:
+            self.logger.warning(f"[CUSTOM SKILLS] Error registering custom skills: {e}")
+
+        # Phase 24: Custom Skills - Collect custom skill tool definitions
+        try:
+            custom_tool_defs = skill_manager.get_custom_skill_tool_definitions(self.db, self.agent_id)
+            if custom_tool_defs:
+                self.logger.info(f"[CUSTOM SKILLS] Found {len(custom_tool_defs)} custom skill tools for agent {self.agent_id}")
+                skill_tools.extend(custom_tool_defs)
+
+                # Build prompt section for custom skill tools
+                custom_tools_prompt = self._build_skill_tools_prompt(custom_tool_defs)
+                if custom_tools_prompt:
+                    system_prompt_with_date = f"{system_prompt_with_date}\n{custom_tools_prompt}"
+
+                # Add to ollama_tools if using Ollama
+                if ollama_tools is not None:
+                    ollama_tools.extend(custom_tool_defs)
+                elif custom_tool_defs:
+                    ollama_tools = custom_tool_defs
+        except Exception as e:
+            self.logger.warning(f"[CUSTOM SKILLS] Error collecting custom skill tools: {e}")
 
         try:
             # Call AI (Phase 7.2: Pass tracking parameters)
@@ -811,6 +947,31 @@ IMPORTANT: When the user asks for system information, server status, file listin
                 if self.sandboxed_tools:
                     tool_call = self.sandboxed_tools.parse_tool_call(ai_response)
 
+                # Fallback: parse [TOOL_CALL] blocks for skill-based tools (e.g. agent_communication)
+                # that don't require the sandboxed_tools skill to be enabled.
+                if tool_call is None and has_tool_call_format:
+                    try:
+                        start = ai_response.find("[TOOL_CALL]") + len("[TOOL_CALL]")
+                        end = ai_response.find("[/TOOL_CALL]")
+                        if end > start:
+                            lines = [l.strip() for l in ai_response[start:end].strip().split("\n") if l.strip()]
+                            t_name, c_name, params, in_params = None, None, {}, False
+                            for line in lines:
+                                if line.startswith("tool_name:"):
+                                    t_name = line.split(":", 1)[1].strip()
+                                elif line.startswith("command_name:"):
+                                    c_name = line.split(":", 1)[1].strip()
+                                elif line.startswith("parameters:"):
+                                    in_params = True
+                                elif in_params and ":" in line:
+                                    k, v = line.split(":", 1)
+                                    params[k.strip()] = v.strip()
+                            if t_name and c_name:
+                                tool_call = {"tool_name": t_name, "command_name": c_name, "parameters": params}
+                                self.logger.info(f"Parsed [TOOL_CALL] for skill tool (no sandboxed_tools): {t_name}/{c_name}")
+                    except Exception as e:
+                        self.logger.warning(f"Error in fallback [TOOL_CALL] parse: {e}")
+
                 if tool_call:
                     tool_name = tool_call.get('tool_name', '')
                     command_name = tool_call.get('command_name', '')
@@ -830,11 +991,30 @@ IMPORTANT: When the user asks for system information, server status, file listin
                         # Phase 5: Execute skill-based tool via skill manager
                         self.logger.info(f"[SKILL TOOL] Executing skill tool '{tool_name}' via skill_manager")
 
+                        # BUG-LOG-006: Build InboundMessage with comm_depth metadata
+                        # so agent_communication_skill can enforce depth limits
+                        from agent.skills.base import InboundMessage as SkillInboundMessage
+                        skill_message_metadata = {}
+                        if self.config.get("comm_depth") is not None:
+                            skill_message_metadata["comm_depth"] = self.config["comm_depth"]
+                        skill_message = SkillInboundMessage(
+                            id=f"tool_call_{tool_name}",
+                            sender=sender_key or "tool_caller",
+                            sender_key=sender_key or "tool_caller",
+                            body=message_text[:500] if message_text else "",
+                            chat_id="tool_execution",
+                            chat_name=None,
+                            is_group=False,
+                            timestamp=datetime.utcnow(),
+                            channel="tool",
+                            metadata=skill_message_metadata or None,
+                        )
+
                         if is_shell_tool:
                             # Shell tool needs special parameter handling
                             script = parameters.get('script', '')
                             target = parameters.get('target', 'default')
-                            timeout = int(parameters.get('timeout', 60))
+                            timeout = int(parameters.get('timeout', 120))
 
                             if script:
                                 tool_execution_result = await skill_manager.execute_tool_call(
@@ -842,6 +1022,7 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                     agent_id=self.agent_id,
                                     tool_name='run_shell_command',
                                     arguments={'script': script, 'target': target, 'timeout': timeout},
+                                    message=skill_message,
                                     sender_key=sender_key
                                 )
                             else:
@@ -852,12 +1033,13 @@ IMPORTANT: When the user asks for system information, server status, file listin
                             media_producing_tools = {'generate_image'}
                             needs_full_result = tool_name in media_producing_tools
 
-                            # All other skill tools (web_search, get_weather, manage_flows, etc.)
+                            # All other skill tools (web_search, manage_flows, etc.)
                             skill_result = await skill_manager.execute_tool_call(
                                 db=self.db,
                                 agent_id=self.agent_id,
                                 tool_name=tool_name,
                                 arguments=parameters,
+                                message=skill_message,
                                 sender_key=sender_key,
                                 return_full_result=needs_full_result
                             )
@@ -925,6 +1107,12 @@ IMPORTANT: When the user asks for system information, server status, file listin
 
                             tool_used = f"custom:{tool_call['tool_name']}"
                             tool_result = tool_execution_result
+
+            # UX FIX: Never leak raw tool-call markup to end users if the tool
+            # wasn't executed or the model produced pseudo tool syntax.
+            if ai_response:
+                ai_response = self._sanitize_unexecuted_tool_output(ai_response)
+            ai_response = self._prefer_tool_result_when_response_empty(ai_response, tool_result)
 
             # Phase 4.8: Memory management moved to Multi-Agent Memory Manager in router
             # Ring buffer deprecated

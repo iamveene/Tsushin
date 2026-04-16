@@ -60,11 +60,13 @@ function SSOCallbackContent() {
 
       try {
         // MED-009: Exchange the one-time code for JWT token
+        // SEC-005: credentials: 'include' ensures browser stores the httpOnly cookie from response
         const response = await fetch(`${API_URL}/api/auth/sso-exchange`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
+          credentials: 'include',
           body: JSON.stringify({ code }),
         })
 
@@ -93,14 +95,14 @@ function SSOCallbackContent() {
   }, [searchParams, router, setAuthFromToken])
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen flex items-center justify-center bg-tsushin-ink">
       <div className="w-full max-w-md">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-8 text-center">
+        <div className="bg-tsushin-surface rounded-2xl shadow-elevated border border-tsushin-border p-8 text-center">
           {processing ? (
             <>
               <div className="w-16 h-16 mx-auto mb-4">
                 <svg
-                  className="animate-spin w-full h-full text-blue-600"
+                  className="animate-spin w-full h-full text-teal-400"
                   xmlns="http://www.w3.org/2000/svg"
                   fill="none"
                   viewBox="0 0 24 24"
@@ -120,16 +122,16 @@ function SSOCallbackContent() {
                   />
                 </svg>
               </div>
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              <h2 className="text-xl font-semibold text-white mb-2">
                 Completing sign in...
               </h2>
-              <p className="text-gray-600 dark:text-gray-400">
+              <p className="text-tsushin-slate">
                 Please wait while we verify your credentials.
               </p>
             </>
           ) : error ? (
             <>
-              <div className="w-16 h-16 mx-auto mb-4 text-red-500">
+              <div className="w-16 h-16 mx-auto mb-4 text-tsushin-vermilion">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   fill="none"
@@ -145,22 +147,22 @@ function SSOCallbackContent() {
                   />
                 </svg>
               </div>
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              <h2 className="text-xl font-semibold text-white mb-2">
                 Authentication Failed
               </h2>
-              <p className="text-red-600 dark:text-red-400 mb-4">
+              <p className="text-tsushin-vermilion mb-4">
                 {error}
               </p>
               <button
                 onClick={() => router.push('/auth/login')}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors"
+                className="btn-primary px-4 py-2 text-sm font-medium"
               >
                 Back to Login
               </button>
             </>
           ) : (
             <>
-              <div className="w-16 h-16 mx-auto mb-4 text-green-500">
+              <div className="w-16 h-16 mx-auto mb-4 text-tsushin-success">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   fill="none"
@@ -176,10 +178,10 @@ function SSOCallbackContent() {
                   />
                 </svg>
               </div>
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              <h2 className="text-xl font-semibold text-white mb-2">
                 Authentication Successful
               </h2>
-              <p className="text-gray-600 dark:text-gray-400">
+              <p className="text-tsushin-slate">
                 Redirecting...
               </p>
             </>
@@ -192,12 +194,12 @@ function SSOCallbackContent() {
 
 function LoadingFallback() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen flex items-center justify-center bg-tsushin-ink">
       <div className="w-full max-w-md">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-8 text-center">
+        <div className="bg-tsushin-surface rounded-2xl shadow-elevated border border-tsushin-border p-8 text-center">
           <div className="w-16 h-16 mx-auto mb-4">
             <svg
-              className="animate-spin w-full h-full text-blue-600"
+              className="animate-spin w-full h-full text-teal-400"
               xmlns="http://www.w3.org/2000/svg"
               fill="none"
               viewBox="0 0 24 24"
@@ -217,7 +219,7 @@ function LoadingFallback() {
               />
             </svg>
           </div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+          <h2 className="text-xl font-semibold text-white mb-2">
             Loading...
           </h2>
         </div>

@@ -8,70 +8,98 @@ Supports dynamic package installation and image commits.
 """
 
 import os
+import re
 import time
 import shlex
 import asyncio
 import logging
-import docker
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from sqlalchemy.orm import Session
 
 from services.docker_network_utils import resolve_tsushin_network_name
+from services.container_runtime import (
+    get_container_runtime,
+    ContainerRuntime,
+    ContainerNotFoundError,
+    ContainerRuntimeError,
+)
 
 logger = logging.getLogger(__name__)
+
+# BUG-063 FIX: Package name validation patterns to prevent command injection
+SAFE_PIP_PACKAGE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*((\[[\w,]+\])?(==|>=|<=|!=|~=|>|<)[\d.*]+)?$')
+SAFE_APT_PACKAGE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._+-]*(=[\d.:~+-]+)?$')
+
+# BUG-132 FIX: Tenant ID validation to prevent path traversal and injection
+_SAFE_TENANT_ID = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$')
 
 
 class ToolboxContainerService:
     """Manages per-tenant toolbox Docker containers for custom tool execution"""
 
     BASE_IMAGE = "tsushin-toolbox:base"
-    CONTAINER_PREFIX = "tsushin-toolbox-"
     COMMAND_TIMEOUT = 300  # Default 5 minutes
     HEALTH_CHECK_TIMEOUT = 30
 
     def __init__(self):
-        """Initialize Docker client"""
-        try:
-            self.docker = docker.from_env()
-            logger.info("Docker client initialized for ToolboxContainerService")
-        except docker.errors.DockerException as e:
-            logger.error(f"Failed to initialize Docker client: {e}")
-            raise RuntimeError(
-                f"Docker is not available. Please ensure Docker is installed and running. Error: {e}"
-            )
+        """Initialize container runtime"""
+        self.runtime: ContainerRuntime = get_container_runtime()
+        logger.info("ToolboxContainerService initialized with container runtime")
+
+    def _validate_tenant_id(self, tenant_id: str) -> str:
+        """BUG-132 FIX: Validate tenant_id to prevent path traversal and injection."""
+        if not _SAFE_TENANT_ID.match(tenant_id):
+            raise ValueError(f"Invalid tenant_id format: {tenant_id!r}")
+        return tenant_id
+
+    @property
+    def _container_prefix(self) -> str:
+        """BUG-448: Use TSN_STACK_NAME for runtime container isolation."""
+        stack_name = (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+        return f"{stack_name}-toolbox-"
 
     def _get_container_name(self, tenant_id: str) -> str:
         """Generate container name for tenant"""
-        return f"{self.CONTAINER_PREFIX}{tenant_id}"
+        self._validate_tenant_id(tenant_id)
+        return f"{self._container_prefix}{tenant_id}"
 
     def _get_image_tag(self, tenant_id: str) -> str:
         """Get tenant-specific image tag"""
+        self._validate_tenant_id(tenant_id)
         return f"tsushin-toolbox:{tenant_id}"
 
     def _get_workspace_path(self, tenant_id: str) -> Path:
         """Get workspace directory path for tenant"""
+        self._validate_tenant_id(tenant_id)
+
         backend_dir = Path(__file__).parent.parent
         workspace_base = backend_dir / "data" / "workspace"
         workspace_dir = workspace_base / tenant_id
 
+        # BUG-132 FIX: Path traversal guard — ensure resolved path stays under base
+        resolved = workspace_dir.resolve()
+        base_resolved = workspace_base.resolve()
+        if not str(resolved).startswith(str(base_resolved) + os.sep) and resolved != base_resolved:
+            raise ValueError(f"Path traversal detected for tenant_id: {tenant_id!r}")
+
         # Ensure base workspace directory exists with proper permissions
         workspace_base.mkdir(parents=True, exist_ok=True)
 
-        # Fix permissions on base workspace directory (needed for Docker-in-Docker)
+        # BUG-064 FIX: Use restrictive permissions (750) instead of world-writable (777)
         try:
-            os.chmod(workspace_base, 0o777)
+            os.chmod(workspace_base, 0o750)
         except OSError as e:
             logger.warning(f"Could not chmod base workspace dir: {e}")
 
         # Create tenant workspace directory
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
-        # Fix permissions for container user (UID 1000, GID 1000)
+        # BUG-064 FIX: Use restrictive permissions (750) instead of world-writable (777)
         # Toolbox container runs as non-root 'toolbox' user for security
         try:
-            os.chmod(workspace_dir, 0o777)
+            os.chmod(workspace_dir, 0o750)
             # Also try to set ownership to UID 1000 (toolbox user) if running as root
             if os.geteuid() == 0:
                 os.chown(workspace_dir, 1000, 1000)
@@ -98,20 +126,19 @@ class ToolboxContainerService:
 
     def _get_or_create_network(self):
         """Get or create the tsushin Docker network"""
-        network_name = resolve_tsushin_network_name(self.docker)
-        try:
-            return self.docker.networks.get(network_name)
-        except docker.errors.NotFound:
-            logger.info(f"Creating Docker network: {network_name}")
-            return self.docker.networks.create(network_name, driver="bridge")
+        # Use raw_client for network name resolution (docker_network_utils needs docker client)
+        if hasattr(self.runtime, 'raw_client'):
+            network_name = resolve_tsushin_network_name(self.runtime.raw_client)
+        else:
+            # Non-Docker runtimes: use canonical name
+            network_name = "tsushin-network"
+        return self.runtime.get_or_create_network(network_name)
 
-    def _image_exists(self, image_name: str) -> bool:
-        """Check if a Docker image exists"""
-        try:
-            self.docker.images.get(image_name)
-            return True
-        except docker.errors.ImageNotFound:
-            return False
+    def _resolve_network_name(self) -> str:
+        """Resolve the tsushin network name."""
+        if hasattr(self.runtime, 'raw_client'):
+            return resolve_tsushin_network_name(self.runtime.raw_client)
+        return "tsushin-network"
 
     def get_container_status(self, tenant_id: str) -> Dict[str, Any]:
         """
@@ -138,35 +165,34 @@ class ToolboxContainerService:
         }
 
         try:
-            container = self.docker.containers.get(container_name)
-            container.reload()
+            attrs = self.runtime.get_container_attrs(container_name)
 
-            status['status'] = container.status
-            status['container_id'] = container.id
-            status['image'] = container.image.tags[0] if container.image.tags else str(container.image.id)[:12]
-            status['created_at'] = container.attrs.get('Created')
+            status['status'] = attrs['status']
+            status['container_id'] = attrs['id']
+            status['image'] = attrs['image_tags'][0] if attrs['image_tags'] else str(attrs['id'])[:12]
+            status['created_at'] = attrs.get('created')
 
             # Get started timestamp
-            state = container.attrs.get('State', {})
+            state = attrs.get('state', {})
             status['started_at'] = state.get('StartedAt')
 
             # Determine health based on container status
-            if container.status == 'running':
+            if attrs['status'] == 'running':
                 status['health'] = 'healthy'
-            elif container.status == 'exited':
+            elif attrs['status'] == 'exited':
                 status['health'] = 'stopped'
             else:
-                status['health'] = container.status
+                status['health'] = attrs['status']
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             status['status'] = 'not_created'
             status['health'] = 'not_created'
             logger.debug(f"Container not found for tenant {tenant_id}")
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             status['status'] = 'error'
             status['health'] = 'error'
             status['error'] = str(e)
-            logger.error(f"Docker API error checking status for tenant {tenant_id}: {e}")
+            logger.error(f"Runtime error checking status for tenant {tenant_id}: {e}")
 
         return status
 
@@ -184,44 +210,57 @@ class ToolboxContainerService:
         container_name = self._get_container_name(tenant_id)
 
         try:
-            container = self.docker.containers.get(container_name)
-            container.reload()
+            container_status = self.runtime.get_container_status(container_name)
 
-            if container.status != 'running':
+            if container_status == 'not_found':
+                # Container doesn't exist, create it
+                logger.info(f"Creating new toolbox container for tenant {tenant_id}")
+                return self.create_container(tenant_id, db)
+
+            if container_status != 'running':
                 logger.info(f"Starting existing container {container_name}")
-                container.start()
+                self.runtime.start_container(container_name)
                 time.sleep(1)  # Brief wait for startup
-                container.reload()
                 # Fix workspace permissions after restart
-                self._fix_workspace_permissions(container)
+                self._fix_workspace_permissions(container_name)
 
             return self.get_container_status(tenant_id)
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             # Container doesn't exist, create it
             logger.info(f"Creating new toolbox container for tenant {tenant_id}")
             return self.create_container(tenant_id, db)
 
-    def _fix_workspace_permissions(self, container) -> bool:
+    def _fix_workspace_permissions(self, container_name: str) -> bool:
         """
         Fix workspace permissions inside the container by running chmod as root.
         This ensures the toolbox user (UID 1000) can write to the workspace.
 
         Args:
-            container: Docker container object
+            container_name: Container name
 
         Returns:
             True if permissions were fixed successfully
         """
         try:
-            # Run chmod as root to fix workspace permissions
-            exec_result = container.exec_run(
-                cmd=["chmod", "777", "/workspace"],
+            # BUG-064 FIX: Use restrictive permissions (750) instead of world-writable (777)
+            exec_result = self.runtime.exec_run(
+                container_name,
+                cmd=["chmod", "750", "/workspace"],
                 user="root",
-                workdir="/workspace"
+                workdir="/workspace",
             )
             if exec_result.exit_code == 0:
-                logger.info("Fixed workspace permissions (chmod 777)")
+                logger.info("Fixed workspace permissions (chmod 750)")
+                # Also set proper ownership for toolbox user
+                chown_result = self.runtime.exec_run(
+                    container_name,
+                    cmd=["chown", "-R", "1000:1000", "/workspace"],
+                    user="root",
+                    workdir="/",
+                )
+                if chown_result.exit_code != 0:
+                    logger.warning(f"Failed to chown workspace: {chown_result.output}")
                 return True
             else:
                 logger.warning(f"Failed to fix workspace permissions: {exec_result.output}")
@@ -249,10 +288,10 @@ class ToolboxContainerService:
 
         # Determine which image to use
         tenant_image = self._get_image_tag(tenant_id)
-        if self._image_exists(tenant_image):
+        if self.runtime.image_exists(tenant_image):
             image_to_use = tenant_image
             logger.info(f"Using tenant-specific image: {tenant_image}")
-        elif self._image_exists(self.BASE_IMAGE):
+        elif self.runtime.image_exists(self.BASE_IMAGE):
             image_to_use = self.BASE_IMAGE
             logger.info(f"Using base image: {self.BASE_IMAGE}")
         else:
@@ -267,23 +306,25 @@ class ToolboxContainerService:
 
         # Ensure network exists
         network = self._get_or_create_network()
+        network_name = network.name if hasattr(network, 'name') else str(network)
 
         try:
             # Remove existing container if it exists but is stopped
             try:
-                existing = self.docker.containers.get(container_name)
-                if existing.status != 'running':
-                    existing.remove()
-                    logger.info(f"Removed stopped container {container_name}")
-                else:
-                    # Already running
-                    return self.get_container_status(tenant_id)
-            except docker.errors.NotFound:
+                existing_status = self.runtime.get_container_status(container_name)
+                if existing_status != 'not_found':
+                    if existing_status == 'running':
+                        # Already running
+                        return self.get_container_status(tenant_id)
+                    else:
+                        self.runtime.remove_container(container_name)
+                        logger.info(f"Removed stopped container {container_name}")
+            except (ContainerNotFoundError, ContainerRuntimeError):
                 pass
 
             # Create and start container
-            container = self.docker.containers.run(
-                image_to_use,
+            container = self.runtime.create_container(
+                image=image_to_use,
                 name=container_name,
                 volumes={
                     host_workspace: {'bind': '/workspace', 'mode': 'rw,z'}
@@ -291,29 +332,35 @@ class ToolboxContainerService:
                 environment={
                     'TENANT_ID': tenant_id,
                 },
-                detach=True,
                 restart_policy={"Name": "unless-stopped"},
-                network=network.name,
+                network=network_name,
                 # Resource limits for security
                 # Increased to 2GB for memory-intensive tools like nuclei
                 mem_limit='2g',
                 memswap_limit='4g',  # Allow swap for heavy scans
                 cpu_quota=100000,  # Full CPU for heavy tools
+                # Security hardening (Phase 23: C-2)
+                security_opt=["no-new-privileges:true"],
+                cap_drop=["ALL"],
+                pids_limit=256,
+                # Security H-1: External DNS to prevent internal service name resolution attacks
+                dns=["8.8.8.8", "8.8.4.4"],
             )
 
-            logger.info(f"Container {container_name} created with ID {container.id}")
+            container_id = container.id if hasattr(container, 'id') else str(container)
+            logger.info(f"Container {container_name} created with ID {container_id}")
 
             # Fix workspace permissions immediately after container creation
             # This runs chmod as root to ensure the toolbox user can write files
             time.sleep(0.5)  # Brief wait for container to fully start
-            self._fix_workspace_permissions(container)
+            self._fix_workspace_permissions(container_name)
 
             # Update database record
-            self._update_db_record(tenant_id, container.id, 'running', image_to_use, db)
+            self._update_db_record(tenant_id, container_id, 'running', image_to_use, db)
 
             return self.get_container_status(tenant_id)
 
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             logger.error(f"Failed to create container for tenant {tenant_id}: {e}")
             raise RuntimeError(f"Failed to create toolbox container: {e}")
 
@@ -331,23 +378,27 @@ class ToolboxContainerService:
         container_name = self._get_container_name(tenant_id)
 
         try:
-            container = self.docker.containers.get(container_name)
+            status = self.runtime.get_container_status(container_name)
 
-            if container.status == 'running':
+            if status == 'running':
                 logger.info(f"Container {container_name} already running")
                 return self.get_container_status(tenant_id)
 
-            container.start()
+            if status == 'not_found':
+                # Container doesn't exist, create it
+                return self.create_container(tenant_id, db)
+
+            self.runtime.start_container(container_name)
             logger.info(f"Container {container_name} started")
 
             self._update_db_status(tenant_id, 'running', db)
 
             return self.get_container_status(tenant_id)
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             # Container doesn't exist, create it
             return self.create_container(tenant_id, db)
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             logger.error(f"Failed to start container: {e}")
             raise RuntimeError(f"Failed to start container: {e}")
 
@@ -366,23 +417,23 @@ class ToolboxContainerService:
         container_name = self._get_container_name(tenant_id)
 
         try:
-            container = self.docker.containers.get(container_name)
+            status = self.runtime.get_container_status(container_name)
 
-            if container.status != 'running':
+            if status != 'running':
                 logger.info(f"Container {container_name} already stopped")
                 return self.get_container_status(tenant_id)
 
-            container.stop(timeout=timeout)
+            self.runtime.stop_container(container_name, timeout=timeout)
             logger.info(f"Container {container_name} stopped")
 
             self._update_db_status(tenant_id, 'stopped', db)
 
             return self.get_container_status(tenant_id)
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             logger.warning(f"Container {container_name} not found")
             return self.get_container_status(tenant_id)
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             logger.error(f"Failed to stop container: {e}")
             raise RuntimeError(f"Failed to stop container: {e}")
 
@@ -401,18 +452,17 @@ class ToolboxContainerService:
         logger.info(f"Restarting container {container_name}")
 
         try:
-            container = self.docker.containers.get(container_name)
-            container.restart(timeout=30)
+            self.runtime.restart_container(container_name, timeout=30)
             logger.info(f"Container {container_name} restarted")
 
             self._update_db_status(tenant_id, 'running', db)
 
             return self.get_container_status(tenant_id)
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             # Create if doesn't exist
             return self.create_container(tenant_id, db)
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             logger.error(f"Failed to restart container: {e}")
             raise RuntimeError(f"Failed to restart container: {e}")
 
@@ -431,18 +481,19 @@ class ToolboxContainerService:
         container_name = self._get_container_name(tenant_id)
 
         try:
-            container = self.docker.containers.get(container_name)
+            status = self.runtime.get_container_status(container_name)
 
-            # Stop if running
-            if container.status == 'running':
-                container.stop(timeout=10)
+            if status != 'not_found':
+                # Stop if running
+                if status == 'running':
+                    self.runtime.stop_container(container_name, timeout=10)
 
-            container.remove()
-            logger.info(f"Container {container_name} removed")
+                self.runtime.remove_container(container_name)
+                logger.info(f"Container {container_name} removed")
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             logger.info(f"Container {container_name} not found (already removed)")
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             logger.error(f"Failed to remove container: {e}")
 
         # Optionally remove workspace
@@ -458,17 +509,18 @@ class ToolboxContainerService:
 
         return {'status': 'deleted', 'tenant_id': tenant_id}
 
-    def _kill_running_execs(self, container):
+    def _kill_running_execs(self, container_name: str):
         """Best-effort kill of any running exec processes in the container."""
         try:
-            container.exec_run(
+            self.runtime.exec_run(
+                container_name,
                 cmd=["sh", "-c", "kill -9 $(ps -o pid= | grep -v '^ *1$') 2>/dev/null || true"],
                 user="root",
-                detach=True
+                detach=True,
             )
-            logger.info(f"Sent kill signal to processes in {container.name}")
+            logger.info(f"Sent kill signal to processes in {container_name}")
         except Exception as e:
-            logger.warning(f"Failed to kill processes in {container.name}: {e}")
+            logger.warning(f"Failed to kill processes in {container_name}: {e}")
 
     async def execute_command(
         self,
@@ -506,13 +558,11 @@ class ToolboxContainerService:
         logger.info(f"Executing command in {container_name} (user={user}, timeout={timeout}s): {command[:100]}...")
 
         try:
-            container = self.docker.containers.get(container_name)
-
             # Ensure container is running
-            if container.status != 'running':
-                container.start()
+            status = self.runtime.get_container_status(container_name)
+            if status != 'running':
+                self.runtime.start_container(container_name)
                 time.sleep(1)
-                container.reload()
 
             start_time = time.time()
 
@@ -538,12 +588,16 @@ class ToolboxContainerService:
 
             try:
                 exec_result = await asyncio.wait_for(
-                    asyncio.to_thread(container.exec_run, **exec_opts),
+                    asyncio.to_thread(
+                        self.runtime.exec_run,
+                        container_name,
+                        **exec_opts
+                    ),
                     timeout=safety_timeout
                 )
             except asyncio.TimeoutError:
                 logger.error(f"Safety timeout ({safety_timeout}s) reached for command in {container_name}")
-                self._kill_running_execs(container)
+                self._kill_running_execs(container_name)
                 execution_time_ms = int((time.time() - start_time) * 1000)
                 return {
                     'success': False,
@@ -596,10 +650,10 @@ class ToolboxContainerService:
 
             return result
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             raise RuntimeError(f"Container not found for tenant {tenant_id}. Please start it first.")
-        except docker.errors.APIError as e:
-            logger.error(f"Docker API error executing command: {e}")
+        except ContainerRuntimeError as e:
+            logger.error(f"Runtime error executing command: {e}")
             raise RuntimeError(f"Command execution failed: {e}")
 
     async def execute_command_streaming(
@@ -619,27 +673,23 @@ class ToolboxContainerService:
         timeout = timeout or self.COMMAND_TIMEOUT
 
         try:
-            container = self.docker.containers.get(container_name)
-
-            if container.status != 'running':
-                container.start()
+            # Ensure container is running
+            status = self.runtime.get_container_status(container_name)
+            if status != 'running':
+                self.runtime.start_container(container_name)
                 time.sleep(1)
 
             # Wrap command in Linux `timeout` for process-level enforcement
             wrapped_command = f"timeout --signal=TERM --kill-after=10 {timeout} sh -c {shlex.quote(command)}"
 
-            # Create exec instance
-            exec_id = container.client.api.exec_create(
-                container.id,
+            # Create exec instance and start with streaming
+            exec_id, output = self.runtime.exec_create_and_start(
+                container_name,
                 ["sh", "-c", wrapped_command],
                 workdir=workdir,
-                tty=False,
-                stdout=True,
-                stderr=True
+                stream=True,
+                demux=True,
             )
-
-            # Start exec with streaming
-            output = container.client.api.exec_start(exec_id, stream=True, demux=True)
 
             for stdout_chunk, stderr_chunk in output:
                 if stdout_chunk:
@@ -648,12 +698,12 @@ class ToolboxContainerService:
                     yield {'type': 'stderr', 'data': stderr_chunk.decode('utf-8', errors='replace')}
 
             # Get exit code
-            exec_info = container.client.api.exec_inspect(exec_id)
+            exec_info = self.runtime.exec_inspect(exec_id)
             yield {'type': 'exit', 'exit_code': exec_info.get('ExitCode', -1)}
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             yield {'type': 'error', 'error': f"Container not found for tenant {tenant_id}"}
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             yield {'type': 'error', 'error': str(e)}
 
     async def install_package(
@@ -675,13 +725,29 @@ class ToolboxContainerService:
         Returns:
             Installation result dict
         """
+        # BUG-063 FIX: Validate package name to prevent command injection
+        if package_type == 'pip' and not SAFE_PIP_PACKAGE.match(package_name):
+            raise ValueError(
+                f"Invalid pip package name '{package_name}'. "
+                "Only letters, numbers, dots, hyphens, underscores allowed, "
+                "optionally with version specifier (e.g., ==1.0.0)."
+            )
+        elif package_type == 'apt' and not SAFE_APT_PACKAGE.match(package_name):
+            raise ValueError(
+                f"Invalid apt package name '{package_name}'. "
+                "Only letters, numbers, dots, hyphens, plus signs allowed."
+            )
+
+        if len(package_name) > 200:
+            raise ValueError("Package name too long (max 200 characters)")
+
         # Determine command and user based on package type
         if package_type == 'pip':
-            command = f"pip install --user {package_name}"
+            command = f"pip install --user {shlex.quote(package_name)}"
             user = None  # Use default user
         elif package_type == 'apt':
             # apt requires root privileges
-            command = f"apt-get update && apt-get install -y {package_name}"
+            command = f"apt-get update && apt-get install -y {shlex.quote(package_name)}"
             user = "root"  # Run as root for system package installation
         else:
             raise ValueError(f"Unknown package type: {package_type}")
@@ -716,16 +782,30 @@ class ToolboxContainerService:
         logger.info(f"Committing container {container_name} to image {new_image_tag}")
 
         try:
-            container = self.docker.containers.get(container_name)
-
-            # Commit container to new image
-            image = container.commit(
+            image = self.runtime.commit_container(
+                container_name,
                 repository="tsushin-toolbox",
                 tag=tenant_id,
-                message=f"Committed by tenant {tenant_id} at {datetime.utcnow().isoformat() + 'Z'}"
+                message=f"Committed by tenant {tenant_id} at {datetime.utcnow().isoformat() + 'Z'}",
             )
+        except ContainerRuntimeError as e:
+            if "not supported" in str(e).lower():
+                # K8s mode: commit not supported — mark packages as committed in DB only
+                logger.warning(f"Container commit not supported in current runtime, marking packages committed in DB only")
+                self._mark_packages_committed(tenant_id, db)
+                return {
+                    'success': True,
+                    'image_tag': new_image_tag,
+                    'image_id': 'db-only',
+                    'committed_at': datetime.utcnow().isoformat() + "Z",
+                    'note': 'Packages recorded in DB. Use CI/CD to build custom images for K8s.'
+                }
+            raise
 
-            logger.info(f"Container committed as {new_image_tag} (ID: {image.id[:12]})")
+        try:
+
+            image_id = image.id if hasattr(image, 'id') else str(image)
+            logger.info(f"Container committed as {new_image_tag} (ID: {image_id[:12]})")
 
             # Update database to mark packages as committed
             self._mark_packages_committed(tenant_id, db)
@@ -736,13 +816,13 @@ class ToolboxContainerService:
             return {
                 'success': True,
                 'image_tag': new_image_tag,
-                'image_id': image.id,
+                'image_id': image_id,
                 'committed_at': datetime.utcnow().isoformat() + "Z"
             }
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             raise RuntimeError(f"Container not found for tenant {tenant_id}")
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             logger.error(f"Failed to commit container: {e}")
             raise RuntimeError(f"Failed to commit container: {e}")
 
@@ -764,20 +844,21 @@ class ToolboxContainerService:
 
         # Stop and remove container
         try:
-            container = self.docker.containers.get(container_name)
-            if container.status == 'running':
-                container.stop(timeout=10)
-            container.remove()
+            status = self.runtime.get_container_status(container_name)
+            if status == 'running':
+                self.runtime.stop_container(container_name, timeout=10)
+            if status != 'not_found':
+                self.runtime.remove_container(container_name)
             logger.info(f"Container {container_name} removed")
-        except docker.errors.NotFound:
+        except (ContainerNotFoundError, ContainerRuntimeError):
             pass
 
         # Remove tenant-specific image
-        if self._image_exists(tenant_image):
+        if self.runtime.image_exists(tenant_image):
             try:
-                self.docker.images.remove(tenant_image, force=True)
+                self.runtime.remove_image(tenant_image, force=True)
                 logger.info(f"Tenant image {tenant_image} removed")
-            except docker.errors.APIError as e:
+            except ContainerRuntimeError as e:
                 logger.warning(f"Failed to remove tenant image: {e}")
 
         # Clear package records

@@ -210,7 +210,7 @@ export default function PlansPage() {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-600 dark:text-gray-400">Loading...</div>
+        <div className="text-tsushin-slate">Loading...</div>
       </div>
     )
   }
@@ -222,21 +222,21 @@ export default function PlansPage() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <div className="flex items-center space-x-3 mb-2">
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
+              <h1 className="text-3xl font-bold text-white">
                 Subscription Plans
               </h1>
               <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-900 dark:text-purple-200 text-sm font-semibold rounded-full">
                 Global Admin
               </span>
             </div>
-            <p className="text-gray-600 dark:text-gray-400">
+            <p className="text-tsushin-slate">
               Manage subscription plans and pricing
             </p>
           </div>
 
           <button
             onClick={openCreateModal}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-md transition-colors"
+            className="btn-primary px-4 py-2 font-medium rounded-md transition-colors"
           >
             + Create Plan
           </button>
@@ -245,20 +245,20 @@ export default function PlansPage() {
         {/* Stats */}
         {stats && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-              <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Plans</div>
-              <div className="text-3xl font-bold text-gray-900 dark:text-gray-100">{stats.total_plans}</div>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+              <div className="text-sm text-tsushin-slate mb-1">Total Plans</div>
+              <div className="text-3xl font-bold text-white">{stats.total_plans}</div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-              <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Active Plans</div>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+              <div className="text-sm text-tsushin-slate mb-1">Active Plans</div>
               <div className="text-3xl font-bold text-green-600 dark:text-green-400">{stats.active_plans}</div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-              <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Public Plans</div>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+              <div className="text-sm text-tsushin-slate mb-1">Public Plans</div>
               <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">{stats.public_plans}</div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-              <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Tenants</div>
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+              <div className="text-sm text-tsushin-slate mb-1">Total Tenants</div>
               <div className="text-3xl font-bold text-purple-600 dark:text-purple-400">
                 {Object.values(stats.tenants_per_plan).reduce((a, b) => a + b, 0)}
               </div>
@@ -277,83 +277,83 @@ export default function PlansPage() {
         )}
 
         {/* Filters */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 mb-6">
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-4 mb-6">
           <label className="flex items-center space-x-2 cursor-pointer">
             <input
               type="checkbox"
               checked={showInactive}
               onChange={(e) => setShowInactive(e.target.checked)}
-              className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+              className="rounded border-tsushin-border text-teal-600 focus:ring-teal-500"
             />
-            <span className="text-sm text-gray-700 dark:text-gray-300">Show inactive plans</span>
+            <span className="text-sm text-tsushin-fog">Show inactive plans</span>
           </label>
         </div>
 
         {/* Plans Table */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border overflow-hidden">
           {loading ? (
-            <div className="p-8 text-center text-gray-600 dark:text-gray-400">
+            <div className="p-8 text-center text-tsushin-slate">
               Loading plans...
             </div>
           ) : plans.length === 0 ? (
-            <div className="p-8 text-center text-gray-600 dark:text-gray-400">
+            <div className="p-8 text-center text-tsushin-slate">
               No plans found.
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Plan</th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Price</th>
-                    <th className="text-center py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Users</th>
-                    <th className="text-center py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Agents</th>
-                    <th className="text-center py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Requests/mo</th>
-                    <th className="text-center py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Tenants</th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Status</th>
-                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">Actions</th>
+                  <tr className="bg-tsushin-ink border-b border-tsushin-border">
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">Plan</th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">Price</th>
+                    <th className="text-center py-3 px-4 text-sm font-semibold text-white">Users</th>
+                    <th className="text-center py-3 px-4 text-sm font-semibold text-white">Agents</th>
+                    <th className="text-center py-3 px-4 text-sm font-semibold text-white">Requests/mo</th>
+                    <th className="text-center py-3 px-4 text-sm font-semibold text-white">Tenants</th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">Status</th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-white">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {plans.map((plan) => (
                     <tr
                       key={plan.id}
-                      className={`border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/50 ${!plan.is_active ? 'opacity-50' : ''
+                      className={`border-b border-tsushin-border hover:bg-tsushin-surface ${!plan.is_active ? 'opacity-50' : ''
                         }`}
                     >
                       <td className="py-3 px-4">
                         <div>
-                          <div className="font-medium text-gray-900 dark:text-gray-100">
+                          <div className="font-medium text-white">
                             {plan.display_name}
                           </div>
-                          <div className="text-sm text-gray-600 dark:text-gray-400">
+                          <div className="text-sm text-tsushin-slate">
                             {plan.name}
                           </div>
                         </div>
                       </td>
                       <td className="py-3 px-4">
                         <div className="text-sm">
-                          <div className="font-medium text-gray-900 dark:text-gray-100">
+                          <div className="font-medium text-white">
                             {formatPrice(plan.price_monthly)}/mo
                           </div>
                           {plan.price_yearly > 0 && (
-                            <div className="text-gray-600 dark:text-gray-400">
+                            <div className="text-tsushin-slate">
                               {formatPrice(plan.price_yearly)}/yr
                             </div>
                           )}
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-center text-sm text-gray-700 dark:text-gray-300">
+                      <td className="py-3 px-4 text-center text-sm text-tsushin-fog">
                         {formatLimit(plan.max_users)}
                       </td>
-                      <td className="py-3 px-4 text-center text-sm text-gray-700 dark:text-gray-300">
+                      <td className="py-3 px-4 text-center text-sm text-tsushin-fog">
                         {formatLimit(plan.max_agents)}
                       </td>
-                      <td className="py-3 px-4 text-center text-sm text-gray-700 dark:text-gray-300">
+                      <td className="py-3 px-4 text-center text-sm text-tsushin-fog">
                         {formatLimit(plan.max_monthly_requests)}
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-xs font-semibold rounded">
+                        <span className="px-2 py-1 bg-tsushin-elevated text-white text-xs font-semibold rounded">
                           {plan.tenant_count}
                         </span>
                       </td>
@@ -377,7 +377,7 @@ export default function PlansPage() {
                       <td className="py-3 px-4 text-right">
                         <button
                           onClick={() => openEditModal(plan)}
-                          className="text-sm text-purple-600 dark:text-purple-400 hover:underline mr-3"
+                          className="text-sm text-teal-400 hover:underline mr-3"
                         >
                           Edit
                         </button>
@@ -401,14 +401,14 @@ export default function PlansPage() {
         {/* Create/Edit Modal */}
         {showModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-3xl w-full my-8">
-              <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border shadow-xl max-w-3xl w-full my-8">
+              <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
+                <h2 className="text-xl font-bold text-white">
                   {editingPlan ? 'Edit Plan' : 'Create New Plan'}
                 </h2>
                 <button
                   onClick={() => setShowModal(false)}
-                  className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+                  className="p-2 text-tsushin-slate hover:text-white"
                 >
                   ✕
                 </button>
@@ -425,7 +425,7 @@ export default function PlansPage() {
                   {/* Basic Info */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                      <label className="block text-sm font-medium text-white mb-2">
                         Plan ID (lowercase, no spaces)
                       </label>
                       <input
@@ -435,11 +435,11 @@ export default function PlansPage() {
                         placeholder="e.g. pro_plus"
                         required
                         disabled={!!editingPlan}
-                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 disabled:opacity-50"
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface disabled:opacity-50"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                      <label className="block text-sm font-medium text-white mb-2">
                         Display Name
                       </label>
                       <input
@@ -448,13 +448,13 @@ export default function PlansPage() {
                         onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
                         placeholder="e.g. Pro Plus"
                         required
-                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                    <label className="block text-sm font-medium text-white mb-2">
                       Description
                     </label>
                     <textarea
@@ -462,14 +462,14 @@ export default function PlansPage() {
                       onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                       placeholder="Plan description..."
                       rows={2}
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                     />
                   </div>
 
                   {/* Pricing */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                      <label className="block text-sm font-medium text-white mb-2">
                         Monthly Price (cents)
                       </label>
                       <input
@@ -477,14 +477,14 @@ export default function PlansPage() {
                         value={formData.price_monthly}
                         onChange={(e) => setFormData({ ...formData, price_monthly: parseInt(e.target.value) || 0 })}
                         min={0}
-                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                       />
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      <p className="text-xs text-tsushin-muted mt-1">
                         {formatPrice(formData.price_monthly || 0)}/month
                       </p>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                      <label className="block text-sm font-medium text-white mb-2">
                         Yearly Price (cents)
                       </label>
                       <input
@@ -492,9 +492,9 @@ export default function PlansPage() {
                         value={formData.price_yearly}
                         onChange={(e) => setFormData({ ...formData, price_yearly: parseInt(e.target.value) || 0 })}
                         min={0}
-                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                       />
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      <p className="text-xs text-tsushin-muted mt-1">
                         {formatPrice(formData.price_yearly || 0)}/year
                       </p>
                     </div>
@@ -502,68 +502,68 @@ export default function PlansPage() {
 
                   {/* Limits */}
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                    <h3 className="text-sm font-semibold text-white mb-3">
                       Plan Limits (-1 for unlimited)
                     </h3>
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                       <div>
-                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Max Users</label>
+                        <label className="block text-xs text-tsushin-slate">Max Users</label>
                         <input
                           type="number"
                           value={formData.max_users}
                           onChange={(e) => setFormData({ ...formData, max_users: parseInt(e.target.value) || 0 })}
                           min={-1}
-                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Max Agents</label>
+                        <label className="block text-xs text-tsushin-slate">Max Agents</label>
                         <input
                           type="number"
                           value={formData.max_agents}
                           onChange={(e) => setFormData({ ...formData, max_agents: parseInt(e.target.value) || 0 })}
                           min={-1}
-                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Requests/Month</label>
+                        <label className="block text-xs text-tsushin-slate">Requests/Month</label>
                         <input
                           type="number"
                           value={formData.max_monthly_requests}
                           onChange={(e) => setFormData({ ...formData, max_monthly_requests: parseInt(e.target.value) || 0 })}
                           min={-1}
-                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Knowledge Docs</label>
+                        <label className="block text-xs text-tsushin-slate">Knowledge Docs</label>
                         <input
                           type="number"
                           value={formData.max_knowledge_docs}
                           onChange={(e) => setFormData({ ...formData, max_knowledge_docs: parseInt(e.target.value) || 0 })}
                           min={-1}
-                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Flows</label>
+                        <label className="block text-xs text-tsushin-slate">Flows</label>
                         <input
                           type="number"
                           value={formData.max_flows}
                           onChange={(e) => setFormData({ ...formData, max_flows: parseInt(e.target.value) || 0 })}
                           min={-1}
-                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">MCP Instances</label>
+                        <label className="block text-xs text-tsushin-slate">MCP Instances</label>
                         <input
                           type="number"
                           value={formData.max_mcp_instances}
                           onChange={(e) => setFormData({ ...formData, max_mcp_instances: parseInt(e.target.value) || 0 })}
                           min={-1}
-                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                         />
                       </div>
                     </div>
@@ -571,7 +571,7 @@ export default function PlansPage() {
 
                   {/* Features */}
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                    <h3 className="text-sm font-semibold text-white mb-3">
                       Features
                     </h3>
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
@@ -588,9 +588,9 @@ export default function PlansPage() {
                                 setFormData({ ...formData, features: features.filter(f => f !== feature.id) })
                               }
                             }}
-                            className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+                            className="rounded border-tsushin-border text-teal-600 focus:ring-teal-500"
                           />
-                          <span className="text-sm text-gray-700 dark:text-gray-300">{feature.label}</span>
+                          <span className="text-sm text-tsushin-fog">{feature.label}</span>
                         </label>
                       ))}
                     </div>
@@ -603,44 +603,44 @@ export default function PlansPage() {
                         type="checkbox"
                         checked={formData.is_active}
                         onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                        className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+                        className="rounded border-tsushin-border text-teal-600 focus:ring-teal-500"
                       />
-                      <span className="text-sm text-gray-700 dark:text-gray-300">Active</span>
+                      <span className="text-sm text-tsushin-fog">Active</span>
                     </label>
                     <label className="flex items-center space-x-2 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={formData.is_public}
                         onChange={(e) => setFormData({ ...formData, is_public: e.target.checked })}
-                        className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+                        className="rounded border-tsushin-border text-teal-600 focus:ring-teal-500"
                       />
-                      <span className="text-sm text-gray-700 dark:text-gray-300">Public (show on pricing page)</span>
+                      <span className="text-sm text-tsushin-fog">Public (show on pricing page)</span>
                     </label>
                     <div className="flex items-center space-x-2">
-                      <label className="text-sm text-gray-700 dark:text-gray-300">Sort Order:</label>
+                      <label className="text-sm text-tsushin-fog">Sort Order:</label>
                       <input
                         type="number"
                         value={formData.sort_order}
                         onChange={(e) => setFormData({ ...formData, sort_order: parseInt(e.target.value) || 0 })}
                         min={0}
-                        className="w-20 px-2 py-1 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                        className="w-20 px-2 py-1 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                       />
                     </div>
                   </div>
                 </div>
 
-                <div className="flex justify-end space-x-3 p-6 border-t border-gray-200 dark:border-gray-700">
+                <div className="flex justify-end space-x-3 p-6 border-t border-tsushin-border">
                   <button
                     type="button"
                     onClick={() => setShowModal(false)}
-                    className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md"
+                    className="px-4 py-2 bg-tsushin-elevated text-white rounded-md"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={modalLoading}
-                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md disabled:opacity-50"
+                    className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
                   >
                     {modalLoading ? 'Saving...' : editingPlan ? 'Update Plan' : 'Create Plan'}
                   </button>

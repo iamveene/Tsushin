@@ -17,9 +17,11 @@ import json
 import logging
 import asyncio
 import hashlib
+import re
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from models import (
     FlowDefinition, FlowNode, FlowRun, FlowNodeRun,
@@ -228,12 +230,15 @@ class FlowStepHandler:
         parser = TemplateParser(data)
         return parser.render(template)
 
-    def _resolve_contact_to_phone(self, identifier: str) -> Optional[str]:
+    def _resolve_contact_to_phone(self, identifier: str, tenant_id: Optional[str] = None) -> Optional[str]:
         """
         Resolve a contact identifier (friendly name, @mention) to phone number or group JID.
 
         Args:
             identifier: Contact identifier (e.g., "@Alice", "Alice", "+5500000000001", "120363...@g.us")
+            tenant_id: V060-CHN-006 follow-up — scope contact lookups to this tenant
+                so a flow step for Tenant A can't resolve "@Alice" to Tenant B's
+                contact. Callers should derive this from flow_run.tenant_id.
 
         Returns:
             Phone number or group JID if found, None otherwise
@@ -252,9 +257,9 @@ class FlowStepHandler:
         if identifier.replace("+", "").replace(" ", "").replace("-", "").isdigit():
             return identifier.replace(" ", "").replace("-", "")
 
-        # Try to resolve as contact identifier
+        # Try to resolve as contact identifier (tenant-scoped — V060-CHN-006)
         try:
-            contact_service = ContactService(self.db)
+            contact_service = ContactService(self.db, tenant_id=tenant_id)
             contact = contact_service.resolve_identifier(identifier)
 
             if contact:
@@ -284,6 +289,50 @@ class FlowStepHandler:
             logger.error(f"Error resolving contact '{identifier}': {e}")
             return None
 
+    def _resolve_tenant_id(self, flow_run: FlowRun, step: FlowNode) -> Optional[str]:
+        """Resolve tenant_id from flow context."""
+        if flow_run and hasattr(flow_run, 'tenant_id') and flow_run.tenant_id:
+            return flow_run.tenant_id
+        # Try via agent
+        agent_id = step.agent_id if step else None
+        if not agent_id and flow_run:
+            flow = self.db.query(FlowDefinition).filter(
+                FlowDefinition.id == flow_run.flow_definition_id
+            ).first()
+            if flow:
+                agent_id = flow.default_agent_id
+        if agent_id:
+            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+            if agent:
+                return agent.tenant_id
+        return None
+
+    def _resolve_telegram_sender(self, tenant_id: str):
+        """Resolve TelegramSender for a tenant."""
+        from models import TelegramBotInstance
+        from services.telegram_bot_service import TelegramBotService
+        from telegram_integration.sender import TelegramSender
+
+        try:
+            bot_instance = self.db.query(TelegramBotInstance).filter(
+                TelegramBotInstance.tenant_id == tenant_id,
+                TelegramBotInstance.status == "active"
+            ).first()
+
+            if not bot_instance:
+                logger.warning(f"No active Telegram bot for tenant {tenant_id}")
+                return None
+
+            telegram_service = TelegramBotService(self.db)
+            token = telegram_service._decrypt_token(
+                bot_instance.bot_token_encrypted,
+                bot_instance.tenant_id
+            )
+            return TelegramSender(token)
+        except Exception as e:
+            logger.error(f"Failed to resolve Telegram sender: {e}")
+            return None
+
 
 class NotificationStepHandler(FlowStepHandler):
     """Handles Notification steps - sends one-way notifications."""
@@ -298,9 +347,9 @@ class NotificationStepHandler(FlowStepHandler):
         """Send notification message without expecting reply."""
         config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
 
-        # Channel guard: only WhatsApp is supported for now
+        # Channel guard: WhatsApp and Telegram supported
         channel = config.get("channel", "whatsapp")
-        if channel != "whatsapp":
+        if channel not in ("whatsapp", "telegram"):
             logger.warning(f"Notification step uses unsupported channel '{channel}', skipping")
             return {
                 "status": "skipped",
@@ -329,56 +378,112 @@ class NotificationStepHandler(FlowStepHandler):
         recipient = self._replace_variables(recipient, enriched_data)
         message = self._replace_variables(message_template, enriched_data)
 
-        # Resolve contact identifier (e.g., "@alice") to phone number
-        resolved_recipient = self._resolve_contact_to_phone(recipient)
-        if not resolved_recipient:
-            logger.error(f"Could not resolve recipient '{recipient}' to a phone number")
-            return {
-                "recipient": recipient,
-                "status": "failed",
-                "error": f"Could not resolve recipient '{recipient}' to a phone number"
-            }
+        if channel == "whatsapp":
+            # Resolve contact identifier (e.g., "@alice") to phone number — tenant-scoped (V060-CHN-006)
+            resolved_recipient = self._resolve_contact_to_phone(
+                recipient, tenant_id=(flow_run.tenant_id if flow_run else None)
+            )
+            if not resolved_recipient:
+                logger.error(f"Could not resolve recipient '{recipient}' to a phone number")
+                return {
+                    "recipient": recipient,
+                    "status": "failed",
+                    "error": f"Could not resolve recipient '{recipient}' to a phone number"
+                }
 
-        logger.info(f"Sending notification to {recipient} (resolved: {resolved_recipient})")
+            logger.info(f"Sending notification to {recipient} (resolved: {resolved_recipient})")
 
-        try:
-            # Resolve MCP URL and secret using tenant context from flow_run and step
-            mcp_url, api_secret = self._resolve_mcp_url_and_secret(resolved_recipient, flow_run=flow_run, step=step)
+            try:
+                # Resolve MCP URL and secret using tenant context from flow_run and step
+                mcp_url, api_secret = self._resolve_mcp_url_and_secret(resolved_recipient, flow_run=flow_run, step=step)
 
-            # Check MCP health before sending
-            if not self._check_mcp_connection(mcp_url):
-                logger.error(f"MCP not ready at {mcp_url}, cannot send notification")
+                # Check MCP health before sending
+                if not self._check_mcp_connection(mcp_url):
+                    logger.error(f"MCP not ready at {mcp_url}, cannot send notification")
+                    return {
+                        "recipient": recipient,
+                        "resolved_recipient": resolved_recipient,
+                        "message_sent": message,
+                        "mcp_url": mcp_url,
+                        "success": False,
+                        "status": "failed",
+                        "error": "MCP instance not connected or authenticated",
+                        "channel": "whatsapp",
+                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                    }
+
+                # Phase Security-1: Pass api_secret for authentication
+                success = await self.mcp_sender.send_message(resolved_recipient, message, api_url=mcp_url, api_secret=api_secret)
+
                 return {
                     "recipient": recipient,
                     "resolved_recipient": resolved_recipient,
                     "message_sent": message,
                     "mcp_url": mcp_url,
-                    "success": False,
+                    "success": success,
+                    "status": "completed" if success else "failed",
+                    "channel": "whatsapp",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+            except Exception as e:
+                logger.error(f"Failed to send notification: {e}")
+                return {
+                    "recipient": recipient,
+                    "resolved_recipient": resolved_recipient if 'resolved_recipient' in locals() else None,
                     "status": "failed",
-                    "error": "MCP instance not connected or authenticated",
+                    "error": str(e)
+                }
+
+        elif channel == "telegram":
+            # Telegram notification: resolve sender and send via Telegram Bot API
+            tenant_id = self._resolve_tenant_id(flow_run, step)
+            if not tenant_id:
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": "Could not resolve tenant_id for Telegram notification",
                     "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
-            # Phase Security-1: Pass api_secret for authentication
-            success = await self.mcp_sender.send_message(resolved_recipient, message, api_url=mcp_url, api_secret=api_secret)
+            telegram_sender = self._resolve_telegram_sender(tenant_id)
+            if not telegram_sender:
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": "No active Telegram bot configured for this tenant",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
 
-            return {
-                "recipient": recipient,
-                "resolved_recipient": resolved_recipient,
-                "message_sent": message,
-                "mcp_url": mcp_url,
-                "success": success,
-                "status": "completed" if success else "failed",
-                "timestamp": datetime.utcnow().isoformat() + "Z"
-            }
-        except Exception as e:
-            logger.error(f"Failed to send notification: {e}")
-            return {
-                "recipient": recipient,
-                "resolved_recipient": resolved_recipient if 'resolved_recipient' in locals() else None,
-                "status": "failed",
-                "error": str(e)
-            }
+            # Recipient should be a Telegram chat_id (numeric string)
+            try:
+                chat_id = int(recipient)
+            except (ValueError, TypeError):
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": f"Invalid Telegram chat_id: {recipient}",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            try:
+                success = await telegram_sender.send_message(chat_id=chat_id, message=message)
+                return {
+                    "recipient": recipient,
+                    "message_sent": message,
+                    "success": success,
+                    "status": "completed" if success else "failed",
+                    "channel": "telegram",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+            except Exception as e:
+                logger.error(f"Failed to send Telegram notification: {e}")
+                return {
+                    "recipient": recipient,
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": str(e),
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
 
 
 class MessageStepHandler(FlowStepHandler):
@@ -393,10 +498,12 @@ class MessageStepHandler(FlowStepHandler):
     ) -> Dict[str, Any]:
         """Send message to recipients."""
         config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
+        if not config:
+            config = {}
 
-        # Channel guard: only WhatsApp is supported for now
+        # Channel guard: WhatsApp and Telegram supported
         channel = config.get("channel", "whatsapp")
-        if channel != "whatsapp":
+        if channel not in ("whatsapp", "telegram"):
             logger.warning(f"Message step uses unsupported channel '{channel}', skipping")
             return {
                 "status": "skipped",
@@ -405,9 +512,11 @@ class MessageStepHandler(FlowStepHandler):
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
-        recipients = config.get("recipients", [])
+        recipients = config.get("recipients") or []
         if isinstance(recipients, str):
             recipients = [recipients]
+        else:
+            recipients = [item for item in recipients if isinstance(item, str) and item]
         recipient = config.get("recipient")
         if recipient and recipient not in recipients:
             recipients.append(recipient)
@@ -431,68 +540,118 @@ class MessageStepHandler(FlowStepHandler):
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
-        # Resolve contact identifiers to phone numbers
-        resolved_recipients = []
-        for recipient in recipients:
-            resolved = self._resolve_contact_to_phone(recipient)
-            if resolved:
-                resolved_recipients.append(resolved)
-            else:
-                logger.warning(f"Could not resolve recipient '{recipient}', skipping")
+        if channel == "whatsapp":
+            # Resolve contact identifiers to phone numbers — tenant-scoped (V060-CHN-006)
+            _flow_tenant = flow_run.tenant_id if flow_run else None
+            resolved_recipients = []
+            for recipient in recipients:
+                resolved = self._resolve_contact_to_phone(recipient, tenant_id=_flow_tenant)
+                if resolved:
+                    resolved_recipients.append(resolved)
+                else:
+                    logger.warning(f"Could not resolve recipient '{recipient}', skipping")
 
-        if not resolved_recipients:
-            logger.error("No valid recipients after resolution")
-            return {
-                "recipients": recipients,
-                "resolved_recipients": [],
-                "message_sent": message,
-                "sent_count": 0,
-                "total_recipients": len(recipients),
-                "status": "failed",
-                "error": "No valid recipients could be resolved",
-                "timestamp": datetime.utcnow().isoformat() + "Z"
-            }
+            if not resolved_recipients:
+                logger.error("No valid recipients after resolution")
+                return {
+                    "recipients": recipients,
+                    "resolved_recipients": [],
+                    "message_sent": message,
+                    "sent_count": 0,
+                    "total_recipients": len(recipients),
+                    "status": "failed",
+                    "error": "No valid recipients could be resolved",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
 
-        logger.info(f"Sending message to {len(resolved_recipients)} resolved recipient(s)")
+            logger.info(f"Sending message to {len(resolved_recipients)} resolved recipient(s)")
 
-        # Resolve MCP URL and secret once using tenant context (same for all recipients)
-        mcp_url, api_secret = self._resolve_mcp_url_and_secret(resolved_recipients[0], flow_run=flow_run, step=step)
+            # Resolve MCP URL and secret once using tenant context (same for all recipients)
+            mcp_url, api_secret = self._resolve_mcp_url_and_secret(resolved_recipients[0], flow_run=flow_run, step=step)
 
-        # Check MCP health before sending
-        if not self._check_mcp_connection(mcp_url):
-            logger.error(f"MCP not ready at {mcp_url}, cannot send messages")
+            # Check MCP health before sending
+            if not self._check_mcp_connection(mcp_url):
+                logger.error(f"MCP not ready at {mcp_url}, cannot send messages")
+                return {
+                    "recipients": recipients,
+                    "resolved_recipients": resolved_recipients,
+                    "message_sent": message,
+                    "mcp_url": mcp_url,
+                    "sent_count": 0,
+                    "total_recipients": len(recipients),
+                    "status": "failed",
+                    "error": "MCP instance not connected or authenticated",
+                    "channel": "whatsapp",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            sent_count = 0
+            for recipient in resolved_recipients:
+                try:
+                    # Phase Security-1: Pass api_secret for authentication
+                    success = await self.mcp_sender.send_message(recipient, message, api_url=mcp_url, api_secret=api_secret)
+                    if success:
+                        sent_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to send message to {recipient}: {e}")
+
             return {
                 "recipients": recipients,
                 "resolved_recipients": resolved_recipients,
                 "message_sent": message,
                 "mcp_url": mcp_url,
-                "sent_count": 0,
+                "sent_count": sent_count,
                 "total_recipients": len(recipients),
-                "status": "failed",
-                "error": "MCP instance not connected or authenticated",
+                "status": "completed" if sent_count > 0 else "failed",
+                "channel": "whatsapp",
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
-        sent_count = 0
-        for recipient in resolved_recipients:
-            try:
-                # Phase Security-1: Pass api_secret for authentication
-                success = await self.mcp_sender.send_message(recipient, message, api_url=mcp_url, api_secret=api_secret)
-                if success:
-                    sent_count += 1
-            except Exception as e:
-                logger.error(f"Failed to send message to {recipient}: {e}")
+        elif channel == "telegram":
+            # Telegram message: resolve sender and send via Telegram Bot API
+            tenant_id = self._resolve_tenant_id(flow_run, step)
+            if not tenant_id:
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": "Could not resolve tenant_id for Telegram message",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
 
-        return {
-            "recipients": recipients,
-            "resolved_recipients": resolved_recipients,
-            "message_sent": message,
-            "mcp_url": mcp_url,
-            "sent_count": sent_count,
-            "total_recipients": len(recipients),
-            "status": "completed" if sent_count > 0 else "failed",
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        }
+            telegram_sender = self._resolve_telegram_sender(tenant_id)
+            if not telegram_sender:
+                return {
+                    "status": "failed",
+                    "channel": "telegram",
+                    "error": "No active Telegram bot configured for this tenant",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            sent_count = 0
+            for recipient in recipients:
+                # Each recipient should be a Telegram chat_id (numeric string)
+                try:
+                    chat_id = int(recipient)
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid Telegram chat_id: {recipient}, skipping")
+                    continue
+
+                try:
+                    success = await telegram_sender.send_message(chat_id=chat_id, message=message)
+                    if success:
+                        sent_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to send Telegram message to {recipient}: {e}")
+
+            return {
+                "recipients": recipients,
+                "message_sent": message,
+                "sent_count": sent_count,
+                "total_recipients": len(recipients),
+                "status": "completed" if sent_count > 0 else "failed",
+                "channel": "telegram",
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
 
 
 class ToolStepHandler(FlowStepHandler):
@@ -551,7 +710,8 @@ class ToolStepHandler(FlowStepHandler):
             except asyncio.TimeoutError:
                 raise Exception(f"Tool execution timed out after {timeout}s")
         else:
-            result = await self._execute_builtin_tool(tool_name, merged_params)
+            tenant_id = flow_run.tenant_id if flow_run else None
+            result = await self._execute_builtin_tool(tool_name, merged_params, tenant_id=tenant_id)
             return result
 
     async def _execute_sandboxed_tool(self, tool_id: str, parameters: Dict[str, Any], tenant_id: Optional[str] = None) -> Dict[str, Any]:
@@ -599,12 +759,17 @@ class ToolStepHandler(FlowStepHandler):
                 "error": str(e)
             }
 
-    async def _execute_builtin_tool(self, tool_id: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute built-in tool (google_search, weather, web_scraping)."""
+    async def _execute_builtin_tool(
+        self,
+        tool_id: str,
+        parameters: Dict[str, Any],
+        tenant_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute built-in tool (google_search, web_scraping)."""
         try:
             if tool_id == "google_search":
                 from agent.tools.search_tool import SearchTool
-                tool = SearchTool(db=self.db)
+                tool = SearchTool(db=self.db, tenant_id=tenant_id)
                 query = parameters.get("query", parameters.get("q", ""))
                 result = tool.search(query)
 
@@ -639,48 +804,13 @@ class ToolStepHandler(FlowStepHandler):
                     "status": "completed"
                 }
 
-            elif tool_id == "weather":
-                from agent.tools.weather_tool import WeatherTool
-                tool = WeatherTool(db=self.db)
-                location = parameters.get("location", "")
-                result = tool.get_current_weather(location)
-
-                if result.get("error"):
-                    return {
-                        "tool_used": "weather",
-                        "tool_type": "built_in",
-                        "location": location,
-                        "status": "failed",
-                        "error": result.get("error")
-                    }
-
-                summary = f"{result['location']}, {result['country']}: {result['temperature']}°C, {result['description']}"
-
-                return {
-                    "tool_used": "weather",
-                    "tool_type": "built_in",
-                    "location": location,
-                    "weather_summary": summary,
-                    "temperature": result.get('temperature'),
-                    "description": result.get('description'),
-                    "humidity": result.get('humidity'),
-                    "raw_output": result,
-                    "status": "completed"
-                }
-
             elif tool_id == "web_scraping":
-                from agent.tools.scraper_tool import WebScraperTool
-                tool = WebScraperTool()
-                url = parameters.get("url", "")
-                result = await tool.scrape_async(url)
-
+                # Deprecated: web_scraping replaced by browser_automation skill
                 return {
                     "tool_used": "web_scraping",
                     "tool_type": "built_in",
-                    "url": url,
-                    "summary": f"Scraped {len(result.get('text', ''))} characters",
-                    "raw_output": result,
-                    "status": "completed"
+                    "status": "deprecated",
+                    "error": "web_scraping is deprecated. Update this flow to use browser_automation with action=extract."
                 }
 
             else:
@@ -774,7 +904,7 @@ class SlashCommandStepHandler(FlowStepHandler):
 
 class SkillStepHandler(FlowStepHandler):
     """
-    Phase 16: Handles Skill steps - executes agentic skills (flight_search, weather, etc.).
+    Phase 16: Handles Skill steps - executes agentic skills (flight_search, etc.).
 
     Allows flows to call skills like FlightSearchSkill with a natural language prompt
     and receive structured output that can be injected into subsequent steps.
@@ -890,10 +1020,13 @@ class SkillStepHandler(FlowStepHandler):
 
             # Get skill config from agent settings, with overrides
             agent_skill_config = await skill_manager.get_skill_config(self.db, agent_id, skill_type)
+            # BUG-370: Resolve tenant_id from the agent so tenant-scoped API keys work
+            agent_obj = self.db.query(Agent).filter(Agent.id == agent_id).first()
             final_config = {
                 **(agent_skill_config or skill_class.get_default_config()),
                 **skill_config_override,
-                "agent_id": agent_id
+                "agent_id": agent_id,
+                "tenant_id": agent_obj.tenant_id if agent_obj else None
             }
 
             # Inject config for can_handle
@@ -917,7 +1050,10 @@ class SkillStepHandler(FlowStepHandler):
                            f"{'tool' if use_tool_mode else 'legacy'} "
                            f"(tool_arguments={'yes' if tool_arguments else 'no'})")
 
-            if use_tool_mode and has_execute_tool and is_tool_enabled:
+            # BUG-393 fix: When use_tool_mode is explicitly True in step config,
+            # respect it even if the skill's agent-level config has execution_mode="legacy".
+            # The flow step explicitly requested tool mode, so bypass is_tool_enabled check.
+            if use_tool_mode and has_execute_tool and (is_tool_enabled or config.get("use_tool_mode") is True):
                 logger.info(f"SkillStepHandler: Using execute_tool() for skill '{skill_type}'")
                 # Execute skill via tool mode
                 result = await skill_instance.execute_tool(tool_arguments, inbound_message, final_config)
@@ -932,7 +1068,7 @@ class SkillStepHandler(FlowStepHandler):
                 result = await skill_instance.process(inbound_message, final_config)
 
             # Determine actual execution mode used
-            actual_execution_mode = "tool" if (use_tool_mode and has_execute_tool and is_tool_enabled) else "legacy"
+            actual_execution_mode = "tool" if (use_tool_mode and has_execute_tool and (is_tool_enabled or config.get("use_tool_mode") is True)) else "legacy"
 
             # Return structured output for template injection
             return {
@@ -1040,9 +1176,9 @@ class ConversationStepHandler(FlowStepHandler):
         """Start conversation and optionally create ConversationThread."""
         config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
 
-        # Channel guard: only WhatsApp is supported for now
+        # Channel guard: WhatsApp and Telegram supported
         channel = config.get("channel", "whatsapp")
-        if channel != "whatsapp":
+        if channel not in ("whatsapp", "telegram"):
             logger.warning(f"Conversation step uses unsupported channel '{channel}', skipping")
             return {
                 "status": "skipped",
@@ -1268,19 +1404,25 @@ class SummarizationStepHandler(FlowStepHandler):
     """
     Phase 17: Agentic Summarization Step Handler
 
-    Generates AI-powered summaries of conversation transcripts.
-    Useful for multi-step flows where conversation output needs to be
-    condensed before being sent to recipients.
+    Generates AI-powered summaries of:
+    1. Conversation transcripts (via thread_id from conversation steps)
+    2. Raw text output (via source_step from tool/skill steps)
 
     Config schema:
     {
-        "source_step": "step_1",      # Step name/position to get thread_id from
-        "thread_id": 123,              # Or explicit thread_id
+        "source_step": "step_1",      # Step name/position to get content from
+        "thread_id": 123,              # Or explicit thread_id (for conversation steps)
         "summary_prompt": "...",       # Custom summarization instructions
         "output_format": "brief|detailed|structured|minimal",  # Output style
         "prompt_mode": "append|replace",  # How to use summary_prompt
         "model": "gemini-2.5-flash"    # Optional: AI model to use
     }
+
+    Resolution priority:
+    1. Explicit thread_id in config
+    2. thread_id from source_step output (conversation steps)
+    3. raw_output from source_step output (tool/skill steps)
+    4. previous_step fallback (if no source_step specified)
 
     Output formats:
     - "brief": Concise 2-3 sentence summary (default)
@@ -1302,24 +1444,68 @@ class SummarizationStepHandler(FlowStepHandler):
         flow_run: FlowRun,
         step_run: FlowNodeRun
     ) -> Dict[str, Any]:
-        """Generate AI summary of conversation transcript."""
+        """Generate AI summary of conversation transcript or raw text output."""
         config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
 
         # Get thread_id from previous step or explicit config
         thread_id = config.get("thread_id")
         source_step = config.get("source_step")
+        source_text = None  # Raw text from source step (for tool/skill outputs)
+
+        # BUG-496: Support inline text/content in config_json
+        if not source_text:
+            source_text = config.get("text") or config.get("content")
 
         if not thread_id and source_step:
-            # Try to get thread_id from previous step's output
-            thread_id = input_data.get(f"{source_step}.thread_id") or input_data.get("thread_id")
+            # Use proper nested dict access (source_step is a context key like "step_1")
+            source_data = input_data.get(source_step, {})
+            if isinstance(source_data, dict):
+                thread_id = source_data.get("thread_id")
 
-        if not thread_id:
+            # Fallback: check root-level thread_id (backward compat)
+            if not thread_id:
+                thread_id = input_data.get("thread_id")
+
+            # If still no thread_id, try to get raw text from source step
+            # Check multiple field names since different step types use different keys:
+            #   tool steps → raw_output, skill steps → output, slash_command → output/message
+            if not thread_id and isinstance(source_data, dict):
+                source_text = (
+                    source_data.get("raw_output")
+                    or source_data.get("output")
+                    or source_data.get("message")
+                    or source_data.get("summary")
+                    or source_data.get("search_results")
+                    or source_data.get("error")
+                )
+
+        # If no source_step and no thread_id, try previous_step as fallback
+        if not thread_id and not source_text:
+            prev = input_data.get("previous_step", {})
+            if isinstance(prev, dict):
+                thread_id = prev.get("thread_id")
+                if not thread_id:
+                    source_text = (
+                        prev.get("raw_output")
+                        or prev.get("output")
+                        or prev.get("message")
+                        or prev.get("summary")
+                        or prev.get("search_results")
+                        or prev.get("error")
+                    )
+
+        if not thread_id and not source_text:
             return {
                 "status": "failed",
-                "error": "No thread_id found. Specify 'thread_id' or 'source_step' in config.",
+                "error": "No thread_id or source text found. Specify 'thread_id', 'source_step' (with raw_output), or supply 'text'/'content' directly in config_json.",
                 "summary": ""
             }
 
+        # === Path B: Raw text summarization (for tool/skill outputs) ===
+        if not thread_id and source_text:
+            return await self._summarize_raw_text(source_text, config, source_step, flow_run=flow_run)
+
+        # === Path A: Thread-based summarization (for conversation steps) ===
         try:
             # Fetch conversation thread
             thread = self.db.query(ConversationThread).filter(
@@ -1468,11 +1654,15 @@ Summary:"""
             # Phase 7.2: Token tracking integrated via handler's token_tracker
             from agent.ai_client import AIClient
 
+            # Resolve tenant_id for API key lookup
+            tenant_id = getattr(flow_run, 'tenant_id', None)
+
             ai_client = AIClient(
                 provider=model_provider,
                 model_name=model,
                 db=self.db,
-                token_tracker=self.token_tracker
+                token_tracker=self.token_tracker,
+                tenant_id=tenant_id,
             )
 
             logger.info(f"Generating summary for thread {thread_id} using {model_provider}/{model}...")
@@ -1517,6 +1707,581 @@ Summary:"""
                 "summary": "",
                 "thread_id": thread_id
             }
+
+    async def _summarize_raw_text(
+        self,
+        source_text: str,
+        config: Dict[str, Any],
+        source_step: Optional[str] = None,
+        flow_run: Optional[FlowRun] = None
+    ) -> Dict[str, Any]:
+        """Summarize raw text output from tool/skill steps using AI."""
+        try:
+            # Convert structured data to string
+            if isinstance(source_text, (dict, list)):
+                transcript = json.dumps(source_text, ensure_ascii=False, indent=2)
+            else:
+                transcript = str(source_text)
+
+            if not transcript.strip():
+                return {
+                    "status": "failed",
+                    "error": "Source text is empty",
+                    "summary": "",
+                    "source_step": source_step
+                }
+
+            output_format = config.get("output_format", "brief")
+            custom_prompt = config.get("summary_prompt", "")
+            prompt_mode = config.get("prompt_mode", "append")
+
+            model = config.get("model")
+            model_provider = config.get("model_provider")
+
+            if not model:
+                model = "gemini-2.5-flash"
+            if not model_provider:
+                if model.startswith("gpt-") or model.startswith("o1") or model.startswith("o3"):
+                    model_provider = "openai"
+                elif model.startswith("claude"):
+                    model_provider = "anthropic"
+                else:
+                    model_provider = "gemini"
+                logger.warning(f"Model provider not configured, inferred '{model_provider}' for model '{model}'")
+
+            # Build prompt
+            if prompt_mode == "replace" or (custom_prompt and custom_prompt.startswith("OVERRIDE:")):
+                prompt_text = custom_prompt[9:].strip() if custom_prompt.startswith("OVERRIDE:") else custom_prompt
+                base_prompt = f"""{prompt_text}
+
+Text to summarize:
+{transcript}"""
+            else:
+                format_instructions = {
+                    "brief": "Provide a concise 2-3 sentence summary.",
+                    "detailed": "Provide a comprehensive summary with key points and outcomes.",
+                    "structured": "Provide a structured summary with sections: Objective, Key Points, Outcome, Next Steps.",
+                    "minimal": "Extract ONLY the essential data points (status, dates, numbers, outcomes). No analysis, no narrative. Maximum 3-5 lines."
+                }
+                format_instruction = format_instructions.get(output_format, format_instructions["brief"])
+
+                if output_format == "minimal":
+                    base_prompt = f"""{format_instruction}
+
+Text to summarize:
+{transcript}
+
+{custom_prompt}"""
+                else:
+                    base_prompt = f"""Analyze the following text output and provide a summary.
+
+{format_instruction}
+
+Focus on:
+- Key findings and results
+- Important data points, numbers, or identifiers
+- Status and outcome
+- Any errors or warnings
+
+Text to summarize:
+{transcript}
+
+{custom_prompt}
+
+Summary:"""
+
+            from agent.ai_client import AIClient
+
+            # Resolve tenant_id for API key lookup
+            tenant_id = getattr(flow_run, 'tenant_id', None) if flow_run else None
+
+            ai_client = AIClient(
+                provider=model_provider,
+                model_name=model,
+                db=self.db,
+                token_tracker=self.token_tracker,
+                tenant_id=tenant_id,
+            )
+
+            source_label = source_step or "previous_step"
+            logger.info(f"Generating summary for raw text from '{source_label}' using {model_provider}/{model}...")
+
+            response = await ai_client.generate(
+                system_prompt="You are a helpful assistant that summarizes text output and technical results.",
+                user_message=base_prompt,
+                operation_type="text_summarization"
+            )
+
+            if response.get('error'):
+                return {
+                    "status": "failed",
+                    "error": f"AI generation error: {response['error']}",
+                    "summary": "",
+                    "source_step": source_label
+                }
+
+            summary = response.get('answer', '').strip()
+            logger.info(f"Generated summary ({len(summary)} chars) from raw text of '{source_label}'")
+
+            return {
+                "status": "completed",
+                "summary": summary,
+                "transcript": transcript,
+                "source_step": source_label,
+                "source_type": "raw_text",
+                "model_used": f"{model_provider}/{model}",
+                "output_format": output_format
+            }
+
+        except Exception as e:
+            logger.error(f"Raw text summarization failed: {e}", exc_info=True)
+            return {
+                "status": "failed",
+                "error": str(e),
+                "summary": "",
+                "source_step": source_step
+            }
+
+
+class GateStepHandler(FlowStepHandler):
+    """
+    Conditional Gate Step Handler — flow control node.
+
+    Evaluates conditions against previous step outputs and either passes
+    (status="completed") or blocks (status="failed") the flow.
+
+    Two modes:
+    - "programmatic": Zero LLM cost. Evaluates gate_conditions using operators.
+    - "agentic": Sends source data + prompt to LLM for pass/fail decision.
+
+    Config schema:
+    {
+        "gate_mode": "programmatic",           # or "agentic"
+        "gate_conditions": [                   # programmatic mode
+            {"field": "inbox.count", "operator": ">=", "value": 5, "type": "number"},
+            {"field": "inbox.raw_output", "operator": "matches", "value": "urgent|critical", "type": "regex"}
+        ],
+        "gate_logic": "all",                   # "all" (AND) or "any" (OR)
+        "gate_prompt": "...",                   # agentic mode prompt
+        "gate_source_step": "inbox",           # step output to evaluate
+        "gate_on_fail": "skip",                # "skip", "notify"
+        "gate_fail_notification": {            # optional notification on fail
+            "channel": "whatsapp",
+            "recipient": "+5527...",
+            "message_template": "Gate blocked: {{gate.reason}}"
+        }
+    }
+
+    Supported operators (programmatic mode):
+    - Numeric: ==, !=, >, >=, <, <=
+    - String: contains, not_contains, starts_with, ends_with
+    - Regex: matches
+    - Existence: is_empty, is_not_empty
+    - Collection: count_gte, count_lte
+    - Boolean: == true/false
+    """
+
+    async def execute(self, step, input_data, flow_run, step_run):
+        config = json.loads(step.config_json) if isinstance(step.config_json, str) else (step.config_json or {})
+        gate_mode = config.get("gate_mode", "programmatic")
+        gate_source_step = config.get("gate_source_step")
+        gate_on_fail = config.get("gate_on_fail", "skip")
+
+        logger.info(f"Gate step executing in '{gate_mode}' mode (source={gate_source_step})")
+
+        # Resolve source data from step context
+        source_data = self._resolve_source_data(gate_source_step, input_data)
+
+        try:
+            if gate_mode == "agentic":
+                passed, reasoning, conditions_detail = await self._evaluate_agentic(
+                    config, source_data, input_data, flow_run, step
+                )
+            else:
+                passed, reasoning, conditions_detail = self._evaluate_programmatic(
+                    config, source_data, input_data
+                )
+        except Exception as e:
+            logger.error(f"Gate evaluation failed with exception: {e}", exc_info=True)
+            # Fail-closed: exceptions block the flow
+            passed = False
+            reasoning = f"Gate evaluation error: {str(e)}"
+            conditions_detail = []
+
+        result = {
+            "gate_result": "pass" if passed else "fail",
+            "gate_mode": gate_mode,
+            "conditions_evaluated": conditions_detail,
+            "reasoning": reasoning,
+        }
+
+        if passed:
+            logger.info(f"Gate PASSED: {reasoning}")
+            result["status"] = "completed"
+            return result
+
+        # Gate failed
+        logger.info(f"Gate FAILED: {reasoning}")
+
+        # Handle gate_on_fail actions
+        if gate_on_fail == "notify":
+            fail_notif = config.get("gate_fail_notification")
+            if fail_notif:
+                try:
+                    await self._send_gate_notification(fail_notif, result, input_data, flow_run, step)
+                    result["fail_action_taken"] = "notify"
+                except Exception as e:
+                    logger.warning(f"Gate fail notification failed: {e}")
+                    result["fail_action_taken"] = "notify_failed"
+        else:
+            result["fail_action_taken"] = "skip"
+
+        result["status"] = "failed"
+        return result
+
+    def _resolve_source_data(self, gate_source_step, input_data):
+        """Resolve the source step's output data from context."""
+        if not gate_source_step:
+            # Default to previous_step
+            return input_data.get("previous_step", {})
+
+        # Try exact key first (step name or alias)
+        if gate_source_step in input_data:
+            return input_data[gate_source_step]
+
+        # Try step_N format
+        if gate_source_step.startswith("step_"):
+            return input_data.get(gate_source_step, {})
+
+        # Try previous_step as fallback
+        return input_data.get("previous_step", {})
+
+    def _resolve_field_path(self, path, data):
+        """Navigate a dot-separated field path through nested dicts/lists.
+
+        Examples:
+            "count" -> data["count"]
+            "raw_output.items" -> data["raw_output"]["items"]
+            "items[0].subject" -> data["items"][0]["subject"]
+        """
+        if not path or data is None:
+            return None
+
+        parts = []
+        for segment in path.split("."):
+            # Handle array indexing: "items[0]" -> "items", 0
+            if "[" in segment and segment.endswith("]"):
+                key, idx_str = segment.rstrip("]").split("[", 1)
+                if key:
+                    parts.append(key)
+                try:
+                    parts.append(int(idx_str))
+                except ValueError:
+                    parts.append(idx_str)
+            else:
+                parts.append(segment)
+
+        current = data
+        for part in parts:
+            if current is None:
+                return None
+            if isinstance(part, int):
+                if isinstance(current, (list, tuple)) and 0 <= part < len(current):
+                    current = current[part]
+                else:
+                    return None
+            elif isinstance(current, dict):
+                current = current.get(part)
+            else:
+                # Try attribute access as fallback
+                current = getattr(current, str(part), None)
+        return current
+
+    def _evaluate_programmatic(self, config, source_data, input_data):
+        """Evaluate programmatic gate conditions. Zero LLM cost.
+
+        Returns (passed: bool, reasoning: str, conditions_detail: list)
+        """
+        conditions = config.get("gate_conditions", [])
+        logic = config.get("gate_logic", "all")
+
+        if not conditions:
+            # No conditions = auto-pass
+            return True, "No conditions defined — gate passes by default", []
+
+        results = []
+        for cond in conditions:
+            field_path = cond.get("field", "")
+            operator = cond.get("operator", "is_not_empty")
+            expected = cond.get("value")
+            value_type = cond.get("type", "string")
+
+            # Resolve the field value — try source data first, then full context
+            actual = self._resolve_field_path(field_path, source_data)
+            if actual is None:
+                actual = self._resolve_field_path(field_path, input_data)
+
+            passed = self._evaluate_condition(actual, operator, expected, value_type)
+            results.append({
+                "field": field_path,
+                "operator": operator,
+                "expected": expected,
+                "actual": self._safe_serialize(actual),
+                "passed": passed,
+            })
+
+        if logic == "any":
+            overall = any(r["passed"] for r in results)
+            mode_label = "ANY"
+        else:
+            overall = all(r["passed"] for r in results)
+            mode_label = "ALL"
+
+        passed_count = sum(1 for r in results if r["passed"])
+        total = len(results)
+        reasoning = f"{mode_label} logic: {passed_count}/{total} conditions passed"
+
+        return overall, reasoning, results
+
+    def _evaluate_condition(self, actual, operator, expected, value_type):
+        """Evaluate a single condition. Returns bool."""
+        try:
+            # Existence checks (work on any type)
+            if operator == "is_empty":
+                if actual is None:
+                    return True
+                if isinstance(actual, (str, list, dict, tuple)):
+                    return len(actual) == 0
+                return actual == 0 or actual == ""
+            if operator == "is_not_empty":
+                if actual is None:
+                    return False
+                if isinstance(actual, (str, list, dict, tuple)):
+                    return len(actual) > 0
+                return actual != 0 and actual != ""
+
+            # Count operations (on collections)
+            if operator == "count_gte":
+                return self._safe_len(actual) >= int(expected)
+            if operator == "count_lte":
+                return self._safe_len(actual) <= int(expected)
+
+            # Regex matching
+            if operator == "matches":
+                return bool(re.search(str(expected), str(actual or ""), re.IGNORECASE))
+
+            # String operations
+            if operator == "contains":
+                return str(expected).lower() in str(actual or "").lower()
+            if operator == "not_contains":
+                return str(expected).lower() not in str(actual or "").lower()
+            if operator == "starts_with":
+                return str(actual or "").lower().startswith(str(expected).lower())
+            if operator == "ends_with":
+                return str(actual or "").lower().endswith(str(expected).lower())
+
+            # Numeric comparisons
+            if value_type == "number" or operator in (">", ">=", "<", "<="):
+                a = float(actual) if actual is not None else 0
+                e = float(expected) if expected is not None else 0
+                if operator == "==":
+                    return a == e
+                if operator == "!=":
+                    return a != e
+                if operator == ">":
+                    return a > e
+                if operator == ">=":
+                    return a >= e
+                if operator == "<":
+                    return a < e
+                if operator == "<=":
+                    return a <= e
+
+            # Boolean comparisons
+            if value_type == "boolean":
+                a = self._to_bool(actual)
+                e = self._to_bool(expected)
+                if operator == "==":
+                    return a == e
+                if operator == "!=":
+                    return a != e
+
+            # Default string equality
+            if operator == "==":
+                return str(actual or "") == str(expected or "")
+            if operator == "!=":
+                return str(actual or "") != str(expected or "")
+
+            logger.warning(f"Unknown gate operator: {operator}")
+            return False
+
+        except (TypeError, ValueError) as e:
+            logger.debug(f"Condition evaluation type error: {e}")
+            return False
+
+    async def _evaluate_agentic(self, config, source_data, input_data, flow_run, step):
+        """Evaluate gate condition using LLM. Returns (passed, reasoning, detail)."""
+        gate_prompt = config.get("gate_prompt", "")
+        if not gate_prompt:
+            return False, "No gate_prompt defined for agentic mode", []
+
+        # Resolve template variables in prompt
+        resolved_prompt = self._replace_variables(gate_prompt, input_data)
+
+        # Serialize source data (truncate to control token usage)
+        source_str = self._safe_serialize(source_data, max_length=4000)
+
+        system_prompt = (
+            "You are a gate evaluator for an automated workflow. "
+            "Your job is to evaluate whether the data below satisfies the given condition. "
+            "Reply with EXACTLY one line starting with 'PASS:' or 'FAIL:' followed by a brief reason.\n\n"
+            "Example responses:\n"
+            "PASS: The data contains 5 unread financial emails matching the criteria.\n"
+            "FAIL: No emails related to financial topics were found in the data."
+        )
+
+        user_message = (
+            f"## Data to evaluate:\n{source_str}\n\n"
+            f"## Condition to check:\n{resolved_prompt}\n\n"
+            "Respond with PASS: or FAIL: followed by your reasoning."
+        )
+
+        # Resolve agent/model — same pattern as SummarizationStepHandler
+        agent_id = step.agent_id or (flow_run.flow.default_agent_id if flow_run.flow else None)
+
+        # Resolve model from agent config
+        model = None
+        model_provider = None
+        if agent_id:
+            from models import Agent
+            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+            if agent:
+                model = agent.model_name
+                model_provider = agent.model_provider
+
+        if not model:
+            model = "gemini-2.5-flash"
+        if not model_provider:
+            if model.startswith("gpt-") or model.startswith("o1") or model.startswith("o3"):
+                model_provider = "openai"
+            elif model.startswith("claude"):
+                model_provider = "anthropic"
+            else:
+                model_provider = "gemini"
+
+        # Resolve tenant_id for API key lookup
+        tenant_id = getattr(flow_run, 'tenant_id', None)
+
+        try:
+            from agent.ai_client import AIClient
+            ai_client = AIClient(
+                provider=model_provider,
+                model_name=model,
+                db=self.db,
+                token_tracker=self.token_tracker,
+                tenant_id=tenant_id,
+            )
+            response = await ai_client.generate(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                operation_type="gate_evaluation",
+            )
+            if response.get("error"):
+                raise RuntimeError(response["error"])
+            response_text = response.get("answer", "")
+        except Exception as e:
+            logger.error(f"Agentic gate LLM call failed: {e}")
+            # Fail-closed: LLM failures block the flow
+            return False, f"LLM evaluation failed: {str(e)}", []
+
+        # Parse PASS/FAIL from response
+        response_text = (response_text or "").strip()
+        response_upper = response_text.upper()
+
+        if response_upper.startswith("PASS"):
+            passed = True
+            reasoning = response_text[5:].strip(": ") if len(response_text) > 4 else "LLM approved"
+        elif response_upper.startswith("FAIL"):
+            passed = False
+            reasoning = response_text[5:].strip(": ") if len(response_text) > 4 else "LLM rejected"
+        elif "PASS" in response_upper:
+            passed = True
+            reasoning = response_text
+        elif "FAIL" in response_upper:
+            passed = False
+            reasoning = response_text
+        else:
+            # Unparseable — fail-closed
+            passed = False
+            reasoning = f"Unparseable LLM response (fail-closed): {response_text[:200]}"
+
+        detail = [{
+            "type": "agentic",
+            "prompt": resolved_prompt[:200],
+            "llm_response": response_text[:500],
+            "passed": passed,
+        }]
+
+        return passed, reasoning, detail
+
+    async def _send_gate_notification(self, notif_config, gate_result, input_data, flow_run, step):
+        """Send a notification when gate fails (gate_on_fail='notify')."""
+        channel = notif_config.get("channel", "whatsapp")
+        recipient = notif_config.get("recipient")
+        message_template = notif_config.get("message_template", "Gate blocked flow execution.")
+
+        if not recipient:
+            logger.warning("Gate fail notification has no recipient — skipping")
+            return
+
+        # Build gate context for template resolution
+        gate_context = {**input_data, "gate": gate_result}
+        message = self._replace_variables(message_template, gate_context)
+
+        # Resolve recipient
+        resolved = self._resolve_contact_to_phone(recipient, getattr(flow_run, 'tenant_id', None))
+        if not resolved:
+            resolved = recipient
+
+        # Send via MCP (same pattern as NotificationStepHandler)
+        mcp_url, mcp_secret = self._resolve_mcp_url_and_secret(resolved, flow_run, step)
+        if mcp_url:
+            try:
+                await self.mcp_sender.send_message(resolved, message, api_url=mcp_url, api_secret=mcp_secret)
+                logger.info(f"Gate fail notification sent to {resolved}")
+            except Exception as e:
+                logger.warning(f"Gate fail notification send error: {e}")
+
+    @staticmethod
+    def _safe_len(value):
+        """Safely get length of a value."""
+        if value is None:
+            return 0
+        if isinstance(value, (str, list, dict, tuple)):
+            return len(value)
+        return 0
+
+    @staticmethod
+    def _to_bool(value):
+        """Convert a value to boolean."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ("true", "1", "yes")
+        return bool(value)
+
+    @staticmethod
+    def _safe_serialize(data, max_length=2000):
+        """Safely serialize data to string with truncation."""
+        if data is None:
+            return "null"
+        try:
+            serialized = json.dumps(data, default=str, indent=2)
+        except (TypeError, ValueError):
+            serialized = str(data)
+        if len(serialized) > max_length:
+            return serialized[:max_length] + f"\n... (truncated, {len(serialized)} total chars)"
+        return serialized
 
 
 # Legacy handler for backward compatibility
@@ -1584,13 +2349,24 @@ class SubflowStepHandler(FlowStepHandler):
             else:
                 child_context[target_key] = source_value
 
+        # SEC: Validate target flow belongs to same tenant (BUG-LOG-002)
+        target_flow = self.db.query(FlowDefinition).filter(
+            FlowDefinition.id == target_flow_id,
+            FlowDefinition.tenant_id == flow_run.tenant_id
+        ).first()
+        if not target_flow:
+            raise FlowValidationError(
+                f"Subflow {target_flow_id} not found or belongs to different tenant"
+            )
+
         logger.info(f"Starting subflow {target_flow_id}")
 
         child_run = await self.flow_engine.run_flow(
             flow_definition_id=target_flow_id,
             trigger_context=child_context,
             initiator="subflow",
-            parent_run_id=flow_run.id
+            parent_run_id=flow_run.id,
+            tenant_id=flow_run.tenant_id
         )
 
         return {
@@ -1788,7 +2564,9 @@ class FlowEngine:
             "conversation": ConversationStepHandler(db, self.mcp_sender, self.token_tracker),
             "slash_command": SlashCommandStepHandler(db, self.mcp_sender, self.token_tracker),
             "skill": SkillStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 16: Agentic skill execution
+            "custom_skill": SkillStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 22: Custom skill alias
             "summarization": SummarizationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 17: Agentic summarization
+            "gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Conditional gate node
             "browser_automation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Browser automation
             # Legacy types (backward compatibility)
             "Trigger": TriggerNodeHandler(db, self.mcp_sender, self.token_tracker),
@@ -1798,8 +2576,54 @@ class FlowEngine:
             "SlashCommand": SlashCommandStepHandler(db, self.mcp_sender, self.token_tracker),
             "Subflow": SubflowStepHandler(db, self.mcp_sender, self, self.token_tracker),
             "Summarization": SummarizationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 17: Legacy casing
-            "BrowserAutomation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker)  # Phase 14.5: Legacy casing
+            "Gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Gate: Legacy casing
+            "BrowserAutomation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Legacy casing
+            "AgentNode": ConversationStepHandler(db, self.mcp_sender, self.token_tracker),  # BUG-495: alias for agent-based conversation node
         }
+
+        # BUG-LOG-007: Clean up any globally stale runs at engine init
+        try:
+            self._cleanup_stale_runs()
+        except Exception as e:
+            logger.warning(f"Stale run cleanup at init failed (non-fatal): {e}")
+
+    def _cleanup_stale_runs(self, flow_definition_id: Optional[int] = None) -> int:
+        """
+        BUG-LOG-007: Recover flow runs stuck in "running" state.
+
+        Runs that have been in "running" state for longer than a reasonable timeout
+        are marked as "failed" with a recovery message.  This prevents stale runs
+        from accumulating after process crashes or unhandled exceptions.
+
+        Args:
+            flow_definition_id: If provided, only clean up runs for this flow.
+                                If None, clean up all stale runs globally.
+
+        Returns:
+            Number of stale runs recovered.
+        """
+        # Use 2x the default step timeout as the stale cutoff (minimum 1 hour)
+        stale_cutoff = datetime.utcnow() - timedelta(seconds=max(DEFAULT_STEP_TIMEOUT * 2, 3600))
+
+        query = self.db.query(FlowRun).filter(
+            FlowRun.status == "running",
+            FlowRun.started_at < stale_cutoff,
+        )
+        if flow_definition_id is not None:
+            query = query.filter(FlowRun.flow_definition_id == flow_definition_id)
+
+        stale_runs = query.all()
+        for stale in stale_runs:
+            stale.status = "failed"
+            stale.error_text = "Recovered: flow was stuck in running state (process crash or timeout)"
+            stale.completed_at = datetime.utcnow()
+
+        if stale_runs:
+            self.db.commit()
+            logger.info(f"BUG-LOG-007: Recovered {len(stale_runs)} stale flow runs"
+                        f"{f' for flow {flow_definition_id}' if flow_definition_id else ' (global)'}")
+
+        return len(stale_runs)
 
     def _build_step_context(
         self,
@@ -1989,10 +2813,10 @@ class FlowEngine:
         while True:
             idempotency_key = self.generate_idempotency_key(flow_run.id, step.id, retry_count)
 
-            # Check if already executed (idempotency)
+            # BUG-LOG-010: Use SELECT FOR UPDATE to prevent TOCTOU race
             existing = self.db.query(FlowNodeRun).filter(
                 FlowNodeRun.idempotency_key == idempotency_key
-            ).first()
+            ).with_for_update(skip_locked=True).first()
 
             if existing and existing.status == "completed":
                 logger.info(f"Step {step.id} already executed (idempotency key: {idempotency_key})")
@@ -2008,9 +2832,19 @@ class FlowEngine:
                 idempotency_key=idempotency_key,
                 retry_count=retry_count
             )
-            self.db.add(step_run)
-            self.db.commit()
-            self.db.refresh(step_run)
+            try:
+                self.db.add(step_run)
+                self.db.commit()
+                self.db.refresh(step_run)
+            except IntegrityError:
+                self.db.rollback()
+                existing = self.db.query(FlowNodeRun).filter(
+                    FlowNodeRun.idempotency_key == idempotency_key
+                ).first()
+                if existing:
+                    logger.info(f"BUG-LOG-010: Concurrent insert detected for step {step.id}, returning existing record")
+                    return existing
+                raise
 
             try:
                 # Get handler for step type (case-insensitive)
@@ -2018,20 +2852,61 @@ class FlowEngine:
                 if not handler:
                     raise Exception(f"No handler for step type: {step.type}")
 
-                # Execute with timeout
+                # BUG-LOG-011: Execute with timeout AND periodic cancellation checks.
+                # Instead of a simple wait_for, run the handler as a task and poll
+                # for cancellation every few seconds so cancel_run can interrupt
+                # a long-running step without waiting for the full timeout.
                 start_time = datetime.utcnow()
-                output = await asyncio.wait_for(
-                    handler.execute(step, input_data, flow_run, step_run),
-                    timeout=timeout
+                handler_task = asyncio.ensure_future(
+                    handler.execute(step, input_data, flow_run, step_run)
                 )
+                cancel_poll_interval = 5  # seconds between cancellation checks
+                elapsed = 0.0
+                while not handler_task.done():
+                    wait_time = min(cancel_poll_interval, timeout - elapsed)
+                    if wait_time <= 0:
+                        handler_task.cancel()
+                        raise asyncio.TimeoutError()
+                    try:
+                        await asyncio.wait_for(asyncio.shield(handler_task), timeout=wait_time)
+                    except asyncio.TimeoutError:
+                        elapsed += wait_time
+                        if handler_task.done():
+                            break
+                        # Check for external cancellation
+                        self.db.refresh(flow_run)
+                        if flow_run.status in ("cancelled", "failed"):
+                            logger.info(f"BUG-LOG-011: Step {step.id} interrupted — flow run {flow_run.id} was {flow_run.status}")
+                            handler_task.cancel()
+                            try:
+                                await handler_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
+                            step_run.status = "cancelled"
+                            step_run.completed_at = datetime.utcnow()
+                            step_run.error_text = f"Step cancelled: flow run was {flow_run.status}"
+                            step_run.execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                            self.db.commit()
+                            return step_run
+
+                # Retrieve the result (may re-raise exceptions from the handler)
+                output = handler_task.result()
                 end_time = datetime.utcnow()
 
-                # Update step_run with success
-                step_run.status = "completed"
+                # Update step_run with results
                 step_run.completed_at = end_time
                 step_run.output_json = json.dumps(output)
                 step_run.execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
                 step_run.tool_used = output.get("tool_used")
+
+                # Check if the handler reported internal failure via output status
+                if isinstance(output, dict) and output.get("status") == "failed":
+                    step_run.status = "failed"
+                    step_run.error_text = output.get("error", "Step handler reported failure")
+                    logger.warning(f"Step {step.id} ({step.type}) reported failure: {step_run.error_text}")
+                else:
+                    step_run.status = "completed"
+                    logger.info(f"Step {step.id} ({step.type}) completed in {step_run.execution_time_ms}ms")
 
                 if "token_usage" in output:
                     step_run.token_usage_json = json.dumps(output["token_usage"])
@@ -2039,7 +2914,6 @@ class FlowEngine:
                 self.db.commit()
                 self.db.refresh(step_run)
 
-                logger.info(f"Step {step.id} ({step.type}) completed in {step_run.execution_time_ms}ms")
                 return step_run
 
             except asyncio.TimeoutError:
@@ -2161,7 +3035,9 @@ class FlowEngine:
         initiator: str = "api",
         trigger_type: str = "immediate",
         triggered_by: Optional[str] = None,
-        parent_run_id: Optional[int] = None
+        parent_run_id: Optional[int] = None,
+        tenant_id: Optional[str] = None,
+        resume_run_id: Optional[int] = None
     ) -> FlowRun:
         """
         Main execution entry point.
@@ -2179,10 +3055,17 @@ class FlowEngine:
         """
         logger.info(f"Starting flow run for definition {flow_definition_id}")
 
-        # Load flow definition
-        flow = self.db.query(FlowDefinition).filter(FlowDefinition.id == flow_definition_id).first()
+        # Load flow definition (with tenant filter when provided — BUG-LOG-002)
+        query = self.db.query(FlowDefinition).filter(FlowDefinition.id == flow_definition_id)
+        if tenant_id:
+            query = query.filter(FlowDefinition.tenant_id == tenant_id)
+        flow = query.first()
         if not flow:
             raise FlowValidationError(f"Flow definition {flow_definition_id} not found")
+
+        # BUG-LOG-007: Clean up stale flow runs stuck in "running"
+        # Scoped to this flow's definition to avoid cross-tenant collateral (2D-2)
+        self._cleanup_stale_runs(flow_definition_id=flow_definition_id)
 
         # Get tenant from flow
         tenant_id = flow.tenant_id
@@ -2216,23 +3099,33 @@ class FlowEngine:
             FlowNode.flow_definition_id == flow_definition_id
         ).order_by(FlowNode.position).all()
 
-        # Create FlowRun
-        flow_run = FlowRun(
-            flow_definition_id=flow_definition_id,
-            tenant_id=tenant_id,
-            status="running",
-            started_at=datetime.utcnow(),
-            initiator=initiator,
-            trigger_type=trigger_type,
-            triggered_by=triggered_by,
-            total_steps=len(steps),
-            completed_steps=0,
-            failed_steps=0,
-            trigger_context_json=json.dumps(trigger_context) if trigger_context else None
-        )
-        self.db.add(flow_run)
-        self.db.commit()
-        self.db.refresh(flow_run)
+        # Create or resume FlowRun
+        if resume_run_id:
+            flow_run = self.db.query(FlowRun).filter(FlowRun.id == resume_run_id).first()
+            if not flow_run:
+                raise FlowValidationError(f"Flow run {resume_run_id} not found")
+            flow_run.status = "running"
+            flow_run.started_at = datetime.utcnow()
+            flow_run.total_steps = len(steps)
+            self.db.commit()
+            self.db.refresh(flow_run)
+        else:
+            flow_run = FlowRun(
+                flow_definition_id=flow_definition_id,
+                tenant_id=tenant_id,
+                status="running",
+                started_at=datetime.utcnow(),
+                initiator=initiator,
+                trigger_type=trigger_type,
+                triggered_by=triggered_by,
+                total_steps=len(steps),
+                completed_steps=0,
+                failed_steps=0,
+                trigger_context_json=json.dumps(trigger_context) if trigger_context else None
+            )
+            self.db.add(flow_run)
+            self.db.commit()
+            self.db.refresh(flow_run)
 
         try:
             # Execute steps sequentially
@@ -2240,6 +3133,12 @@ class FlowEngine:
             completed_step_runs: List[FlowNodeRun] = []
 
             for step in steps:
+                # BUG-LOG-011: Check for cancellation between steps
+                self.db.refresh(flow_run)
+                if flow_run.status in ("cancelled", "failed"):
+                    logger.info(f"Flow run {flow_run.id} was {flow_run.status} externally, stopping execution")
+                    break
+
                 logger.info(f"Executing step {step.position}: {step.type} ({step.name or 'unnamed'})")
 
                 # Phase 13.1: Build comprehensive step context with all previous step outputs
@@ -2257,7 +3156,12 @@ class FlowEngine:
                 # Track completed step run for context building
                 completed_step_runs.append(step_run)
 
-                if step_run.status == "failed":
+                # BUG-LOG-011: Handle cancelled steps (from in-flight cancellation)
+                if step_run.status == "cancelled":
+                    logger.info(f"Step {step.position} was cancelled, stopping flow")
+                    # flow_run.status was already set to "cancelled" by the API
+                    break
+                elif step_run.status == "failed":
                     # Check on_failure action
                     if step.on_failure == "continue":
                         logger.warning(f"Step {step.position} failed but continuing (on_failure=continue)")
@@ -2275,9 +3179,12 @@ class FlowEngine:
                 else:
                     flow_run.completed_steps += 1
 
-            # Mark as completed if not already failed
-            if flow_run.status != "failed":
-                flow_run.status = "completed"
+            # Mark as completed if not already failed/cancelled
+            if flow_run.status not in ("failed", "cancelled"):
+                if flow_run.failed_steps > 0:
+                    flow_run.status = "completed_with_errors"
+                else:
+                    flow_run.status = "completed"
 
             flow_run.completed_at = datetime.utcnow()
 
@@ -2289,19 +3196,40 @@ class FlowEngine:
             final_report = self.generate_final_report(flow_run)
             flow_run.final_report_json = json.dumps(final_report)
 
-            self.db.commit()
-            self.db.refresh(flow_run)
+            try:
+                self.db.commit()
+                self.db.refresh(flow_run)
+            except Exception as commit_err:
+                # BUG-394 fix: Robust commit for keyword-triggered flows sharing DB session
+                logger.warning(f"Flow completion commit failed, retrying: {commit_err}")
+                self.db.rollback()
+                self.db.add(flow_run)
+                self.db.commit()
+                self.db.refresh(flow_run)
 
             logger.info(f"Flow run {flow_run.id} completed with status: {flow_run.status}")
             return flow_run
 
         except Exception as e:
-            logger.error(f"Flow execution failed: {e}")
+            logger.error(f"Flow execution failed: {e}", exc_info=True)
             flow_run.status = "failed"
             flow_run.completed_at = datetime.utcnow()
             flow_run.error_text = str(e)
-            self.db.commit()
-            self.db.refresh(flow_run)
+            try:
+                self.db.commit()
+                self.db.refresh(flow_run)
+            except Exception as commit_err:
+                # BUG-394 fix: If the shared DB session is in a bad state (e.g., from
+                # keyword-triggered flows sharing the playground_service session),
+                # rollback and retry the commit to prevent stuck "running" flow_runs.
+                logger.error(f"Flow finalization commit failed: {commit_err}, attempting rollback + retry")
+                try:
+                    self.db.rollback()
+                    self.db.add(flow_run)
+                    self.db.commit()
+                    self.db.refresh(flow_run)
+                except Exception as retry_err:
+                    logger.error(f"Flow finalization retry also failed: {retry_err}")
             return flow_run
 
 

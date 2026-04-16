@@ -9,6 +9,8 @@ Provides CRUD operations for sandboxed tools and execution endpoints.
 Security: CRIT-008 fix - All endpoints now require authentication and tenant isolation.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -21,6 +23,7 @@ from agent.tools.sandboxed_tool_service import SandboxedToolService
 from agent.tools.workspace_manager import WorkspaceManager
 from auth_dependencies import get_tenant_context, TenantContext, require_permission
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Global engine (set by app.py)
@@ -176,7 +179,7 @@ def get_sandboxed_tool(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     return tool
 
@@ -239,7 +242,7 @@ def update_sandboxed_tool(
 
     # Verify tenant access
     if not ctx.can_access_resource(existing.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Custom tool not found")
 
     if tool.name is not None:
         existing.name = tool.name
@@ -272,7 +275,7 @@ def delete_sandboxed_tool(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     db.delete(tool)
     db.commit()
@@ -297,7 +300,7 @@ def list_tool_commands(
         raise HTTPException(status_code=404, detail="Tool not found")
 
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     commands = db.query(SandboxedToolCommand).filter_by(tool_id=tool_id).all()
     return commands
@@ -317,7 +320,7 @@ def create_tool_command(
         raise HTTPException(status_code=404, detail="Tool not found")
 
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     new_command = SandboxedToolCommand(
         tool_id=command.tool_id,
@@ -347,7 +350,7 @@ def delete_tool_command(
     # Verify access through the parent tool
     tool = db.query(SandboxedTool).filter_by(id=command.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this command")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     db.delete(command)
     db.commit()
@@ -373,7 +376,7 @@ def list_command_parameters(
 
     tool = db.query(SandboxedTool).filter_by(id=command.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this command")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     parameters = db.query(SandboxedToolParameter).filter_by(command_id=command_id).all()
     return parameters
@@ -395,7 +398,7 @@ def create_command_parameter(
     # Verify tenant access through parent tool
     tool = db.query(SandboxedTool).filter_by(id=command.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this command")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     new_param = SandboxedToolParameter(
         command_id=parameter.command_id,
@@ -425,11 +428,11 @@ def delete_command_parameter(
     # Verify access through command -> tool chain
     command = db.query(SandboxedToolCommand).filter_by(id=parameter.command_id).first()
     if not command:
-        raise HTTPException(status_code=403, detail="Access denied to this parameter")
+        raise HTTPException(status_code=404, detail="Parameter not found")
 
     tool = db.query(SandboxedTool).filter_by(id=command.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this parameter")
+        raise HTTPException(status_code=404, detail="Parameter not found")
 
     db.delete(parameter)
     db.commit()
@@ -459,7 +462,7 @@ async def execute_sandboxed_tool(
         raise HTTPException(status_code=404, detail="Tool not found")
 
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     # Pass tenant_id for container execution support
     service = SandboxedToolService(db, tenant_id=ctx.tenant_id if ctx else None)
@@ -476,7 +479,8 @@ async def execute_sandboxed_tool(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Execution failed: {str(e)}")
+        logger.exception(f"Execution failed: {e}")
+        raise HTTPException(status_code=500, detail="Execution failed. Check server logs for details.")
 
 
 @router.get("/custom-tools/executions/", response_model=List[SandboxedToolExecutionResponse])
@@ -520,7 +524,7 @@ def get_execution(
     # Verify access through the parent tool
     tool = db.query(SandboxedTool).filter_by(id=execution.tool_id).first()
     if not tool or not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this execution")
+        raise HTTPException(status_code=404, detail="Execution not found")
 
     return execution
 
@@ -543,14 +547,15 @@ def list_workspace_files(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     workspace = WorkspaceManager()
     try:
         files = workspace.list_files(tool.name)
         return {"tool_name": tool.name, "files": files}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
+        logger.exception(f"Failed to list workspace files for tool {tool.name}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list files. Check server logs for details.")
 
 
 @router.get("/custom-tools/{tool_id}/workspace/files/{file_path:path}")
@@ -568,7 +573,7 @@ def read_workspace_file(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     workspace = WorkspaceManager()
     try:
@@ -577,7 +582,8 @@ def read_workspace_file(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
+        logger.exception(f"Failed to read workspace file {file_path}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read file. Check server logs for details.")
 
 
 @router.delete("/custom-tools/{tool_id}/workspace")
@@ -594,11 +600,12 @@ def clean_workspace(
 
     # Verify tenant access
     if not ctx.can_access_resource(tool.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tool")
+        raise HTTPException(status_code=404, detail="Tool not found")
 
     workspace = WorkspaceManager()
     try:
         workspace.clean_workspace(tool.name)
         return {"status": "success", "message": f"Workspace cleaned for tool '{tool.name}'"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to clean workspace: {str(e)}")
+        logger.exception(f"Failed to clean workspace for tool {tool.name}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clean workspace. Check server logs for details.")

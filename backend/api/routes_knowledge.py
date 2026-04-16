@@ -14,6 +14,7 @@ Endpoints:
 - POST /api/agents/{agent_id}/knowledge/extract/{user_id} - Trigger extraction
 """
 
+import re
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -61,9 +62,49 @@ def verify_agent_access(agent_id: int, db: Session, ctx: TenantContext) -> Agent
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     return agent
+
+
+def build_fact_extraction_aliases(user_id: str) -> List[str]:
+    """
+    Build fallback memory keys for manual fact extraction.
+
+    The knowledge UI works with canonical fact keys, while recent working-memory
+    history may be stored under sender/channel aliases depending on isolation
+    mode. We probe those aliases so extraction can still find the conversation.
+    """
+    aliases: List[str] = []
+    base_user_id = user_id[7:] if user_id.startswith("sender_") else user_id
+
+    if base_user_id != user_id:
+        aliases.append(base_user_id)
+    else:
+        aliases.append(f"sender_{base_user_id}")
+
+    playground_match = re.match(
+        r"^playground_u(?P<user_id>\d+)_a\d+(?:_t\d+)?$",
+        base_user_id,
+    )
+    if playground_match:
+        aliases.append(f"channel_playground_{playground_match.group('user_id')}")
+
+    api_user_match = re.match(
+        r"^api_user_(?P<user_id>\d+)(?:_thread_\d+)?$",
+        base_user_id,
+    )
+    if api_user_match:
+        aliases.append(f"channel_api_user_{api_user_match.group('user_id')}")
+
+    api_client_match = re.match(
+        r"^api_client_(?P<client_id>.+?)(?:_thread_\d+)?$",
+        base_user_id,
+    )
+    if api_client_match:
+        aliases.append(f"channel_api_client_{api_client_match.group('client_id')}")
+
+    return [alias for alias in aliases if alias and alias != user_id]
 
 
 # Request/Response Models
@@ -130,11 +171,11 @@ def list_agent_knowledge(
             min_confidence=min_confidence
         )
     else:
-        # Get all facts for agent (across all users)
-        facts = []
-        # This would require a new method in KnowledgeService
-        # For now, return empty if no user_id specified
-        pass
+        facts = knowledge_service.get_all_agent_facts(
+            agent_id=agent_id,
+            topic=topic,
+            min_confidence=min_confidence
+        )
 
     return FactsListResponse(
         facts=[FactResponse(**f) for f in facts],
@@ -373,6 +414,10 @@ async def trigger_fact_extraction(
         "enable_semantic_search": config_row.enable_semantic_search,
         "semantic_search_results": config_row.semantic_search_results,
         "semantic_similarity_threshold": config_row.semantic_similarity_threshold,
+        "model_provider": agent.model_provider,
+        "model_name": agent.model_name,
+        "provider_instance_id": getattr(agent, "provider_instance_id", None),
+        "tenant_id": agent.tenant_id,
         "auto_extract_facts": True,  # Enable fact extraction
         "fact_extraction_threshold": 5  # Min messages before extraction
     }
@@ -386,7 +431,10 @@ async def trigger_fact_extraction(
     )
 
     # Trigger extraction
-    facts = await memory_system.extract_facts_now(user_id)
+    facts = await memory_system.extract_facts_now(
+        user_id,
+        alternate_user_ids=build_fact_extraction_aliases(user_id),
+    )
 
     return {
         "message": f"Extracted {len(facts)} facts",

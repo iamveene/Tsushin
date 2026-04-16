@@ -62,7 +62,7 @@ class FlowsSkill(BaseSkill):
     skill_type = "flows"
     skill_name = "Flows"
     skill_description = "Schedule reminders, AI-driven conversations, and manage scheduled events"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     def __init__(self):
         """Initialize with wrapped skills and provider support"""
@@ -70,6 +70,23 @@ class FlowsSkill(BaseSkill):
         self._scheduler = SchedulerSkill()
         self._query = SchedulerQuerySkill()
         self._provider: Optional[SchedulerProviderBase] = None
+        self._cached_tenant_id: Optional[str] = None
+
+    def _resolve_tenant_id(self) -> Optional[str]:
+        """Resolve tenant_id from agent context for API key lookups."""
+        if self._cached_tenant_id:
+            return self._cached_tenant_id
+        agent_id = getattr(self, '_agent_id', None)
+        if agent_id and self._db_session:
+            try:
+                from models import Agent
+                agent = self._db_session.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    self._cached_tenant_id = agent.tenant_id
+                    return self._cached_tenant_id
+            except Exception:
+                pass
+        return None
 
     def set_db_session(self, db):
         """
@@ -121,8 +138,8 @@ class FlowsSkill(BaseSkill):
                 logger.warning(f"FlowsSkill: Error getting tenant_id: {e}")
 
         try:
-            # If agent_id is provided and no explicit provider, try to load from DB
-            if agent_id and not config.get('scheduler_provider'):
+            # Always check DB first — AgentSkillIntegration overrides config defaults
+            if agent_id:
                 return SchedulerProviderFactory.get_provider_for_agent(
                     agent_id=agent_id,
                     db=self._db_session
@@ -251,7 +268,7 @@ class FlowsSkill(BaseSkill):
                 provider = "gemini"
 
             logger.info(f"FlowsSkill: Using provider={provider}, model={ai_model} for intent detection")
-            ai_client = AIClient(provider=provider, model_name=ai_model, db=self._db_session)  # Phase 7.4: Pass db for API key loading
+            ai_client = AIClient(provider=provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             system_prompt = """You are an operation classifier for Flows/Scheduler system.
 
@@ -461,6 +478,7 @@ Answer:"""
                     recurrence_rrule = 'RRULE:FREQ=MONTHLY;INTERVAL=1'
 
             # Create the event via the provider
+            # BUG-356 FIX: Pass sender_key so scheduler can resolve notification recipient
             event = await provider.create_event(
                 title=parsed['title'],
                 start=parsed['start'],
@@ -468,7 +486,8 @@ Answer:"""
                 description=parsed.get('description'),
                 location=parsed.get('location'),
                 recurrence=recurrence_rrule,
-                reminder_minutes=parsed.get('reminder_minutes', 30)
+                reminder_minutes=parsed.get('reminder_minutes', 30),
+                sender_key=message.sender_key
             )
 
             # #region agent log
@@ -769,7 +788,7 @@ Answer:"""
             else:
                 ai_provider = "gemini"
 
-            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session)
+            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             system_prompt = """You are helping identify which calendar event the user wants to delete.
 Given a list of events and the user's message, return the ID of the matching event.
@@ -848,7 +867,7 @@ Answer:"""
             else:
                 ai_provider = "gemini"
 
-            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session)
+            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             # Get current time context
             brazil_tz = pytz.timezone('America/Sao_Paulo')
@@ -946,7 +965,7 @@ Answer (JSON only):"""
             else:
                 ai_provider = "gemini"
 
-            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session)
+            ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             # Get current time in Brazil timezone for context
             brazil_tz = pytz.timezone('America/Sao_Paulo')
@@ -1124,6 +1143,8 @@ Return ONLY a valid JSON object, no other text."""
         """
         # Get agent-specific config
         config = getattr(self, '_config', {}) or {}
+        if not self.is_legacy_enabled(config):
+            return False
         capabilities = config.get('capabilities', {})
         body_lower = message.body.lower()
 
@@ -1458,20 +1479,7 @@ Return ONLY a valid JSON object, no other text."""
         """
         return {
             # Phase 7.1.3: Minimal keywords with verb forms for grammatical coverage
-            "keywords": [
-                # Portuguese - noun + verb conjugations
-                "lembrete", "lembrar", "lembre", "lembra",
-                # English - noun + verb forms
-                "reminder", "remind",
-                # System name
-                "flows", "flow",
-                # Calendar keywords (for Google Calendar provider)
-                "calendar", "meeting", "reunião", "evento",
-                "schedule", "agendar", "agenda",
-                # Delete/Update keywords
-                "delete", "deletar", "remover", "cancelar", "cancel",
-                "update", "atualizar", "modificar", "alterar", "mudar"
-            ],
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",  # DEPRECATED: Use intent_detection_model instead
             # Phase 7.5: Configurable intent detection model
@@ -1873,6 +1881,7 @@ Return ONLY a valid JSON object, no other text."""
         provider_type = provider.provider_type.value
         provider_name = provider.provider_name
 
+        # BUG-356 FIX: Pass sender_key so scheduler can resolve notification recipient
         event = await provider.create_event(
             title=title,
             start=start_dt,
@@ -1880,7 +1889,8 @@ Return ONLY a valid JSON object, no other text."""
             description=arguments.get("description"),
             location=arguments.get("location"),
             recurrence=recurrence_rrule,
-            reminder_minutes=30
+            reminder_minutes=30,
+            sender_key=message.sender_key
         )
 
         # Format confirmation

@@ -38,6 +38,7 @@ from .sentinel_detections import (
     get_prompt_detection_types,
     get_shell_detection_types,
 )
+from .sentinel_effective_config import SentinelEffectiveConfig
 
 logger = logging.getLogger(__name__)
 
@@ -91,17 +92,20 @@ class SentinelService:
         "knowledge_context",       # KB retrieval context
         "memory_context",          # Conversation memory context
     ]
+    ANALYSIS_LOG_TABLE_NAME = SentinelAnalysisLog.__tablename__
 
-    def __init__(self, db: Session, tenant_id: Optional[str] = None):
+    def __init__(self, db: Session, tenant_id: Optional[str] = None, token_tracker=None):
         """
         Initialize Sentinel service.
 
         Args:
             db: Database session
             tenant_id: Tenant ID for multi-tenancy (None for system-level)
+            token_tracker: Optional TokenTracker for LLM cost monitoring (Phase 0.6.0)
         """
         self.db = db
         self.tenant_id = tenant_id
+        self.token_tracker = token_tracker
         self.logger = logging.getLogger(__name__)
 
     # =========================================================================
@@ -128,25 +132,49 @@ class SentinelService:
             SentinelAgentConfig.agent_id == agent_id
         ).first()
 
-    def get_effective_config(self, agent_id: Optional[int] = None) -> SentinelConfig:
+    def get_effective_config(self, agent_id: Optional[int] = None, skill_type: Optional[str] = None) -> SentinelEffectiveConfig:
         """
-        Get the effective configuration for analysis.
+        Get the effective security configuration for analysis.
+
+        v1.6.0: Tries profile-based resolution first, falls back to legacy.
+
+        Resolution chain:
+        1. Profile resolution (skill -> agent -> tenant -> system default)
+        2. Legacy fallback (agent override -> tenant config -> system config)
+        3. Hardcoded defaults
+
+        Args:
+            agent_id: Optional agent ID for agent/skill-specific config
+            skill_type: Optional skill type for skill-level profile resolution
+
+        Returns:
+            SentinelEffectiveConfig with resolved settings
+        """
+        try:
+            from .sentinel_profiles_service import SentinelProfilesService
+            profiles_service = SentinelProfilesService(self.db, self.tenant_id)
+            result = profiles_service.get_effective_config(agent_id, skill_type)
+            if result:
+                return result
+        except Exception as e:
+            self.logger.warning(f"Profile resolution failed, using legacy: {e}")
+
+        # Legacy fallback
+        legacy_config = self._legacy_get_effective_config(agent_id)
+        return SentinelEffectiveConfig.from_legacy_config(legacy_config)
+
+    def _legacy_get_effective_config(self, agent_id: Optional[int] = None) -> SentinelConfig:
+        """
+        Legacy configuration resolution (pre-v1.6.0).
 
         Hierarchy:
         1. Agent override (if set)
         2. Tenant config (if set)
         3. System default
-
-        Args:
-            agent_id: Optional agent ID for agent-specific overrides
-
-        Returns:
-            Merged SentinelConfig with effective settings
         """
         # Start with system config
         system_config = self.get_system_config()
         if not system_config:
-            # Create in-memory default if no system config exists
             self.logger.warning("No system Sentinel config found, using defaults")
             return self._create_default_config()
 
@@ -173,9 +201,10 @@ class SentinelService:
             detect_agent_takeover=True,
             detect_poisoning=True,
             detect_shell_malicious_intent=True,
+            detect_browser_ssrf=True,
             aggressiveness_level=1,
             llm_provider="gemini",
-            llm_model="gemini-2.0-flash-lite",
+            llm_model="gemini-2.5-flash-lite",
             llm_max_tokens=256,
             llm_temperature=0.1,
             cache_ttl_seconds=300,
@@ -208,6 +237,7 @@ class SentinelService:
             detect_agent_takeover=system_config.detect_agent_takeover,
             detect_poisoning=system_config.detect_poisoning,
             detect_shell_malicious_intent=system_config.detect_shell_malicious_intent,
+            detect_browser_ssrf=getattr(system_config, 'detect_browser_ssrf', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -237,6 +267,7 @@ class SentinelService:
             merged.detect_agent_takeover = tenant_config.detect_agent_takeover
             merged.detect_poisoning = tenant_config.detect_poisoning
             merged.detect_shell_malicious_intent = tenant_config.detect_shell_malicious_intent
+            merged.detect_browser_ssrf = getattr(tenant_config, 'detect_browser_ssrf', True)
             merged.aggressiveness_level = tenant_config.aggressiveness_level
             merged.llm_provider = tenant_config.llm_provider
             merged.llm_model = tenant_config.llm_model
@@ -258,6 +289,10 @@ class SentinelService:
                 merged.poisoning_prompt = tenant_config.poisoning_prompt
             if tenant_config.shell_intent_prompt:
                 merged.shell_intent_prompt = tenant_config.shell_intent_prompt
+            if getattr(tenant_config, 'memory_poisoning_prompt', None):
+                merged.memory_poisoning_prompt = tenant_config.memory_poisoning_prompt
+            if getattr(tenant_config, 'browser_ssrf_prompt', None):
+                merged.browser_ssrf_prompt = tenant_config.browser_ssrf_prompt
 
         # Override with agent config if present (only non-None values)
         if agent_override:
@@ -278,6 +313,87 @@ class SentinelService:
     # Analysis Methods
     # =========================================================================
 
+    def _resolve_skill_scan_config(self, profile_id: Optional[int] = None) -> SentinelEffectiveConfig:
+        """
+        Resolve config for skill instruction scanning.
+
+        Resolution order:
+        1. Explicitly specified profile_id (from the CustomSkill record)
+        2. "custom-skill-scan" system profile (auto-resolved)
+        3. Fallback to standard effective config (tenant/system default)
+        """
+        try:
+            from .sentinel_profiles_service import SentinelProfilesService
+            from models import SentinelProfile
+
+            if profile_id:
+                from sqlalchemy import or_
+                svc = SentinelProfilesService(self.db, self.tenant_id)
+                profile = self.db.query(SentinelProfile).filter(
+                    SentinelProfile.id == profile_id,
+                    or_(SentinelProfile.is_system == True, SentinelProfile.tenant_id == self.tenant_id),
+                ).first()
+                if profile:
+                    return svc._resolve_profile(profile, "skill_scan")
+
+            # Auto-resolve: look for "custom-skill-scan" system profile
+            skill_scan_profile = self.db.query(SentinelProfile).filter(
+                SentinelProfile.slug == "custom-skill-scan",
+                SentinelProfile.is_system == True,
+                SentinelProfile.tenant_id.is_(None),
+            ).first()
+
+            if skill_scan_profile and skill_scan_profile.is_enabled:
+                svc = SentinelProfilesService(self.db, self.tenant_id)
+                return svc._resolve_profile(skill_scan_profile, "system")
+        except Exception as e:
+            self.logger.warning(f"Skill scan profile resolution failed, using default: {e}")
+
+        return self.get_effective_config()
+
+    async def analyze_skill_instructions(
+        self,
+        instructions: str,
+        skill_profile_id: Optional[int] = None,
+    ) -> SentinelAnalysisResult:
+        """
+        Analyze custom skill instructions for embedded malicious content.
+
+        Uses the "Custom Skill Scan" system profile by default, which disables
+        detections that conflict with intentional behavior modification
+        (agent_takeover, poisoning, memory_poisoning) while keeping
+        shell_malicious and a skill-aware prompt_injection check.
+
+        Args:
+            instructions: The skill instruction text to scan
+            skill_profile_id: Optional specific profile to use (overrides auto-resolution)
+
+        Returns:
+            SentinelAnalysisResult with threat detection results
+        """
+        start_time = time.time()
+
+        config = self._resolve_skill_scan_config(skill_profile_id)
+
+        if not config.is_enabled:
+            return self._create_allowed_result("skill_scan", "sentinel_disabled", start_time)
+
+        if config.aggressiveness_level <= 0:
+            return self._create_allowed_result("skill_scan", "aggressiveness_off", start_time)
+
+        truncated = instructions[:config.max_input_chars]
+
+        return await self._analyze_unified(
+            input_content=truncated,
+            analysis_type="skill_scan",
+            config=config,
+            sender_key=None,
+            message_id=None,
+            agent_id=None,
+            start_time=start_time,
+            scan_mode="skill_scan",
+        )
+
     async def analyze_prompt(
         self,
         prompt: str,
@@ -287,6 +403,7 @@ class SentinelService:
         source: Optional[str] = None,
         message_id: Optional[str] = None,
         skill_context: Optional[str] = None,
+        skill_type: Optional[str] = None,
     ) -> SentinelAnalysisResult:
         """
         Analyze user prompt for security threats.
@@ -322,8 +439,19 @@ class SentinelService:
                 response_time_ms=int((time.time() - start_time) * 1000),
             )
 
-        # Get effective configuration
-        config = self.get_effective_config(agent_id)
+        # Get effective configuration (skill_type enables skill-level profile resolution)
+        config = self.get_effective_config(agent_id, skill_type=skill_type)
+
+        # Auto-exempt detection types for enabled skills (skill enablement = authorization)
+        if agent_id:
+            try:
+                from services.skill_context_service import SkillContextService
+                exemptions = SkillContextService(self.db).get_agent_sentinel_exemptions(agent_id, tenant_id=self.tenant_id)
+                if exemptions:
+                    config.apply_skill_exemptions(exemptions)
+                    self.logger.debug(f"Auto-exempted {exemptions} for agent {agent_id}")
+            except Exception as ex:
+                self.logger.warning(f"Failed to apply skill exemptions: {ex}")
 
         # Check if Sentinel is enabled
         if not config.is_enabled:
@@ -331,7 +459,7 @@ class SentinelService:
 
         # Phase 20 Enhancement: Check if slash command analysis is disabled
         # If prompt starts with "/" and enable_slash_command_analysis is False, skip analysis
-        enable_slash_analysis = getattr(config, 'enable_slash_command_analysis', True)
+        enable_slash_analysis = config.enable_slash_command_analysis
         if not enable_slash_analysis and prompt.strip().startswith("/"):
             self.logger.debug("Skipping Sentinel analysis for slash command (toggle disabled)")
             return self._create_allowed_result("prompt", "slash_command_bypass", start_time)
@@ -349,10 +477,9 @@ class SentinelService:
 
         # Check if any detection types are enabled
         # If none are enabled, skip analysis entirely
-        has_enabled_detection = (
-            config.detect_prompt_injection or
-            config.detect_agent_takeover or
-            config.detect_poisoning
+        has_enabled_detection = any(
+            config.is_detection_enabled(dt)
+            for dt in get_prompt_detection_types()
         )
         if not has_enabled_detection:
             return self._create_allowed_result("prompt", "no_detection_types", start_time)
@@ -408,7 +535,7 @@ class SentinelService:
         input_hash = self._hash_input(truncated_args)
 
         # Use prompt injection detection on tool arguments
-        if config.detect_prompt_injection:
+        if config.is_detection_enabled("prompt_injection"):
             result = await self._analyze_single(
                 input_content=truncated_args,
                 input_hash=input_hash,
@@ -434,6 +561,7 @@ class SentinelService:
         sender_key: Optional[str] = None,
         conversation_context: Optional[List[Dict]] = None,
         skill_context: Optional[str] = None,
+        skill_type: Optional[str] = None,
     ) -> SentinelAnalysisResult:
         """
         Analyze a tool call for security threats before execution.
@@ -458,8 +586,8 @@ class SentinelService:
         """
         start_time = time.time()
 
-        # Get effective configuration
-        config = self.get_effective_config(agent_id)
+        # Get effective configuration (skill_type enables skill-level profile resolution)
+        config = self.get_effective_config(agent_id, skill_type=skill_type)
 
         # Check if Sentinel is enabled
         if not config.is_enabled or not config.enable_tool_analysis:
@@ -481,6 +609,7 @@ class SentinelService:
                     command=script,
                     agent_id=agent_id,
                     sender_key=sender_key,
+                    skill_type=skill_type or "shell",
                 )
                 if shell_result.is_threat_detected:
                     self.logger.warning(
@@ -489,23 +618,59 @@ class SentinelService:
                     )
                     return shell_result
 
-        # Browser automation tools - check for sensitive URL patterns
-        if tool_name in ["browser_navigate", "scrape_webpage"]:
+        # BUG-068 FIX: Expanded SSRF protection for URL-bearing tools
+        URL_BEARING_TOOLS = {
+            "browser_navigate", "navigate", "navigate_to",
+            "browse", "fetch_url", "http_request", "open_url", "web_request",
+            "browser_go", "curl", "wget",
+        }
+        sensitive_patterns = [
+            # Scheme attacks
+            "file://", "gopher://", "ftp://", "dict://", "ldap://",
+            # Loopback
+            "localhost", "127.0.0.1", "0.0.0.0", "[::1]", "[::ffff:",
+            # Cloud metadata endpoints
+            "169.254.169.254", "169.254.", "metadata.google",
+            "100.100.100.200",
+            # Docker/K8s internal
+            "host.docker.internal", "gateway.docker.internal",
+            "kubernetes.default",
+            # Private networks (RFC 1918)
+            "10.",
+            "192.168.",
+            # 172.16-31 range
+            "172.16.", "172.17.", "172.18.", "172.19.",
+            "172.20.", "172.21.", "172.22.", "172.23.",
+            "172.24.", "172.25.", "172.26.", "172.27.",
+            "172.28.", "172.29.", "172.30.", "172.31.",
+            # Hex/octal encoding tricks
+            "0x7f", "0177.", "2130706433",
+        ]
+        if tool_name in URL_BEARING_TOOLS:
             url = arguments.get("url", "")
             if url:
-                sensitive_patterns = [
-                    "file://",  # Local file access
-                    "localhost",  # Internal services
-                    "127.0.0.1",
-                    "169.254.",  # AWS metadata
-                    "metadata.google",  # GCP metadata
-                ]
                 for pattern in sensitive_patterns:
                     if pattern in url.lower():
                         return SentinelAnalysisResult(
                             is_threat_detected=True,
                             threat_score=0.9,
                             threat_reason=f"Attempt to access sensitive URL pattern: {pattern}",
+                            action="blocked",
+                            detection_type="ssrf_attempt",
+                            analysis_type="tool",
+                            response_time_ms=int((time.time() - start_time) * 1000),
+                        )
+
+        # Also check URL-like arguments in any tool call (defense in depth)
+        if tool_name not in URL_BEARING_TOOLS:
+            any_url = arguments.get("url", "") or arguments.get("target_url", "") or arguments.get("endpoint", "") or arguments.get("base_url", "")
+            if any_url:
+                for pattern in sensitive_patterns:
+                    if pattern in any_url.lower():
+                        return SentinelAnalysisResult(
+                            is_threat_detected=True,
+                            threat_score=0.9,
+                            threat_reason=f"SSRF attempt via {tool_name} argument: {pattern}",
                             action="blocked",
                             detection_type="ssrf_attempt",
                             analysis_type="tool",
@@ -533,7 +698,7 @@ class SentinelService:
         input_hash = self._hash_input(truncated_args)
 
         # Detect prompt injection in tool arguments
-        if config.detect_prompt_injection:
+        if config.is_detection_enabled("prompt_injection"):
             result = await self._analyze_single(
                 input_content=truncated_args,
                 input_hash=input_hash,
@@ -573,6 +738,8 @@ class SentinelService:
         agent_id: Optional[int] = None,
         sender_key: Optional[str] = None,
         pattern_result: Optional[Any] = None,
+        skill_type: Optional[str] = None,
+        skill_context: Optional[str] = None,
     ) -> SentinelAnalysisResult:
         """
         Analyze shell command for malicious intent.
@@ -585,14 +752,16 @@ class SentinelService:
             agent_id: Agent ID for agent-specific config
             sender_key: User identifier for logging
             pattern_result: Result from ShellSecurityService (for context)
+            skill_type: Skill type for skill-level profile resolution (defaults to "shell")
+            skill_context: Formatted skill context string to inject into analysis
 
         Returns:
             SentinelAnalysisResult with threat detection results
         """
         start_time = time.time()
 
-        # Get effective configuration
-        config = self.get_effective_config(agent_id)
+        # Get effective configuration (default to "shell" skill for shell commands)
+        config = self.get_effective_config(agent_id, skill_type=skill_type or "shell")
 
         # Check if Sentinel is enabled
         if not config.is_enabled or not config.enable_shell_analysis:
@@ -601,7 +770,7 @@ class SentinelService:
         if config.aggressiveness_level <= 0:
             return self._create_allowed_result("shell", "aggressiveness_off", start_time)
 
-        if not config.detect_shell_malicious_intent:
+        if not config.is_detection_enabled("shell_malicious"):
             return self._create_allowed_result("shell", "shell_intent_disabled", start_time)
 
         # Truncate command for analysis
@@ -620,7 +789,126 @@ class SentinelService:
             message_id=None,
             agent_id=agent_id,
             start_time=start_time,
+            skill_context=skill_context,
             tool_name="run_shell_command",  # For exception matching
+        )
+
+        return result
+
+    async def analyze_browser_url(
+        self,
+        url: str,
+        agent_id: Optional[int] = None,
+        sender_key: Optional[str] = None,
+        message_id: Optional[str] = None,
+        skill_type: Optional[str] = None,
+    ) -> SentinelAnalysisResult:
+        """
+        Analyze a browser navigation URL for SSRF intent.
+
+        Uses LLM-based semantic analysis to detect attempts to access internal
+        services, cloud metadata, or private network resources via browser automation.
+
+        This complements the pattern-based SSRF validation in ssrf_validator.py
+        with intent-level analysis that can detect indirect or obfuscated SSRF attempts.
+
+        Args:
+            url: The URL being navigated to
+            agent_id: Agent ID for agent-specific config
+            sender_key: User identifier for logging
+            message_id: Message ID for logging
+            skill_type: Skill type for skill-level profile resolution (defaults to "browser_automation")
+
+        Returns:
+            SentinelAnalysisResult with threat detection results
+        """
+        start_time = time.time()
+
+        # Get effective configuration
+        config = self.get_effective_config(agent_id, skill_type=skill_type or "browser_automation")
+
+        # Check if Sentinel is enabled
+        if not config.is_enabled:
+            return self._create_allowed_result("browser", "sentinel_disabled", start_time)
+
+        if config.aggressiveness_level <= 0:
+            return self._create_allowed_result("browser", "aggressiveness_off", start_time)
+
+        if not config.is_detection_enabled("browser_ssrf"):
+            return self._create_allowed_result("browser", "browser_ssrf_disabled", start_time)
+
+        # Truncate URL for analysis
+        truncated_url = url[:config.max_input_chars]
+        input_hash = self._hash_input(truncated_url)
+
+        # Analyze for SSRF intent
+        result = await self._analyze_single(
+            input_content=truncated_url,
+            input_hash=input_hash,
+            analysis_type="browser",
+            detection_type="browser_ssrf",
+            config=config,
+            sender_key=sender_key,
+            message_id=message_id,
+            agent_id=agent_id,
+            start_time=start_time,
+            tool_name="browser_navigate",
+        )
+
+        return result
+
+    async def analyze_vector_store_content(
+        self,
+        content: str,
+        agent_id: Optional[int] = None,
+        instance_id: Optional[int] = None,
+        sender_key: str = "",
+    ) -> SentinelAnalysisResult:
+        """
+        Analyze content destined for (or retrieved from) a vector store.
+
+        Uses the vector_store_poisoning detection type via LLM analysis.
+        Logs with analysis_type='vector_store', detection_type='vector_store_poisoning'.
+
+        Args:
+            content: The content text to analyze (document/chunk being ingested or retrieved)
+            agent_id: Agent ID for agent-specific config resolution
+            instance_id: Optional vector store instance ID (for logging context)
+            sender_key: User identifier for logging
+
+        Returns:
+            SentinelAnalysisResult with threat detection results
+        """
+        start_time = time.time()
+
+        # Get effective configuration
+        config = self.get_effective_config(agent_id=agent_id)
+
+        # Check if Sentinel is enabled
+        if not config.is_enabled:
+            return self._create_allowed_result("vector_store", "sentinel_disabled", start_time)
+
+        if config.aggressiveness_level <= 0:
+            return self._create_allowed_result("vector_store", "aggressiveness_off", start_time)
+
+        if not config.is_detection_enabled("vector_store_poisoning"):
+            return self._create_allowed_result("vector_store", "vector_store_poisoning_disabled", start_time)
+
+        # Truncate content for analysis
+        truncated_content = content[:config.max_input_chars]
+        input_hash = self._hash_input(truncated_content)
+
+        # Analyze for vector store poisoning
+        result = await self._analyze_single(
+            input_content=truncated_content,
+            input_hash=input_hash,
+            analysis_type="vector_store",
+            detection_type="vector_store_poisoning",
+            config=config,
+            sender_key=sender_key,
+            message_id=None,
+            agent_id=agent_id,
+            start_time=start_time,
         )
 
         return result
@@ -635,7 +923,7 @@ class SentinelService:
         input_hash: str,
         analysis_type: str,
         detection_type: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         sender_key: Optional[str],
         message_id: Optional[str],
         agent_id: Optional[int],
@@ -655,8 +943,8 @@ class SentinelService:
             tool_name: Optional tool name for tool-type exception matching.
             target_domain: Optional domain extracted from URLs for domain-type exceptions.
         """
-        # Phase 20 Enhancement: Check detection mode
-        detection_mode = getattr(config, 'detection_mode', 'block')
+        # Check detection mode
+        detection_mode = config.detection_mode
         if detection_mode == 'off':
             self.logger.debug(f"Detection mode is 'off', skipping {detection_type} analysis")
             return self._create_allowed_result(analysis_type, "detection_off", start_time)
@@ -687,7 +975,7 @@ class SentinelService:
             )
 
             # Log with exception info (if logging enabled)
-            if config.log_all_analyses:
+            if self._should_log_analysis(blocked_result, config):
                 self._log_analysis(
                     analysis_type=analysis_type,
                     detection_type=detection_type,
@@ -720,13 +1008,20 @@ class SentinelService:
             self.logger.debug(f"Cache hit for {detection_type}")
             cached_result.response_time_ms = int((time.time() - start_time) * 1000)
 
-            # Phase 20 Enhancement: Apply detect_only mode to cached results too
-            if cached_result.is_threat_detected and detection_mode == "detect_only":
-                self.logger.info(
-                    f"Detect-only mode (cached): Threat detected in {detection_type} but allowing. "
-                    f"Reason: {cached_result.threat_reason}"
-                )
-                cached_result.action = "allowed"
+            # Phase 20 Enhancement: Apply detection_mode to cached results too
+            if cached_result.is_threat_detected:
+                if detection_mode == "detect_only":
+                    self.logger.info(
+                        f"Detect-only mode (cached): Threat detected in {detection_type} but allowing. "
+                        f"Reason: {cached_result.threat_reason}"
+                    )
+                    cached_result.action = "allowed"
+                elif detection_mode == "warn_only":
+                    self.logger.info(
+                        f"Warn-only mode (cached): Threat detected in {detection_type} but allowing with warning. "
+                        f"Reason: {cached_result.threat_reason}"
+                    )
+                    cached_result.action = "warned"
 
             return cached_result
 
@@ -758,8 +1053,37 @@ class SentinelService:
             )
         except Exception as e:
             self.logger.error(f"LLM call failed: {e}", exc_info=True)
-            # On LLM failure, allow the content (fail open)
-            return self._create_allowed_result(analysis_type, detection_type, start_time)
+            # BUG-LOG-020 FIX: Fail-CLOSED on LLM errors — block content when
+            # security analysis cannot complete.  A fail-open path would let
+            # malicious input bypass Sentinel whenever the LLM is unreachable.
+            response_time_ms = int((time.time() - start_time) * 1000)
+            blocked_result = SentinelAnalysisResult(
+                is_threat_detected=True,
+                threat_score=1.0,
+                threat_reason=f"Security analysis unavailable (LLM error: {type(e).__name__}). Content blocked as a precaution.",
+                action="blocked",
+                detection_type=detection_type,
+                analysis_type=analysis_type,
+                cached=False,
+                response_time_ms=response_time_ms,
+            )
+            # Log the fail-closed event for audit
+            if self._should_log_analysis(blocked_result, config):
+                self._log_analysis(
+                    analysis_type=analysis_type,
+                    detection_type=detection_type,
+                    input_content=input_content[:500],
+                    input_hash=input_hash,
+                    result=blocked_result,
+                    sender_key=sender_key,
+                    message_id=message_id,
+                    agent_id=agent_id,
+                    llm_provider=config.llm_provider,
+                    llm_model=config.llm_model,
+                    response_time_ms=response_time_ms,
+                    detection_mode_used=detection_mode,
+                )
+            return blocked_result
 
         # Parse LLM response
         response_time_ms = int((time.time() - start_time) * 1000)
@@ -771,14 +1095,20 @@ class SentinelService:
             response_time_ms,
         )
 
-        # Phase 20 Enhancement: Handle detect_only mode
-        # If threat detected but mode is detect_only, log but allow
+        # Phase 20 Enhancement: Handle non-blocking detection modes
+        # If threat detected but mode is detect_only or warn_only, override action
         if result.is_threat_detected and detection_mode == "detect_only":
             self.logger.info(
                 f"Detect-only mode: Threat detected in {detection_type} but allowing. "
                 f"Reason: {result.threat_reason}"
             )
             result.action = "allowed"
+        elif result.is_threat_detected and detection_mode == "warn_only":
+            self.logger.info(
+                f"Warn-only mode: Threat detected in {detection_type} but allowing with warning. "
+                f"Reason: {result.threat_reason}"
+            )
+            result.action = "warned"
 
         # Cache result
         self._save_cache(
@@ -791,7 +1121,7 @@ class SentinelService:
         )
 
         # Log analysis
-        if result.is_threat_detected or config.log_all_analyses:
+        if self._should_log_analysis(result, config):
             self._log_analysis(
                 analysis_type=analysis_type,
                 detection_type=detection_type,
@@ -813,7 +1143,7 @@ class SentinelService:
         self,
         system_prompt: str,
         user_content: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
     ) -> Dict[str, Any]:
         """
         Call LLM for security analysis.
@@ -829,6 +1159,7 @@ class SentinelService:
             temperature=config.llm_temperature,
             max_tokens=config.llm_max_tokens,
             tenant_id=self.tenant_id,
+            token_tracker=self.token_tracker,
         )
 
         result = await client.generate(
@@ -844,7 +1175,7 @@ class SentinelService:
         llm_result: Dict[str, Any],
         analysis_type: str,
         detection_type: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         response_time_ms: int,
     ) -> SentinelAnalysisResult:
         """Parse LLM response into SentinelAnalysisResult."""
@@ -880,7 +1211,7 @@ class SentinelService:
             # Determine action based on detection_mode
             action = "allowed"
             if is_threat:
-                mode = getattr(config, 'detection_mode', 'block')
+                mode = config.detection_mode
                 if mode == 'block':
                     action = "blocked"
                 elif mode == 'warn_only':
@@ -913,26 +1244,21 @@ class SentinelService:
                 response_time_ms=response_time_ms,
             )
 
-    def _get_custom_prompt(self, detection_type: str, config: SentinelConfig) -> Optional[str]:
+    def _get_custom_prompt(self, detection_type: str, config: SentinelEffectiveConfig) -> Optional[str]:
         """Get custom prompt from config if set."""
-        prompt_map = {
-            "prompt_injection": config.prompt_injection_prompt,
-            "agent_takeover": config.agent_takeover_prompt,
-            "poisoning": config.poisoning_prompt,
-            "shell_malicious": config.shell_intent_prompt,
-        }
-        return prompt_map.get(detection_type)
+        return config.get_custom_prompt(detection_type)
 
     async def _analyze_unified(
         self,
         input_content: str,
         analysis_type: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         sender_key: Optional[str],
         message_id: Optional[str],
         agent_id: Optional[int],
         start_time: float,
         skill_context: Optional[str] = None,
+        scan_mode: str = "standard",
     ) -> SentinelAnalysisResult:
         """
         Perform unified threat classification with a single LLM call.
@@ -940,35 +1266,48 @@ class SentinelService:
         This replaces the multi-call approach with a single unified prompt that
         detects AND classifies threats, reducing token consumption by 67-75%.
 
+        Args:
+            scan_mode: "standard" for user messages, "skill_scan" for custom skill instructions.
+                       skill_scan uses a context-aware prompt that won't flag behavior modification.
+
         Returns the most appropriate threat classification or 'none' if safe.
         """
-        from .sentinel_detections import get_unified_prompt
+        from .sentinel_detections import get_unified_prompt, get_skill_scan_prompt
 
         # Check detection mode
-        detection_mode = getattr(config, 'detection_mode', 'block')
+        detection_mode = config.detection_mode
         if detection_mode == 'off':
             self.logger.debug("Detection mode is 'off', skipping unified analysis")
             return self._create_allowed_result(analysis_type, "detection_off", start_time)
 
         input_hash = self._hash_input(input_content)
 
-        # Check cache (using 'unified' as detection_type for cache key)
+        # Use scan_mode in cache key to avoid cross-contamination
+        cache_detection_key = "unified" if scan_mode == "standard" else f"unified_{scan_mode}"
+
+        # Check cache
         cached_result = self._check_cache(
             input_hash=input_hash,
             analysis_type=analysis_type,
-            detection_type="unified",
+            detection_type=cache_detection_key,
             aggressiveness=config.aggressiveness_level,
         )
 
         if cached_result:
-            self.logger.debug("Cache hit for unified analysis")
+            self.logger.debug(f"Cache hit for {scan_mode} analysis")
             cached_result.response_time_ms = int((time.time() - start_time) * 1000)
-            if cached_result.is_threat_detected and detection_mode == "detect_only":
-                cached_result.action = "allowed"
+            if cached_result.is_threat_detected:
+                if detection_mode == "detect_only":
+                    cached_result.action = "allowed"
+                elif detection_mode == "warn_only":
+                    cached_result.action = "warned"
             return cached_result
 
-        # Get unified classification prompt
-        analysis_prompt = get_unified_prompt(config.aggressiveness_level)
+        # Get classification prompt based on scan mode
+        if scan_mode == "skill_scan":
+            analysis_prompt = get_skill_scan_prompt(config.aggressiveness_level)
+        else:
+            analysis_prompt = get_unified_prompt(config.aggressiveness_level)
         if not analysis_prompt:
             return self._create_allowed_result(analysis_type, "no_prompt", start_time)
 
@@ -988,7 +1327,35 @@ class SentinelService:
             )
         except Exception as e:
             self.logger.error(f"Unified LLM call failed: {e}", exc_info=True)
-            return self._create_allowed_result(analysis_type, "llm_error", start_time)
+            # BUG-LOG-020 FIX: Fail-CLOSED on LLM errors — block content when
+            # security analysis cannot complete.
+            response_time_ms = int((time.time() - start_time) * 1000)
+            blocked_result = SentinelAnalysisResult(
+                is_threat_detected=True,
+                threat_score=1.0,
+                threat_reason=f"Security analysis unavailable (LLM error: {type(e).__name__}). Content blocked as a precaution.",
+                action="blocked",
+                detection_type="unified",
+                analysis_type=analysis_type,
+                cached=False,
+                response_time_ms=response_time_ms,
+            )
+            if self._should_log_analysis(blocked_result, config):
+                self._log_analysis(
+                    analysis_type=analysis_type,
+                    detection_type="unified",
+                    input_content=input_content[:500],
+                    input_hash=input_hash,
+                    result=blocked_result,
+                    sender_key=sender_key,
+                    message_id=message_id,
+                    agent_id=agent_id,
+                    llm_provider=config.llm_provider,
+                    llm_model=config.llm_model,
+                    response_time_ms=response_time_ms,
+                    detection_mode_used=detection_mode,
+                )
+            return blocked_result
 
         # Parse unified response
         response_time_ms = int((time.time() - start_time) * 1000)
@@ -999,26 +1366,43 @@ class SentinelService:
             response_time_ms,
         )
 
-        # Handle detect_only mode
+        # Post-classification detection filter: if LLM classified as a detection
+        # type that is disabled in the profile, override to allowed
+        if result.is_threat_detected and result.detection_type != "none":
+            if not config.is_detection_enabled(result.detection_type):
+                self.logger.info(
+                    f"Detection type '{result.detection_type}' classified but disabled in profile "
+                    f"'{config.profile_name}', overriding to allowed"
+                )
+                result.is_threat_detected = False
+                result.action = "allowed"
+
+        # Handle non-blocking detection modes
         if result.is_threat_detected and detection_mode == "detect_only":
             self.logger.info(
                 f"Detect-only mode: {result.detection_type} threat detected but allowing. "
                 f"Reason: {result.threat_reason}"
             )
             result.action = "allowed"
+        elif result.is_threat_detected and detection_mode == "warn_only":
+            self.logger.info(
+                f"Warn-only mode: {result.detection_type} threat detected but allowing with warning. "
+                f"Reason: {result.threat_reason}"
+            )
+            result.action = "warned"
 
         # Cache result
         self._save_cache(
             input_hash=input_hash,
             analysis_type=analysis_type,
-            detection_type="unified",
+            detection_type=cache_detection_key,
             aggressiveness=config.aggressiveness_level,
             result=result,
             ttl=config.cache_ttl_seconds,
         )
 
         # Log if threat detected or log_all enabled
-        if result.is_threat_detected or config.log_all_analyses:
+        if self._should_log_analysis(result, config):
             self._log_analysis(
                 analysis_type=analysis_type,
                 detection_type=result.detection_type,
@@ -1040,14 +1424,19 @@ class SentinelService:
         self,
         llm_result: Dict[str, Any],
         analysis_type: str,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         response_time_ms: int,
     ) -> SentinelAnalysisResult:
         """
         Parse unified classification LLM response.
 
-        The unified response format is:
-        {"threat_type": "none|prompt_injection|agent_takeover|poisoning|shell_malicious", "score": 0.0-1.0, "reason": "..."}
+        Valid threat_type values: "none" + all keys in DETECTION_REGISTRY
+        (see backend/services/sentinel_detections.py). Currently 8 detection
+        types: prompt_injection, agent_takeover, poisoning, shell_malicious,
+        memory_poisoning, agent_escalation, browser_ssrf, vector_store_poisoning.
+
+        Response format:
+        {"threat_type": "<valid_type>", "score": 0.0-1.0, "reason": "..."}
         """
         answer = llm_result.get("answer", "")
 
@@ -1076,8 +1465,8 @@ class SentinelService:
             score = float(parsed.get("score", 0.0))
             reason = parsed.get("reason", "")
 
-            # Validate threat_type
-            valid_types = ["none", "prompt_injection", "agent_takeover", "poisoning", "shell_malicious"]
+            # Validate threat_type (dynamically derived from registry)
+            valid_types = ["none"] + list(DETECTION_REGISTRY.keys())
             if threat_type not in valid_types:
                 self.logger.warning(f"Invalid threat_type '{threat_type}', defaulting to 'none'")
                 threat_type = "none"
@@ -1086,7 +1475,13 @@ class SentinelService:
 
             action = "allowed"
             if is_threat:
-                action = "blocked" if config.block_on_detection else "warned"
+                mode = getattr(config, 'detection_mode', 'block')
+                if mode == 'block':
+                    action = "blocked"
+                elif mode == 'warn_only':
+                    action = "warned"
+                else:
+                    action = "allowed"
 
             return SentinelAnalysisResult(
                 is_threat_detected=is_threat,
@@ -1115,7 +1510,7 @@ class SentinelService:
     async def send_threat_notification(
         self,
         result: SentinelAnalysisResult,
-        config: SentinelConfig,
+        config: SentinelEffectiveConfig,
         sender_key: Optional[str] = None,
         agent_id: Optional[int] = None,
         mcp_api_url: Optional[str] = None,
@@ -1139,16 +1534,16 @@ class SentinelService:
             True if notification was sent successfully
         """
         # Check if notifications are enabled
-        if not getattr(config, 'enable_notifications', True):
+        if not config.enable_notifications:
             self.logger.debug("Notifications disabled, skipping")
             return False
 
         # Check action-specific settings
-        if result.action == "blocked" and not getattr(config, 'notification_on_block', True):
+        if result.action == "blocked" and not config.notification_on_block:
             self.logger.debug("Notification on block disabled, skipping")
             return False
-        if result.action == "allowed" and not getattr(config, 'notification_on_detect', False):
-            self.logger.debug("Notification on detect disabled, skipping")
+        if result.action in ("allowed", "warned") and not config.notification_on_detect:
+            self.logger.debug("Notification on detect/warn disabled, skipping")
             return False
 
         # The recipient is the sender (the user who sent the blocked message)
@@ -1160,7 +1555,7 @@ class SentinelService:
         recipient = sender_key
 
         # Build message from template
-        template = getattr(config, 'notification_message_template', None)
+        template = config.notification_message_template
         if not template:
             # Default template - user-friendly message explaining why their message was blocked
             template = (
@@ -1224,6 +1619,14 @@ class SentinelService:
             cached=False,
             response_time_ms=int((time.time() - start_time) * 1000),
         )
+
+    def _should_log_analysis(
+        self,
+        result: Optional[SentinelAnalysisResult],
+        config: SentinelEffectiveConfig,
+    ) -> bool:
+        """Threats always log; safe analyses log only when explicitly enabled."""
+        return bool(result and (result.is_threat_detected or config.log_all_analyses))
 
     def _hash_input(self, content: str) -> str:
         """Generate SHA-256 hash of input content."""
@@ -1485,30 +1888,19 @@ class SentinelService:
 
             self.logger.info(f"🧹 Found {len(blocked_message_ids)} blocked messages to clean up")
 
-            # 1. Delete from Memory table
-            memory_deleted = self.db.query(Memory).filter(
-                Memory.message_id.in_(blocked_message_ids)
-            ).delete(synchronize_session=False)
-            stats["memory_deleted"] = memory_deleted
-
-            # 2. Delete from FTS5 index
-            try:
-                from sqlalchemy import text
-                # SQLite FTS5 doesn't support IN with named parameters well, so we build the query
-                # Use individual deletes for safety
-                fts_deleted = 0
-                for msg_id in blocked_message_ids:
-                    result = self.db.execute(text("""
-                        DELETE FROM conversation_search_fts
-                        WHERE message_id = :message_id
-                    """), {"message_id": msg_id})
-                    fts_deleted += result.rowcount
-                stats["fts_deleted"] = fts_deleted
-            except Exception as e:
-                self.logger.warning(f"FTS cleanup failed (may not exist): {e}")
-
-            self.db.commit()
-            self.logger.info(f"🧹 Memory cleanup completed: {stats}")
+            # TODO: Redesign cleanup_poisoned_memory — the Memory model uses
+            # (tenant_id, agent_id, sender_key) as its key, NOT message_id.
+            # The current approach of matching Memory rows by message_id is
+            # incorrect and silently deletes nothing.  A proper fix requires
+            # correlating SentinelAnalysisLog entries back to Memory rows via
+            # sender_key + agent_id, or adding a message-level ID to the
+            # Memory/conversation model.
+            self.logger.error(
+                "cleanup_poisoned_memory: Memory model has no message_id column. "
+                "Cleanup cannot proceed until this function is redesigned. "
+                f"Found {len(blocked_message_ids)} blocked entries but cannot correlate "
+                "them to Memory rows. Returning without modifications."
+            )
             return stats
 
         except Exception as e:

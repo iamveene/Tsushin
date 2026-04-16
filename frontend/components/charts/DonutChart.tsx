@@ -7,8 +7,9 @@
  * More sophisticated than basic pie charts.
  */
 
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
-import { CHART_COLORS, TOOLTIP_STYLE, getColorByIndex } from './chartTheme'
+import { PieChart, Pie, Cell, Tooltip } from 'recharts'
+import { TOOLTIP_STYLE, getColorByIndex } from './chartTheme'
+import ResponsiveChartFrame from './ResponsiveChartFrame'
 
 interface DonutChartData {
   name: string
@@ -28,8 +29,22 @@ interface DonutChartProps {
   className?: string
 }
 
+interface DonutTooltipEntry {
+  name: string
+  value: number
+  payload: {
+    color: string
+    percentage: string
+  }
+}
+
+interface DonutTooltipProps {
+  active?: boolean
+  payload?: DonutTooltipEntry[]
+}
+
 // Custom tooltip component
-const CustomTooltip = ({ active, payload }: any) => {
+const CustomTooltip = ({ active, payload }: DonutTooltipProps) => {
   if (!active || !payload || !payload.length) return null
 
   const data = payload[0]
@@ -89,9 +104,9 @@ export default function DonutChart({
         <h3 className="text-sm font-semibold text-white mb-3">{title}</h3>
       )}
 
-      <div className="relative" style={{ width: size, height: size }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
+      <ResponsiveChartFrame className="relative" width={size} height={size}>
+        {({ height: chartHeight, width: chartWidth }) => (
+          <PieChart width={chartWidth} height={chartHeight}>
             <Pie
               data={chartData}
               cx="50%"
@@ -114,7 +129,7 @@ export default function DonutChart({
             </Pie>
             <Tooltip content={<CustomTooltip />} />
           </PieChart>
-        </ResponsiveContainer>
+        )}
 
         {/* Center stat */}
         {(centerLabel || centerValue) && (
@@ -129,7 +144,7 @@ export default function DonutChart({
             )}
           </div>
         )}
-      </div>
+      </ResponsiveChartFrame>
 
       {/* Legend */}
       {showLegend && (

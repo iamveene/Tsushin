@@ -116,7 +116,7 @@ function KnowledgeSummaryNode(props: NodeProps<KnowledgeSummaryNodeData>) {
       {/* Detail Popup */}
       {showDetail && (
         <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
           onClick={() => setShowDetail(false)}
           role="presentation"
         >

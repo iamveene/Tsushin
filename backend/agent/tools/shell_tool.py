@@ -67,9 +67,9 @@ def get_tool_definition() -> Dict[str, Any]:
                         "description": (
                             "Maximum seconds to wait for the command result. "
                             "If exceeded, command may continue running in background. "
-                            "Range: 1-300. Default: 60"
+                            "Range: 1-300. Default: 120"
                         ),
-                        "default": 60,
+                        "default": 120,
                         "minimum": 1,
                         "maximum": 300
                     }
@@ -85,7 +85,7 @@ async def run_shell_command(
     db: Session,
     agent_id: int,
     target: str = "default",
-    timeout: int = 60,
+    timeout: int = 120,
     sender_key: str = None
 ) -> str:
     """
@@ -200,6 +200,7 @@ def format_shell_result(result: CommandResult) -> Dict[str, Any]:
         "execution_time_ms": result.execution_time_ms,
         "error": result.error_message,
         "timed_out": result.timed_out,
+        "delivery_failed": result.delivery_failed,
         # Security fields (CRIT-005)
         "blocked": result.blocked,
         "blocked_reason": result.blocked_reason,

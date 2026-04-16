@@ -6,6 +6,7 @@ These models correspond to the database schema created in migration 001.
 """
 
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -21,12 +22,22 @@ class Tenant(Base):
     slug = Column(String(100), unique=True, nullable=False, index=True)
     plan = Column(String(50), default='free')  # Legacy: plan name string
     plan_id = Column(Integer, ForeignKey('subscription_plan.id'), nullable=True)  # New: FK to subscription_plan
-    max_users = Column(Integer, default=1)
-    max_agents = Column(Integer, default=1)
-    max_monthly_requests = Column(Integer, default=1000)
+    max_users = Column(Integer, default=5)
+    max_agents = Column(Integer, default=10)
+    max_monthly_requests = Column(Integer, default=10000)
     is_active = Column(Boolean, default=True)
     status = Column(String(20), default='active')  # active, suspended, trial
     created_by_global_admin = Column(Integer, ForeignKey('user.id'), nullable=True)
+    slash_commands_default_policy = Column(String(30), default="enabled_for_known")  # Feature #12: disabled | enabled_for_all | enabled_for_known
+    audit_retention_days = Column(Integer, default=90)
+    # v0.6.0 Remote Access: per-tenant entitlement gate. When False, users from this
+    # tenant cannot authenticate via the public Cloudflare tunnel hostname.
+    remote_access_enabled = Column(Boolean, default=False, nullable=False, index=True)
+    # v0.6.0 Channels: publicly-reachable HTTPS base URL for Slack HTTP Events and
+    # Discord Interactions endpoints. Used by the Hub UI to render the exact webhook
+    # URL the tenant must paste into Slack/Discord. Nullable — when unset, the UI
+    # shows a "configure this first" warning before allowing HTTP-mode setup.
+    public_base_url = Column(String(512), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)
@@ -53,10 +64,11 @@ class User(Base):
     # SSO / Authentication fields
     auth_provider = Column(String(20), default='local', index=True)  # local, google
     google_id = Column(String(255), unique=True, nullable=True, index=True)
-    avatar_url = Column(String(500), nullable=True)
+    avatar_url = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login_at = Column(DateTime, nullable=True)
+    password_changed_at = Column(DateTime, nullable=True)  # BUG-134: Track password changes for JWT invalidation
     deleted_at = Column(DateTime, nullable=True)
 
     # Relationships
@@ -226,6 +238,29 @@ class GlobalAdminAuditLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class AuditEvent(Base):
+    """Tenant-scoped audit event for tracking all platform activity."""
+    __tablename__ = "audit_event"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('user.id'), nullable=True, index=True)
+    action = Column(String(100), nullable=False, index=True)
+    resource_type = Column(String(50), nullable=True)
+    resource_id = Column(String(100), nullable=True)
+    details = Column(JSONB, nullable=True)
+    ip_address = Column(String(50), nullable=True)
+    user_agent = Column(String(500), nullable=True)
+    channel = Column(String(20), nullable=True)  # web, api, whatsapp, telegram, system
+    severity = Column(String(10), default='info')  # info, warning, critical
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index('ix_audit_event_tenant_created', 'tenant_id', 'created_at'),
+        Index('ix_audit_event_tenant_action', 'tenant_id', 'action'),
+    )
+
+
 class SubscriptionPlan(Base):
     """
     Subscription plan definition.
@@ -277,3 +312,41 @@ class TenantSSOConfig(Base):
     # Relationships
     tenant = relationship("Tenant", back_populates="sso_config")
     default_role = relationship("Role")
+
+
+class TenantSyslogConfig(Base):
+    """
+    Per-tenant syslog forwarding configuration.
+    Allows tenants to stream audit events to external syslog servers via TCP, UDP, or TLS.
+    """
+    __tablename__ = "tenant_syslog_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey('tenant.id'), unique=True, nullable=False)
+    enabled = Column(Boolean, default=False)
+
+    # Connection settings
+    host = Column(String(255), nullable=True)
+    port = Column(Integer, default=514)
+    protocol = Column(String(10), default='tcp')  # tcp, udp, tls
+
+    # Syslog format settings
+    facility = Column(Integer, default=1)  # RFC 5424 facility (1=user-level)
+    app_name = Column(String(48), default='tsushin')
+
+    # TLS settings (Fernet-encrypted)
+    tls_ca_cert_encrypted = Column(Text, nullable=True)
+    tls_client_cert_encrypted = Column(Text, nullable=True)
+    tls_client_key_encrypted = Column(Text, nullable=True)
+    tls_verify = Column(Boolean, default=True)
+
+    # Event filtering — JSON array of category strings to stream
+    event_categories = Column(Text, nullable=True)  # e.g. ["auth","agent","security"]
+
+    # Operational metadata
+    last_successful_send = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    last_error_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

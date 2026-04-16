@@ -220,7 +220,7 @@ async def generate_tts(request: TTSRequest):
         logger.error(f"TTS generation failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"TTS generation failed: {str(e)}"
+            detail="TTS generation failed. Check server logs for details."
         )
 
 

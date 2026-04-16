@@ -8,6 +8,15 @@
 import React from 'react'
 import { formatDateTime } from '@/lib/dateUtils'
 
+/**
+ * Defense-in-depth: strip all HTML tags except <mark> and </mark>.
+ * Backend already HTML-escapes content, but this ensures safety
+ * even if a future code path bypasses backend sanitization.
+ */
+function sanitizeSnippet(html: string): string {
+  return html.replace(/<(?!\/?mark\b)[^>]*>/gi, '')
+}
+
 interface SearchResult {
   // Common fields
   snippet: string
@@ -167,7 +176,7 @@ export default function SearchResults({
                 {/* Snippet with Highlighting */}
                 <div
                   className="text-white leading-relaxed search-result-snippet text-sm"
-                  dangerouslySetInnerHTML={{ __html: result.snippet }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeSnippet(result.snippet) }}
                 />
               </div>
             )
@@ -216,7 +225,7 @@ export default function SearchResults({
               {/* Snippet with Highlighting */}
               <div
                 className="text-white leading-relaxed search-result-snippet"
-                dangerouslySetInnerHTML={{ __html: result.snippet || (result.content?.substring(0, 150) + '...') || '' }}
+                dangerouslySetInnerHTML={{ __html: sanitizeSnippet(result.snippet || (result.content?.substring(0, 150) + '...') || '') }}
               />
 
               {/* View Thread Button */}

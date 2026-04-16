@@ -12,8 +12,9 @@
  * UI: List view with sortable columns for better organization
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react'
 import { useRouter } from 'next/navigation'
+import { useToast } from '@/contexts/ToastContext'
 import {
   api,
   type FlowDefinition,
@@ -36,6 +37,7 @@ import {
   editableToCreatePayload
 } from '@/lib/client'
 import FlowsStatCards from '@/components/flows/FlowsStatCards'
+import TemplateTextarea from '@/components/flows/TemplateTextarea'
 import {
   MessageIcon,
   BellIcon,
@@ -44,12 +46,12 @@ import {
   PlayIcon,
   CalendarIcon,
   RefreshIcon,
+  HashIcon,
   EnvelopeIcon,
   BrainIcon,
   DocumentIcon,
   CommandIcon,
   PlaneIcon,
-  CloudSunIcon,
   SearchIcon,
   GlobeIcon,
   CalendarDaysIcon,
@@ -57,13 +59,18 @@ import {
   BookOpenIcon,
   WhatsAppIcon,
   TelegramIcon,
-  PauseIcon,
+  SlackIcon,
+  DiscordIcon,
+  WebhookIcon,
   LightbulbIcon,
   FileTextIcon,
   ClipboardIcon,
+  ShieldCheckIcon,
   type IconProps
 } from '@/components/ui/icons'
 import { parseUTCTimestamp, formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
+import CreateFromTemplateModal from '@/components/flows/CreateFromTemplateModal'
 
 // ==================== CONSTANTS ====================
 
@@ -78,6 +85,7 @@ const EXECUTION_METHODS: { value: ExecutionMethod; label: string; Icon: React.FC
   { value: 'immediate', label: 'Immediate', Icon: PlayIcon },
   { value: 'scheduled', label: 'Scheduled', Icon: CalendarIcon },
   { value: 'recurring', label: 'Recurring', Icon: RefreshIcon },
+  { value: 'keyword', label: 'Keyword', Icon: HashIcon },  // BUG-336
 ]
 
 const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string }[] = [
@@ -85,14 +93,18 @@ const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; d
   { value: 'message', label: 'Message', Icon: EnvelopeIcon, description: 'Send a single message' },
   { value: 'notification', label: 'Notification', Icon: BellIcon, description: 'Send a notification' },
   { value: 'tool', label: 'Tool', Icon: WrenchIcon, description: 'Execute a tool or action' },
-  { value: 'skill', label: 'Skill', Icon: BrainIcon, description: 'Execute an agentic skill (flight search, weather, etc.)' },
+  { value: 'skill', label: 'Skill', Icon: BrainIcon, description: 'Execute an agentic skill (flight search, web search, etc.)' },
   { value: 'summarization', label: 'Summarization', Icon: DocumentIcon, description: 'AI-powered summary of conversation' },
   { value: 'slash_command', label: 'Slash Command', Icon: CommandIcon, description: 'Execute a slash command (/scheduler, /memory, etc.)' },
+  { value: 'gate', label: 'Gate', Icon: ShieldCheckIcon, description: 'Conditional check \u2014 block or pass' },
 ]
 
-const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
+const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram' | 'slack' | 'discord' | 'webhook'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
   { value: 'whatsapp', label: 'WhatsApp', Icon: WhatsAppIcon, activeColor: 'text-green-400', enabled: true },
-  { value: 'telegram', label: 'Telegram', Icon: TelegramIcon, activeColor: 'text-blue-400', enabled: false, badge: 'Coming Soon' },
+  { value: 'telegram', label: 'Telegram', Icon: TelegramIcon, activeColor: 'text-blue-400', enabled: true },
+  { value: 'slack', label: 'Slack', Icon: SlackIcon, activeColor: 'text-purple-400', enabled: true },
+  { value: 'discord', label: 'Discord', Icon: DiscordIcon, activeColor: 'text-indigo-400', enabled: true },
+  { value: 'webhook', label: 'Webhook', Icon: WebhookIcon, activeColor: 'text-cyan-400', enabled: true },
 ]
 
 // Summarization output format options
@@ -119,9 +131,7 @@ const SUMMARIZATION_MODELS = [
 // Available agent skills for the skill step type
 const AVAILABLE_SKILLS: { value: string; label: string; Icon: React.FC<IconProps>; description: string }[] = [
   { value: 'flight_search', label: 'Flight Search', Icon: PlaneIcon, description: 'Search for flights using natural language' },
-  { value: 'weather', label: 'Weather', Icon: CloudSunIcon, description: 'Get weather information for any location' },
   { value: 'web_search', label: 'Web Search', Icon: SearchIcon, description: 'Search the web for information' },
-  { value: 'web_scraping', label: 'Web Scraping', Icon: GlobeIcon, description: 'Extract data from web pages' },
   { value: 'scheduler', label: 'Scheduler', Icon: CalendarIcon, description: 'Manage calendar events and reminders' },
   { value: 'scheduler_query', label: 'Scheduler Query', Icon: CalendarDaysIcon, description: 'Query calendar events' },
   { value: 'gmail', label: 'Gmail', Icon: MailIcon, description: 'Send and manage emails' },
@@ -136,6 +146,7 @@ type SortDirection = 'asc' | 'desc'
 // ==================== MAIN PAGE ====================
 
 export default function FlowsPage() {
+  const toast = useToast()
   const router = useRouter()
   const [allFlows, setAllFlows] = useState<FlowDefinition[]>([])
   const [runs, setRuns] = useState<FlowRun[]>([])
@@ -143,6 +154,7 @@ export default function FlowsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [personas, setPersonas] = useState<Persona[]>([])
   const [customTools, setCustomTools] = useState<CustomTool[]>([])
+  const [customSkills, setCustomSkills] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   // Filter & Search states
@@ -157,54 +169,62 @@ export default function FlowsPage() {
 
   // Modal states
   const [showCreateFlow, setShowCreateFlow] = useState(false)
+  const [showCreateFromTemplate, setShowCreateFromTemplate] = useState(false)
   const [editingFlowId, setEditingFlowId] = useState<number | null>(null)
   const [viewingRunId, setViewingRunId] = useState<number | null>(null)
+  const [executingFlowId, setExecutingFlowId] = useState<number | null>(null)
   const [activeThreads, setActiveThreads] = useState<ConversationThread[]>([])
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalFlows, setTotalFlows] = useState(0)
+  const [pageSize, setPageSize] = useState<number>(25)
+  const PAGE_SIZE = pageSize
+  const PAGE_SIZE_OPTIONS = [10, 25, 50, 100]
 
   // Selected rows for bulk actions
   const [selectedFlows, setSelectedFlows] = useState<Set<number>>(new Set())
-
-  // Emergency Stop state
-  const [emergencyStop, setEmergencyStop] = useState(false)
-  const [checkingEmergencyStop, setCheckingEmergencyStop] = useState(false)
+  const [bulkActionLoading, setBulkActionLoading] = useState(false)
 
   useEffect(() => {
     loadData()
-    checkEmergencyStopStatus()
+  }, [currentPage, pageSize])
 
-    const handleRefresh = () => {
-      loadData()
-      checkEmergencyStopStatus()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-
-    // Poll emergency stop status
-    const interval = setInterval(checkEmergencyStopStatus, 10000)
-
-    return () => {
-      window.removeEventListener('tsushin:refresh', handleRefresh)
-      clearInterval(interval)
-    }
-  }, [])
+  useGlobalRefresh(() => loadData())
 
   async function loadData() {
     setLoading(true)
     try {
-      const [flowsData, runsData, agentsData, contactsData, personasData, customToolsData] = await Promise.allSettled([
-        api.getFlows(),
+      const [flowsData, runsData, agentsData, contactsData, personasData, customToolsData, customSkillsData] = await Promise.allSettled([
+        api.getFlows({ limit: PAGE_SIZE, offset: (currentPage - 1) * PAGE_SIZE }),
         api.getFlowRuns(undefined, 20),
         api.getAgents(true),
         api.getContacts(),
         api.getPersonas(),
-        api.getSandboxedTools()
+        api.getSandboxedTools(),
+        api.getCustomSkills()
       ])
 
-      if (flowsData.status === 'fulfilled') setAllFlows(flowsData.value)
+      if (flowsData.status === 'fulfilled') {
+        // Auto-correct pagination: if current page is now past the last page
+        // (e.g., after deletion), snap back and let useEffect re-fetch the right
+        // window — do not overwrite list with empty results in the meantime.
+        const total = flowsData.value.total
+        const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
+        if (currentPage > lastPage) {
+          setTotalFlows(total)
+          setCurrentPage(lastPage)
+        } else {
+          setAllFlows(flowsData.value.items)
+          setTotalFlows(total)
+        }
+      }
       if (runsData.status === 'fulfilled') setRuns(runsData.value)
       if (agentsData.status === 'fulfilled') setAgents(agentsData.value)
       if (contactsData.status === 'fulfilled') setContacts(contactsData.value)
       if (personasData.status === 'fulfilled') setPersonas(personasData.value.filter((p: Persona) => p.is_active))
       if (customToolsData.status === 'fulfilled') setCustomTools(customToolsData.value.filter((t: CustomTool) => t.is_enabled))
+      if (customSkillsData.status === 'fulfilled') setCustomSkills(customSkillsData.value.filter((s: any) => s.is_enabled && s.scan_status === 'clean'))
 
       // Load active conversation threads (silent catch - non-critical data)
       const threads = await api.getActiveConversationThreads().catch(() => [])
@@ -328,23 +348,26 @@ export default function FlowsPage() {
             await loadData()
           } catch (forceError: any) {
             console.error('Failed to force delete flow:', forceError)
-            alert(`Failed to delete flow: ${forceError?.message || 'Unknown error'}`)
+            toast.error('Delete Failed', `Failed to delete flow: ${forceError?.message || 'Unknown error'}`)
           }
         }
       } else {
-        alert(`Failed to delete flow: ${errorMessage}`)
+        toast.error('Delete Failed', `Failed to delete flow: ${errorMessage}`)
       }
     }
   }
 
   async function handleRunFlow(flowId: number) {
+    setExecutingFlowId(flowId)
     try {
       const run = await api.executeFlow(flowId)
       setViewingRunId(run.id)
-      await loadData()
+      loadData()
     } catch (error) {
       console.error('Failed to run flow:', error)
-      alert('Failed to run flow')
+      toast.error('Execution Failed', 'Failed to run flow')
+    } finally {
+      setExecutingFlowId(null)
     }
   }
 
@@ -354,8 +377,85 @@ export default function FlowsPage() {
       await loadData()
     } catch (error) {
       console.error('Failed to toggle flow status:', error)
-      alert('Failed to toggle flow status')
+      toast.error('Toggle Failed', 'Failed to toggle flow status')
     }
+  }
+
+  async function handleBulkSetActive(active: boolean) {
+    if (selectedFlows.size === 0) return
+    setBulkActionLoading(true)
+    const ids = Array.from(selectedFlows)
+    let success = 0
+    let failed = 0
+    for (const id of ids) {
+      try {
+        await api.patchFlow(id, { is_active: active })
+        success++
+      } catch (error) {
+        console.error(`Failed to ${active ? 'enable' : 'disable'} flow ${id}:`, error)
+        failed++
+      }
+    }
+    setBulkActionLoading(false)
+    setSelectedFlows(new Set())
+    if (failed === 0) {
+      toast.success(
+        active ? 'Flows Enabled' : 'Flows Disabled',
+        `${success} flow${success === 1 ? '' : 's'} ${active ? 'enabled' : 'disabled'}`
+      )
+    } else {
+      toast.error('Bulk Action Partial', `${success} succeeded, ${failed} failed`)
+    }
+    await loadData()
+  }
+
+  async function handleBulkDelete() {
+    if (selectedFlows.size === 0) return
+    const count = selectedFlows.size
+    if (!confirm(`Delete ${count} flow${count === 1 ? '' : 's'}? This cannot be undone.`)) return
+    setBulkActionLoading(true)
+    const ids = Array.from(selectedFlows)
+    let success = 0
+    let failed = 0
+    let needsForce: number[] = []
+    for (const id of ids) {
+      try {
+        await api.deleteFlow(id, false)
+        success++
+      } catch (error: any) {
+        const errorMessage = error?.message || ''
+        if (errorMessage.includes('existing run')) {
+          needsForce.push(id)
+        } else {
+          console.error(`Failed to delete flow ${id}:`, error)
+          failed++
+        }
+      }
+    }
+    if (needsForce.length > 0) {
+      const forceDelete = confirm(
+        `${needsForce.length} flow${needsForce.length === 1 ? ' has' : 's have'} existing runs.\n\nForce delete ${needsForce.length === 1 ? 'it' : 'them'}? This will also delete all run history.`
+      )
+      if (forceDelete) {
+        for (const id of needsForce) {
+          try {
+            await api.deleteFlow(id, true)
+            success++
+          } catch (forceError) {
+            console.error(`Failed to force delete flow ${id}:`, forceError)
+            failed++
+          }
+        }
+      }
+    }
+    setBulkActionLoading(false)
+    setSelectedFlows(new Set())
+    if (failed === 0) {
+      toast.success('Flows Deleted', `${success} flow${success === 1 ? '' : 's'} deleted`)
+    } else {
+      toast.error('Bulk Delete Partial', `${success} deleted, ${failed} failed`)
+    }
+    await loadData()
   }
 
   async function handleCancelRun(runId: number) {
@@ -365,58 +465,17 @@ export default function FlowsPage() {
       await loadData()
     } catch (error) {
       console.error('Failed to cancel run:', error)
-      alert('Failed to cancel run')
+      toast.error('Cancel Failed', 'Failed to cancel run')
     }
   }
 
-  async function checkEmergencyStopStatus() {
-    try {
-      const response = await fetch('http://localhost:8081/api/system/status', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-        }
-      })
-      if (response.ok) {
-        const data = await response.json()
-        setEmergencyStop(data.emergency_stop || false)
-      }
-    } catch (error) {
-      console.error('Failed to check emergency stop status:', error)
-    }
-  }
-
-  async function toggleEmergencyStop() {
-    if (!emergencyStop && !confirm('EMERGENCY STOP will halt all message processing immediately. Continue?')) return
-
-    setCheckingEmergencyStop(true)
-    try {
-      const endpoint = emergencyStop ? '/api/system/resume' : '/api/system/emergency-stop'
-      const response = await fetch(`http://localhost:8081${endpoint}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-        }
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        setEmergencyStop(data.emergency_stop || false)
-      } else {
-        alert('Failed to toggle emergency stop')
-      }
-    } catch (error) {
-      console.error('Failed to toggle emergency stop:', error)
-      alert('Failed to toggle emergency stop')
-    } finally {
-      setCheckingEmergencyStop(false)
-    }
-  }
+  const totalPages = Math.ceil(totalFlows / PAGE_SIZE)
 
   // Stats calculation (based on all flows, not filtered)
   const stats = {
-    totalFlows: allFlows.length,
-    activeFlows: allFlows.filter(f => f.is_active).length, // Enabled flows
-    inactiveFlows: allFlows.filter(f => !f.is_active).length, // Disabled flows
+    totalFlows: totalFlows,
+    activeFlows: allFlows.filter(f => f.is_active).length, // Enabled flows (current page)
+    inactiveFlows: allFlows.filter(f => !f.is_active).length, // Disabled flows (current page)
     totalRuns: runs.length,
     runningRuns: runs.filter(r => r.status === 'running').length,
     activeThreads: activeThreads.length,
@@ -453,37 +512,19 @@ export default function FlowsPage() {
             <p className="text-slate-500 mt-1 text-sm">Manage automated workflows, conversations, and notifications</p>
           </div>
           <div className="flex items-center gap-3">
-            {/* Emergency Stop Button */}
+            {/* From Template Button */}
             <button
-              onClick={toggleEmergencyStop}
-              disabled={checkingEmergencyStop}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${emergencyStop
-                  ? 'bg-red-500/20 text-red-400 border-2 border-red-500/50 hover:bg-red-500/30 shadow-lg shadow-red-500/20'
-                  : 'bg-slate-800/80 text-slate-400 border border-slate-700/50 hover:bg-slate-700/80 hover:text-white hover:border-slate-600'
-                }`}
-              title={emergencyStop ? "Click to resume message processing" : "Emergency Stop - Immediately halt all message processing"}
+              onClick={() => setShowCreateFromTemplate(true)}
+              className="px-4 py-2.5 bg-teal-500/10 text-teal-300 border border-teal-500/30 font-medium rounded-lg
+                         hover:bg-teal-500/15 hover:border-teal-500/50 transition-all
+                         flex items-center gap-2"
+              title="Create a flow from a pre-built hybrid automation template"
             >
-              {checkingEmergencyStop ? (
-                <>
-                  <span className="animate-spin">⟳</span>
-                  <span>Processing...</span>
-                </>
-              ) : emergencyStop ? (
-                <>
-                  <span className="text-lg">🚨</span>
-                  <div className="flex flex-col items-start">
-                    <span className="font-bold">STOPPED</span>
-                    <span className="text-xs opacity-75">Click to resume</span>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <PauseIcon size={20} />
-                  <span>Emergency Stop</span>
-                </>
-              )}
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              From Template
             </button>
-
             {/* New Flow Button */}
             <button
               onClick={() => setShowCreateFlow(true)}
@@ -566,16 +607,8 @@ export default function FlowsPage() {
               </button>
             )}
 
-            {/* Refresh */}
-            <button
-              onClick={loadData}
-              className="ml-auto px-3 py-2 text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-1"
-            >
-              <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Refresh
-            </button>
+            {/* Spacer to push filters left when no refresh button */}
+            <div className="ml-auto" />
           </div>
 
           {/* Results count */}
@@ -624,6 +657,46 @@ export default function FlowsPage() {
               )}
             </div>
           ) : (
+            <>
+            {/* Bulk Actions Bar */}
+            {selectedFlows.size > 0 && (
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/50 bg-teal-500/5">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-teal-300 font-medium">
+                    {selectedFlows.size} selected
+                  </span>
+                  <button
+                    onClick={() => setSelectedFlows(new Set())}
+                    className="text-xs text-slate-400 hover:text-white transition-colors"
+                  >
+                    Clear selection
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleBulkSetActive(true)}
+                    disabled={bulkActionLoading}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Enable
+                  </button>
+                  <button
+                    onClick={() => handleBulkSetActive(false)}
+                    disabled={bulkActionLoading}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Disable
+                  </button>
+                  <button
+                    onClick={handleBulkDelete}
+                    disabled={bulkActionLoading}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-red-500/30 text-red-300 hover:bg-red-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -762,14 +835,18 @@ export default function FlowsPage() {
                             </button>
                             <button
                               onClick={() => handleRunFlow(flow.id)}
-                              disabled={!flow.is_active || (flow.node_count || 0) === 0}
+                              disabled={!flow.is_active || (flow.node_count || 0) === 0 || executingFlowId === flow.id}
                               className="p-2 text-teal-400 hover:text-teal-300 hover:bg-teal-500/10 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                               title="Run"
                             >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
+                              {executingFlowId === flow.id ? (
+                                <div className="w-4 h-4 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                              )}
                             </button>
                             <button
                               onClick={() => handleDeleteFlow(flow.id)}
@@ -788,6 +865,75 @@ export default function FlowsPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination */}
+            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800/50 flex-wrap gap-3">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="text-sm text-slate-400">
+                  Showing {totalFlows === 0 ? 0 : ((currentPage - 1) * PAGE_SIZE) + 1}–{Math.min(currentPage * PAGE_SIZE, totalFlows)} of {totalFlows} flows
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-slate-500">Per page:</label>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value))
+                      setCurrentPage(1)
+                      setSelectedFlows(new Set())
+                    }}
+                    className="px-2 py-1 bg-slate-800/50 border border-slate-700 rounded-lg text-slate-300 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none"
+                  >
+                    {PAGE_SIZE_OPTIONS.map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {totalPages > 1 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage <= 1}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Previous
+                  </button>
+                  {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                    let page: number
+                    if (totalPages <= 7) {
+                      page = i + 1
+                    } else if (currentPage <= 4) {
+                      page = i + 1
+                    } else if (currentPage >= totalPages - 3) {
+                      page = totalPages - 6 + i
+                    } else {
+                      page = currentPage - 3 + i
+                    }
+                    return (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page)}
+                        className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                          currentPage === page
+                            ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30'
+                            : 'border border-slate-700 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    )
+                  })}
+                  <button
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage >= totalPages}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
           )}
         </div>
 
@@ -891,9 +1037,26 @@ export default function FlowsPage() {
           contacts={contacts}
           personas={personas}
           customTools={customTools}
+          customSkills={customSkills}
           onClose={() => setShowCreateFlow(false)}
           onSuccess={() => {
             setShowCreateFlow(false)
+            loadData()
+          }}
+        />
+      )}
+
+      {/* Create from Template Modal */}
+      {showCreateFromTemplate && (
+        <CreateFromTemplateModal
+          agents={agents}
+          contacts={contacts}
+          personas={personas}
+          customTools={customTools}
+          onClose={() => setShowCreateFromTemplate(false)}
+          onSuccess={(flowId, flowName) => {
+            setShowCreateFromTemplate(false)
+            toast.success('Flow Created', `${flowName} is ready. Configure and enable it when you're set.`)
             loadData()
           }}
         />
@@ -907,6 +1070,7 @@ export default function FlowsPage() {
           contacts={contacts}
           personas={personas}
           customTools={customTools}
+          customSkills={customSkills}
           onClose={() => setEditingFlowId(null)}
           onSuccess={() => {
             setEditingFlowId(null)
@@ -984,6 +1148,11 @@ function ExecutionBadge({ method }: { method: ExecutionMethod }) {
       label: 'Recurring',
       color: 'text-violet-400',
       icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+    },
+    keyword: {
+      label: 'Keyword',
+      color: 'text-cyan-400',
+      icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" /></svg>
     },
   }
 
@@ -1159,14 +1328,16 @@ function RecurrenceConfigPanel({ value, onChange }: {
 
 // ==================== CREATE FLOW MODAL ====================
 
-function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onSuccess }: {
+function CreateFlowModal({ agents, contacts, personas, customTools, customSkills, onClose, onSuccess }: {
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onClose: () => void
   onSuccess: () => void
 }) {
+  const toast = useToast()
   const [step, setStep] = useState<'config' | 'steps'>('config')
   const [flowData, setFlowData] = useState<CreateFlowData>({
     name: '',
@@ -1176,24 +1347,32 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
     steps: []
   })
   const [submitting, setSubmitting] = useState(false)
+  const flowDataRef = useRef(flowData)
+  flowDataRef.current = flowData
+  // Flush callbacks registered by each StepConfigForm
+  const createFlushRef = useRef<Map<number, () => void>>(new Map())
 
   async function handleSubmit() {
     if (!flowData.name.trim()) {
-      alert('Please provide a flow name')
+      toast.warning('Validation', 'Please provide a flow name')
       return
     }
     if ((flowData.steps?.length || 0) === 0) {
-      alert('Please add at least one step to your flow')
+      toast.warning('Validation', 'Please add at least one step to your flow')
       return
     }
 
+    // Flush all pending step config form changes before submitting
+    createFlushRef.current.forEach(flush => flush())
+    await new Promise(r => setTimeout(r, 0))
+
     setSubmitting(true)
     try {
-      await api.createFlowV2(flowData)
+      await api.createFlowV2(flowDataRef.current)
       onSuccess()
     } catch (error) {
       console.error('Failed to create flow:', error)
-      alert('Failed to create flow')
+      toast.error('Creation Failed', 'Failed to create flow')
     } finally {
       setSubmitting(false)
     }
@@ -1201,7 +1380,11 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-800 rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-700">
+      <div
+        className="bg-slate-800 rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-700"
+        onClick={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
           <div>
@@ -1211,7 +1394,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
               {step === 'steps' && 'Add steps to your flow'}
             </p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white">
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-white">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -1290,6 +1473,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
                     return (
                       <button
                         key={method.value}
+                        type="button"
                         onClick={() => setFlowData(prev => ({ ...prev, execution_method: method.value }))}
                         className={`p-3 rounded-lg border text-center transition-all ${flowData.execution_method === method.value
                             ? 'border-cyan-500 bg-cyan-500/10 text-white'
@@ -1329,6 +1513,27 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
                 </div>
               )}
 
+              {/* BUG-336: Keyword trigger configuration */}
+              {flowData.execution_method === 'keyword' && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1.5">Trigger Keywords</label>
+                  <p className="text-xs text-slate-500 mb-2">
+                    Enter one keyword or command per line. Messages matching any of these trigger this flow (e.g. <code className="bg-slate-800 px-1 rounded">/testflow</code> or <code className="bg-slate-800 px-1 rounded">start report</code>).
+                  </p>
+                  <textarea
+                    value={(flowData.trigger_keywords || []).join('\n')}
+                    onChange={(e) => setFlowData(prev => ({
+                      ...prev,
+                      trigger_keywords: e.target.value.split('\n').map(k => k.trim()).filter(Boolean)
+                    }))}
+                    rows={4}
+                    placeholder="/testflow&#10;run report&#10;start workflow"
+                    className="w-full px-4 py-2.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white font-mono text-sm
+                               focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Default Agent</label>
                 <select
@@ -1353,7 +1558,9 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
               contacts={contacts}
               personas={personas}
               customTools={customTools}
+              customSkills={customSkills}
               onChange={(steps) => setFlowData(prev => ({ ...prev, steps }))}
+              flushCallbacksRef={createFlushRef}
             />
           )}
         </div>
@@ -1361,6 +1568,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
         {/* Footer */}
         <div className="px-6 py-4 border-t border-slate-700 flex items-center justify-between">
           <button
+            type="button"
             onClick={() => {
               if (step === 'steps') setStep('config')
               else onClose()
@@ -1370,6 +1578,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
             {step === 'config' ? 'Cancel' : 'Back'}
           </button>
           <button
+            type="button"
             onClick={() => {
               if (step === 'config') setStep('steps')
               else handleSubmit()
@@ -1388,16 +1597,27 @@ function CreateFlowModal({ agents, contacts, personas, customTools, onClose, onS
 
 // ==================== STEP BUILDER ====================
 
-function StepBuilder({ steps, agents, contacts, personas, customTools, onChange }: {
+function StepBuilder({ steps, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef }: {
   steps: CreateFlowStepData[]
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onChange: (steps: CreateFlowStepData[]) => void
+  flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
 }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [showAddStep, setShowAddStep] = useState(steps.length === 0)
+
+  function handleStepTypeClick(
+    event: MouseEvent<HTMLButtonElement>,
+    stepType: StepType
+  ) {
+    event.preventDefault()
+    event.stopPropagation()
+    addStep(stepType)
+  }
 
   function addStep(stepType: StepType) {
     const newStep: CreateFlowStepData = {
@@ -1433,8 +1653,13 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
     const newSteps = [...steps]
     const targetIndex = direction === 'up' ? index - 1 : index + 1
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
-    // Update positions
-    newSteps.forEach((step, i) => step.position = i + 1)
+    // Update positions and auto-rename "Step N" names to match new position
+    newSteps.forEach((step, i) => {
+      step.position = i + 1
+      if (/^Step \d+$/.test(step.name)) {
+        step.name = `Step ${i + 1}`
+      }
+    })
     onChange(newSteps)
   }
 
@@ -1458,6 +1683,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
               >
                 <div className="flex flex-col gap-1">
                   <button
+                    type="button"
                     onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
                     disabled={index === 0}
                     className="text-slate-500 hover:text-white disabled:opacity-30"
@@ -1467,6 +1693,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
                     </svg>
                   </button>
                   <button
+                    type="button"
                     onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
                     disabled={index === steps.length - 1}
                     className="text-slate-500 hover:text-white disabled:opacity-30"
@@ -1489,14 +1716,36 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
                 </div>
 
                 <div className="flex-1">
-                  <div className="font-medium text-white">{step.name}</div>
+                  <div className="font-medium text-white flex items-center gap-2">
+                    {step.name}
+                    {step.type === 'gate' && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        (step.config?.gate_mode || 'programmatic') === 'programmatic'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                      }`}>
+                        {(step.config?.gate_mode || 'programmatic') === 'programmatic' ? 'Programmatic' : 'Agentic'}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-sm text-slate-400">
                     {STEP_TYPES.find(t => t.value === step.type)?.label}
                     {step.allow_multi_turn && ' • Multi-turn'}
+                    {step.type === 'gate' && step.config?.gate_conditions && step.config.gate_conditions.length > 0 && (
+                      <span className="text-xs text-slate-500 ml-1">
+                        • {step.config.gate_conditions.length} condition{step.config.gate_conditions.length !== 1 ? 's' : ''} ({step.config?.gate_logic || 'all'})
+                      </span>
+                    )}
+                    {step.type === 'gate' && step.config?.gate_mode === 'agentic' && step.config?.gate_prompt && (
+                      <span className="text-xs text-slate-500 ml-1">
+                        • AI prompt set
+                      </span>
+                    )}
                   </div>
                 </div>
 
                 <button
+                  type="button"
                   onClick={(e) => { e.stopPropagation(); removeStep(index) }}
                   className="text-red-400 hover:text-red-300 p-2"
                 >
@@ -1519,7 +1768,11 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
                     contacts={contacts}
                     personas={personas}
                     customTools={customTools}
+                    customSkills={customSkills}
                     onChange={(update) => updateStep(index, update)}
+                    allSteps={steps}
+                    flushCallbacksRef={flushCallbacksRef}
+                    stepIndex={index}
                   />
                 </div>
               )}
@@ -1538,7 +1791,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
               return (
                 <button
                   key={type.value}
-                  onClick={() => addStep(type.value)}
+                  type="button"
+                  onClick={(event) => handleStepTypeClick(event, type.value)}
                   className="p-4 rounded-lg border border-slate-700 hover:border-cyan-500/50 hover:bg-cyan-500/5
                              text-center transition-all text-slate-300 hover:text-cyan-400"
                 >
@@ -1554,6 +1808,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
         </div>
       ) : (
         <button
+          type="button"
           onClick={() => setShowAddStep(true)}
           className="w-full py-3 rounded-xl border border-dashed border-slate-600 text-slate-400
                      hover:border-cyan-500/50 hover:text-cyan-400 transition-all flex items-center justify-center gap-2"
@@ -1565,6 +1820,89 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, onChange 
         </button>
       )}
     </div>
+  )
+}
+
+// ==================== CURSOR-SAFE INPUT HELPERS ====================
+// These components hold their own local state so that the cursor position
+// is never lost when the parent re-renders and passes a new value prop.
+
+function CursorSafeInput({
+  value: externalValue,
+  onValueChange,
+  onFocus: externalOnFocus,
+  onBlur: externalOnBlur,
+  ...restProps
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> & {
+  value: string
+  onValueChange: (value: string) => void
+}) {
+  const [localValue, setLocalValue] = useState(externalValue)
+  const isFocusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      setLocalValue(externalValue)
+    }
+  }, [externalValue])
+
+  return (
+    <input
+      {...restProps}
+      value={localValue}
+      onFocus={(e) => {
+        isFocusedRef.current = true
+        externalOnFocus?.(e)
+      }}
+      onBlur={(e) => {
+        isFocusedRef.current = false
+        externalOnBlur?.(e)
+      }}
+      onChange={(e) => {
+        setLocalValue(e.target.value)
+        onValueChange(e.target.value)
+      }}
+    />
+  )
+}
+
+function CursorSafeTextarea({
+  value: externalValue,
+  onValueChange,
+  onFocus: externalOnFocus,
+  onBlur: externalOnBlur,
+  ...restProps
+}: Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'onChange' | 'value'> & {
+  value: string
+  onValueChange: (value: string) => void
+}) {
+  const [localValue, setLocalValue] = useState(externalValue)
+  const isFocusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      setLocalValue(externalValue)
+    }
+  }, [externalValue])
+
+  return (
+    <textarea
+      {...restProps}
+      value={localValue}
+      onFocus={(e) => {
+        isFocusedRef.current = true
+        externalOnFocus?.(e)
+      }}
+      onBlur={(e) => {
+        isFocusedRef.current = false
+        onValueChange(localValue)
+        externalOnBlur?.(e)
+      }}
+      onChange={(e) => {
+        setLocalValue(e.target.value)
+        onValueChange(e.target.value)
+      }}
+    />
   )
 }
 
@@ -1721,10 +2059,10 @@ function ToolParameterForm({
                     {param.name}
                     {param.required && <span className="text-red-400 ml-1">*</span>}
                   </label>
-                  <input
+                  <CursorSafeInput
                     type="text"
                     value={parameters[param.name] || ''}
-                    onChange={(e) => onChange({ ...parameters, [param.name]: e.target.value })}
+                    onValueChange={(v) => onChange({ ...parameters, [param.name]: v })}
                     placeholder={param.description || `Enter ${param.name}`}
                     className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                                focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -1753,19 +2091,25 @@ function ToolParameterForm({
 
 // ==================== STEP CONFIG FORM ====================
 
-function StepConfigForm({ step, agents, contacts, personas, customTools, onChange }: {
+function StepConfigForm({ step, agents, contacts, personas, customTools, customSkills, onChange, allSteps, flushCallbacksRef, stepIndex }: {
   step: CreateFlowStepData
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onChange: (update: Partial<CreateFlowStepData>) => void
+  allSteps: CreateFlowStepData[]
+  flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
+  stepIndex?: number
 }) {
   const [recipientInput, setRecipientInput] = useState(step.config?.recipient || '')
   const [showContactSuggestions, setShowContactSuggestions] = useState(false)
   const [localChanges, setLocalChanges] = useState<Partial<CreateFlowStepData>>({})
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const pendingChangesRef = useRef<Partial<CreateFlowStepData>>({})
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
 
   useEffect(() => {
     setRecipientInput(step.config?.recipient || '')
@@ -1777,10 +2121,34 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
     }
   }, [step.position])
 
+  // Register flush callback so Create Flow can force-flush pending changes
+  useEffect(() => {
+    if (!flushCallbacksRef || stepIndex === undefined) return
+    const flush = () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+        saveTimeoutRef.current = null
+      }
+      const pending = pendingChangesRef.current
+      if (Object.keys(pending).length > 0) {
+        onChangeRef.current(pending)
+        pendingChangesRef.current = {}
+      }
+    }
+    flushCallbacksRef.current.set(stepIndex, flush)
+    return () => { flushCallbacksRef.current.delete(stepIndex) }
+  }, [stepIndex, flushCallbacksRef])
+
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
+      }
+      // Flush any pending changes on unmount so edits are not lost
+      const pending = pendingChangesRef.current
+      if (Object.keys(pending).length > 0) {
+        onChangeRef.current(pending)
+        pendingChangesRef.current = {}
       }
     }
   }, [])
@@ -1827,10 +2195,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
       {/* Step Name */}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1.5">Step Name</label>
-        <input
+        <CursorSafeInput
           type="text"
-          value={currentStep.name}
-          onChange={(e) => debouncedSave({ name: e.target.value })}
+          value={currentStep.name || ''}
+          onValueChange={(v) => debouncedSave({ name: v })}
           className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
@@ -1925,20 +2293,20 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
           <label className="block text-sm font-medium text-slate-300 mb-1.5">
             {step.type === 'notification' ? 'Notification Text' : 'Message Template'}
           </label>
-          <textarea
-            value={currentConfig?.message_template || currentConfig?.content || ''}
-            onChange={(e) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', e.target.value)}
+          <TemplateTextarea
+            value={step.type === 'notification'
+              ? (currentConfig?.content || '')
+              : (currentConfig?.message_template || '')}
+            onValueChange={(v) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', v)}
             rows={3}
             placeholder={step.type === 'notification'
               ? 'What to notify about? Use {{step_1.field}} to inject previous step outputs'
               : 'Enter your message... Use {{step_1.field}} to inject previous step outputs'}
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                        focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+            allSteps={allSteps.map(s => ({ name: s.name, type: s.type, position: s.position, config: s.config }))}
+            currentStepPosition={step.position}
           />
-          <p className="text-xs text-slate-500 mt-1">
-            <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Use {'{{'}step_N.field{'}}'} or {'{{'}step_name.field{'}}'} to inject outputs from previous steps.</span>
-            Helpers: {'{{'}value | truncate:100{'}}'}, {'{{'}value | upper{'}}'}, {'{{'}value | json{'}}'}
-          </p>
         </div>
       )}
 
@@ -1947,13 +2315,12 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <textarea
+            <CursorSafeTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
-              onChange={(e) => {
-                const value = e.target.value
+              onValueChange={(v) => {
                 debouncedSave(prev => ({
-                  conversation_objective: value,
-                  config: { ...step.config, ...prev.config, objective: value }
+                  conversation_objective: v,
+                  config: { ...step.config, ...prev.config, objective: v }
                 }))
               }}
               rows={2}
@@ -1965,9 +2332,9 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.initial_prompt || ''}
-              onChange={(e) => updateConfig('initial_prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('initial_prompt', v)}
               rows={2}
               placeholder="First message to send..."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
@@ -2006,10 +2373,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. conversation_result"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2053,8 +2420,6 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               {(currentConfig?.tool_type || 'built_in') === 'built_in' ? (
                 <>
                   <option value="google_search">Google Search</option>
-                  <option value="weather">Weather</option>
-                  <option value="web_scraping">Web Scraping</option>
                   <option value="asana_tasks">Asana Tasks</option>
                   <option value="send_message">Send Message</option>
                 </>
@@ -2095,10 +2460,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. scan_results"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2122,15 +2487,28 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             >
               <option value="">Select a skill...</option>
-              {AVAILABLE_SKILLS.map(skill => (
-                <option key={skill.value} value={skill.value}>
-                  {skill.label}
-                </option>
-              ))}
+              <optgroup label="Built-in Skills">
+                {AVAILABLE_SKILLS.map(skill => (
+                  <option key={skill.value} value={skill.value}>
+                    {skill.label}
+                  </option>
+                ))}
+              </optgroup>
+              {customSkills && customSkills.length > 0 && (
+                <optgroup label="Custom Skills">
+                  {customSkills.map((s: any) => (
+                    <option key={`custom:${s.slug}`} value={`custom:${s.slug}`}>
+                      {s.icon || '\uD83E\uDDE9'} {s.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             {currentConfig?.skill_type && (
               <p className="text-xs text-slate-500 mt-1">
-                {AVAILABLE_SKILLS.find(s => s.value === currentConfig?.skill_type)?.description}
+                {AVAILABLE_SKILLS.find(s => s.value === currentConfig?.skill_type)?.description
+                  || customSkills?.find((s: any) => `custom:${s.slug}` === currentConfig?.skill_type)?.description
+                  || ''}
               </p>
             )}
           </div>
@@ -2140,9 +2518,9 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.prompt || ''}
-              onChange={(e) => updateConfig('prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
@@ -2162,14 +2540,6 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               </p>
             </div>
           )}
-          {currentConfig?.skill_type === 'weather' && (
-            <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
-              <p className="text-xs text-slate-400">
-                <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><CloudSunIcon size={12} /> Weather Tips:</span> Specify the location clearly.
-                <br />Example: "Como está o tempo em São Paulo hoje?"
-              </p>
-            </div>
-          )}
           {currentConfig?.skill_type === 'scheduler' && (
             <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
               <p className="text-xs text-slate-400">
@@ -2185,10 +2555,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. flight_results"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2205,10 +2575,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.source_step || ''}
-              onChange={(e) => updateConfig('source_step', e.target.value)}
+              onValueChange={(v) => updateConfig('source_step', v)}
               placeholder="step_1 or step name"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2261,9 +2631,9 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
                 {step.config?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.summary_prompt || ''}
-              onChange={(e) => updateConfig('summary_prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
               placeholder={currentConfig?.prompt_mode === 'replace'
                 ? 'Enter your complete summarization instructions...\n\nExample:\nExtract only:\n📍 Status: [value]\n📅 Date: [value]'
@@ -2304,10 +2674,10 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.command || ''}
-              onChange={(e) => updateConfig('command', e.target.value)}
+              onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
@@ -2332,6 +2702,311 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, onChang
             </p>
             <p className="text-xs text-slate-500 mt-2">
               Output available as {'{{'}step_N.output{'}}'} in subsequent steps
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* Gate Settings */}
+      {step.type === 'gate' && (
+        <>
+          {/* Mode Toggle */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-200 mb-2">Gate Mode</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => updateConfig('gate_mode', 'programmatic')}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                  (currentConfig?.gate_mode || 'programmatic') === 'programmatic'
+                    ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
+                    : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                }`}
+              >
+                Programmatic
+              </button>
+              <button
+                type="button"
+                onClick={() => updateConfig('gate_mode', 'agentic')}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                  currentConfig?.gate_mode === 'agentic'
+                    ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                    : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                }`}
+              >
+                Agentic (AI)
+              </button>
+            </div>
+          </div>
+
+          {/* Programmatic Mode Panel */}
+          {(currentConfig?.gate_mode || 'programmatic') === 'programmatic' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_source_step || ''}
+                  onValueChange={(v) => updateConfig('gate_source_step', v)}
+                  placeholder="e.g. inbox, step_1"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <p className="text-xs text-slate-500 mt-1">Step whose output the gate evaluates</p>
+              </div>
+
+              {/* Logic Toggle */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Condition Logic</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateConfig('gate_logic', 'all')}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      (currentConfig?.gate_logic || 'all') === 'all'
+                        ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400'
+                        : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    ALL (AND)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateConfig('gate_logic', 'any')}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      currentConfig?.gate_logic === 'any'
+                        ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400'
+                        : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    ANY (OR)
+                  </button>
+                </div>
+              </div>
+
+              {/* Conditions List */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Conditions</label>
+                <div className="space-y-2">
+                  {(currentConfig?.gate_conditions || []).map((cond: any, ci: number) => (
+                    <div key={ci} className="flex gap-2 items-start p-2 bg-slate-800/50 rounded-lg border border-slate-700">
+                      <div className="flex-1 grid grid-cols-4 gap-2">
+                        <CursorSafeInput
+                          type="text"
+                          value={cond.field || ''}
+                          onValueChange={(v) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], field: v }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          placeholder="e.g. count"
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        />
+                        <select
+                          value={cond.operator || '=='}
+                          onChange={(e) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], operator: e.target.value }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        >
+                          <optgroup label="Numeric">
+                            <option value="==">==</option>
+                            <option value="!=">!=</option>
+                            <option value=">">&gt;</option>
+                            <option value=">=">&gt;=</option>
+                            <option value="<">&lt;</option>
+                            <option value="<=">&lt;=</option>
+                          </optgroup>
+                          <optgroup label="String">
+                            <option value="contains">contains</option>
+                            <option value="not_contains">not_contains</option>
+                            <option value="starts_with">starts_with</option>
+                            <option value="ends_with">ends_with</option>
+                          </optgroup>
+                          <optgroup label="Regex">
+                            <option value="matches">matches</option>
+                          </optgroup>
+                          <optgroup label="Existence">
+                            <option value="is_empty">is_empty</option>
+                            <option value="is_not_empty">is_not_empty</option>
+                          </optgroup>
+                          <optgroup label="Collection">
+                            <option value="count_gte">count_gte</option>
+                            <option value="count_lte">count_lte</option>
+                          </optgroup>
+                        </select>
+                        <CursorSafeInput
+                          type="text"
+                          value={cond.value ?? ''}
+                          onValueChange={(v) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], value: v }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          placeholder="value"
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        />
+                        <select
+                          value={cond.type || 'string'}
+                          onChange={(e) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], type: e.target.value }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        >
+                          <option value="number">number</option>
+                          <option value="string">string</option>
+                          <option value="boolean">boolean</option>
+                          <option value="regex">regex</option>
+                          <option value="count">count</option>
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = (currentConfig?.gate_conditions || []).filter((_: any, i: number) => i !== ci)
+                          updateConfig('gate_conditions', updated)
+                        }}
+                        className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const updated = [...(currentConfig?.gate_conditions || []), { field: '', operator: '==', value: '', type: 'string' }]
+                    updateConfig('gate_conditions', updated)
+                  }}
+                  className="mt-2 px-3 py-1.5 text-xs font-medium rounded-lg border border-dashed border-slate-600
+                             text-slate-400 hover:border-cyan-500/50 hover:text-cyan-400 transition-colors"
+                >
+                  + Add Condition
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Agentic Mode Panel */}
+          {currentConfig?.gate_mode === 'agentic' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_source_step || ''}
+                  onValueChange={(v) => updateConfig('gate_source_step', v)}
+                  placeholder="e.g. inbox, step_1"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <p className="text-xs text-slate-500 mt-1">Step whose output the AI evaluates</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
+                <CursorSafeTextarea
+                  value={currentConfig?.gate_prompt || ''}
+                  onValueChange={(v) => updateConfig('gate_prompt', v)}
+                  rows={4}
+                  placeholder="Describe when the gate should PASS..."
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                </svg>
+                <span className="text-xs text-amber-400">Uses AI tokens &mdash; will incur LLM cost</span>
+              </div>
+            </>
+          )}
+
+          {/* Common: On Fail Action */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">On Fail Action</label>
+            <select
+              value={currentConfig?.gate_on_fail || 'skip'}
+              onChange={(e) => updateConfig('gate_on_fail', e.target.value)}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                         focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            >
+              <option value="skip">Skip remaining steps (silent)</option>
+              <option value="notify">Send notification, then stop</option>
+            </select>
+          </div>
+
+          {/* Notify sub-fields */}
+          {currentConfig?.gate_on_fail === 'notify' && (
+            <div className="space-y-3 pl-4 border-l-2 border-amber-500/30">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Channel</label>
+                <select
+                  value={currentConfig?.gate_fail_notification?.channel || 'whatsapp'}
+                  onChange={(e) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    channel: e.target.value
+                  })}
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                >
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="telegram">Telegram</option>
+                  <option value="slack">Slack</option>
+                  <option value="discord">Discord</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_fail_notification?.recipient || ''}
+                  onValueChange={(v) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    recipient: v
+                  })}
+                  placeholder="e.g. +5527999999999"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
+                <CursorSafeTextarea
+                  value={currentConfig?.gate_fail_notification?.message_template || ''}
+                  onValueChange={(v) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    message_template: v
+                  })}
+                  rows={3}
+                  placeholder="Gate blocked: {{gate.reasoning}}"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Tips */}
+          <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <p className="text-xs text-slate-400">
+              <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><ShieldCheckIcon size={12} /> Gate Tips:</span>
+              <br />{'•'} <strong>Programmatic</strong> mode is zero-cost {'—'} no AI tokens used
+              <br />{'•'} <strong>Agentic</strong> mode uses LLM for complex decisions
+              <br />{'•'} Reference gate output with {'{{'}step_N.gate_result{'}}'} in subsequent steps
             </p>
           </div>
         </>
@@ -2381,7 +3056,9 @@ function EditableStepBuilder({
   contacts,
   personas,
   customTools,
-  onStepsChange
+  customSkills,
+  onStepsChange,
+  flushCallbacksRef
 }: {
   flowId: number
   steps: EditableStepData[]
@@ -2389,8 +3066,11 @@ function EditableStepBuilder({
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onStepsChange: (steps: EditableStepData[]) => void
+  flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
 }) {
+  const toast = useToast()
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [showAddStep, setShowAddStep] = useState(steps.length === 0)
   const [savingSteps, setSavingSteps] = useState<Set<number>>(new Set())
@@ -2425,7 +3105,7 @@ function EditableStepBuilder({
       console.error('Failed to create step:', error)
       // Remove the temp step on error
       onStepsChange(steps)
-      alert('Failed to create step')
+      toast.error('Step Error', 'Failed to create step')
     }
   }
 
@@ -2497,7 +3177,7 @@ function EditableStepBuilder({
       console.error('Failed to delete step:', error)
       // Restore on error
       onStepsChange(steps)
-      alert('Failed to delete step')
+      toast.error('Step Error', 'Failed to delete step')
     }
   }
 
@@ -2509,28 +3189,36 @@ function EditableStepBuilder({
     const newSteps = [...steps]
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
 
-    // Update positions
-    newSteps.forEach((step, i) => step.position = i + 1)
+    // Update positions and auto-rename "Step N" names to match new position
+    newSteps.forEach((step, i) => {
+      step.position = i + 1
+      if (/^Step \d+$/.test(step.name)) {
+        step.name = `Step ${i + 1}`
+      }
+    })
     onStepsChange(newSteps)
 
-    // Update positions in backend
-    const step1 = newSteps[index]
-    const step2 = newSteps[targetIndex]
+    // Use atomic reorder endpoint to avoid unique constraint issues
+    const reorderPayload = newSteps
+      .filter(s => s.id)
+      .map(s => ({ step_id: s.id!, position: s.position, name: s.name }))
 
-    try {
-      if (step1.id) {
-        await api.updateFlowStep(flowId, step1.id, { position: step1.position })
+    if (reorderPayload.length > 0) {
+      try {
+        await api.reorderFlowSteps(flowId, reorderPayload)
+      } catch (error) {
+        console.error('Failed to reorder steps:', error)
+        // Restore original order on error
+        const restored = [...newSteps]
+          ;[restored[index], restored[targetIndex]] = [restored[targetIndex], restored[index]]
+        restored.forEach((step, i) => {
+          step.position = i + 1
+          if (/^Step \d+$/.test(step.name)) {
+            step.name = `Step ${i + 1}`
+          }
+        })
+        onStepsChange(restored)
       }
-      if (step2.id) {
-        await api.updateFlowStep(flowId, step2.id, { position: step2.position })
-      }
-    } catch (error) {
-      console.error('Failed to reorder steps:', error)
-      // Restore original order on error
-      const restored = [...newSteps]
-        ;[restored[index], restored[targetIndex]] = [restored[targetIndex], restored[index]]
-      restored.forEach((step, i) => step.position = i + 1)
-      onStepsChange(restored)
     }
   }
 
@@ -2592,6 +3280,15 @@ function EditableStepBuilder({
                 <div className="flex-1">
                   <div className="font-medium text-white flex items-center gap-2">
                     {step.name}
+                    {step.type === 'gate' && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        (step.config?.gate_mode || 'programmatic') === 'programmatic'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                      }`}>
+                        {(step.config?.gate_mode || 'programmatic') === 'programmatic' ? 'Programmatic' : 'Agentic'}
+                      </span>
+                    )}
                     {step._saving && (
                       <span className="text-xs text-cyan-400">Saving...</span>
                     )}
@@ -2602,6 +3299,16 @@ function EditableStepBuilder({
                   <div className="text-sm text-slate-400">
                     {STEP_TYPES.find(t => t.value === step.type)?.label}
                     {step.allow_multi_turn && ' • Multi-turn'}
+                    {step.type === 'gate' && step.config?.gate_conditions && step.config.gate_conditions.length > 0 && (
+                      <span className="text-xs text-slate-500 ml-1">
+                        • {step.config.gate_conditions.length} condition{step.config.gate_conditions.length !== 1 ? 's' : ''} ({step.config?.gate_logic || 'all'})
+                      </span>
+                    )}
+                    {step.type === 'gate' && step.config?.gate_mode === 'agentic' && step.config?.gate_prompt && (
+                      <span className="text-xs text-slate-500 ml-1">
+                        • AI prompt set
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -2630,7 +3337,10 @@ function EditableStepBuilder({
                     contacts={contacts}
                     personas={personas}
                     customTools={customTools}
+                    customSkills={customSkills}
                     onChange={(update) => updateStep(index, update)}
+                    flushCallbacksRef={flushCallbacksRef}
+                    allSteps={steps}
                   />
                 </div>
               )}
@@ -2689,19 +3399,24 @@ function EditableStepBuilder({
 
 // ==================== EDITABLE STEP CONFIG FORM ====================
 
-function EditableStepConfigForm({ step, agents, contacts, personas, customTools, onChange }: {
+function EditableStepConfigForm({ step, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef, allSteps }: {
   step: EditableStepData
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onChange: (update: Partial<EditableStepData>) => void
+  flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
+  allSteps: EditableStepData[]
 }) {
   const [recipientInput, setRecipientInput] = useState(step.config?.recipient || '')
   const [showContactSuggestions, setShowContactSuggestions] = useState(false)
   const [localChanges, setLocalChanges] = useState<Partial<EditableStepData>>({})
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const pendingChangesRef = useRef<Partial<EditableStepData>>({})
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
 
   useEffect(() => {
     setRecipientInput(step.config?.recipient || '')
@@ -2713,10 +3428,34 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
     }
   }, [step.id])
 
+  // Register flush callback so handleSave can force-flush pending changes before closing
+  useEffect(() => {
+    if (!flushCallbacksRef || !step.id) return
+    const flush = () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+        saveTimeoutRef.current = null
+      }
+      const pending = pendingChangesRef.current
+      if (Object.keys(pending).length > 0) {
+        onChangeRef.current(pending)
+        pendingChangesRef.current = {}
+      }
+    }
+    flushCallbacksRef.current.set(step.id, flush)
+    return () => { flushCallbacksRef.current.delete(step.id) }
+  }, [step.id, flushCallbacksRef])
+
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
+      }
+      // Flush any pending changes on unmount so edits are not lost
+      const pending = pendingChangesRef.current
+      if (Object.keys(pending).length > 0) {
+        onChangeRef.current(pending)
+        pendingChangesRef.current = {}
       }
     }
   }, [])
@@ -2765,10 +3504,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
       {/* Step Name */}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1.5">Step Name</label>
-        <input
+        <CursorSafeInput
           type="text"
           value={currentStep.name || ''}
-          onChange={(e) => debouncedSave({ name: e.target.value })}
+          onValueChange={(v) => debouncedSave({ name: v })}
           className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
@@ -2863,19 +3602,20 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
           <label className="block text-sm font-medium text-slate-300 mb-1.5">
             {step.type === 'notification' ? 'Notification Text' : 'Message Template'}
           </label>
-          <textarea
-            value={currentConfig?.message_template || currentConfig?.content || ''}
-            onChange={(e) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', e.target.value)}
+          <TemplateTextarea
+            value={step.type === 'notification'
+              ? (currentConfig?.content || '')
+              : (currentConfig?.message_template || '')}
+            onValueChange={(v) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', v)}
             rows={3}
             placeholder={step.type === 'notification'
               ? 'What to notify about? Use {{step_1.field}} to inject previous step outputs'
               : 'Enter your message... Use {{step_1.field}} to inject previous step outputs'}
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                        focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+            allSteps={allSteps.map(s => ({ name: s.name, type: s.type, position: s.position, config: s.config }))}
+            currentStepPosition={step.position}
           />
-          <p className="text-xs text-slate-500 mt-1">
-            <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Use {'{{'}step_N.field{'}}'} or {'{{'}step_name.field{'}}'} to inject outputs from previous steps.</span>
-          </p>
         </div>
       )}
 
@@ -2884,13 +3624,12 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <textarea
+            <CursorSafeTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
-              onChange={(e) => {
-                const value = e.target.value
+              onValueChange={(v) => {
                 debouncedSave(prev => ({
-                  conversation_objective: value,
-                  config: { ...step.config, ...prev.config, objective: value }
+                  conversation_objective: v,
+                  config: { ...step.config, ...prev.config, objective: v }
                 }))
               }}
               rows={2}
@@ -2902,9 +3641,9 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.initial_prompt || ''}
-              onChange={(e) => updateConfig('initial_prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('initial_prompt', v)}
               rows={2}
               placeholder="First message to send..."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
@@ -2943,10 +3682,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. conversation_result"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -2986,8 +3725,6 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               {(currentConfig?.tool_type || 'built_in') === 'built_in' ? (
                 <>
                   <option value="google_search">Google Search</option>
-                  <option value="weather">Weather</option>
-                  <option value="web_scraping">Web Scraping</option>
                   <option value="asana_tasks">Asana Tasks</option>
                   <option value="send_message">Send Message</option>
                 </>
@@ -3020,10 +3757,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. scan_results"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -3044,15 +3781,28 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             >
               <option value="">Select a skill...</option>
-              {AVAILABLE_SKILLS.map(skill => (
-                <option key={skill.value} value={skill.value}>
-                  {skill.label}
-                </option>
-              ))}
+              <optgroup label="Built-in Skills">
+                {AVAILABLE_SKILLS.map(skill => (
+                  <option key={skill.value} value={skill.value}>
+                    {skill.label}
+                  </option>
+                ))}
+              </optgroup>
+              {customSkills && customSkills.length > 0 && (
+                <optgroup label="Custom Skills">
+                  {customSkills.map((s: any) => (
+                    <option key={`custom:${s.slug}`} value={`custom:${s.slug}`}>
+                      {s.icon || '\uD83E\uDDE9'} {s.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             {currentConfig?.skill_type && (
               <p className="text-xs text-slate-500 mt-1">
-                {AVAILABLE_SKILLS.find(s => s.value === currentConfig?.skill_type)?.description}
+                {AVAILABLE_SKILLS.find(s => s.value === currentConfig?.skill_type)?.description
+                  || customSkills?.find((s: any) => `custom:${s.slug}` === currentConfig?.skill_type)?.description
+                  || ''}
               </p>
             )}
           </div>
@@ -3062,9 +3812,9 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.prompt || ''}
-              onChange={(e) => updateConfig('prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
@@ -3084,14 +3834,6 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               </p>
             </div>
           )}
-          {currentConfig?.skill_type === 'weather' && (
-            <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
-              <p className="text-xs text-slate-400">
-                <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><CloudSunIcon size={12} /> Weather Tips:</span> Specify the location clearly.
-                <br />Example: "Como está o tempo em São Paulo hoje?"
-              </p>
-            </div>
-          )}
           {currentConfig?.skill_type === 'scheduler' && (
             <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
               <p className="text-xs text-slate-400">
@@ -3107,10 +3849,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Output Alias (optional)
               <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
             </label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.output_alias || ''}
-              onChange={(e) => updateConfig('output_alias', e.target.value)}
+              onValueChange={(v) => updateConfig('output_alias', v)}
               placeholder="e.g. flight_results"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -3127,10 +3869,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.source_step || ''}
-              onChange={(e) => updateConfig('source_step', e.target.value)}
+              onValueChange={(v) => updateConfig('source_step', v)}
               placeholder="step_1 or step name"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
@@ -3183,9 +3925,9 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 {currentConfig?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <textarea
+            <CursorSafeTextarea
               value={currentConfig?.summary_prompt || ''}
-              onChange={(e) => updateConfig('summary_prompt', e.target.value)}
+              onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
               placeholder={currentConfig?.prompt_mode === 'replace'
                 ? 'Enter your complete summarization instructions...\n\nExample:\nExtract only:\n📍 Status: [value]\n📅 Date: [value]'
@@ -3226,10 +3968,10 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <input
+            <CursorSafeInput
               type="text"
               value={currentConfig?.command || ''}
-              onChange={(e) => updateConfig('command', e.target.value)}
+              onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
@@ -3254,6 +3996,311 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
             </p>
             <p className="text-xs text-slate-500 mt-2">
               Output available as {'{{'}step_N.output{'}}'} in subsequent steps
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* Gate Settings */}
+      {step.type === 'gate' && (
+        <>
+          {/* Mode Toggle */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-200 mb-2">Gate Mode</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => updateConfig('gate_mode', 'programmatic')}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                  (currentConfig?.gate_mode || 'programmatic') === 'programmatic'
+                    ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
+                    : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                }`}
+              >
+                Programmatic
+              </button>
+              <button
+                type="button"
+                onClick={() => updateConfig('gate_mode', 'agentic')}
+                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                  currentConfig?.gate_mode === 'agentic'
+                    ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                    : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                }`}
+              >
+                Agentic (AI)
+              </button>
+            </div>
+          </div>
+
+          {/* Programmatic Mode Panel */}
+          {(currentConfig?.gate_mode || 'programmatic') === 'programmatic' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_source_step || ''}
+                  onValueChange={(v) => updateConfig('gate_source_step', v)}
+                  placeholder="e.g. inbox, step_1"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <p className="text-xs text-slate-500 mt-1">Step whose output the gate evaluates</p>
+              </div>
+
+              {/* Logic Toggle */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Condition Logic</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateConfig('gate_logic', 'all')}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      (currentConfig?.gate_logic || 'all') === 'all'
+                        ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400'
+                        : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    ALL (AND)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateConfig('gate_logic', 'any')}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      currentConfig?.gate_logic === 'any'
+                        ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400'
+                        : 'bg-slate-700/30 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    ANY (OR)
+                  </button>
+                </div>
+              </div>
+
+              {/* Conditions List */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Conditions</label>
+                <div className="space-y-2">
+                  {(currentConfig?.gate_conditions || []).map((cond: any, ci: number) => (
+                    <div key={ci} className="flex gap-2 items-start p-2 bg-slate-800/50 rounded-lg border border-slate-700">
+                      <div className="flex-1 grid grid-cols-4 gap-2">
+                        <CursorSafeInput
+                          type="text"
+                          value={cond.field || ''}
+                          onValueChange={(v) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], field: v }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          placeholder="e.g. count"
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        />
+                        <select
+                          value={cond.operator || '=='}
+                          onChange={(e) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], operator: e.target.value }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        >
+                          <optgroup label="Numeric">
+                            <option value="==">==</option>
+                            <option value="!=">!=</option>
+                            <option value=">">&gt;</option>
+                            <option value=">=">&gt;=</option>
+                            <option value="<">&lt;</option>
+                            <option value="<=">&lt;=</option>
+                          </optgroup>
+                          <optgroup label="String">
+                            <option value="contains">contains</option>
+                            <option value="not_contains">not_contains</option>
+                            <option value="starts_with">starts_with</option>
+                            <option value="ends_with">ends_with</option>
+                          </optgroup>
+                          <optgroup label="Regex">
+                            <option value="matches">matches</option>
+                          </optgroup>
+                          <optgroup label="Existence">
+                            <option value="is_empty">is_empty</option>
+                            <option value="is_not_empty">is_not_empty</option>
+                          </optgroup>
+                          <optgroup label="Collection">
+                            <option value="count_gte">count_gte</option>
+                            <option value="count_lte">count_lte</option>
+                          </optgroup>
+                        </select>
+                        <CursorSafeInput
+                          type="text"
+                          value={cond.value ?? ''}
+                          onValueChange={(v) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], value: v }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          placeholder="value"
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        />
+                        <select
+                          value={cond.type || 'string'}
+                          onChange={(e) => {
+                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            updated[ci] = { ...updated[ci], type: e.target.value }
+                            updateConfig('gate_conditions', updated)
+                          }}
+                          className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs
+                                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        >
+                          <option value="number">number</option>
+                          <option value="string">string</option>
+                          <option value="boolean">boolean</option>
+                          <option value="regex">regex</option>
+                          <option value="count">count</option>
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = (currentConfig?.gate_conditions || []).filter((_: any, i: number) => i !== ci)
+                          updateConfig('gate_conditions', updated)
+                        }}
+                        className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const updated = [...(currentConfig?.gate_conditions || []), { field: '', operator: '==', value: '', type: 'string' }]
+                    updateConfig('gate_conditions', updated)
+                  }}
+                  className="mt-2 px-3 py-1.5 text-xs font-medium rounded-lg border border-dashed border-slate-600
+                             text-slate-400 hover:border-cyan-500/50 hover:text-cyan-400 transition-colors"
+                >
+                  + Add Condition
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Agentic Mode Panel */}
+          {currentConfig?.gate_mode === 'agentic' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Source Step</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_source_step || ''}
+                  onValueChange={(v) => updateConfig('gate_source_step', v)}
+                  placeholder="e.g. inbox, step_1"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <p className="text-xs text-slate-500 mt-1">Step whose output the AI evaluates</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
+                <CursorSafeTextarea
+                  value={currentConfig?.gate_prompt || ''}
+                  onValueChange={(v) => updateConfig('gate_prompt', v)}
+                  rows={4}
+                  placeholder="Describe when the gate should PASS..."
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                </svg>
+                <span className="text-xs text-amber-400">Uses AI tokens &mdash; will incur LLM cost</span>
+              </div>
+            </>
+          )}
+
+          {/* Common: On Fail Action */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">On Fail Action</label>
+            <select
+              value={currentConfig?.gate_on_fail || 'skip'}
+              onChange={(e) => updateConfig('gate_on_fail', e.target.value)}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                         focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            >
+              <option value="skip">Skip remaining steps (silent)</option>
+              <option value="notify">Send notification, then stop</option>
+            </select>
+          </div>
+
+          {/* Notify sub-fields */}
+          {currentConfig?.gate_on_fail === 'notify' && (
+            <div className="space-y-3 pl-4 border-l-2 border-amber-500/30">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Channel</label>
+                <select
+                  value={currentConfig?.gate_fail_notification?.channel || 'whatsapp'}
+                  onChange={(e) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    channel: e.target.value
+                  })}
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                >
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="telegram">Telegram</option>
+                  <option value="slack">Slack</option>
+                  <option value="discord">Discord</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
+                <CursorSafeInput
+                  type="text"
+                  value={currentConfig?.gate_fail_notification?.recipient || ''}
+                  onValueChange={(v) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    recipient: v
+                  })}
+                  placeholder="e.g. +5527999999999"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
+                <CursorSafeTextarea
+                  value={currentConfig?.gate_fail_notification?.message_template || ''}
+                  onValueChange={(v) => updateConfig('gate_fail_notification', {
+                    ...currentConfig?.gate_fail_notification,
+                    message_template: v
+                  })}
+                  rows={3}
+                  placeholder="Gate blocked: {{gate.reasoning}}"
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Tips */}
+          <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <p className="text-xs text-slate-400">
+              <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><ShieldCheckIcon size={12} /> Gate Tips:</span>
+              <br />{'•'} <strong>Programmatic</strong> mode is zero-cost {'—'} no AI tokens used
+              <br />{'•'} <strong>Agentic</strong> mode uses LLM for complex decisions
+              <br />{'•'} Reference gate output with {'{{'}step_N.gate_result{'}}'} in subsequent steps
             </p>
           </div>
         </>
@@ -3296,20 +4343,28 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
 
 // ==================== EDIT FLOW MODAL ====================
 
-function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClose, onSuccess }: {
+function EditFlowModal({ flowId, agents, contacts, personas, customTools, customSkills, onClose, onSuccess }: {
   flowId: number
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  customSkills?: any[]
   onClose: () => void
   onSuccess: () => void
 }) {
+  const toast = useToast()
   const [flow, setFlow] = useState<FlowDefinition | null>(null)
   const [steps, setSteps] = useState<EditableStepData[]>([])
+  const stepsRef = useRef<EditableStepData[]>([])
   const [loading, setLoading] = useState(true)
+  // Flush callbacks registered by each EditableStepConfigForm to force-save pending edits
+  const flushCallbacksRef = useRef<Map<number, () => void>>(new Map())
   const [saving, setSaving] = useState(false)
   const [validationErrors, setValidationErrors] = useState<string[]>([])
+
+  // Keep stepsRef in sync for use inside handleSave after flush
+  useEffect(() => { stepsRef.current = steps }, [steps])
 
   useEffect(() => {
     loadFlow()
@@ -3330,7 +4385,7 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClos
       setSteps(editableSteps)
     } catch (error) {
       console.error('Failed to load flow:', error)
-      alert('Failed to load flow')
+      toast.error('Load Failed', 'Failed to load flow')
       onClose()
     } finally {
       setLoading(false)
@@ -3342,7 +4397,7 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClos
       const result = await api.validateFlow(flowId)
       if (result.valid) {
         setValidationErrors([])
-        alert('Flow is valid!')
+        toast.success('Validation', 'Flow is valid!')
       } else {
         setValidationErrors(result.errors || ['Validation failed'])
       }
@@ -3356,6 +4411,15 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClos
     if (!flow) return
     setSaving(true)
     try {
+      // 1. Flush all pending form edits into the steps state synchronously.
+      //    This ensures text field changes that are still in the 500ms debounce window
+      //    are propagated to the steps array before we save.
+      flushCallbacksRef.current.forEach(flush => flush())
+
+      // 2. Wait one microtask for React to process the flushed state updates
+      await new Promise(r => setTimeout(r, 0))
+
+      // 3. Save flow-level data
       await api.patchFlow(flowId, {
         name: flow.name,
         description: flow.description || undefined,
@@ -3363,11 +4427,22 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClos
         execution_method: flow.execution_method as any,
         scheduled_at: flow.scheduled_at,
         recurrence_rule: flow.recurrence_rule as any,
+        default_agent_id: flow.default_agent_id ?? 0,
+        trigger_keywords: flow.trigger_keywords ?? [],  // BUG-336
       })
+
+      // 4. Explicitly save all steps using the latest ref (updated after flush)
+      const latestSteps = stepsRef.current
+      await Promise.all(
+        latestSteps.filter(s => s.id).map(s =>
+          api.updateFlowStep(flowId, s.id!, editableToUpdatePayload(s))
+        )
+      )
+
       onSuccess()
     } catch (error) {
       console.error('Failed to save flow:', error)
-      alert('Failed to save flow')
+      toast.error('Save Failed', 'Failed to save flow')
     } finally {
       setSaving(false)
     }
@@ -3501,6 +4576,43 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClos
                   />
                 </div>
               )}
+
+              {/* BUG-336: Keyword trigger configuration in edit mode */}
+              {flow.execution_method === 'keyword' && (
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-slate-300 mb-1.5">Trigger Keywords</label>
+                  <p className="text-xs text-slate-500 mb-2">
+                    One keyword or command per line. Matching messages in Playground or channels will trigger this flow instead of the AI (e.g. <code className="bg-slate-800 px-1 rounded">/testflow</code>).
+                  </p>
+                  <textarea
+                    value={(flow.trigger_keywords || []).join('\n')}
+                    onChange={(e) => setFlow(prev => prev ? {
+                      ...prev,
+                      trigger_keywords: e.target.value.split('\n').map(k => k.trim()).filter(Boolean)
+                    } : null)}
+                    rows={4}
+                    placeholder="/testflow&#10;run report&#10;start workflow"
+                    className="w-full px-4 py-2.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white font-mono text-sm
+                               focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  />
+                </div>
+              )}
+
+              <div className="col-span-2">
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Default Agent</label>
+                <select
+                  value={flow.default_agent_id || ''}
+                  onChange={(e) => setFlow(prev => prev ? { ...prev, default_agent_id: e.target.value ? parseInt(e.target.value) : null } : null)}
+                  className="w-full px-4 py-2.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white
+                             focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                >
+                  <option value="">Select an agent...</option>
+                  {agents.map(agent => (
+                    <option key={agent.id} value={agent.id}>{agent.contact_name}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-500 mt-1">Used for steps that don&apos;t have a specific agent assigned</p>
+              </div>
             </div>
           </div>
 
@@ -3514,7 +4626,9 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, onClos
               contacts={contacts}
               personas={personas}
               customTools={customTools}
+              customSkills={customSkills}
               onStepsChange={setSteps}
+              flushCallbacksRef={flushCallbacksRef}
             />
           </div>
         </div>
@@ -3558,10 +4672,31 @@ function ViewRunModal({ runId, onClose }: {
   const [run, setRun] = useState<FlowRun | null>(null)
   const [nodeRuns, setNodeRuns] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const statusRef = useRef<string>('')
+
+  const isActive = statusRef.current === 'pending' || statusRef.current === 'running'
 
   useEffect(() => {
     loadRun()
+    return () => stopPolling()
   }, [runId])
+
+  // Start/stop polling based on run status
+  useEffect(() => {
+    if (isActive && !pollingRef.current) {
+      pollingRef.current = setInterval(pollRun, 2000)
+    } else if (!isActive && pollingRef.current) {
+      stopPolling()
+    }
+  }, [run?.status])
+
+  function stopPolling() {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+      pollingRef.current = null
+    }
+  }
 
   async function loadRun() {
     setLoading(true)
@@ -3571,6 +4706,7 @@ function ViewRunModal({ runId, onClose }: {
         api.getFlowNodeRuns(runId)
       ])
       setRun(runData)
+      statusRef.current = runData.status
       setNodeRuns(nodeRunsData)
     } catch (error) {
       console.error('Failed to load run:', error)
@@ -3579,10 +4715,24 @@ function ViewRunModal({ runId, onClose }: {
     }
   }
 
-  if (loading || !run) {
+  async function pollRun() {
+    try {
+      const [runData, nodeRunsData] = await Promise.all([
+        api.getFlowRun(runId),
+        api.getFlowNodeRuns(runId)
+      ])
+      setRun(runData)
+      statusRef.current = runData.status
+      setNodeRuns(nodeRunsData)
+    } catch (error) {
+      console.error('Failed to poll run:', error)
+    }
+  }
+
+  if (loading && !run) {
     return (
       <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
-        <div className="bg-slate-800 rounded-2xl p-8">
+        <div className="bg-slate-800 rounded-2xl p-8 text-center">
           <div className="animate-spin h-8 w-8 border-2 border-cyan-500 border-t-transparent rounded-full mx-auto" />
           <p className="text-slate-400 mt-4">Loading run details...</p>
         </div>
@@ -3590,14 +4740,30 @@ function ViewRunModal({ runId, onClose }: {
     )
   }
 
+  const totalSteps = run?.total_steps || 0
+  const completedSteps = (run?.completed_steps || 0) + (run?.failed_steps || 0)
+  const progressPct = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0
+  const runIsActive = run && ['pending', 'running'].includes(run.status)
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-slate-800 rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-700">
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-white">Run #{run.id}</h2>
-            <p className="text-sm text-slate-400">Flow #{run.flow_definition_id}</p>
+          <div className="flex items-center gap-3">
+            {runIsActive && (
+              <div className="relative flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500" />
+              </div>
+            )}
+            <div>
+              <h2 className="text-xl font-bold text-white">
+                Run #{run?.id || '...'}
+                {runIsActive && <span className="ml-2 text-sm font-normal text-cyan-400">Live</span>}
+              </h2>
+              <p className="text-sm text-slate-400">Flow #{run?.flow_definition_id}</p>
+            </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3606,30 +4772,53 @@ function ViewRunModal({ runId, onClose }: {
           </button>
         </div>
 
+        {/* Progress bar (visible while active) */}
+        {runIsActive && totalSteps > 0 && (
+          <div className="px-6 pt-4">
+            <div className="flex items-center justify-between text-sm mb-2">
+              <span className="text-slate-400">
+                {run?.status === 'pending' ? 'Preparing...' : `Executing step ${completedSteps + 1} of ${totalSteps}`}
+              </span>
+              <span className="text-cyan-400 font-medium">{progressPct}%</span>
+            </div>
+            <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-teal-400 transition-all duration-500 ease-out"
+                style={{ width: `${Math.max(progressPct, run?.status === 'pending' ? 0 : 3)}%` }}
+              />
+              {run?.status === 'running' && progressPct < 100 && (
+                <div className="h-full w-full -mt-2 bg-gradient-to-r from-transparent via-cyan-400/20 to-transparent animate-pulse" />
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Run Info */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-slate-700/30 rounded-lg p-4">
-              <div className="text-sm text-slate-400">Status</div>
-              <StatusBadge status={run.status} />
+          {run && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-slate-700/30 rounded-lg p-4">
+                <div className="text-sm text-slate-400">Status</div>
+                <StatusBadge status={run.status} />
+              </div>
+              <div className="bg-slate-700/30 rounded-lg p-4">
+                <div className="text-sm text-slate-400">Started</div>
+                <div className="text-white">{run.started_at ? formatDate(run.started_at) : '-'}</div>
+              </div>
+              <div className="bg-slate-700/30 rounded-lg p-4">
+                <div className="text-sm text-slate-400">Completed</div>
+                <div className="text-white">{run.completed_at ? formatDate(run.completed_at) : '-'}</div>
+              </div>
+              <div className="bg-slate-700/30 rounded-lg p-4">
+                <div className="text-sm text-slate-400">Steps</div>
+                <div className="text-white">{completedSteps}/{totalSteps}</div>
+              </div>
             </div>
-            <div className="bg-slate-700/30 rounded-lg p-4">
-              <div className="text-sm text-slate-400">Started</div>
-              <div className="text-white">{formatDate(run.started_at)}</div>
-            </div>
-            <div className="bg-slate-700/30 rounded-lg p-4">
-              <div className="text-sm text-slate-400">Completed</div>
-              <div className="text-white">{run.completed_at ? formatDate(run.completed_at) : '-'}</div>
-            </div>
-            <div className="bg-slate-700/30 rounded-lg p-4">
-              <div className="text-sm text-slate-400">Initiator</div>
-              <div className="text-white truncate">{run.initiator}</div>
-            </div>
-          </div>
+          )}
 
           {/* Error */}
-          {run.error_text && (
+          {run?.error_text && (
             <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
               <h4 className="text-sm font-semibold text-red-400 mb-2">Error</h4>
               <p className="text-sm text-red-300">{run.error_text}</p>
@@ -3639,17 +4828,38 @@ function ViewRunModal({ runId, onClose }: {
           {/* Step Runs */}
           <div>
             <h3 className="text-lg font-semibold text-white mb-4">Step Execution</h3>
-            {nodeRuns.length === 0 ? (
+            {nodeRuns.length === 0 && !runIsActive ? (
               <p className="text-slate-400">No step execution data available</p>
+            ) : nodeRuns.length === 0 && runIsActive ? (
+              <div className="flex items-center gap-3 text-slate-400 py-4">
+                <div className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
+                <span>{run?.status === 'pending' ? 'Preparing execution...' : 'Waiting for first step...'}</span>
+              </div>
             ) : (
               <div className="space-y-3">
                 {nodeRuns.map((nodeRun, index) => (
-                  <div key={nodeRun.id} className="bg-slate-700/30 rounded-lg p-4 border border-slate-700">
+                  <div
+                    key={nodeRun.id}
+                    className={`bg-slate-700/30 rounded-lg p-4 border transition-all duration-300 ${
+                      nodeRun.status === 'running'
+                        ? 'border-cyan-500/50 shadow-lg shadow-cyan-500/5'
+                        : nodeRun.status === 'completed'
+                          ? 'border-green-500/30'
+                          : nodeRun.status === 'failed'
+                            ? 'border-red-500/30'
+                            : 'border-slate-700'
+                    }`}
+                  >
                     <div className="flex items-center justify-between mb-2">
-                      <div className="font-medium text-white">Step {index + 1}</div>
+                      <div className="flex items-center gap-2">
+                        {nodeRun.status === 'running' && (
+                          <div className="w-3 h-3 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                        )}
+                        <div className="font-medium text-white">Step {index + 1}</div>
+                      </div>
                       <StatusBadge status={nodeRun.status} />
                     </div>
-                    {nodeRun.execution_time_ms && (
+                    {nodeRun.execution_time_ms != null && (
                       <div className="text-sm text-slate-400">
                         Execution time: {nodeRun.execution_time_ms}ms
                       </div>
@@ -3659,6 +4869,13 @@ function ViewRunModal({ runId, onClose }: {
                     )}
                   </div>
                 ))}
+                {/* Pending steps placeholder */}
+                {runIsActive && nodeRuns.length < totalSteps && (
+                  <div className="flex items-center gap-2 text-slate-500 text-sm px-4 py-2">
+                    <div className="w-3 h-3 border-2 border-slate-600 border-t-transparent rounded-full animate-spin" />
+                    {totalSteps - nodeRuns.length} step{totalSteps - nodeRuns.length > 1 ? 's' : ''} remaining...
+                  </div>
+                )}
               </div>
             )}
           </div>

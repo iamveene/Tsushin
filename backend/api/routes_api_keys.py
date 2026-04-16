@@ -52,7 +52,7 @@ def get_db():
 
 # Pydantic schemas
 class ApiKeyCreate(BaseModel):
-    service: str  # 'anthropic', 'openai', 'gemini', 'brave_search', 'openweather', 'amadeus', 'google_flights', 'serpapi'
+    service: str  # 'anthropic', 'openai', 'gemini', 'brave_search', 'amadeus', 'google_flights', 'serpapi'
     api_key: str
     is_active: bool = True
 
@@ -81,11 +81,19 @@ SUPPORTED_SERVICES = {
     'openai': 'OpenAI (GPT)',
     'gemini': 'Google Gemini',
     'openrouter': 'OpenRouter',
+    'groq': 'Groq (LLaMA/Mixtral)',
+    'grok': 'Grok (xAI)',
+    'deepseek': 'DeepSeek',
+    'elevenlabs': 'ElevenLabs (TTS)',
     'brave_search': 'Brave Search API',
-    'openweather': 'OpenWeatherMap',
     'amadeus': 'Amadeus (Flight Search)',
     'google_flights': 'Google Flights (SerpApi)',
-    'serpapi': 'SerpAPI (Google Search)'
+    'serpapi': 'SerpAPI (Google Search)',
+    'vertex_ai': 'Vertex AI (Google Cloud)',
+    'vertex_ai_project_id': 'Vertex AI Project ID',
+    'vertex_ai_region': 'Vertex AI Region',
+    'vertex_ai_sa_email': 'Vertex AI Service Account Email',
+    'tavily': 'Tavily (Web Search)',
 }
 
 
@@ -262,7 +270,7 @@ def get_api_key_route(
 
     # Verify user can access this resource
     if not ctx.can_access_resource(key.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this API key")
+        raise HTTPException(status_code=404, detail="API key not found")
 
     return to_api_key_response(key, db)
 
@@ -364,7 +372,7 @@ def update_api_key(
 
     # Verify access
     if not ctx.can_access_resource(key.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this API key")
+        raise HTTPException(status_code=404, detail="API key not found")
 
     plaintext_key_for_sync = None
     if data.api_key is not None:
@@ -424,7 +432,7 @@ def delete_api_key(
 
     # Verify access
     if not ctx.can_access_resource(key.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this API key")
+        raise HTTPException(status_code=404, detail="API key not found")
 
     db.delete(key)
     db.commit()
@@ -434,13 +442,14 @@ def delete_api_key(
 # ==================== Ollama Integration (Phase 5.2) ====================
 
 @router.get("/ollama/health")
-async def check_ollama_health(db: Session = Depends(get_db)):
+async def check_ollama_health(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_user_required),
+):
     """
     Check Ollama local LLM service health status.
     Returns online/offline status and available models.
     Phase 5.2.1: Uses configured base URL from Config table.
-
-    Note: This is a system-wide health check, no tenant isolation needed.
     """
     # Load from Config table if available, otherwise from env var
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
@@ -452,6 +461,12 @@ async def check_ollama_health(db: Session = Depends(get_db)):
         ollama_base_url = config.ollama_base_url
     if config and config.ollama_api_key:
         ollama_api_key = config.ollama_api_key
+
+    from utils.ssrf_validator import validate_ollama_url, SSRFValidationError
+    try:
+        ollama_base_url = validate_ollama_url(ollama_base_url)
+    except SSRFValidationError as e:
+        return {"status": "error", "base_url": ollama_base_url, "available": False, "error": f"SSRF blocked: {e}"}
 
     try:
         headers = {}

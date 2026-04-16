@@ -156,7 +156,7 @@ async def approve_command(
         raise HTTPException(status_code=404, detail="Command not found")
 
     if not ctx.can_access_resource(command.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     result = service.approve_command(
         command_id=command_id,
@@ -200,7 +200,7 @@ async def reject_command(
         raise HTTPException(status_code=404, detail="Command not found")
 
     if not ctx.can_access_resource(command.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     result = service.reject_command(
         command_id=command_id,
@@ -294,7 +294,9 @@ async def get_approval_stats(
 @router.post("/check-security", response_model=SecurityCheckResponse)
 async def check_command_security(
     request: SecurityCheckRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("shell.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """
     Check commands for security risks without executing.
@@ -303,7 +305,11 @@ async def check_command_security(
     """
     security = get_security_service()
 
-    allowed, result = security.check_commands(request.commands)
+    allowed, result = security.check_commands(
+        request.commands,
+        tenant_id=ctx.tenant_id,
+        db=db
+    )
 
     return SecurityCheckResponse(
         allowed=allowed,

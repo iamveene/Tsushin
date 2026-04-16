@@ -46,7 +46,8 @@ class KnowledgeService:
         agent_id: int,
         user_id: str,
         topic: Optional[str] = None,
-        min_confidence: float = 0.0
+        min_confidence: float = 0.0,
+        decay_config=None
     ) -> List[Dict]:
         """
         Get all facts about a user.
@@ -56,6 +57,7 @@ class KnowledgeService:
             user_id: User identifier
             topic: Optional topic filter
             min_confidence: Minimum confidence threshold
+            decay_config: Optional DecayConfig for temporal decay filtering
 
         Returns:
             List of fact dictionaries
@@ -76,10 +78,84 @@ class KnowledgeService:
                 SemanticKnowledge.key
             ).all()
 
-            return [self._fact_to_dict(f) for f in facts]
+            decay_enabled = (
+                decay_config is not None
+                and getattr(decay_config, 'enabled', False)
+            )
+
+            if decay_enabled:
+                from .temporal_decay import (
+                    apply_decay_to_confidence, compute_freshness_label, should_archive
+                )
+                now = datetime.utcnow()
+                result = []
+                accessed_ids = []
+
+                for f in facts:
+                    last_accessed = getattr(f, 'last_accessed_at', None)
+                    eff_confidence = apply_decay_to_confidence(
+                        f.confidence, last_accessed, now, decay_config.decay_lambda
+                    )
+
+                    if should_archive(eff_confidence, decay_config.archive_threshold):
+                        continue
+
+                    freshness = compute_freshness_label(
+                        last_accessed, now, decay_config.decay_lambda,
+                        decay_config.archive_threshold
+                    )
+
+                    fact_dict = self._fact_to_dict(f)
+                    fact_dict['effective_confidence'] = round(eff_confidence, 4)
+                    fact_dict['freshness'] = freshness['freshness']
+                    fact_dict['decay_factor'] = freshness['decay_factor']
+                    fact_dict['days_since_access'] = freshness['days_since_access']
+                    result.append(fact_dict)
+                    accessed_ids.append(f.id)
+
+                # Update last_accessed_at for returned facts
+                if accessed_ids:
+                    try:
+                        self.db.query(SemanticKnowledge).filter(
+                            SemanticKnowledge.id.in_(accessed_ids)
+                        ).update(
+                            {SemanticKnowledge.last_accessed_at: datetime.utcnow()},
+                            synchronize_session='fetch'
+                        )
+                        self.db.commit()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to update last_accessed_at for facts: {e}")
+                        self.db.rollback()
+
+                return result
+            else:
+                return [self._fact_to_dict(f) for f in facts]
 
         except Exception as e:
             self.logger.error(f"Failed to get user facts: {e}")
+            return []
+
+    def get_all_agent_facts(
+        self,
+        agent_id: int,
+        topic: Optional[str] = None,
+        min_confidence: float = 0.0
+    ) -> List[Dict]:
+        try:
+            query = self.db.query(SemanticKnowledge).filter(
+                SemanticKnowledge.agent_id == agent_id,
+                SemanticKnowledge.confidence >= min_confidence
+            )
+            if topic:
+                query = query.filter(SemanticKnowledge.topic == topic)
+            facts = query.order_by(
+                SemanticKnowledge.updated_at.desc(),
+                SemanticKnowledge.topic,
+                SemanticKnowledge.key
+            ).all()
+            return [self._fact_to_dict(f) for f in facts]
+        except Exception as e:
+            self.logger.error(f"Failed to get all agent facts: {e}")
             return []
 
     def get_fact(
@@ -414,6 +490,7 @@ class KnowledgeService:
         Returns:
             Dictionary representation
         """
+        last_accessed = getattr(fact, 'last_accessed_at', None)
         return {
             'id': fact.id,
             'agent_id': fact.agent_id,
@@ -423,8 +500,78 @@ class KnowledgeService:
             'value': fact.value,
             'confidence': fact.confidence,
             'learned_at': fact.learned_at.isoformat() if fact.learned_at else None,
-            'updated_at': fact.updated_at.isoformat() if fact.updated_at else None
+            'updated_at': fact.updated_at.isoformat() if fact.updated_at else None,
+            'last_accessed_at': last_accessed.isoformat() if last_accessed else None
         }
+
+    def archive_decayed_facts(
+        self,
+        agent_id: int,
+        decay_lambda: float,
+        archive_threshold: float,
+        dry_run: bool = False
+    ) -> Dict:
+        """
+        Archive (delete) facts whose decayed confidence falls below the archive threshold.
+
+        Args:
+            agent_id: Agent ID
+            decay_lambda: Decay rate
+            archive_threshold: Confidence threshold below which facts are archived
+            dry_run: If True, only report what would be archived
+
+        Returns:
+            Dictionary with archive results
+        """
+        try:
+            from .temporal_decay import apply_decay_to_confidence, should_archive
+
+            facts = self.db.query(SemanticKnowledge).filter(
+                SemanticKnowledge.agent_id == agent_id
+            ).all()
+
+            now = datetime.utcnow()
+            to_archive = []
+
+            for fact in facts:
+                last_accessed = getattr(fact, 'last_accessed_at', None)
+                eff_confidence = apply_decay_to_confidence(
+                    fact.confidence, last_accessed, now, decay_lambda
+                )
+                if should_archive(eff_confidence, archive_threshold):
+                    to_archive.append({
+                        'id': fact.id,
+                        'topic': fact.topic,
+                        'key': fact.key,
+                        'confidence': fact.confidence,
+                        'effective_confidence': round(eff_confidence, 4),
+                        'user_id': fact.user_id
+                    })
+
+            if not dry_run and to_archive:
+                archive_ids = [f['id'] for f in to_archive]
+                self.db.query(SemanticKnowledge).filter(
+                    SemanticKnowledge.id.in_(archive_ids)
+                ).delete(synchronize_session='fetch')
+                self.db.commit()
+
+            return {
+                'total_facts': len(facts),
+                'archived_count': len(to_archive),
+                'archived_facts': to_archive,
+                'dry_run': dry_run
+            }
+
+        except Exception as e:
+            self.logger.error(f"Failed to archive decayed facts: {e}")
+            self.db.rollback()
+            return {
+                'total_facts': 0,
+                'archived_count': 0,
+                'archived_facts': [],
+                'dry_run': dry_run,
+                'error': str(e)
+            }
 
     def format_communication_style_prompt(
         self,

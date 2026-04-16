@@ -63,6 +63,7 @@ class CommandResult:
     execution_time_ms: Optional[int] = None
     error_message: Optional[str] = None
     timed_out: bool = False
+    delivery_failed: bool = False  # True if command timed out without beacon picking it up (sent_at is NULL)
     # Security-related fields (CRIT-005)
     blocked: bool = False
     blocked_reason: Optional[str] = None
@@ -96,7 +97,15 @@ class CommandResult:
             )
 
         if self.timed_out:
-            return f"⏱️ Command timed out (ID: {self.command_id}). The beacon may still be processing it."
+            if self.delivery_failed:
+                return (
+                    f"⏱️ Beacon offline — command was never delivered (ID: {self.command_id}). "
+                    f"Check that the beacon process is running and can reach the server."
+                )
+            return (
+                f"⏱️ Command sent to beacon but execution timed out (ID: {self.command_id}). "
+                f"The command may still be running in background."
+            )
 
         if not self.success:
             error = self.error_message or self.stderr or "Unknown error"
@@ -256,6 +265,35 @@ class ShellCommandService:
         return None, f"No shell found with hostname or name '{target}'"
 
     # =========================================================================
+    # Beacon Health Check
+    # =========================================================================
+
+    def _check_beacon_health(self, shell) -> Optional[str]:
+        """
+        Check if beacon has checked in recently.
+
+        Returns a warning message if beacon appears stale/offline, or None if healthy.
+        Threshold: 30 seconds since last checkin (6x the 5s base poll interval).
+        """
+        if not shell.last_checkin:
+            return (
+                f"Beacon '{shell.hostname or shell.name}' has never checked in. "
+                f"Verify the beacon process is running and can reach this server."
+            )
+
+        seconds_since_checkin = (datetime.utcnow() - shell.last_checkin).total_seconds()
+        stale_threshold = 30  # 6x the 5s base poll interval
+
+        if seconds_since_checkin > stale_threshold:
+            return (
+                f"Beacon '{shell.hostname or shell.name}' last checked in "
+                f"{int(seconds_since_checkin)}s ago (threshold: {stale_threshold}s). "
+                f"The beacon may be offline."
+            )
+
+        return None
+
+    # =========================================================================
     # Security Methods (CRIT-005 Fix)
     # =========================================================================
 
@@ -299,11 +337,15 @@ class ShellCommandService:
         allowed_paths = shell.allowed_paths or []
 
         # Check all commands against patterns
+        # BUG-SEC-016 FIX: Pass tenant_id and db so that per-tenant command
+        # restriction policies are enforced by check_commands.
         all_allowed, security_result = security_service.check_commands(
             commands=commands,
             allowed_commands=allowed_commands if allowed_commands else None,
             allowed_paths=allowed_paths if allowed_paths else None,
-            require_approval_for_high_risk=True
+            require_approval_for_high_risk=True,
+            tenant_id=tenant_id,
+            db=self.db,
         )
 
         if not all_allowed:
@@ -674,7 +716,7 @@ class ShellCommandService:
     async def wait_for_completion_async(
         self,
         command_id: str,
-        timeout_seconds: int = 60,
+        timeout_seconds: int = 120,
         poll_interval: float = 1.0
     ) -> CommandResult:
         """
@@ -698,11 +740,18 @@ class ShellCommandService:
         start_time = time.time()
         deadline = start_time + timeout_seconds
 
+        # BUG-355 FIX: Create the sessionmaker ONCE outside the loop to avoid
+        # creating a new connection pool entry on every poll iteration.
+        # Previously, creating FreshSession inside the loop could exhaust the
+        # connection pool, causing health/readiness endpoints to hang.
+        FreshSessionFactory = None
+        if db._global_engine:
+            FreshSessionFactory = sessionmaker(bind=db._global_engine)
+
         while time.time() < deadline:
             # Use a fresh session for each poll to see beacon's commits
-            if db._global_engine:
-                FreshSession = sessionmaker(bind=db._global_engine)
-                poll_db = FreshSession()
+            if FreshSessionFactory:
+                poll_db = FreshSessionFactory()
                 try:
                     command = poll_db.query(ShellCommand).filter(
                         ShellCommand.id == command_id
@@ -748,22 +797,37 @@ class ShellCommandService:
         # Timeout reached
         logger.warning(f"Command {command_id} timed out after {timeout_seconds}s")
 
-        # Mark command as timed out using fresh session
-        if db._global_engine:
-            FreshSession = sessionmaker(bind=db._global_engine)
-            timeout_db = FreshSession()
+        # Mark command as timed out and detect delivery failure
+        was_delivered = False
+        if FreshSessionFactory:
+            timeout_db = FreshSessionFactory()
             try:
                 command = timeout_db.query(ShellCommand).filter(
                     ShellCommand.id == command_id
                 ).first()
+
+                if command:
+                    was_delivered = command.sent_at is not None
 
                 if command and command.status in [
                     CommandStatus.QUEUED.value,
                     CommandStatus.SENT.value,
                     CommandStatus.EXECUTING.value
                 ]:
+                    if not was_delivered:
+                        error_msg = (
+                            f"Beacon offline — command was never delivered "
+                            f"(queued for {timeout_seconds}s). Check that the beacon "
+                            f"process is running and can reach this server."
+                        )
+                    else:
+                        error_msg = (
+                            f"Command was delivered to beacon but execution timed out "
+                            f"after {timeout_seconds}s. The command may still be running "
+                            f"in background."
+                        )
                     command.status = CommandStatus.TIMEOUT.value
-                    command.error_message = f"Timed out after {timeout_seconds} seconds"
+                    command.error_message = error_msg
                     timeout_db.commit()
             finally:
                 timeout_db.close()
@@ -772,27 +836,57 @@ class ShellCommandService:
                 ShellCommand.id == command_id
             ).first()
 
+            if command:
+                was_delivered = command.sent_at is not None
+
             if command and command.status in [
                 CommandStatus.QUEUED.value,
                 CommandStatus.SENT.value,
                 CommandStatus.EXECUTING.value
             ]:
+                if not was_delivered:
+                    error_msg = (
+                        f"Beacon offline — command was never delivered "
+                        f"(queued for {timeout_seconds}s). Check that the beacon "
+                        f"process is running and can reach this server."
+                    )
+                else:
+                    error_msg = (
+                        f"Command was delivered to beacon but execution timed out "
+                        f"after {timeout_seconds}s. The command may still be running "
+                        f"in background."
+                    )
                 command.status = CommandStatus.TIMEOUT.value
-                command.error_message = f"Timed out after {timeout_seconds} seconds"
+                command.error_message = error_msg
                 self.db.commit()
+
+        # Build context-aware error message for result
+        if not was_delivered:
+            final_error = (
+                f"Beacon offline — command was never delivered "
+                f"(queued for {timeout_seconds}s). Check that the beacon "
+                f"process is running and can reach this server."
+            )
+        else:
+            final_error = (
+                f"Command was delivered to beacon but execution timed out "
+                f"after {timeout_seconds}s. The command may still be running "
+                f"in background."
+            )
 
         return CommandResult(
             success=False,
             command_id=command_id,
             status=CommandStatus.TIMEOUT.value,
-            error_message=f"Timed out after {timeout_seconds} seconds",
-            timed_out=True
+            error_message=final_error,
+            timed_out=True,
+            delivery_failed=not was_delivered
         )
 
     def wait_for_completion(
         self,
         command_id: str,
-        timeout_seconds: int = 60,
+        timeout_seconds: int = 120,
         poll_interval: float = 1.0
     ) -> CommandResult:
         """
@@ -815,10 +909,14 @@ class ShellCommandService:
         start_time = time.time()
         deadline = start_time + timeout_seconds
 
+        # BUG-355 FIX: Create sessionmaker once outside the loop (same as async version)
+        SyncSessionFactory = None
+        if db._global_engine:
+            SyncSessionFactory = sessionmaker(bind=db._global_engine)
+
         while time.time() < deadline:
-            if db._global_engine:
-                FreshSession = sessionmaker(bind=db._global_engine)
-                poll_db = FreshSession()
+            if SyncSessionFactory:
+                poll_db = SyncSessionFactory()
                 try:
                     command = poll_db.query(ShellCommand).filter(
                         ShellCommand.id == command_id
@@ -859,21 +957,37 @@ class ShellCommandService:
 
         logger.warning(f"Command {command_id} timed out after {timeout_seconds}s")
 
-        if db._global_engine:
-            FreshSession = sessionmaker(bind=db._global_engine)
-            timeout_db = FreshSession()
+        # Mark command as timed out and detect delivery failure
+        was_delivered = False
+        if SyncSessionFactory:
+            timeout_db = SyncSessionFactory()
             try:
                 command = timeout_db.query(ShellCommand).filter(
                     ShellCommand.id == command_id
                 ).first()
+
+                if command:
+                    was_delivered = command.sent_at is not None
 
                 if command and command.status in [
                     CommandStatus.QUEUED.value,
                     CommandStatus.SENT.value,
                     CommandStatus.EXECUTING.value
                 ]:
+                    if not was_delivered:
+                        error_msg = (
+                            f"Beacon offline — command was never delivered "
+                            f"(queued for {timeout_seconds}s). Check that the beacon "
+                            f"process is running and can reach this server."
+                        )
+                    else:
+                        error_msg = (
+                            f"Command was delivered to beacon but execution timed out "
+                            f"after {timeout_seconds}s. The command may still be running "
+                            f"in background."
+                        )
                     command.status = CommandStatus.TIMEOUT.value
-                    command.error_message = f"Timed out after {timeout_seconds} seconds"
+                    command.error_message = error_msg
                     timeout_db.commit()
             finally:
                 timeout_db.close()
@@ -882,21 +996,51 @@ class ShellCommandService:
                 ShellCommand.id == command_id
             ).first()
 
+            if command:
+                was_delivered = command.sent_at is not None
+
             if command and command.status in [
                 CommandStatus.QUEUED.value,
                 CommandStatus.SENT.value,
                 CommandStatus.EXECUTING.value
             ]:
+                if not was_delivered:
+                    error_msg = (
+                        f"Beacon offline — command was never delivered "
+                        f"(queued for {timeout_seconds}s). Check that the beacon "
+                        f"process is running and can reach this server."
+                    )
+                else:
+                    error_msg = (
+                        f"Command was delivered to beacon but execution timed out "
+                        f"after {timeout_seconds}s. The command may still be running "
+                        f"in background."
+                    )
                 command.status = CommandStatus.TIMEOUT.value
-                command.error_message = f"Timed out after {timeout_seconds} seconds"
+                command.error_message = error_msg
                 self.db.commit()
+
+        # Build context-aware error message for result
+        if not was_delivered:
+            final_error = (
+                f"Beacon offline — command was never delivered "
+                f"(queued for {timeout_seconds}s). Check that the beacon "
+                f"process is running and can reach this server."
+            )
+        else:
+            final_error = (
+                f"Command was delivered to beacon but execution timed out "
+                f"after {timeout_seconds}s. The command may still be running "
+                f"in background."
+            )
 
         return CommandResult(
             success=False,
             command_id=command_id,
             status=CommandStatus.TIMEOUT.value,
-            error_message=f"Timed out after {timeout_seconds} seconds",
-            timed_out=True
+            error_message=final_error,
+            timed_out=True,
+            delivery_failed=not was_delivered
         )
 
     def get_command(self, command_id: str) -> Optional[ShellCommand]:
@@ -952,7 +1096,7 @@ class ShellCommandService:
         tenant_id: str,
         initiated_by: str,
         agent_id: Optional[int] = None,
-        timeout_seconds: int = 60,
+        timeout_seconds: int = 120,
         wait_for_result: bool = True
     ) -> CommandResult:
         """
@@ -1132,12 +1276,25 @@ class ShellCommandService:
                     command=script,
                     agent_id=agent_id,
                     sender_key=initiated_by,
+                    skill_type="shell",
                 )
 
                 if sentinel_result.is_threat_detected and sentinel_result.action == "blocked":
                     logger.warning(
                         f"SENTINEL: Shell command blocked - {sentinel_result.detection_type}: {sentinel_result.threat_reason}"
                     )
+                    # Audit log the security block
+                    try:
+                        from services.audit_service import log_tenant_event, TenantAuditActions
+                        log_tenant_event(self.db, tenant_id, None,
+                            TenantAuditActions.SECURITY_SENTINEL_BLOCK, "shell_command", None,
+                            {"detection_type": sentinel_result.detection_type,
+                             "threat_score": sentinel_result.threat_score,
+                             "reason": sentinel_result.threat_reason,
+                             "agent_id": agent_id},
+                            severity="warning")
+                    except Exception:
+                        pass
                     # Log the blocked attempt
                     blocked_cmd = self._log_blocked_command(
                         commands, shell.id, tenant_id, initiated_by,
@@ -1170,6 +1327,14 @@ class ShellCommandService:
         # END SENTINEL ANALYSIS
         # =====================================================================
 
+        # =====================================================================
+        # BEACON HEALTH CHECK - Proactive warning
+        # =====================================================================
+        beacon_warning = self._check_beacon_health(shell)
+        if beacon_warning:
+            logger.warning(f"Beacon health warning for shell {shell.id}: {beacon_warning}")
+        # =====================================================================
+
         # Queue the command (passed security check)
         command = self.queue_command(
             shell_id=shell.id,
@@ -1198,6 +1363,56 @@ class ShellCommandService:
             timeout_seconds=timeout_seconds
         )
 
+        # =====================================================================
+        # AUTO-RETRY on delivery failure (beacon offline)
+        # Only retry once, only if command was never picked up by beacon
+        # Retry uses half the original timeout to limit total wait time
+        # =====================================================================
+        if result.timed_out and result.delivery_failed:
+            retry_timeout = max(30, timeout_seconds // 2)  # At least 30s, at most half original
+            logger.info(
+                f"Command {command.id} delivery failed (beacon offline). "
+                f"Auto-retrying with new command (attempt 2/2, timeout={retry_timeout}s)..."
+            )
+
+            # Queue a NEW command (original is already marked TIMEOUT)
+            retry_command = self.queue_command(
+                shell_id=shell.id,
+                commands=commands,
+                initiated_by=initiated_by,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                timeout_seconds=retry_timeout
+            )
+
+            # Wait for retry result with reduced timeout
+            result = await self.wait_for_completion_async(
+                command_id=retry_command.id,
+                timeout_seconds=retry_timeout
+            )
+
+            if result.timed_out:
+                result.error_message = (
+                    f"Auto-retry also failed. {result.error_message} "
+                    f"(Original command {command.id[:8]} also timed out.)"
+                )
+                logger.warning(
+                    f"Retry command {retry_command.id} also timed out. "
+                    f"Beacon appears persistently offline."
+                )
+            else:
+                logger.info(
+                    f"Retry command {retry_command.id} succeeded after "
+                    f"original {command.id} delivery failure."
+                )
+        # =====================================================================
+        # END AUTO-RETRY
+        # =====================================================================
+
+        # Prepend beacon health warning if we had one and command still timed out
+        if beacon_warning and result.timed_out:
+            result.error_message = f"[Pre-check: {beacon_warning}] {result.error_message}"
+
         # Add YOLO mode indicator to result
         if yolo_auto_approved:
             result.yolo_mode_auto_approved = True
@@ -1211,7 +1426,7 @@ class ShellCommandService:
         tenant_id: str,
         initiated_by: str,
         agent_id: Optional[int] = None,
-        timeout_seconds: int = 60,
+        timeout_seconds: int = 120,
         wait_for_result: bool = True
     ) -> CommandResult:
         """
@@ -1357,6 +1572,14 @@ class ShellCommandService:
         # END SECURITY CHECK
         # =====================================================================
 
+        # =====================================================================
+        # BEACON HEALTH CHECK - Proactive warning (sync)
+        # =====================================================================
+        beacon_warning = self._check_beacon_health(shell)
+        if beacon_warning:
+            logger.warning(f"Beacon health warning for shell {shell.id}: {beacon_warning}")
+        # =====================================================================
+
         # Queue the command
         command = self.queue_command(
             shell_id=shell.id,
@@ -1382,6 +1605,52 @@ class ShellCommandService:
             command_id=command.id,
             timeout_seconds=timeout_seconds
         )
+
+        # =====================================================================
+        # AUTO-RETRY on delivery failure (sync version)
+        # Retry uses half the original timeout to limit total wait time
+        # =====================================================================
+        if result.timed_out and result.delivery_failed:
+            retry_timeout = max(30, timeout_seconds // 2)
+            logger.info(
+                f"Command {command.id} delivery failed (beacon offline). "
+                f"Auto-retrying with new command (attempt 2/2, timeout={retry_timeout}s)..."
+            )
+
+            retry_command = self.queue_command(
+                shell_id=shell.id,
+                commands=commands,
+                initiated_by=initiated_by,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                timeout_seconds=retry_timeout
+            )
+
+            result = self.wait_for_completion(
+                command_id=retry_command.id,
+                timeout_seconds=retry_timeout
+            )
+
+            if result.timed_out:
+                result.error_message = (
+                    f"Auto-retry also failed. {result.error_message} "
+                    f"(Original command {command.id[:8]} also timed out.)"
+                )
+                logger.warning(
+                    f"Retry command {retry_command.id} also timed out. "
+                    f"Beacon appears persistently offline."
+                )
+            else:
+                logger.info(
+                    f"Retry command {retry_command.id} succeeded after "
+                    f"original {command.id} delivery failure."
+                )
+        # =====================================================================
+
+        # Prepend beacon health warning if we had one and command still timed out
+        if beacon_warning and result.timed_out:
+            result.error_message = f"[Pre-check: {beacon_warning}] {result.error_message}"
+
         if yolo_auto_approved:
             result.yolo_mode_auto_approved = True
         return result

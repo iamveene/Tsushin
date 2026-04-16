@@ -30,6 +30,13 @@ from .tts_provider import (
 logger = logging.getLogger(__name__)
 
 
+def _get_default_kokoro_service_url() -> str:
+    stack_name = (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+    if os.path.exists("/.dockerenv"):
+        return f"http://{stack_name}-kokoro-tts:8880"
+    return "http://localhost:8880"
+
+
 class KokoroTTSProvider(TTSProvider):
     """
     Kokoro TTS Provider.
@@ -169,11 +176,9 @@ class KokoroTTSProvider(TTSProvider):
     # Supported languages
     SUPPORTED_LANGUAGES = ["pt", "en", "es", "ja", "zh", "fr", "de", "it"]
 
-    def __init__(self, db=None, token_tracker=None):
-        super().__init__(db=db, token_tracker=token_tracker)
-        # VOICE-005 Fix: Auto-detect Docker environment for correct default URL
-        default_url = "http://kokoro-tts:8880" if os.path.exists("/.dockerenv") else "http://localhost:8880"
-        self.service_url = os.getenv("KOKORO_SERVICE_URL", default_url)
+    def __init__(self, db=None, token_tracker=None, tenant_id=None):
+        super().__init__(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
+        self.service_url = os.getenv("KOKORO_SERVICE_URL", _get_default_kokoro_service_url())
 
     def get_provider_name(self) -> str:
         return "kokoro"
@@ -534,6 +539,27 @@ class KokoroTTSProvider(TTSProvider):
                         )
 
                 except httpx.ConnectError:
+                    # Retry with voices endpoint as fallback
+                    try:
+                        fallback_start = time.time()
+                        fallback_response = await client.get(f"{self.service_url}/v1/audio/voices")
+                        fallback_latency = int((time.time() - fallback_start) * 1000)
+                        if fallback_response.status_code == 200:
+                            return ProviderStatus(
+                                provider=self.provider_name,
+                                status="healthy",
+                                message="Kokoro TTS is available (via voices endpoint)",
+                                available=True,
+                                latency_ms=fallback_latency,
+                                details={
+                                    "service_url": self.service_url,
+                                    "voices": len(self.VOICES),
+                                    "languages": self.SUPPORTED_LANGUAGES,
+                                    "is_free": True,
+                                }
+                            )
+                    except Exception:
+                        pass
                     return ProviderStatus(
                         provider=self.provider_name,
                         status="unavailable",

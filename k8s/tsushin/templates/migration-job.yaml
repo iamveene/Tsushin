@@ -1,0 +1,69 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "tsushin.fullname" . }}-migrate-{{ .Release.Revision }}
+  namespace: {{ include "tsushin.namespace" . }}
+  labels:
+    {{- include "tsushin.backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-install
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "tsushin.backend.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      serviceAccountName: {{ include "tsushin.backend.serviceAccountName" . }}
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          command: ["python", "-m", "alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "tsushin.configMapName" . }}
+            - secretRef:
+                name: {{ include "tsushin.secretName" . }}
+          {{- if .Values.cloudsql.enabled }}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tsushin.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: "postgresql://tsushin:$(POSTGRES_PASSWORD)@127.0.0.1:{{ .Values.cloudsql.port }}/tsushin"
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+        {{- if .Values.cloudsql.enabled }}
+        - name: cloud-sql-proxy
+          image: {{ .Values.cloudsql.image }}
+          args:
+            - {{ .Values.cloudsql.instanceConnectionName | quote }}
+            - "--port={{ .Values.cloudsql.port }}"
+            - "--auto-iam-authn"
+            - "--exit-zero-on-sigterm"
+          resources:
+            {{- toYaml .Values.cloudsql.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+        {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.data.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tsushin.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

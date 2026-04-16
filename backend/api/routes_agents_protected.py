@@ -19,15 +19,17 @@ from db import get_db
 from models import (
     Agent, AgentSkillIntegration, HubIntegration, GmailIntegration,
     CalendarIntegration, AsanaIntegration, AgentSkill, AgentKnowledge,
-    Contact, WhatsAppMCPInstance, TelegramBotInstance, SentinelAgentConfig
+    Contact, WhatsAppMCPInstance, TelegramBotInstance, SentinelAgentConfig,
+    AgentCommunicationPermission,
 )
-from models_rbac import User
+from models_rbac import User, Tenant
 from auth_dependencies import (
     get_current_user_required,
     get_tenant_context,
     require_permission,
     TenantContext
 )
+from services.whatsapp_binding_service import parse_enabled_channels, resolve_agent_whatsapp_binding
 
 router = APIRouter(prefix="/api/v2/agents", tags=["agents-protected"])
 
@@ -76,8 +78,6 @@ async def list_agents_protected(
 # Skill metadata for enriched skill display in Graph View
 SKILL_METADATA = {
     "web_search": {"category": "search", "name": "Web Search", "description": "Search the web for information"},
-    "weather": {"category": "integration", "name": "Weather", "description": "Get weather forecasts"},
-    "web_scraping": {"category": "search", "name": "Web Scraping", "description": "Scrape content from websites"},
     "audio_transcript": {"category": "audio", "name": "Audio Transcript", "description": "Transcribe audio to text"},
     "audio_tts": {"category": "audio", "name": "Text to Speech", "description": "Convert text to speech"},
     # Gmail/Email - standalone skill category so it shows at Agent level, not under Integrations
@@ -91,6 +91,7 @@ SKILL_METADATA = {
     "browser_automation": {"category": "automation", "name": "Browser Automation", "description": "Control web browsers"},
     "shell": {"category": "automation", "name": "Shell", "description": "Execute shell commands"},
     "sandboxed_tools": {"category": "automation", "name": "Sandboxed Tools", "description": "Execute tools in sandboxed environment"},
+    "image_analysis": {"category": "media", "name": "Image Analysis", "description": "Interpret and extract information from attached images"},
     "image": {"category": "media", "name": "Image Generation", "description": "Generate and edit images"},
     # Flight Search - standalone skill category so it shows at Agent level
     "flight_search": {"category": "flight_search", "name": "Flight Search", "description": "Search for flights"},
@@ -112,11 +113,16 @@ class AgentGraphPreviewItem(BaseModel):
     memory_isolation_mode: str
     enabled_channels: List[str]
     whatsapp_integration_id: Optional[int]
+    resolved_whatsapp_integration_id: Optional[int] = None
+    whatsapp_binding_status: str = "disabled"
+    whatsapp_binding_source: str = "disabled"
     telegram_integration_id: Optional[int]
+    webhook_integration_id: Optional[int] = None  # v0.6.0
     skills_count: int
     knowledge_doc_count: int
     knowledge_chunk_count: int
     sentinel_enabled: bool
+    avatar: Optional[str] = None
 
 
 class WhatsAppChannelInfo(BaseModel):
@@ -133,6 +139,15 @@ class TelegramChannelInfo(BaseModel):
     bot_username: str
     status: str
     health_status: str
+
+
+class WebhookChannelInfo(BaseModel):
+    """Webhook channel info for Graph View (v0.6.0)"""
+    id: int
+    integration_name: str
+    status: str
+    health_status: str
+    callback_enabled: bool
 
 
 class GraphPreviewResponse(BaseModel):
@@ -157,8 +172,6 @@ async def get_agents_graph_preview(
 
     Returns all data needed for Graph View in a single request.
     """
-    import json
-
     # Query agents with aggregated skills and knowledge counts
     # Using subqueries for efficiency
     skills_subq = (
@@ -221,15 +234,8 @@ async def get_agents_graph_preview(
         sentinel_enabled = row[5]
 
         # Parse enabled_channels (may be JSON string or list)
-        if isinstance(agent.enabled_channels, list):
-            enabled_channels = agent.enabled_channels
-        elif isinstance(agent.enabled_channels, str) and agent.enabled_channels:
-            try:
-                enabled_channels = json.loads(agent.enabled_channels)
-            except (json.JSONDecodeError, TypeError):
-                enabled_channels = ["playground", "whatsapp"]
-        else:
-            enabled_channels = ["playground", "whatsapp"]
+        enabled_channels = parse_enabled_channels(agent.enabled_channels)
+        binding = resolve_agent_whatsapp_binding(ctx.db, agent, active_only=True)
 
         agents.append(AgentGraphPreviewItem(
             id=agent.id,
@@ -241,11 +247,16 @@ async def get_agents_graph_preview(
             memory_isolation_mode=agent.memory_isolation_mode or "isolated",
             enabled_channels=enabled_channels,
             whatsapp_integration_id=agent.whatsapp_integration_id,
+            resolved_whatsapp_integration_id=binding.resolved_instance_id,
+            whatsapp_binding_status=binding.status,
+            whatsapp_binding_source=binding.source,
             telegram_integration_id=agent.telegram_integration_id,
+            webhook_integration_id=getattr(agent, "webhook_integration_id", None),
             skills_count=skills_count,
             knowledge_doc_count=knowledge_doc_count,
             knowledge_chunk_count=knowledge_chunk_count,
-            sentinel_enabled=bool(sentinel_enabled)
+            sentinel_enabled=bool(sentinel_enabled),
+            avatar=agent.avatar,
         ))
 
     # Fetch channel instances (excluding test/internal instances)
@@ -260,6 +271,12 @@ async def get_agents_graph_preview(
     telegram_query = ctx.db.query(TelegramBotInstance)
     telegram_query = ctx.filter_by_tenant(telegram_query, TelegramBotInstance.tenant_id)
     telegram_instances = telegram_query.all()
+
+    # v0.6.0: Webhook integrations
+    from models import WebhookIntegration
+    webhook_query = ctx.db.query(WebhookIntegration)
+    webhook_query = ctx.filter_by_tenant(webhook_query, WebhookIntegration.tenant_id)
+    webhook_instances = webhook_query.all()
 
     channels = {
         "whatsapp": [
@@ -279,10 +296,125 @@ async def get_agents_graph_preview(
                 health_status=inst.health_status or "unknown"
             ).model_dump()
             for inst in telegram_instances
-        ]
+        ],
+        "webhook": [
+            WebhookChannelInfo(
+                id=inst.id,
+                integration_name=inst.integration_name,
+                status="active" if inst.is_active and inst.status != "paused" else "paused",
+                health_status=inst.health_status or "unknown",
+                callback_enabled=bool(inst.callback_enabled),
+            ).model_dump()
+            for inst in webhook_instances
+        ],
     }
 
     return GraphPreviewResponse(agents=agents, channels=channels)
+
+
+# =============================================================================
+# GET /api/v2/agents/comm-enabled — A2A visualization data
+# IMPORTANT: Must remain before the /{agent_id} route to avoid FastAPI
+# matching "comm-enabled" as an integer agent_id parameter.
+# =============================================================================
+
+class AgentSummary(BaseModel):
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    agent_type: str
+
+
+class CommPermissionSummary(BaseModel):
+    id: int
+    source_agent_id: int
+    target_agent_id: int
+    is_enabled: bool
+    max_depth: int
+    rate_limit_rpm: int
+
+
+class CommEnabledResponse(BaseModel):
+    agents: List[AgentSummary]
+    permissions: List[CommPermissionSummary]
+
+
+@router.get(
+    "/comm-enabled",
+    response_model=CommEnabledResponse,
+    dependencies=[Depends(require_permission("agents.read"))],
+)
+async def get_comm_enabled_agents(
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Return all agents with the agent_communication skill enabled, plus all
+    A2A communication permissions for this tenant.
+
+    Used by Graph View and Agent Builder to populate the A2A visualization layer.
+    """
+    db = ctx.db
+
+    comm_skill_rows = (
+        db.query(AgentSkill.agent_id)
+        .filter(
+            AgentSkill.skill_type == "agent_communication",
+            AgentSkill.is_enabled == True,
+        )
+        .subquery()
+    )
+    enabled_permission_rows = (
+        db.query(AgentCommunicationPermission.source_agent_id)
+        .filter(
+            AgentCommunicationPermission.tenant_id == ctx.tenant_id,
+            AgentCommunicationPermission.is_enabled == True,
+        )
+        .distinct()
+        .subquery()
+    )
+
+    agents_db = (
+        db.query(Agent, Contact.friendly_name)
+        .join(Contact, Agent.contact_id == Contact.id)
+        .filter(
+            Agent.tenant_id == ctx.tenant_id,
+            Agent.is_active == True,
+            Agent.id.in_(comm_skill_rows),
+            Agent.id.in_(enabled_permission_rows),
+        )
+        .all()
+    )
+
+    agents = [
+        AgentSummary(
+            id=agent.id,
+            name=friendly_name or f"Agent {agent.id}",
+            avatar=agent.avatar,
+            agent_type=agent.model_provider or "gemini",
+        )
+        for agent, friendly_name in agents_db
+    ]
+
+    permissions_db = (
+        db.query(AgentCommunicationPermission)
+        .filter(AgentCommunicationPermission.tenant_id == ctx.tenant_id)
+        .order_by(AgentCommunicationPermission.id)
+        .all()
+    )
+
+    permissions = [
+        CommPermissionSummary(
+            id=perm.id,
+            source_agent_id=perm.source_agent_id,
+            target_agent_id=perm.target_agent_id,
+            is_enabled=perm.is_enabled,
+            max_depth=perm.max_depth or 3,
+            rate_limit_rpm=perm.rate_limit_rpm or 30,
+        )
+        for perm in permissions_db
+    ]
+
+    return CommEnabledResponse(agents=agents, permissions=permissions)
 
 
 # =============================================================================
@@ -307,10 +439,7 @@ async def get_agent_protected(
 
     # Check tenant access
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have access to this agent"
-        )
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     return {
         "id": agent.id,
@@ -331,7 +460,21 @@ async def create_agent_protected(
 
     - Requires: agents.write permission
     - Automatically sets tenant_id and user_id from context
+    - BUG-314: Enforces tenant agent cap before creation
     """
+    # BUG-314: Enforce tenant agent cap before creating
+    tenant = ctx.db.query(Tenant).filter(Tenant.id == ctx.tenant_id).first()
+    if tenant and tenant.max_agents is not None and tenant.max_agents > 0:
+        current_agent_count = ctx.db.query(Agent).filter(
+            Agent.tenant_id == ctx.tenant_id,
+            Agent.is_active == True
+        ).count()
+        if current_agent_count >= tenant.max_agents:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Agent limit reached. Your plan allows a maximum of {tenant.max_agents} agents. Please upgrade your plan or delete unused agents."
+            )
+
     # In real implementation, would accept agent data from request body
     # For now, just demonstrate the pattern
 
@@ -361,10 +504,7 @@ async def delete_agent_protected(
 
     # Check tenant access
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have access to this agent"
-        )
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # In real implementation, would delete the agent
     # For now, just demonstrate the pattern
@@ -414,7 +554,7 @@ async def get_agent_skill_integrations(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Get all skill integrations for this agent
     skill_configs = ctx.db.query(AgentSkillIntegration).filter(
@@ -478,7 +618,7 @@ async def set_agent_skill_integration(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Validate integration_id if provided
     if data.integration_id:
@@ -490,7 +630,7 @@ async def set_agent_skill_integration(
             raise HTTPException(status_code=404, detail="Integration not found")
 
         if not ctx.can_access_resource(integration.tenant_id):
-            raise HTTPException(status_code=403, detail="Integration access denied")
+            raise HTTPException(status_code=404, detail="Integration not found")
 
     # Validate scheduler_provider
     valid_providers = ['flows', 'google_calendar', 'asana']
@@ -546,7 +686,7 @@ async def delete_agent_skill_integration(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Delete config
     deleted = ctx.db.query(AgentSkillIntegration).filter(
@@ -580,7 +720,7 @@ async def get_available_integrations_for_skill(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     if skill_type == 'gmail':
         # Return Gmail integrations
@@ -719,7 +859,7 @@ async def get_agent_expand_data(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Skills to exclude from Graph View (internal/system skills)
     EXCLUDED_SKILL_TYPES = {"automation"}  # Multi-Step Automation is internal

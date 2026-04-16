@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 import sys
 import os
@@ -10,9 +10,11 @@ import asyncio
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import Contact, UserContactMapping, ContactChannelMapping
+from api.sanitizers import strip_html_tags
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from services.contact_channel_mapping_service import ContactChannelMappingService
+from services.audit_service import log_tenant_event, TenantAuditActions
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +112,7 @@ def enrich_contact_with_user_info(db: Session, contact: Contact) -> dict:
         "role": contact.role,
         "is_active": contact.is_active,
         "is_dm_trigger": contact.is_dm_trigger,
+        "slash_commands_enabled": contact.slash_commands_enabled,  # Feature #12
         "notes": contact.notes,
         "created_at": contact.created_at,
         "updated_at": contact.updated_at,
@@ -163,7 +166,7 @@ def update_user_contact_mapping(db: Session, contact_id: int, user_id: int | Non
     if existing_user_mapping and existing_user_mapping.contact_id != contact_id:
         raise HTTPException(
             status_code=400,
-            detail=f"User is already linked to another contact (ID: {existing_user_mapping.contact_id})"
+            detail="User is already linked to another contact"
         )
 
     if existing_mapping:
@@ -205,24 +208,41 @@ class ChannelMappingCreate(BaseModel):
 class ContactCreate(BaseModel):
     friendly_name: str = Field(..., min_length=1, max_length=100)
     whatsapp_id: str | None = Field(None, max_length=50)
-    phone_number: str | None = Field(None, max_length=20)
+    phone_number: str | None = Field(None, max_length=20, pattern=r"^\+?[1-9]\d{6,14}$")
     telegram_id: str | None = Field(None, max_length=50)  # Phase 10.1.1: Telegram user ID
     telegram_username: str | None = Field(None, max_length=50)  # Phase 10.1.1: Telegram @username
-    role: str = Field(default="user", pattern="^(user|agent)$")
+    role: str = Field(default="user", pattern="^(user|agent|external)$")
     is_dm_trigger: bool = Field(default=True)  # Phase 4.3: Default True, user can opt-out during creation
+    slash_commands_enabled: Optional[bool] = Field(None, description="Feature #12: NULL = tenant default, True/False = explicit override")
     notes: str | None = None
     linked_user_id: int | None = Field(None, description="ID of the system user to link this contact to")
+
+    @field_validator("friendly_name")
+    @classmethod
+    def sanitize_friendly_name(cls, v: str) -> str:
+        cleaned = strip_html_tags(v)
+        if not cleaned or not cleaned.strip():
+            raise ValueError("Friendly name must not be empty after removing HTML tags")
+        return cleaned.strip()
+
+    @field_validator("notes")
+    @classmethod
+    def sanitize_notes(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return strip_html_tags(v).strip() or None
 
     class Config:
         json_schema_extra = {
             "example": {
                 "friendly_name": "Alice",
                 "whatsapp_id": "123456789012345",
-                "phone_number": "5500000000000",
+                "phone_number": "5527988290533",
                 "telegram_id": "123456789",
                 "telegram_username": "alice_user",
                 "role": "user",
                 "is_dm_trigger": True,
+                "slash_commands_enabled": None,
                 "notes": "Example contact",
                 "linked_user_id": None
             }
@@ -232,14 +252,32 @@ class ContactCreate(BaseModel):
 class ContactUpdate(BaseModel):
     friendly_name: str | None = Field(None, min_length=1, max_length=100)
     whatsapp_id: str | None = Field(None, max_length=50)
-    phone_number: str | None = Field(None, max_length=20)
+    phone_number: str | None = Field(None, max_length=20, pattern=r"^\+?[1-9]\d{6,14}$")
     telegram_id: str | None = Field(None, max_length=50)  # Phase 10.1.1: Telegram user ID
     telegram_username: str | None = Field(None, max_length=50)  # Phase 10.1.1: Telegram @username
-    role: str | None = Field(None, pattern="^(user|agent)$")
+    role: str | None = Field(None, pattern="^(user|agent|external)$")
     is_active: bool | None = None
     is_dm_trigger: bool | None = None  # Phase 4.3
+    slash_commands_enabled: Optional[bool] = None  # Feature #12: NULL = tenant default, True/False = explicit override
     notes: str | None = None
     linked_user_id: int | None = Field(None, description="ID of the system user to link this contact to (use -1 to unlink)")
+
+    @field_validator("friendly_name")
+    @classmethod
+    def sanitize_friendly_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        cleaned = strip_html_tags(v)
+        if not cleaned or not cleaned.strip():
+            raise ValueError("Friendly name must not be empty after removing HTML tags")
+        return cleaned.strip()
+
+    @field_validator("notes")
+    @classmethod
+    def sanitize_notes(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return strip_html_tags(v).strip() or None
 
 
 class ContactResponse(BaseModel):
@@ -252,6 +290,7 @@ class ContactResponse(BaseModel):
     role: str
     is_active: bool
     is_dm_trigger: bool  # Phase 4.3
+    slash_commands_enabled: Optional[bool] = None  # Feature #12
     notes: str | None
     created_at: datetime
     updated_at: datetime
@@ -311,6 +350,7 @@ def get_contact(
 @router.post("/", response_model=ContactResponse, status_code=201)
 def create_contact(
     contact: ContactCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contacts.write")),
     ctx: TenantContext = Depends(get_tenant_context)
@@ -360,6 +400,8 @@ def create_contact(
         update_user_contact_mapping(db, new_contact.id, linked_user_id)
         db.commit()
 
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.CONTACT_CREATE, "contact", str(new_contact.id), {"name": new_contact.friendly_name}, request)
+
     # Trigger WhatsApp ID resolution if phone number provided but no WhatsApp ID
     if new_contact.phone_number and not new_contact.whatsapp_id:
         logger.info(f"🔍 Triggering WhatsApp ID resolution for new contact '{new_contact.friendly_name}'")
@@ -387,11 +429,12 @@ def update_contact(
 
     # Verify user can access this contact (tenant isolation)
     if not ctx.can_access_resource(db_contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
-    # Check for unique constraints
+    # Check for unique constraints (scoped to tenant)
     if contact.friendly_name and contact.friendly_name != db_contact.friendly_name:
         existing = db.query(Contact).filter(
+            Contact.tenant_id == db_contact.tenant_id,
             Contact.friendly_name == contact.friendly_name,
             Contact.id != contact_id
         ).first()
@@ -400,15 +443,17 @@ def update_contact(
 
     if contact.whatsapp_id and contact.whatsapp_id != db_contact.whatsapp_id:
         existing = db.query(Contact).filter(
+            Contact.tenant_id == db_contact.tenant_id,
             Contact.whatsapp_id == contact.whatsapp_id,
             Contact.id != contact_id
         ).first()
         if existing:
             raise HTTPException(status_code=400, detail="Contact with this WhatsApp ID already exists")
 
-    # Phase 10.1.1: Check telegram_id uniqueness
+    # Phase 10.1.1: Check telegram_id uniqueness (scoped to tenant)
     if contact.telegram_id and contact.telegram_id != db_contact.telegram_id:
         existing = db.query(Contact).filter(
+            Contact.tenant_id == db_contact.tenant_id,
             Contact.telegram_id == contact.telegram_id,
             Contact.id != contact_id
         ).first()
@@ -441,6 +486,8 @@ def update_contact(
     db.commit()
     db.refresh(db_contact)
 
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.CONTACT_UPDATE, "contact", str(contact_id), {"name": db_contact.friendly_name}, request)
+
     # CRITICAL: Clear contact cache after update (especially for is_dm_trigger changes)
     # This ensures the MessageFilter uses the latest contact settings
     if hasattr(request.app.state, 'contact_service'):
@@ -459,6 +506,7 @@ def update_contact(
 @router.delete("/{contact_id}", status_code=204)
 def delete_contact(
     contact_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contacts.delete")),
     ctx: TenantContext = Depends(get_tenant_context)
@@ -473,7 +521,9 @@ def delete_contact(
 
     # Verify user can access this contact (tenant isolation)
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    contact_name = contact.friendly_name
 
     # Delete any user-contact mapping first
     existing_mapping = db.query(UserContactMapping).filter(
@@ -484,6 +534,9 @@ def delete_contact(
 
     db.delete(contact)
     db.commit()
+
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.CONTACT_DELETE, "contact", str(contact_id), {"name": contact_name}, request)
+
     return None
 
 
@@ -547,7 +600,7 @@ def add_channel_mapping(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Add the mapping
     mapping_service = ContactChannelMappingService(db)
@@ -568,7 +621,8 @@ def add_channel_mapping(
 
         return new_mapping
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception(f"Error adding channel mapping for contact {contact_id}")
+        raise HTTPException(status_code=400, detail="Failed to add channel mapping")
 
 
 @router.delete("/{contact_id}/channels/{mapping_id}", status_code=204)
@@ -588,7 +642,7 @@ def remove_channel_mapping(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Verify mapping belongs to this contact
     mapping_service = ContactChannelMappingService(db)
@@ -619,7 +673,7 @@ def update_channel_mapping_metadata(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Verify mapping belongs to this contact
     mapping_service = ContactChannelMappingService(db)
@@ -685,7 +739,7 @@ async def resolve_contact_whatsapp(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     if not ctx.can_access_resource(contact.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this contact")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Check if contact has phone number
     if not contact.phone_number:
@@ -726,11 +780,11 @@ async def resolve_contact_whatsapp(
                 message="Phone number not registered on WhatsApp or no MCP instance available"
             )
     except Exception as e:
-        logger.error(f"WhatsApp resolution failed for contact {contact_id}: {e}")
+        logger.exception(f"WhatsApp resolution failed for contact {contact_id}")
         return WhatsAppResolutionResponse(
             success=False,
             contact_id=contact_id,
-            message=f"Resolution failed: {str(e)}"
+            message="Resolution failed due to an internal error"
         )
 
 
@@ -765,12 +819,12 @@ async def resolve_all_contacts_whatsapp(
             message=result.get("message") or result.get("error")
         )
     except Exception as e:
-        logger.error(f"Batch WhatsApp resolution failed: {e}")
+        logger.exception("Batch WhatsApp resolution failed")
         return BatchResolutionResponse(
             success=False,
             resolved=0,
             failed=0,
             skipped=0,
             total=0,
-            message=f"Resolution failed: {str(e)}"
+            message="Resolution failed due to an internal error"
         )

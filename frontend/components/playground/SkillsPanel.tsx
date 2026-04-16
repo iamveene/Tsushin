@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react'
+import { authenticatedFetch } from '@/lib/client'
 import {
   MicrophoneIcon,
   VolumeIcon,
@@ -76,16 +77,11 @@ export default function SkillsPanel({ agentId }: SkillsPanelProps) {
 
     try {
       const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
-      const token = localStorage.getItem('tsushin_auth_token')
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
 
       // Fetch both agent skills and available skills
       const [agentRes, availableRes] = await Promise.all([
-        fetch(`${baseUrl}/api/agents/${agentId}/skills`, { headers }),
-        fetch(`${baseUrl}/api/skills/available`, { headers })
+        authenticatedFetch(`${baseUrl}/api/agents/${agentId}/skills`),
+        authenticatedFetch(`${baseUrl}/api/skills/available`)
       ])
 
       if (agentRes.ok) {

@@ -140,21 +140,32 @@ async def execute_command(
 
     Handles built-in commands and routes to appropriate handlers.
     """
-    from agent.memory.tool_output_buffer import get_tool_output_buffer
+    from models import Agent
     import logging
 
     logger = logging.getLogger(__name__)
+
+    # Validate agent belongs to user's tenant
+    agent = db.query(Agent).filter(
+        Agent.id == data.agent_id,
+        Agent.tenant_id == current_user.tenant_id
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=403, detail="Agent not accessible")
+
     service = SlashCommandService(db)
 
-    # Use provided sender_key or generate from user ID
-    # Match the format used in playground_service.py for proper tool buffer integration
-    if data.channel == "playground" and data.thread_id:
-        # Use thread-specific sender_key format for proper isolation
-        sender_key = data.sender_key or f"playground_u{current_user.id}_a{data.agent_id}_t{data.thread_id}"
+    # SECURITY: Always generate sender_key from authenticated user — never accept from request body
+    # BUG-392 fix: Use stable per-user-per-agent key (NO thread suffix) to match
+    # playground_service.py send_message() and process_message_streaming().
+    # The old thread-suffixed format caused /inject to store pending injections under
+    # a different buffer key than the next message would check.
+    if data.channel == "playground" and data.agent_id:
+        sender_key = f"playground_u{current_user.id}_a{data.agent_id}"
     elif data.channel == "playground":
-        sender_key = data.sender_key or f"playground_user_{current_user.id}"
+        sender_key = f"playground_user_{current_user.id}"
     else:
-        sender_key = data.sender_key or f"user_{current_user.id}"
+        sender_key = f"user_{current_user.id}"
 
     result = await service.execute_command(
         message=data.message,
@@ -164,22 +175,6 @@ async def execute_command(
         channel=data.channel,
         user_id=current_user.id
     )
-
-    # Layer 5: Store tool output in ephemeral buffer for follow-up interactions
-    # This enables agentic analysis of tool results with execution IDs
-    if result.get("action") in ("tool_executed", "tool_running") and result.get("message"):
-        tool_buffer = get_tool_output_buffer()
-        tool_name = result.get("tool_name", "unknown")
-        command_name = result.get("command_name", "execute")
-
-        execution_id = tool_buffer.add_tool_output(
-            agent_id=data.agent_id,
-            sender_key=sender_key,
-            tool_name=tool_name,
-            command_name=command_name,
-            output=result["message"]
-        )
-        result["execution_id"] = execution_id
 
     # Store command and response in conversation memory for complete history
     # This fixes the "broken/split" conversation issue in Playground UI

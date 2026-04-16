@@ -16,8 +16,8 @@ export default function SignupPage() {
   }, [router])
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-      <p className="text-gray-600 dark:text-gray-400">Redirecting to login...</p>
+    <div className="min-h-screen flex items-center justify-center bg-tsushin-ink">
+      <p className="text-tsushin-slate">Redirecting to login...</p>
     </div>
   )
 }

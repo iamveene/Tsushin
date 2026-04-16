@@ -25,9 +25,10 @@ class ConversationKnowledgeService:
     - Knowledge export
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, token_tracker=None):
         self.db = db
         self.logger = logging.getLogger(__name__)
+        self.token_tracker = token_tracker
 
     async def extract_knowledge(
         self,
@@ -116,35 +117,23 @@ class ConversationKnowledgeService:
         user_id: int
     ) -> List[Dict[str, str]]:
         """Get all messages from a thread."""
-        from models import Memory
+        from services.playground_thread_service import PlaygroundThreadService
 
-        # Find memory record for this thread
-        # sender_key pattern for playground threads: sender_playground_u{user_id}_a{agent_id}_t{thread_id}
-        sender_key_pattern = f"%_t{thread_id}"
+        thread_service = PlaygroundThreadService(self.db)
+        thread = thread_service.get_thread_record(
+            thread_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        if not thread:
+            self.logger.warning(f"[Phase 14.6] Thread {thread_id} not found")
+            return []
 
-        self.logger.info(f"[Phase 14.6] Querying Memory with pattern: {sender_key_pattern}")
-
-        memory_records = self.db.query(Memory).filter(
-            Memory.sender_key.like(sender_key_pattern)
-        ).all()
-
-        self.logger.info(f"[Phase 14.6] Found {len(memory_records)} memory records for thread {thread_id}")
-        for mem in memory_records:
-            self.logger.info(f"[Phase 14.6] Memory record: sender_key={mem.sender_key}, messages_json_length={len(mem.messages_json) if mem.messages_json else 0}")
-
-        messages = []
-        for mem in memory_records:
-            try:
-                # messages_json is already deserialized by SQLAlchemy (JSON type)
-                msgs = mem.messages_json if mem.messages_json else []
-                if isinstance(msgs, str):
-                    # If it's still a string, parse it
-                    msgs = json.loads(msgs)
-                messages.extend(msgs)
-            except Exception as e:
-                self.logger.warning(f"[Phase 14.6] Failed to parse messages_json: {e}")
-                continue
-
+        messages = thread_service._get_thread_messages_from_memory(thread)
+        self.logger.info(
+            f"[Phase 14.6] Loaded {len(messages)} messages for thread {thread_id} "
+            f"(recipient={thread.recipient})"
+        )
         return messages
 
     async def _extract_tags(
@@ -348,7 +337,7 @@ Do not include any explanation, only the JSON array."""
             from services.conversation_search_service import ConversationSearchService
             search_service = ConversationSearchService(self.db)
 
-            semantic_results = search_service.search_semantic(
+            semantic_results = await search_service.search_semantic(
                 query=query_text,
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -425,7 +414,10 @@ Do not include any explanation, only the JSON array."""
 
             client = AIClient(
                 provider=agent.model_provider,
-                model_name=agent.model_name
+                model_name=agent.model_name,
+                db=self.db,
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Call LLM with simple prompt

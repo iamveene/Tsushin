@@ -87,6 +87,12 @@ id = "vertex-ai-credentials-json"
 description = "Vertex AI / GCP service account credentials JSON (inline)"
 regex = '''"type"\s*:\s*"service_account"'''
 keywords = ["service_account"]
+[rules.allowlist]
+  # These files programmatically build credential dicts from variables — not actual secrets
+  paths = [
+    '''backend/api/routes_provider_instances\.py$''',
+    '''backend/agent/ai_client\.py$''',
+  ]
 
 # ============================================
 # Allowlist - files/patterns that should be ignored
@@ -105,6 +111,8 @@ paths = [
     '''README\.md$''',
     '''CLAUDE\.md$''',
     '''ARCHITECTURE\.md$''',
+    '''DOCUMENTATION\.md$''',
+    '''USER_GUIDE\.md$''',
     '''docs/.*\.md$''',
 
     # Node modules and virtual environments
@@ -170,6 +178,7 @@ regexes = [
     # Vertex AI / GCP placeholder patterns (infrastructure templates)
     '''@PROJECT\.iam\.gserviceaccount\.com''',
     '''\$\{\{.*secrets\.GCP_PROJECT''',
+    '''name@project-id\.iam\.gserviceaccount\.com''',
 ]
 
 # Specific commits to allow (add commit hashes here if needed)

@@ -24,8 +24,8 @@ interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
   children: React.ReactNode
 }
 
-// Base input classes for dark mode compatibility
-const baseInputClasses = 'w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
+// Base input classes using tsushin design tokens
+const baseInputClasses = 'w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-deep placeholder:text-tsushin-muted focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-colors'
 
 /**
  * Dark mode-compatible text input
@@ -36,19 +36,19 @@ export function Input({ label, error, helperText, className = '', ...props }: In
   return (
     <div className="w-full">
       {label && (
-        <label className="block text-sm font-medium mb-2 text-gray-900 dark:text-gray-100">
+        <label className="block text-sm font-medium mb-2 text-tsushin-fog">
           {label}
         </label>
       )}
       <input
         {...props}
-        className={`${baseInputClasses} ${error ? 'border-red-500 dark:border-red-400' : ''} ${className}`}
+        className={`${baseInputClasses} ${error ? 'border-tsushin-vermilion' : ''} ${className}`}
       />
       {helperText && (
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{helperText}</p>
+        <p className="text-xs text-tsushin-slate mt-1">{helperText}</p>
       )}
       {error && (
-        <p className="text-xs text-red-600 dark:text-red-400 mt-1">{error}</p>
+        <p className="text-xs text-tsushin-vermilion mt-1">{error}</p>
       )}
     </div>
   )
@@ -63,19 +63,19 @@ export function TextArea({ label, error, helperText, className = '', ...props }:
   return (
     <div className="w-full">
       {label && (
-        <label className="block text-sm font-medium mb-2 text-gray-900 dark:text-gray-100">
+        <label className="block text-sm font-medium mb-2 text-tsushin-fog">
           {label}
         </label>
       )}
       <textarea
         {...props}
-        className={`${baseInputClasses} ${error ? 'border-red-500 dark:border-red-400' : ''} ${className}`}
+        className={`${baseInputClasses} ${error ? 'border-tsushin-vermilion' : ''} ${className}`}
       />
       {helperText && (
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{helperText}</p>
+        <p className="text-xs text-tsushin-slate mt-1">{helperText}</p>
       )}
       {error && (
-        <p className="text-xs text-red-600 dark:text-red-400 mt-1">{error}</p>
+        <p className="text-xs text-tsushin-vermilion mt-1">{error}</p>
       )}
     </div>
   )
@@ -93,21 +93,21 @@ export function Select({ label, error, helperText, className = '', children, ...
   return (
     <div className="w-full">
       {label && (
-        <label className="block text-sm font-medium mb-2 text-gray-900 dark:text-gray-100">
+        <label className="block text-sm font-medium mb-2 text-tsushin-fog">
           {label}
         </label>
       )}
       <select
         {...props}
-        className={`${baseInputClasses} ${error ? 'border-red-500 dark:border-red-400' : ''} ${className}`}
+        className={`${baseInputClasses} ${error ? 'border-tsushin-vermilion' : ''} ${className}`}
       >
         {children}
       </select>
       {helperText && (
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{helperText}</p>
+        <p className="text-xs text-tsushin-slate mt-1">{helperText}</p>
       )}
       {error && (
-        <p className="text-xs text-red-600 dark:text-red-400 mt-1">{error}</p>
+        <p className="text-xs text-tsushin-vermilion mt-1">{error}</p>
       )}
     </div>
   )

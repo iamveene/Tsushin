@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tsushin.fullname" . }}-backend
+  namespace: {{ include "tsushin.namespace" . }}
+  labels:
+    {{- include "tsushin.backend.labels" . | nindent 4 }}
+  annotations:
+    cloud.google.com/backend-config: '{"default": "{{ include "tsushin.fullname" . }}-backend-config"}'
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.backend.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "tsushin.backend.selectorLabels" . | nindent 4 }}
+---
+# BackendConfig for WebSocket timeout on GKE Ingress
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: {{ include "tsushin.fullname" . }}-backend-config
+  namespace: {{ include "tsushin.namespace" . }}
+  labels:
+    {{- include "tsushin.backend.labels" . | nindent 4 }}
+spec:
+  timeoutSec: {{ .Values.ingress.websocketTimeout }}
+  connectionDraining:
+    drainingTimeoutSec: 30

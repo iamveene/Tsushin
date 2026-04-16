@@ -243,7 +243,7 @@ def list_tone_presets(
     query = db.query(TonePreset)
 
     # Apply tenant filtering - include tenant's presets AND shared (NULL tenant_id)
-    query = ctx.filter_by_tenant(query, TonePreset.tenant_id)
+    query = ctx.filter_by_tenant(query, TonePreset.tenant_id, include_shared=True)
 
     # Apply search filter
     if search:
@@ -333,7 +333,7 @@ def update_tone_preset(
 
     # Verify user can access this preset
     if not ctx.can_access_resource(preset.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
+        raise HTTPException(status_code=404, detail="Tone preset not found")
 
     # System presets cannot be modified
     if preset.is_system:
@@ -389,7 +389,7 @@ def delete_tone_preset(
 
     # Verify user can access this preset
     if not ctx.can_access_resource(preset.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
+        raise HTTPException(status_code=404, detail="Tone preset not found")
 
     if preset.is_system:
         raise HTTPException(status_code=403, detail="Cannot delete system tone preset")
@@ -585,7 +585,7 @@ def update_slash_command(
 
     # Verify access
     if not ctx.is_global_admin and command.tenant_id != ctx.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to this command")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     # System commands cannot be modified (tenant_id == "_system")
     if command.tenant_id == "_system":
@@ -659,7 +659,7 @@ def delete_slash_command(
 
     # Verify access
     if not ctx.is_global_admin and command.tenant_id != ctx.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to this command")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     if command.tenant_id == "_system":
         raise HTTPException(status_code=403, detail="Cannot delete system command")
@@ -793,7 +793,7 @@ def update_project_pattern(
 
     # Verify access
     if not ctx.is_global_admin and pattern.tenant_id != ctx.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to this pattern")
+        raise HTTPException(status_code=404, detail="Pattern not found")
 
     # System patterns cannot be modified (tenant_id == "_system")
     if pattern.tenant_id == "_system":
@@ -851,7 +851,7 @@ def delete_project_pattern(
 
     # Verify access
     if not ctx.is_global_admin and pattern.tenant_id != ctx.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to this pattern")
+        raise HTTPException(status_code=404, detail="Pattern not found")
 
     if pattern.tenant_id == "_system":
         raise HTTPException(status_code=403, detail="Cannot delete system pattern")

@@ -1,7 +1,7 @@
 'use client'
 
-import React, { useEffect, useState, useCallback } from 'react'
-import { api, AgentSkill, SkillDefinition, SkillIntegration, SkillProvider, TTSProviderInfo, TTSVoice, AgentTTSConfig } from '@/lib/client'
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { api, AgentSkill, SkillDefinition, SkillIntegration, SkillProvider, TTSProviderInfo, TTSVoice, AgentTTSConfig, SentinelProfile, SentinelProfileAssignment, AgentSandboxedTool, SandboxedTool } from '@/lib/client'
 import { ArrayConfigInput } from './ArrayConfigInput'
 import {
   PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon, BotIcon,
@@ -9,6 +9,9 @@ import {
   SearchIcon, AlertTriangleIcon, CheckIcon, MessageIcon, FileTextIcon,
   IconProps,
 } from '@/components/ui/icons'
+import AddSkillModal from './skills/AddSkillModal'
+import ToggleSwitch from './ui/ToggleSwitch'
+import { HIDDEN_SKILLS, SPECIAL_RENDERED_SKILLS, SKILL_DISPLAY_INFO, getSkillDisplay } from './skills/skill-constants'
 
 interface Props {
   agentId: number
@@ -64,17 +67,54 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [shellConfig, setShellConfig] = useState<Record<string, any>>({ wait_for_result: false, default_timeout: 60 })
   const [shellBeacons, setShellBeacons] = useState<any[]>([])
 
+  // Skill-level security profile state (v1.6.0 Phase E)
+  const [securityProfiles, setSecurityProfiles] = useState<SentinelProfile[]>([])
+  const [skillSecurityAssignments, setSkillSecurityAssignments] = useState<Map<string, SentinelProfileAssignment | null>>(new Map())
+  const [skillSecurityPopover, setSkillSecurityPopover] = useState<string | null>(null)
+  const securityPopoverRef = useRef<HTMLDivElement>(null)
+
+  // Phase 24: Custom Skills state
+  const [customSkillAssignments, setCustomSkillAssignments] = useState<any[]>([])
+  const [availableCustomSkills, setAvailableCustomSkills] = useState<any[]>([])
+  const [showCustomSkillPicker, setShowCustomSkillPicker] = useState(false)
+
+  // Add Skill modal state
+  const [showAddSkillModal, setShowAddSkillModal] = useState(false)
+
+  // Sandboxed Tools config (embedded in skill config modal)
+  const [sandboxedTools, setSandboxedTools] = useState<SandboxedTool[]>([])
+  const [agentSandboxedTools, setAgentSandboxedTools] = useState<AgentSandboxedTool[]>([])
+  const [sandboxedToolsLoading, setSandboxedToolsLoading] = useState(false)
+  const [sandboxedToolUpdating, setSandboxedToolUpdating] = useState<number | null>(null)
+
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const [available, agent, integrations] = await Promise.all([
+      const [available, agent, integrations, profiles, secAssignments, customAssignments, allCustomSkills] = await Promise.all([
         api.getAvailableSkills(),
         api.getAgentSkills(agentId),
         api.getAgentSkillIntegrations(agentId),
+        api.getSentinelProfiles(true).catch(() => [] as SentinelProfile[]),
+        api.getSentinelProfileAssignments(agentId).catch(() => [] as SentinelProfileAssignment[]),
+        api.getAgentCustomSkills(agentId).catch(() => []),
+        api.getCustomSkills().catch(() => []),
       ])
       setAvailableSkills(available)
       setAgentSkills(agent)
       setSkillIntegrations(integrations)
+      setCustomSkillAssignments(customAssignments)
+      setAvailableCustomSkills(allCustomSkills)
+      setSecurityProfiles(profiles)
+
+      // Build skill-level assignment map
+      const skillMap = new Map<string, SentinelProfileAssignment | null>()
+      for (const skillType of ['shell', 'web_search']) {
+        const assignment = secAssignments.find(
+          (a: SentinelProfileAssignment) => a.skill_type === skillType
+        )
+        skillMap.set(skillType, assignment || null)
+      }
+      setSkillSecurityAssignments(skillMap)
     } catch (err) {
       console.error('Failed to load skills:', err)
     } finally {
@@ -86,13 +126,47 @@ export default function AgentSkillsManager({ agentId }: Props) {
     loadData()
   }, [loadData])
 
+  // Close security popover on click outside
+  useEffect(() => {
+    if (!skillSecurityPopover) return
+    const handleClick = (e: MouseEvent) => {
+      if (securityPopoverRef.current && !securityPopoverRef.current.contains(e.target as Node)) {
+        setSkillSecurityPopover(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [skillSecurityPopover])
+
   const isSkillEnabled = (skillType: string): boolean => {
     return agentSkills.some(s => s.skill_type === skillType && s.is_enabled)
   }
 
+  const buildDefaultSkillConfig = (skillDef?: SkillDefinition | null): Record<string, any> => {
+    if (!skillDef) return {}
+
+    const schemaDefaults: Record<string, any> = {}
+    const schemaProperties = skillDef.config_schema?.properties || {}
+
+    Object.entries(schemaProperties).forEach(([key, schema]) => {
+      if ((schema as any).default !== undefined) {
+        schemaDefaults[key] = (schema as any).default
+      }
+    })
+
+    return {
+      ...schemaDefaults,
+      ...(skillDef.default_config || {}),
+    }
+  }
+
   const getSkillConfig = (skillType: string): Record<string, any> => {
     const skill = agentSkills.find(s => s.skill_type === skillType)
-    return skill?.config || {}
+    const skillDef = availableSkills.find(s => s.skill_type === skillType)
+    return {
+      ...buildDefaultSkillConfig(skillDef),
+      ...(skill?.config || {}),
+    }
   }
 
   const getSkillIntegration = (skillType: string): SkillIntegration | undefined => {
@@ -103,26 +177,121 @@ export default function AgentSkillsManager({ agentId }: Props) {
     try {
       if (enabled) {
         const skillDef = availableSkills.find(s => s.skill_type === skillType)
-        const defaultConfig: Record<string, any> = {}
-        if (skillDef) {
-          Object.entries(skillDef.config_schema || {}).forEach(([key, schema]) => {
-            defaultConfig[key] = (schema as any).default
-          })
-        }
+        const defaultConfig = buildDefaultSkillConfig(skillDef)
         await api.updateAgentSkill(agentId, skillType, { is_enabled: true, config: defaultConfig })
       } else {
         await api.disableAgentSkill(agentId, skillType)
       }
       loadData()
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to toggle skill:', err)
-      alert('Failed to toggle skill')
+      alert(err?.message || 'Failed to toggle skill')
+    }
+  }
+
+  // Add a built-in skill and open its config modal
+  const addBuiltinSkill = async (skillType: string) => {
+    try {
+      const skillDef = availableSkills.find(s => s.skill_type === skillType)
+      const defaultConfig = buildDefaultSkillConfig(skillDef)
+      await api.updateAgentSkill(agentId, skillType, { is_enabled: true, config: defaultConfig })
+      setShowAddSkillModal(false)
+      await loadData()
+
+      // Open the appropriate config modal
+      const info = SKILL_DISPLAY_INFO[skillType]
+      if (info?.configType === 'provider' && info.providerKey) {
+        openProviderConfig(info.providerKey as 'scheduler' | 'email' | 'web_search')
+      } else if (info?.configType === 'audio') {
+        openAudioConfig(skillType === 'audio_transcript' ? 'transcript' : 'tts')
+      } else if (info?.configType === 'shell') {
+        openShellConfig()
+      } else {
+        openConfig(skillType)
+      }
+    } catch (err: any) {
+      console.error('Failed to add skill:', err)
+      alert(err?.message || 'Failed to add skill')
+    }
+  }
+
+  // Add a custom skill to the agent
+  const addCustomSkill = async (customSkillId: number) => {
+    try {
+      await api.assignCustomSkillToAgent(agentId, customSkillId)
+      setShowAddSkillModal(false)
+      loadData()
+    } catch (err) {
+      console.error('Failed to assign custom skill:', err)
+      alert('Failed to assign skill')
+    }
+  }
+
+  // Remove (disable) a built-in skill
+  const removeSkill = async (skillType: string, displayName: string) => {
+    if (!confirm(`Remove "${displayName}" from this agent?`)) return
+    try {
+      await api.disableAgentSkill(agentId, skillType)
+      loadData()
+    } catch (err) {
+      console.error('Failed to remove skill:', err)
+      alert('Failed to remove skill')
     }
   }
 
   const openConfig = (skillType: string) => {
     setConfiguring(skillType)
     setConfigData(getSkillConfig(skillType))
+    if (skillType === 'sandboxed_tools') {
+      loadSandboxedTools()
+    }
+  }
+
+  const loadSandboxedTools = async () => {
+    setSandboxedToolsLoading(true)
+    try {
+      const [tools, assignments] = await Promise.all([
+        api.getSandboxedTools(),
+        api.getAgentSandboxedTools(agentId),
+      ])
+      setSandboxedTools(tools.filter(t => t.is_enabled))
+      setAgentSandboxedTools(assignments)
+    } catch (err) {
+      console.error('Failed to load sandboxed tools:', err)
+    } finally {
+      setSandboxedToolsLoading(false)
+    }
+  }
+
+  const isSandboxedToolEnabled = (toolId: number): boolean => {
+    return agentSandboxedTools.some(at => at.sandboxed_tool_id === toolId && at.is_enabled)
+  }
+
+  const getSandboxedToolMapping = (toolId: number): AgentSandboxedTool | undefined => {
+    return agentSandboxedTools.find(at => at.sandboxed_tool_id === toolId)
+  }
+
+  const toggleSandboxedTool = async (tool: SandboxedTool, enabled: boolean) => {
+    setSandboxedToolUpdating(tool.id)
+    try {
+      const mapping = getSandboxedToolMapping(tool.id)
+      if (enabled) {
+        if (mapping) {
+          await api.updateAgentSandboxedTool(agentId, mapping.id, { is_enabled: true })
+        } else {
+          await api.addAgentSandboxedTool(agentId, { sandboxed_tool_id: tool.id, is_enabled: true })
+        }
+      } else {
+        if (mapping) {
+          await api.updateAgentSandboxedTool(agentId, mapping.id, { is_enabled: false })
+        }
+      }
+      await loadSandboxedTools()
+    } catch (err) {
+      console.error('Failed to toggle sandboxed tool:', err)
+    } finally {
+      setSandboxedToolUpdating(null)
+    }
   }
 
   const openProviderConfig = async (providerKey: 'scheduler' | 'email' | 'web_search') => {
@@ -358,7 +527,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
           return (
             <div
               key={capKey}
-              className="flex items-start space-x-3 p-3 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800"
+              className="flex items-start space-x-3 p-3 border border-tsushin-border rounded-md bg-tsushin-surface"
             >
               <input
                 type="checkbox"
@@ -375,11 +544,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 className="mt-1 w-5 h-5"
               />
               <div className="flex-1">
-                <label className="font-medium text-gray-900 dark:text-gray-100 cursor-pointer">
+                <label className="font-medium text-white cursor-pointer">
                   {capLabel}
                 </label>
                 {capDesc && (
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  <p className="text-sm text-tsushin-muted mt-1">
                     {capDesc}
                   </p>
                 )}
@@ -392,7 +561,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
   }
 
   const renderConfigInput = (key: string, schema: any, value: any) => {
-    const inputClasses = "w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+    const inputClasses = "w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
 
     if (key === 'capabilities' && schema.type === 'object' && value) {
       return renderCapabilitiesConfig(value)
@@ -464,6 +633,89 @@ export default function AgentSkillsManager({ agentId }: Props) {
     )
   }
 
+  // Skill-level Security Profile Indicator (v1.6.0 Phase E)
+  const handleSkillSecurityAssignment = async (skillType: string, profileId: number | null) => {
+    try {
+      if (profileId) {
+        await api.assignSentinelProfile({
+          profile_id: profileId,
+          agent_id: agentId,
+          skill_type: skillType,
+        })
+      } else {
+        const existing = skillSecurityAssignments.get(skillType)
+        if (existing) {
+          await api.removeSentinelProfileAssignment(existing.id)
+        }
+      }
+      setSkillSecurityPopover(null)
+      loadData()
+    } catch (err: any) {
+      console.error('Failed to update skill security:', err)
+    }
+  }
+
+  const SecurityIndicator = ({ skillType }: { skillType: string }) => {
+    const assignment = skillSecurityAssignments.get(skillType)
+    const isInherited = !assignment
+    const isOpen = skillSecurityPopover === skillType
+
+    return (
+      <div className="relative" ref={isOpen ? securityPopoverRef : undefined}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            setSkillSecurityPopover(isOpen ? null : skillType)
+          }}
+          className={`flex items-center gap-1 px-2 py-0.5 text-xs rounded-full transition-colors ${
+            isInherited
+              ? 'bg-tsushin-elevated text-tsushin-muted hover:bg-tsushin-surface'
+              : 'bg-teal-100 dark:bg-teal-800/30 text-teal-700 dark:text-teal-300 hover:bg-teal-200 dark:hover:bg-teal-700/30'
+          }`}
+          title="Security Profile"
+        >
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          </svg>
+          {isInherited ? 'Inherited' : assignment?.profile_name}
+        </button>
+
+        {isOpen && (
+          <div
+            className="absolute right-0 top-full mt-1 w-52 bg-tsushin-surface border border-tsushin-border rounded-lg shadow-xl z-50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-3 py-2 border-b border-tsushin-border">
+              <p className="text-xs font-medium text-tsushin-muted">Security Profile</p>
+            </div>
+            <div className="p-1 max-h-60 overflow-y-auto">
+              <button
+                onClick={() => handleSkillSecurityAssignment(skillType, null)}
+                className={`w-full px-3 py-2 text-left text-sm rounded hover:bg-tsushin-surface transition-colors ${
+                  isInherited ? 'text-teal-600 dark:text-teal-400 font-medium' : 'text-tsushin-fog'
+                }`}
+              >
+                Inherit from Agent
+              </button>
+              {securityProfiles.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => handleSkillSecurityAssignment(skillType, p.id)}
+                  className={`w-full px-3 py-2 text-left text-sm rounded hover:bg-tsushin-surface transition-colors ${
+                    assignment?.profile_id === p.id ? 'text-teal-600 dark:text-teal-400 font-medium' : 'text-tsushin-fog'
+                  }`}
+                >
+                  {p.name}
+                  {p.is_system && <span className="text-xs text-gray-400 ml-1">[System]</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   // Render provider-based skill card (Scheduler, Email, Web Search)
   const renderProviderSkillCard = (
     displayName: string,
@@ -509,10 +761,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
     return (
       <div
-        className={`border dark:border-gray-700 rounded-lg p-6 ${
+        className={`border border-tsushin-border rounded-lg p-6 ${
           enabled
             ? 'bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20 border-teal-300 dark:border-teal-600'
-            : 'bg-gray-50 dark:bg-gray-900'
+            : 'bg-tsushin-ink'
         }`}
       >
         <div className="flex justify-between items-start mb-4">
@@ -525,8 +777,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   Active
                 </span>
               )}
+              {enabled && providerKey === 'web_search' && <SecurityIndicator skillType="web_search" />}
             </div>
-            <p className="text-sm text-gray-600 dark:text-gray-400">{description}</p>
+            <p className="text-sm text-tsushin-slate">{description}</p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -541,19 +794,19 @@ export default function AgentSkillsManager({ agentId }: Props) {
         {enabled && (
           <div className="mt-4 pt-4 border-t border-teal-200 dark:border-teal-700">
             <div className="grid grid-cols-2 gap-4">
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Provider</div>
+              <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                <div className="text-xs text-tsushin-muted mb-1">Provider</div>
                 <div className="font-medium text-teal-700 dark:text-teal-300">{providerDisplay}</div>
               </div>
               {integrationDisplay && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Account</div>
-                  <div className="font-medium text-gray-900 dark:text-gray-100 truncate">{integrationDisplay}</div>
+                <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                  <div className="text-xs text-tsushin-muted mb-1">Account</div>
+                  <div className="font-medium text-white truncate">{integrationDisplay}</div>
                 </div>
               )}
               {integration?.integration_health && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Status</div>
+                <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                  <div className="text-xs text-tsushin-muted mb-1">Status</div>
                   <div className={`font-medium ${
                     integration.integration_health === 'connected'
                       ? 'text-green-600 dark:text-green-400'
@@ -568,7 +821,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
             {/* Show keywords if configured */}
             {config.keywords && config.keywords.length > 0 && (
               <div className="mt-3">
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Trigger Keywords</div>
+                <div className="text-xs text-tsushin-muted mb-1">Trigger Keywords</div>
                 <div className="flex flex-wrap gap-1">
                   {config.keywords.slice(0, 8).map((kw: string, i: number) => (
                     <span key={i} className="px-2 py-0.5 text-xs bg-teal-100 dark:bg-teal-800/30 text-teal-700 dark:text-teal-300 rounded">
@@ -576,7 +829,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     </span>
                   ))}
                   {config.keywords.length > 8 && (
-                    <span className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
+                    <span className="px-2 py-0.5 text-xs bg-tsushin-elevated text-tsushin-muted rounded">
                       +{config.keywords.length - 8} more
                     </span>
                   )}
@@ -592,10 +845,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 Edit Keywords & Options
               </button>
               <button
-                onClick={() => toggleSkill(skillType, false)}
+                onClick={() => removeSkill(skillType, displayName)}
                 className="px-3 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
               >
-                Disable
+                Remove
               </button>
             </div>
           </div>
@@ -619,10 +872,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
     return (
       <div
-        className={`border dark:border-gray-700 rounded-lg p-6 ${
+        className={`border border-tsushin-border rounded-lg p-6 ${
           anyEnabled
             ? 'bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20 border-teal-300 dark:border-teal-600'
-            : 'bg-gray-50 dark:bg-gray-900'
+            : 'bg-tsushin-ink'
         }`}
       >
         <div className="flex justify-between items-start mb-4">
@@ -636,7 +889,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 </span>
               )}
             </div>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
+            <p className="text-sm text-tsushin-slate">
               Audio processing: Text-to-Speech responses and Speech-to-Text transcription.
             </p>
           </div>
@@ -657,7 +910,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
             className={`p-3 rounded-lg border cursor-pointer transition-all ${
               ttsEnabled
                 ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-600'
-                : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+                : 'bg-tsushin-elevated border-tsushin-border'
             }`}
             onClick={() => openAudioConfig('tts')}
           >
@@ -672,7 +925,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
               )}
             </div>
             {ttsEnabled && (
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+              <div className="text-xs text-tsushin-muted">
                 <span className="inline-flex items-center gap-1">{currentProvider === 'kokoro' ? <><MicrophoneIcon size={10} /> Kokoro (FREE)</> : <>OpenAI</>}</span> • {ttsConfigData.voice || 'pf_dora'}
               </div>
             )}
@@ -683,7 +936,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
             className={`p-3 rounded-lg border cursor-pointer transition-all ${
               transcriptEnabled
                 ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-600'
-                : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+                : 'bg-tsushin-elevated border-tsushin-border'
             }`}
             onClick={() => openAudioConfig('transcript')}
           >
@@ -698,7 +951,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
               )}
             </div>
             {transcriptEnabled && (
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+              <div className="text-xs text-tsushin-muted">
                 Whisper • {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript only' : 'Conversational'}
               </div>
             )}
@@ -710,14 +963,14 @@ export default function AgentSkillsManager({ agentId }: Props) {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {ttsEnabled && (
                 <>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">TTS Provider</div>
+                  <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                    <div className="text-xs text-tsushin-muted mb-1">TTS Provider</div>
                     <div className={`font-medium text-sm ${currentProvider === 'kokoro' ? 'text-green-600 dark:text-green-400' : 'text-blue-600 dark:text-blue-400'}`}>
                       {currentProvider === 'kokoro' ? 'Kokoro (FREE)' : 'OpenAI'}
                     </div>
                   </div>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">TTS Cost</div>
+                  <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                    <div className="text-xs text-tsushin-muted mb-1">TTS Cost</div>
                     <div className={`font-medium text-sm ${currentProvider === 'kokoro' ? 'text-green-600 dark:text-green-400' : 'text-yellow-600 dark:text-yellow-400'}`}>
                       {currentProvider === 'kokoro' ? '$0 (FREE!)' : '~$15/1M chars'}
                     </div>
@@ -726,15 +979,15 @@ export default function AgentSkillsManager({ agentId }: Props) {
               )}
               {transcriptEnabled && (
                 <>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">STT Model</div>
-                    <div className="font-medium text-sm text-gray-900 dark:text-gray-100">
+                  <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                    <div className="text-xs text-tsushin-muted mb-1">STT Model</div>
+                    <div className="font-medium text-sm text-white">
                       Whisper
                     </div>
                   </div>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">STT Mode</div>
-                    <div className="font-medium text-sm text-gray-900 dark:text-gray-100">
+                  <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                    <div className="text-xs text-tsushin-muted mb-1">STT Mode</div>
+                    <div className="font-medium text-sm text-white">
                       {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript' : 'AI Chat'}
                     </div>
                   </div>
@@ -819,10 +1072,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
     return (
       <div
-        className={`border dark:border-gray-700 rounded-lg p-6 ${
+        className={`border border-tsushin-border rounded-lg p-6 ${
           enabled
             ? 'bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20 border-teal-300 dark:border-teal-600'
-            : 'bg-gray-50 dark:bg-gray-900'
+            : 'bg-tsushin-ink'
         }`}
       >
         <div className="flex justify-between items-start mb-4">
@@ -835,8 +1088,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   Active
                 </span>
               )}
+              {enabled && <SecurityIndicator skillType="shell" />}
             </div>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
+            <p className="text-sm text-tsushin-slate">
               Execute remote shell commands on connected beacons. Supports programmatic (/shell) and agentic (natural language) modes.
             </p>
           </div>
@@ -853,26 +1107,26 @@ export default function AgentSkillsManager({ agentId }: Props) {
         {enabled && (
           <div className="mt-4 pt-4 border-t border-teal-200 dark:border-teal-700">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Agent Mode</div>
+              <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                <div className="text-xs text-tsushin-muted mb-1">Agent Mode</div>
                 <div className="font-medium text-teal-700 dark:text-teal-300">
                   <span className="inline-flex items-center gap-1">{config.execution_mode === 'agentic' ? <><BotIcon size={14} /> Agentic</> : <><WrenchIcon size={14} /> Programmatic</>}</span>
                 </div>
               </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Result Mode</div>
-                <div className="font-medium text-gray-900 dark:text-gray-100">
+              <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                <div className="text-xs text-tsushin-muted mb-1">Result Mode</div>
+                <div className="font-medium text-white">
                   <span className="inline-flex items-center gap-1">{config.wait_for_result ? <><ClockIcon size={14} /> Wait</> : <><RocketIcon size={14} /> Fire &amp; Forget</>}</span>
                 </div>
               </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Timeout</div>
-                <div className="font-medium text-gray-900 dark:text-gray-100">
+              <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                <div className="text-xs text-tsushin-muted mb-1">Timeout</div>
+                <div className="font-medium text-white">
                   {config.default_timeout || 60}s
                 </div>
               </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border dark:border-gray-700">
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Beacons Online</div>
+              <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                <div className="text-xs text-tsushin-muted mb-1">Beacons Online</div>
                 <div className={`font-medium ${onlineBeacons > 0 ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
                   {onlineBeacons > 0 ? <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" />{onlineBeacons} connected</span> : <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400 inline-block" />None online</span>}
                 </div>
@@ -887,10 +1141,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 <RadioIcon size={14} /> Shell Command Center
               </a>
               <button
-                onClick={() => toggleSkill('shell', false)}
+                onClick={() => removeSkill('shell', 'Shell')}
                 className="px-3 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
               >
-                Disable
+                Remove
               </button>
             </div>
           </div>
@@ -902,80 +1156,120 @@ export default function AgentSkillsManager({ agentId }: Props) {
   // Render standard skill card (audio, etc.)
   const renderStandardSkillCard = (skill: SkillDefinition) => {
     // Skip provider-based skills (they're rendered separately)
-    // - flows: Part of Scheduler skill
-    // - gmail: Part of Email skill
-    // - asana: Provider for Scheduler skill
-    // - audio_tts: Part of unified Audio skill
-    // - audio_transcript: Part of unified Audio skill
-    // - shell: Has its own dedicated card
-    if (skill.skill_type === 'flows' || skill.skill_type === 'gmail' || skill.skill_type === 'asana' || skill.skill_type === 'audio_tts' || skill.skill_type === 'audio_transcript' || skill.skill_type === 'shell') {
+    if (SPECIAL_RENDERED_SKILLS.has(skill.skill_type) || skill.skill_type === 'asana') {
       return null
     }
 
-    const enabled = isSkillEnabled(skill.skill_type)
     const config = getSkillConfig(skill.skill_type)
+    const display = getSkillDisplay(skill.skill_type, skill.skill_name, skill.skill_description)
+    const Icon = display.icon
 
     return (
       <div
         key={skill.skill_type}
-        className={`border dark:border-gray-700 rounded-lg p-6 ${
-          enabled
-            ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-600'
-            : 'bg-gray-50 dark:bg-gray-900'
-        }`}
+        className="border border-teal-300 dark:border-teal-600 rounded-lg p-6 bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20"
       >
         <div className="flex justify-between items-start mb-4">
           <div className="flex-1">
-            <h3 className="text-lg font-semibold mb-2">{skill.skill_name}</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">{skill.skill_description}</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <label className="flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={enabled}
-                onChange={(e) => toggleSkill(skill.skill_type, e.target.checked)}
-                className="mr-2 w-5 h-5"
-              />
-              <span className="text-sm font-medium">
-                {enabled ? 'Enabled' : 'Disabled'}
+            <div className="flex items-center gap-2 mb-2">
+              <Icon size={24} />
+              <h3 className="text-lg font-semibold">{display.displayName}</h3>
+              <span className="px-2 py-0.5 text-xs font-medium bg-green-100 dark:bg-green-800/30 text-green-700 dark:text-green-300 rounded-full">
+                Active
               </span>
-            </label>
-            {enabled && (
-              <button
-                onClick={() => openConfig(skill.skill_type)}
-                className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
-              >
-                Configure
-              </button>
-            )}
+            </div>
+            <p className="text-sm text-tsushin-slate">{display.description}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => openConfig(skill.skill_type)}
+              className="px-4 py-2 bg-teal-600 text-white text-sm rounded-lg hover:bg-teal-700 transition-colors inline-flex items-center gap-1.5"
+            >
+              <SettingsIcon size={14} /> Configure
+            </button>
           </div>
         </div>
 
-        {enabled && Object.keys(config).length > 0 && (
-          <div className="mt-4 pt-4 border-t border-green-300 dark:border-green-600">
-            <h4 className="text-sm font-medium mb-2 text-green-700 dark:text-green-300">Current Configuration:</h4>
+        {Object.keys(config).length > 0 && (
+          <div className="mt-4 pt-4 border-t border-teal-200 dark:border-teal-700">
             <div className="grid grid-cols-3 gap-4">
               {Object.entries(config)
                 .filter(([key]) => {
                   if (key === 'ai_model' && config.intent_detection_model) return false
                   return true
                 })
+                .slice(0, 6)
                 .map(([key, value]) => (
-                  <div key={key} className="bg-white dark:bg-gray-800 rounded p-2 border dark:border-gray-700">
-                    <div className="text-xs text-gray-600 dark:text-gray-400">{key}</div>
-                    <div className="text-sm font-medium truncate">{String(value)}</div>
+                  <div key={key} className="bg-tsushin-surface rounded p-2 border border-tsushin-border">
+                    <div className="text-xs text-tsushin-slate">{key.replace(/_/g, ' ')}</div>
+                    <div className="text-sm font-medium truncate">{Array.isArray(value) ? `${value.length} items` : String(value)}</div>
                   </div>
                 ))
               }
             </div>
+            <div className="mt-3">
+              <button
+                onClick={() => removeSkill(skill.skill_type, display.displayName)}
+                className="px-3 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
+              >
+                Remove
+              </button>
+            </div>
           </div>
         )}
 
-
+        {Object.keys(config).length === 0 && (
+          <div className="mt-3">
+            <button
+              onClick={() => removeSkill(skill.skill_type, display.displayName)}
+              className="px-3 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
+            >
+              Remove
+            </button>
+          </div>
+        )}
       </div>
     )
   }
+
+  // Compute enabled skill types for the Add Skill modal (must be before any early return)
+  const enabledSkillTypes = useMemo(() => {
+    return new Set(agentSkills.filter(s => s.is_enabled).map(s => s.skill_type))
+  }, [agentSkills])
+
+  const assignedCustomSkillIds = useMemo(() => {
+    return new Set(customSkillAssignments.map((a: any) => a.custom_skill_id))
+  }, [customSkillAssignments])
+
+  // Filter which provider skills are enabled
+  const enabledProviderSkills = useMemo(() => {
+    const result: { providerKey: 'scheduler' | 'email' | 'web_search'; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = []
+    const providerEntries: { providerKey: 'scheduler' | 'email' | 'web_search'; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = [
+      { providerKey: 'scheduler', displayName: 'Scheduler', skillType: 'flows', icon: CalendarIcon, description: 'Create events, reminders, and schedule AI conversations. Choose between built-in Flows, Google Calendar, or Asana.' },
+      { providerKey: 'email', displayName: 'Email', skillType: 'gmail', icon: MailIcon, description: 'Read and search emails. Connect your Gmail account to enable email access.' },
+      { providerKey: 'web_search', displayName: 'Web Search', skillType: 'web_search', icon: SearchIcon, description: 'Search the web for information. Choose between Brave Search (privacy-focused) or Google Search (via SerpAPI).' },
+    ]
+    for (const entry of providerEntries) {
+      if (enabledSkillTypes.has(entry.skillType)) {
+        result.push(entry)
+      }
+    }
+    return result
+  }, [enabledSkillTypes])
+
+  const isAudioEnabled = enabledSkillTypes.has('audio_tts') || enabledSkillTypes.has('audio_transcript')
+  const isShellEnabled = enabledSkillTypes.has('shell')
+
+  // Filter standard skills that are enabled (not provider/audio/shell)
+  const enabledStandardSkills = useMemo(() => {
+    return availableSkills.filter(skill => {
+      if (HIDDEN_SKILLS.has(skill.skill_type)) return false
+      if (SPECIAL_RENDERED_SKILLS.has(skill.skill_type)) return false
+      return enabledSkillTypes.has(skill.skill_type)
+    })
+  }, [availableSkills, enabledSkillTypes])
+
+  const totalEnabledCount = enabledProviderSkills.length + (isAudioEnabled ? 1 : 0) + (isShellEnabled ? 1 : 0) + enabledStandardSkills.length
 
   if (loading) {
     return <div className="p-8 text-center">Loading skills...</div>
@@ -989,64 +1283,86 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const selectedProviderData = currentProviders.find(p => p.provider_type === selectedProvider)
 
   return (
-    <div className="space-y-8">
-      {/* Provider-Based Skills Section */}
-      <div>
-        <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-          <PlugIcon size={20} /> Integration Skills
-        </h2>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-          These skills connect to external services. Configure the provider and account to use.
-        </p>
-
-        <div className="grid gap-6 md:grid-cols-2">
-          {renderProviderSkillCard(
-            'Scheduler',
-            'scheduler',
-            CalendarIcon,
-            'Create events, reminders, and schedule AI conversations. Choose between built-in Flows, Google Calendar, or Asana.'
-          )}
-
-          {renderProviderSkillCard(
-            'Email',
-            'email',
-            MailIcon,
-            'Read and search emails. Connect your Gmail account to enable email access.'
-          )}
-
-          {renderProviderSkillCard(
-            'Web Search',
-            'web_search',
-            SearchIcon,
-            'Search the web for information. Choose between Brave Search (privacy-focused) or Google Search (via SerpAPI).'
-          )}
-
-          {/* Unified Audio Skill Card (TTS + Transcript) */}
-          {renderUnifiedAudioCard()}
-
-          {/* Shell Skill Card */}
-          {renderShellSkillCard()}
+    <div className="space-y-6">
+      {/* Header with Add Skill button */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <PlugIcon size={20} /> Skills
+            <span className="text-sm font-normal text-tsushin-slate ml-1">
+              {totalEnabledCount} active
+            </span>
+          </h2>
+          <p className="text-sm text-tsushin-slate mt-1">
+            Manage the capabilities enabled for this agent.
+          </p>
         </div>
+        <button
+          onClick={() => setShowAddSkillModal(true)}
+          className="px-4 py-2 bg-teal-600 text-white text-sm rounded-lg hover:bg-teal-700 transition-colors inline-flex items-center gap-1.5 font-medium"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Add Skill
+        </button>
       </div>
 
-      {/* Standard Skills Section */}
-      <div>
-        <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-          <WrenchIcon size={20} /> Other Skills
-        </h2>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-          Additional capabilities for your agent.
-        </p>
-
-        <div className="grid gap-6">
-          {availableSkills.map((skill) => renderStandardSkillCard(skill))}
+      {/* Empty state */}
+      {totalEnabledCount === 0 ? (
+        <div className="text-center py-16 bg-tsushin-ink rounded-lg border border-white/5">
+          <PlugIcon size={48} className="mx-auto text-tsushin-muted mb-4" />
+          <h3 className="text-lg font-medium text-white mb-2">No skills configured</h3>
+          <p className="text-sm text-tsushin-muted mb-6 max-w-md mx-auto">
+            Add skills to give your agent capabilities like web search, scheduling, audio processing, and more.
+          </p>
+          <button
+            onClick={() => setShowAddSkillModal(true)}
+            className="px-6 py-2.5 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors inline-flex items-center gap-2 font-medium"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Add Your First Skill
+          </button>
         </div>
-      </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Built-in Skills */}
+          {(enabledProviderSkills.length > 0 || isAudioEnabled || isShellEnabled || enabledStandardSkills.length > 0) && (
+            <div>
+              <div className="flex items-center gap-3 mb-4">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-tsushin-slate whitespace-nowrap">Built-in Skills</h3>
+                <div className="flex-1 h-px bg-white/5" />
+              </div>
+              <div className="grid gap-6 md:grid-cols-2">
+                {enabledProviderSkills.map((ps) => renderProviderSkillCard(ps.displayName, ps.providerKey, ps.icon, ps.description))}
+                {isAudioEnabled && renderUnifiedAudioCard()}
+                {isShellEnabled && renderShellSkillCard()}
+                {enabledStandardSkills.map((skill) => renderStandardSkillCard(skill))}
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* Add Skill Modal */}
+      <AddSkillModal
+        isOpen={showAddSkillModal}
+        onClose={() => setShowAddSkillModal(false)}
+        onAddBuiltinSkill={addBuiltinSkill}
+        onAddCustomSkill={addCustomSkill}
+        availableSkills={availableSkills}
+        enabledSkillTypes={enabledSkillTypes}
+        availableCustomSkills={availableCustomSkills}
+        assignedCustomSkillIds={assignedCustomSkillIds}
+      />
 
       {/* Provider Configuration Modal */}
       {configuringProvider && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+            <div className="bg-tsushin-surface rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
             <div className="bg-gradient-to-r from-teal-600 to-cyan-600 px-6 py-4 flex justify-between items-center">
               <h3 className="text-lg font-semibold text-white">
                 Configure {PROVIDER_SKILLS[configuringProvider as 'scheduler' | 'email' | 'web_search'].displayName}
@@ -1085,18 +1401,18 @@ export default function AgentSkillsManager({ agentId }: Props) {
                           className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
                             selectedProvider === provider.provider_type
                               ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                              : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                              : 'border-tsushin-border hover:border-gray-300'
                           }`}
                         >
                           <div className="flex items-center justify-between">
                             <div>
                               <div className="font-medium">{provider.provider_name}</div>
-                              <div className="text-sm text-gray-500 dark:text-gray-400">{provider.description}</div>
+                              <div className="text-sm text-tsushin-muted">{provider.description}</div>
                             </div>
                             <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                               selectedProvider === provider.provider_type
                                 ? 'border-teal-500 bg-teal-500'
-                                : 'border-gray-300 dark:border-gray-600'
+                                : 'border-tsushin-border'
                             }`}>
                               {selectedProvider === provider.provider_type && (
                                 <div className="w-2 h-2 rounded-full bg-white" />
@@ -1129,13 +1445,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
                             className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
                               selectedIntegration === integration.integration_id
                                 ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-                                : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                                : 'border-tsushin-border hover:border-gray-300'
                             }`}
                           >
                             <div className="flex items-center justify-between">
                               <div>
                                 <div className="font-medium">{integration.name}</div>
-                                <div className="text-sm text-gray-500 dark:text-gray-400">
+                                <div className="text-sm text-tsushin-muted">
                                   {integration.email || integration.workspace || `ID: ${integration.integration_id}`}
                                 </div>
                               </div>
@@ -1150,7 +1466,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                                 <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                                   selectedIntegration === integration.integration_id
                                     ? 'border-green-500 bg-green-500'
-                                    : 'border-gray-300 dark:border-gray-600'
+                                    : 'border-tsushin-border'
                                 }`}>
                                   {selectedIntegration === integration.integration_id && (
                                     <div className="w-2 h-2 rounded-full bg-white" />
@@ -1166,7 +1482,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
                   {/* Info box for web_search provider pricing */}
                   {configuringProvider === 'web_search' && selectedProviderData && (
-                    <div className="border-t pt-4 dark:border-gray-700">
+                    <div className="border-t pt-4 border-tsushin-border">
                       <div className={`p-3 rounded-lg ${
                         selectedProvider === 'brave'
                           ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700'
@@ -1184,11 +1500,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
                   {/* Permission Configuration (Google Calendar only) */}
                   {configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerLoading && (
-                    <div className="border-t pt-6 dark:border-gray-700">
+                    <div className="border-t pt-6 border-tsushin-border">
                       <label className="block text-sm font-medium mb-3">
                         Permissions
                       </label>
-                      <div className="space-y-3 bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
                         <div className="flex items-start gap-3">
                           <input
                             type="checkbox"
@@ -1201,7 +1517,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                             <label htmlFor="permission-read" className="font-medium text-sm cursor-pointer">
                               Read Events
                             </label>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                            <p className="text-xs text-tsushin-muted mt-1">
                               View and list calendar events
                             </p>
                           </div>
@@ -1219,7 +1535,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                             <label htmlFor="permission-write" className="font-medium text-sm cursor-pointer">
                               Write Events
                             </label>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                            <p className="text-xs text-tsushin-muted mt-1">
                               Create, update, and delete calendar events
                             </p>
                           </div>
@@ -1237,10 +1553,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
               )}
             </div>
 
-            <div className="bg-gray-50 dark:bg-gray-900 px-6 py-4 border-t dark:border-gray-700 flex justify-between items-center">
+            <div className="bg-tsushin-ink px-6 py-4 border-t border-tsushin-border flex justify-between items-center">
               <button
                 onClick={() => setConfiguringProvider(null)}
-                className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg"
+                className="px-4 py-2 text-tsushin-slate hover:bg-tsushin-surface rounded-lg"
               >
                 Cancel
               </button>
@@ -1253,7 +1569,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 className={`px-6 py-2 rounded-lg font-medium transition-colors ${
                   (selectedProviderData?.requires_integration && !selectedIntegration) ||
                   (!providerPermissions.read && !providerPermissions.write)
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    ? 'bg-tsushin-elevated text-tsushin-muted cursor-not-allowed'
                     : 'bg-teal-600 text-white hover:bg-teal-700'
                 }`}
               >
@@ -1267,7 +1583,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       {/* Unified Audio Configuration Modal (TTS + Transcript) */}
       {configuringAudio && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+          <div className="bg-tsushin-surface rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
             <div className="bg-gradient-to-r from-teal-600 to-cyan-600 px-6 py-4 flex justify-between items-center">
               <h3 className="text-lg font-semibold text-white flex items-center gap-2">
                 <MicrophoneIcon size={20} /> Configure Audio Skills
@@ -1281,13 +1597,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
             </div>
 
             {/* Tab Navigation */}
-            <div className="flex border-b dark:border-gray-700">
+            <div className="flex border-b border-tsushin-border">
               <button
                 onClick={() => setAudioTab('tts')}
                 className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
                   audioTab === 'tts'
                     ? 'text-teal-600 dark:text-teal-400 border-b-2 border-teal-600 dark:border-teal-400 bg-teal-50 dark:bg-teal-900/20'
-                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                    : 'text-tsushin-muted hover:text-tsushin-fog'
                 }`}
               >
                 <span className="flex items-center justify-center gap-2">
@@ -1300,7 +1616,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
                   audioTab === 'transcript'
                     ? 'text-teal-600 dark:text-teal-400 border-b-2 border-teal-600 dark:border-teal-400 bg-teal-50 dark:bg-teal-900/20'
-                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                    : 'text-tsushin-muted hover:text-tsushin-fog'
                 }`}
               >
                 <span className="flex items-center justify-center gap-2">
@@ -1317,17 +1633,14 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 /* TTS Tab Content */
                 <>
                   {/* Enable Toggle */}
-                  <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                  <div className="flex items-center justify-between p-3 bg-tsushin-ink rounded-lg">
                     <span className="font-medium">Enable TTS Response</span>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isSkillEnabled('audio_tts')}
-                        onChange={(e) => toggleAudioSubSkill('audio_tts', e.target.checked)}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-teal-300 dark:peer-focus:ring-teal-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
-                    </label>
+                    <ToggleSwitch
+                      checked={isSkillEnabled('audio_tts')}
+                      onChange={(checked) => toggleAudioSubSkill('audio_tts', checked)}
+                      size="md"
+                      title={isSkillEnabled('audio_tts') ? 'Disable TTS' : 'Enable TTS'}
+                    />
                   </div>
 
                   {/* Provider Selection */}
@@ -1343,7 +1656,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                           className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
                             ttsConfig.provider === provider.id
                               ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                              : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                              : 'border-tsushin-border hover:border-gray-300'
                           }`}
                         >
                           <div className="flex items-center justify-between">
@@ -1356,7 +1669,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                                   </span>
                                 )}
                               </div>
-                              <div className="text-sm text-gray-500 dark:text-gray-400">
+                              <div className="text-sm text-tsushin-muted">
                                 {provider.voice_count} voices • {provider.supported_languages.join(', ').toUpperCase()}
                               </div>
                               <div className="text-xs text-gray-400 mt-1">
@@ -1366,7 +1679,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                             <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                               ttsConfig.provider === provider.id
                                 ? 'border-teal-500 bg-teal-500'
-                                : 'border-gray-300 dark:border-gray-600'
+                                : 'border-tsushin-border'
                             }`}>
                               {ttsConfig.provider === provider.id && (
                                 <div className="w-2 h-2 rounded-full bg-white" />
@@ -1385,7 +1698,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       <select
                         value={ttsConfig.voice || ''}
                         onChange={(e) => setTTSConfig(prev => ({ ...prev, voice: e.target.value }))}
-                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                       >
                         {ttsVoices.map((voice) => (
                           <option key={voice.voice_id} value={voice.voice_id}>
@@ -1403,7 +1716,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       <select
                         value={ttsConfig.language || 'pt'}
                         onChange={(e) => setTTSConfig(prev => ({ ...prev, language: e.target.value }))}
-                        className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                       >
                         <option value="pt">Portuguese (PTBR)</option>
                         <option value="en">English</option>
@@ -1464,17 +1777,14 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 /* Transcript Tab Content */
                 <>
                   {/* Enable Toggle */}
-                  <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                  <div className="flex items-center justify-between p-3 bg-tsushin-ink rounded-lg">
                     <span className="font-medium">Enable Audio Transcript</span>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isSkillEnabled('audio_transcript')}
-                        onChange={(e) => toggleAudioSubSkill('audio_transcript', e.target.checked)}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-teal-300 dark:peer-focus:ring-teal-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
-                    </label>
+                    <ToggleSwitch
+                      checked={isSkillEnabled('audio_transcript')}
+                      onChange={(checked) => toggleAudioSubSkill('audio_transcript', checked)}
+                      size="md"
+                      title={isSkillEnabled('audio_transcript') ? 'Disable transcript' : 'Enable transcript'}
+                    />
                   </div>
 
                   {/* Response Mode */}
@@ -1486,20 +1796,20 @@ export default function AgentSkillsManager({ agentId }: Props) {
                         className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
                           transcriptConfig.response_mode === 'conversational'
                             ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                            : 'border-tsushin-border hover:border-gray-300'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <div>
                             <div className="font-medium flex items-center gap-1.5"><MessageIcon size={14} /> Conversational</div>
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                            <div className="text-sm text-tsushin-muted">
                               Transcribe audio → Pass to AI → Natural response
                             </div>
                           </div>
                           <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                             transcriptConfig.response_mode === 'conversational'
                               ? 'border-teal-500 bg-teal-500'
-                              : 'border-gray-300 dark:border-gray-600'
+                              : 'border-tsushin-border'
                           }`}>
                             {transcriptConfig.response_mode === 'conversational' && (
                               <div className="w-2 h-2 rounded-full bg-white" />
@@ -1512,20 +1822,20 @@ export default function AgentSkillsManager({ agentId }: Props) {
                         className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
                           transcriptConfig.response_mode === 'transcript_only'
                             ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                            : 'border-tsushin-border hover:border-gray-300'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <div>
                             <div className="font-medium flex items-center gap-1.5"><FileTextIcon size={14} /> Transcript Only</div>
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                            <div className="text-sm text-tsushin-muted">
                               Transcribe audio → Return raw transcript text (no AI)
                             </div>
                           </div>
                           <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                             transcriptConfig.response_mode === 'transcript_only'
                               ? 'border-teal-500 bg-teal-500'
-                              : 'border-gray-300 dark:border-gray-600'
+                              : 'border-tsushin-border'
                           }`}>
                             {transcriptConfig.response_mode === 'transcript_only' && (
                               <div className="w-2 h-2 rounded-full bg-white" />
@@ -1542,7 +1852,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     <select
                       value={transcriptConfig.language || 'auto'}
                       onChange={(e) => setTranscriptConfig(prev => ({ ...prev, language: e.target.value }))}
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                     >
                       <option value="auto">Auto-detect</option>
                       <option value="pt">🇧🇷 Portuguese</option>
@@ -1563,7 +1873,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     <select
                       value={transcriptConfig.model || 'whisper-1'}
                       onChange={(e) => setTranscriptConfig(prev => ({ ...prev, model: e.target.value }))}
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                     >
                       <option value="whisper-1">whisper-1 (Standard)</option>
                     </select>
@@ -1590,10 +1900,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
               )}
             </div>
 
-            <div className="bg-gray-50 dark:bg-gray-900 px-6 py-4 border-t dark:border-gray-700 flex justify-between items-center">
+            <div className="bg-tsushin-ink px-6 py-4 border-t border-tsushin-border flex justify-between items-center">
               <button
                 onClick={() => setConfiguringAudio(false)}
-                className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg"
+                className="px-4 py-2 text-tsushin-slate hover:bg-tsushin-surface rounded-lg"
               >
                 Cancel
               </button>
@@ -1623,7 +1933,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       {/* Shell Configuration Modal */}
       {configuringShell && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+          <div className="bg-tsushin-surface rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
             <div className="bg-gradient-to-r from-teal-600 to-cyan-600 px-6 py-4 flex justify-between items-center">
               <h3 className="text-lg font-semibold text-white flex items-center gap-2">
                 <TerminalIcon size={20} /> Configure Shell Skill
@@ -1642,17 +1952,14 @@ export default function AgentSkillsManager({ agentId }: Props) {
               ) : (
                 <>
                   {/* Enable Toggle */}
-                  <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                  <div className="flex items-center justify-between p-3 bg-tsushin-ink rounded-lg">
                     <span className="font-medium">Enable Shell Skill</span>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isSkillEnabled('shell')}
-                        onChange={(e) => toggleSkill('shell', e.target.checked)}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-teal-300 dark:peer-focus:ring-teal-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-teal-600"></div>
-                    </label>
+                    <ToggleSwitch
+                      checked={isSkillEnabled('shell')}
+                      onChange={(checked) => toggleSkill('shell', checked)}
+                      size="md"
+                      title={isSkillEnabled('shell') ? 'Disable shell' : 'Enable shell'}
+                    />
                   </div>
 
                   {/* Agent Execution Mode */}
@@ -1664,20 +1971,20 @@ export default function AgentSkillsManager({ agentId }: Props) {
                         className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
                           shellConfig.execution_mode !== 'agentic'
                             ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                            : 'border-tsushin-border hover:border-gray-300'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <div>
                             <div className="font-medium flex items-center gap-1.5"><WrenchIcon size={14} /> Programmatic Only</div>
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                            <div className="text-sm text-tsushin-muted">
                               Only <code>/shell &lt;command&gt;</code> works. Natural language is ignored.
                             </div>
                           </div>
                           <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                             shellConfig.execution_mode !== 'agentic'
                               ? 'border-teal-500 bg-teal-500'
-                              : 'border-gray-300 dark:border-gray-600'
+                              : 'border-tsushin-border'
                           }`}>
                             {shellConfig.execution_mode !== 'agentic' && (
                               <div className="w-2 h-2 rounded-full bg-white" />
@@ -1690,20 +1997,20 @@ export default function AgentSkillsManager({ agentId }: Props) {
                         className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
                           shellConfig.execution_mode === 'agentic'
                             ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                            : 'border-tsushin-border hover:border-gray-300'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <div>
                             <div className="font-medium flex items-center gap-1.5"><BotIcon size={14} /> Agentic (Natural Language)</div>
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                            <div className="text-sm text-tsushin-muted">
                               Both <code>/shell</code> AND natural language like "list files in /tmp" work.
                             </div>
                           </div>
                           <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                             shellConfig.execution_mode === 'agentic'
                               ? 'border-teal-500 bg-teal-500'
-                              : 'border-gray-300 dark:border-gray-600'
+                              : 'border-tsushin-border'
                           }`}>
                             {shellConfig.execution_mode === 'agentic' && (
                               <div className="w-2 h-2 rounded-full bg-white" />
@@ -1723,20 +2030,20 @@ export default function AgentSkillsManager({ agentId }: Props) {
                         className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
                           !shellConfig.wait_for_result
                             ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                            : 'border-tsushin-border hover:border-gray-300'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <div>
                             <div className="font-medium flex items-center gap-1.5"><RocketIcon size={14} /> Fire &amp; Forget</div>
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                            <div className="text-sm text-tsushin-muted">
                               Queue command and return immediately. Use <code>/inject</code> to retrieve output later.
                             </div>
                           </div>
                           <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                             !shellConfig.wait_for_result
                               ? 'border-teal-500 bg-teal-500'
-                              : 'border-gray-300 dark:border-gray-600'
+                              : 'border-tsushin-border'
                           }`}>
                             {!shellConfig.wait_for_result && (
                               <div className="w-2 h-2 rounded-full bg-white" />
@@ -1749,20 +2056,20 @@ export default function AgentSkillsManager({ agentId }: Props) {
                         className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
                           shellConfig.wait_for_result
                             ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                            : 'border-tsushin-border hover:border-gray-300'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <div>
                             <div className="font-medium flex items-center gap-1.5"><ClockIcon size={14} /> Wait for Result</div>
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                            <div className="text-sm text-tsushin-muted">
                               Wait for command to complete before returning response.
                             </div>
                           </div>
                           <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
                             shellConfig.wait_for_result
                               ? 'border-teal-500 bg-teal-500'
-                              : 'border-gray-300 dark:border-gray-600'
+                              : 'border-tsushin-border'
                           }`}>
                             {shellConfig.wait_for_result && (
                               <div className="w-2 h-2 rounded-full bg-white" />
@@ -1812,8 +2119,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
                         ))}
                       </div>
                     ) : (
-                      <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-lg text-center">
-                        <p className="text-gray-500 dark:text-gray-400">No beacons online</p>
+                      <div className="p-4 bg-tsushin-ink rounded-lg text-center">
+                        <p className="text-tsushin-muted">No beacons online</p>
                         <a href="/hub/shell" className="text-orange-600 dark:text-orange-400 text-sm hover:underline">
                           → Go to Shell Command Center to enroll a beacon
                         </a>
@@ -1834,10 +2141,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
               )}
             </div>
 
-            <div className="bg-gray-50 dark:bg-gray-900 px-6 py-4 border-t dark:border-gray-700 flex justify-between items-center">
+            <div className="bg-tsushin-ink px-6 py-4 border-t border-tsushin-border flex justify-between items-center">
               <button
                 onClick={() => setConfiguringShell(false)}
-                className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg"
+                className="px-4 py-2 text-tsushin-slate hover:bg-tsushin-surface rounded-lg"
               >
                 Cancel
               </button>
@@ -1853,16 +2160,16 @@ export default function AgentSkillsManager({ agentId }: Props) {
       )}
 
       {/* Standard Configuration Modal */}
-      {configuring && (
+      {configuring && configuring !== 'sandboxed_tools' && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="bg-gray-100 dark:bg-gray-800 px-6 py-4 border-b flex justify-between items-center">
+          <div className="bg-tsushin-surface rounded-lg max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="bg-tsushin-elevated px-6 py-4 border-b flex justify-between items-center">
               <h3 className="text-lg font-semibold">
                 Configure: {availableSkills.find(s => s.skill_type === configuring)?.skill_name || configuring}
               </h3>
               <button
                 onClick={() => setConfiguring(null)}
-                className="text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+                className="text-tsushin-slate hover:text-white"
               >
                 ✕
               </button>
@@ -1877,13 +2184,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     </label>
                     {renderConfigInput(key, schema, configData[key])}
                     {(schema as any).description && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{(schema as any).description}</p>
+                      <p className="text-xs text-tsushin-muted mt-1">{(schema as any).description}</p>
                     )}
                   </div>
                 ))}
             </div>
 
-            <div className="bg-gray-100 dark:bg-gray-800 px-6 py-4 border-t flex justify-end gap-3">
+            <div className="bg-tsushin-elevated px-6 py-4 border-t flex justify-end gap-3">
               <button
                 onClick={() => setConfiguring(null)}
                 className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700"
@@ -1895,6 +2202,114 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
               >
                 Save Configuration
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sandboxed Tools Configuration Modal */}
+      {configuring === 'sandboxed_tools' && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-tsushin-surface rounded-xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col shadow-2xl">
+            <div className="bg-gradient-to-r from-teal-600 to-cyan-600 px-6 py-4 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <WrenchIcon size={20} /> Sandboxed Tools
+                </h3>
+                <p className="text-sm text-white/70 mt-0.5">
+                  {sandboxedTools.length} tool{sandboxedTools.length !== 1 ? 's' : ''} available &middot; {agentSandboxedTools.filter(at => at.is_enabled).length} enabled
+                </p>
+              </div>
+              <button
+                onClick={() => setConfiguring(null)}
+                className="text-white/80 hover:text-white text-xl"
+              >
+                &#x2715;
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 p-6">
+              {sandboxedToolsLoading ? (
+                <div className="text-center py-12 text-tsushin-muted text-sm">Loading tools...</div>
+              ) : sandboxedTools.length === 0 ? (
+                <div className="text-center py-12">
+                  <WrenchIcon size={40} className="mx-auto text-tsushin-muted mb-3" />
+                  <p className="text-tsushin-muted text-sm">No sandboxed tools available.</p>
+                  <p className="text-tsushin-muted/60 text-xs mt-1">Create tools in Hub &gt; Sandboxed Tools first.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {sandboxedTools.map((tool) => {
+                    const enabled = isSandboxedToolEnabled(tool.id)
+                    const isUpdating = sandboxedToolUpdating === tool.id
+                    return (
+                      <div
+                        key={tool.id}
+                        className={`border rounded-lg p-4 transition-colors ${
+                          enabled
+                            ? 'bg-teal-900/15 border-teal-600/30'
+                            : 'bg-tsushin-ink border-white/5 hover:border-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                              enabled ? 'bg-teal-500/15 border border-teal-500/20' : 'bg-white/5 border border-white/10'
+                            }`}>
+                              <WrenchIcon size={16} className={enabled ? 'text-teal-400' : 'text-tsushin-muted'} />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-sm font-semibold text-white">{tool.name}</h4>
+                                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-white/5 text-tsushin-slate rounded">
+                                  {tool.tool_type}
+                                </span>
+                              </div>
+                              <p className="text-xs text-tsushin-muted mt-0.5 line-clamp-1">
+                                {tool.system_prompt.split('\n')[0]}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="ml-3 shrink-0">
+                            {isUpdating ? (
+                              <span className="text-xs text-tsushin-muted">Saving...</span>
+                            ) : (
+                              <ToggleSwitch
+                                checked={enabled}
+                                onChange={(checked) => toggleSandboxedTool(tool, checked)}
+                                title={enabled ? 'Disable tool' : 'Enable tool'}
+                              />
+                            )}
+                          </div>
+                        </div>
+                        {/* Tool-specific warnings */}
+                        {enabled && (tool.name === 'nmap' || tool.name === 'nuclei') && (
+                          <div className="mt-3 p-2.5 bg-yellow-900/20 border border-yellow-700/30 rounded-lg flex items-start gap-2">
+                            <AlertTriangleIcon size={14} className="text-yellow-400 mt-0.5 shrink-0" />
+                            <p className="text-xs text-yellow-300/80">
+                              {tool.name === 'nmap'
+                                ? 'Network scanning should only be performed on networks you own or have permission to scan.'
+                                : 'Only scan targets you own or have explicit permission to test.'}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-tsushin-ink px-6 py-3 border-t border-tsushin-border flex items-center justify-between">
+              <p className="text-xs text-tsushin-muted">
+                Changes are saved automatically per toggle.
+              </p>
+              <button
+                onClick={() => setConfiguring(null)}
+                className="px-4 py-2 text-tsushin-slate hover:bg-tsushin-surface rounded-lg text-sm"
+              >
+                Close
               </button>
             </div>
           </div>

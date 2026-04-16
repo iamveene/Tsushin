@@ -1,0 +1,23 @@
+# AI Providers
+anthropic>=0.18.1  # Phase 6.11.1: Async support
+openai>=1.40.0  # Phase 5.0: Audio skills
+google-generativeai>=0.8.0  # system_instruction support (BUG-133 fix); floor bumped for security/perf
+google-genai>=1.0.0  # Image generation with Gemini 2.0 Flash
+google-auth>=2.28.0  # Vertex AI service account auth + OAuth2 token refresh
+
+# Browser Automation (Phase 14.5)
+playwright>=1.48.0  # Browser automation for web tasks
+aiohttp>=3.10.11  # Phase 8: MCP HTTP bridge communication (CVE floor bump)
+
+# Telegram Integration (Phase 10.1.1)
+python-telegram-bot>=21.0
+
+# Slack Integration (v0.6.0 Item 33)
+slack-sdk>=3.27.0
+
+# Discord Integration (v0.6.0 Item 34)
+discord.py>=2.4.0
+PyNaCl>=1.5.0  # V060-CHN-002: Ed25519 signature verification for Discord interactions webhook
+
+# MCP Container Runtime (Phase 8)
+docker>=7.0.0  # Multi-tenant MCP containerization (services/container_runtime.py)

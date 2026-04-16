@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import { authenticatedFetch } from '@/lib/client'
 
 interface Integration {
   id: number
@@ -44,15 +45,6 @@ export default function AsanaManagePage() {
   const [savingAssignee, setSavingAssignee] = useState(false)
   const [assigneeMessage, setAssigneeMessage] = useState('')
 
-  // Helper function to get authentication headers
-  const getAuthHeaders = () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }
-
   useEffect(() => {
     fetchIntegration()
     fetchHealth()
@@ -68,9 +60,7 @@ export default function AsanaManagePage() {
   const fetchIntegration = async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/hub/integrations`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/integrations`)
       if (!response.ok) throw new Error('Failed to fetch')
 
       const data = await response.json()
@@ -86,9 +76,7 @@ export default function AsanaManagePage() {
   const fetchHealth = async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/hub/asana/${integrationId}/health`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/${integrationId}/health`)
       if (!response.ok) throw new Error('Failed to fetch health')
 
       const data = await response.json()
@@ -101,9 +89,7 @@ export default function AsanaManagePage() {
   const fetchTools = async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/hub/asana/${integrationId}/tools`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/${integrationId}/tools`)
       if (!response.ok) throw new Error('Failed to fetch tools')
 
       const data = await response.json()
@@ -118,9 +104,8 @@ export default function AsanaManagePage() {
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      await fetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
+        method: 'POST'
       })
       router.push('/hub')
     } catch (error) {
@@ -135,9 +120,8 @@ export default function AsanaManagePage() {
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/hub/asana/${integrationId}/default-assignee`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/${integrationId}/default-assignee`, {
         method: 'PATCH',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           assignee_name: assigneeName.trim() || null
         })
@@ -170,9 +154,8 @@ export default function AsanaManagePage() {
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/hub/asana/${integrationId}/default-assignee`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/${integrationId}/default-assignee`, {
         method: 'PATCH',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ assignee_name: null })
       })
 

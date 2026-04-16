@@ -6,9 +6,12 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import StudioTabs from '@/components/studio/StudioTabs'
 import { api, Persona, TonePreset } from '@/lib/client'
+import { useToast } from '@/contexts/ToastContext'
 
 interface PersonaFormData {
   name: string
@@ -26,6 +29,7 @@ interface PersonaFormData {
 }
 
 export default function PersonasPage() {
+  const toast = useToast()
   const pathname = usePathname()
   const [personas, setPersonas] = useState<Persona[]>([])
   const [tonePresets, setTonePresets] = useState<TonePreset[]>([])
@@ -54,13 +58,7 @@ export default function PersonasPage() {
     loadData()
   }, [])
 
-  useEffect(() => {
-    const handleRefresh = () => {
-      loadData()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-    return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [])
+  useGlobalRefresh(() => loadData())
 
   const resetForm = () => {
     setFormData({
@@ -125,7 +123,7 @@ export default function PersonasPage() {
     e.preventDefault()
 
     if (!formData.name.trim() || !formData.description.trim()) {
-      alert('Name and description are required')
+      toast.warning('Validation', 'Name and description are required')
       return
     }
 
@@ -162,7 +160,7 @@ export default function PersonasPage() {
       resetForm()
       await loadData()
     } catch (err: any) {
-      alert(err.message || `Failed to ${editingPersona ? 'update' : 'create'} persona`)
+      toast.error('Save Failed', err.message || `Failed to ${editingPersona ? 'update' : 'create'} persona`)
     } finally {
       setSaving(false)
     }
@@ -175,7 +173,7 @@ export default function PersonasPage() {
       await api.deletePersona(id)
       await loadData()
     } catch (err: any) {
-      alert(err.message || 'Failed to delete persona')
+      toast.error('Delete Failed', err.message || 'Failed to delete persona')
     }
   }
 
@@ -230,52 +228,7 @@ export default function PersonasPage() {
 
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-0 space-y-6">
         {/* Sub Navigation */}
-        <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow">
-          <div className="border-b border-gray-800">
-            <nav className="flex">
-              <Link
-                href="/agents"
-                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
-                  pathname === '/agents'
-                    ? 'border-tsushin-indigo text-tsushin-indigo'
-                    : 'border-transparent text-tsushin-slate hover:text-white'
-                }`}
-              >
-                Agents
-              </Link>
-              <Link
-                href="/agents/contacts"
-                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
-                  pathname === '/agents/contacts'
-                    ? 'border-tsushin-indigo text-tsushin-indigo'
-                    : 'border-transparent text-tsushin-slate hover:text-white'
-                }`}
-              >
-                Contacts
-              </Link>
-              <Link
-                href="/agents/personas"
-                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
-                  pathname === '/agents/personas'
-                    ? 'border-tsushin-indigo text-tsushin-indigo'
-                    : 'border-transparent text-tsushin-slate hover:text-white'
-                }`}
-              >
-                Personas
-              </Link>
-              <Link
-                href="/agents/projects"
-                className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${
-                  pathname?.startsWith('/agents/projects')
-                    ? 'border-tsushin-indigo text-tsushin-indigo'
-                    : 'border-transparent text-tsushin-slate hover:text-white'
-                }`}
-              >
-                Projects
-              </Link>
-            </nav>
-          </div>
-        </div>
+        <StudioTabs />
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

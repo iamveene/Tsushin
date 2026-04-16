@@ -88,6 +88,13 @@ class BraveSearchProvider(SearchProvider):
                 error="Search API key not configured. Configure Brave Search in Hub → Tool APIs."
             )
 
+        # Validate query before API call
+        if not request.query or not request.query.strip():
+            return SearchResponse(
+                success=False, query=request.query or "", provider=self.provider_name,
+                error="Search query cannot be empty",
+            )
+
         try:
             headers = {
                 "Accept": "application/json",
@@ -96,8 +103,8 @@ class BraveSearchProvider(SearchProvider):
             }
 
             params = {
-                "q": request.query,
-                "count": min(request.count, self.get_max_results()),
+                "q": request.query.strip(),
+                "count": max(1, min(request.count, self.get_max_results())),
                 "offset": request.offset
             }
 

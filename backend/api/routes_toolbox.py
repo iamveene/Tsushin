@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from db import get_db
 from models_rbac import User
@@ -48,9 +48,19 @@ class CommandExecuteRequest(BaseModel):
     """Request schema for command execution"""
     command: str = Field(..., description="Command to execute in the container")
     timeout: Optional[int] = Field(default=300, description="Execution timeout in seconds")
-    workdir: Optional[str] = Field(default="/workspace", description="Working directory")
+    # BUG-139 + BUG-143 FIX: Restrict workdir to /workspace and safe subdirectories only
+    # Each path segment must start with an alphanumeric character, preventing . and .. at segment start
+    workdir: Optional[str] = Field(default="/workspace", pattern=r'^/workspace(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$', description="Working directory")
     # BUG-004 Fix: Allow global admins to specify tenant_id explicitly
     tenant_id: Optional[str] = Field(default=None, description="Tenant ID override (for global admins)")
+
+    @field_validator('workdir')
+    @classmethod
+    def validate_workdir_no_traversal(cls, v: Optional[str]) -> Optional[str]:
+        """BUG-139 FIX: Block path traversal via '..' components."""
+        if v is not None and '..' in v.split('/'):
+            raise ValueError("Path traversal ('..') is not allowed in workdir")
+        return v
 
     class Config:
         json_schema_extra = {
@@ -161,7 +171,7 @@ async def get_container_status(
         return ContainerStatusResponse(**status)
     except Exception as e:
         logger.error(f"Failed to get container status: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get container status. Check server logs for details.")
 
 
 @router.post("/start", response_model=ContainerStatusResponse)
@@ -186,8 +196,8 @@ async def start_container(
         logger.info(f"Toolbox container started for tenant {ctx.tenant_id}")
         return ContainerStatusResponse(**status)
     except RuntimeError as e:
-        logger.error(f"Failed to start container: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to start container: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to start container. Check server logs for details.")
 
 
 @router.post("/stop", response_model=ContainerStatusResponse)
@@ -210,8 +220,8 @@ async def stop_container(
         logger.info(f"Toolbox container stopped for tenant {ctx.tenant_id}")
         return ContainerStatusResponse(**status)
     except RuntimeError as e:
-        logger.error(f"Failed to stop container: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to stop container: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to stop container. Check server logs for details.")
 
 
 @router.post("/restart", response_model=ContainerStatusResponse)
@@ -234,8 +244,8 @@ async def restart_container(
         logger.info(f"Toolbox container restarted for tenant {ctx.tenant_id}")
         return ContainerStatusResponse(**status)
     except RuntimeError as e:
-        logger.error(f"Failed to restart container: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to restart container: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to restart container. Check server logs for details.")
 
 
 # ============================================================================
@@ -293,8 +303,8 @@ async def execute_command(
         return CommandExecuteResponse(**result)
 
     except RuntimeError as e:
-        logger.error(f"Command execution failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Command execution failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Command execution failed. Check server logs for details.")
 
 
 # ============================================================================
@@ -321,8 +331,8 @@ async def list_packages(
         packages = service.list_installed_packages(ctx.tenant_id, db)
         return [PackageResponse(**pkg) for pkg in packages]
     except Exception as e:
-        logger.error(f"Failed to list packages: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Failed to list packages: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list packages. Check server logs for details.")
 
 
 @router.post("/packages/install", response_model=CommandExecuteResponse)
@@ -363,8 +373,8 @@ async def install_package(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
-        logger.error(f"Package installation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Package installation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Package installation failed. Check server logs for details.")
 
 
 # ============================================================================
@@ -395,8 +405,8 @@ async def commit_container(
         logger.info(f"Container committed for tenant {ctx.tenant_id}: {result['image_tag']}")
         return CommitResponse(**result)
     except RuntimeError as e:
-        logger.error(f"Container commit failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Container commit failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Container commit failed. Check server logs for details.")
 
 
 @router.post("/reset", response_model=ResetResponse)
@@ -426,8 +436,8 @@ async def reset_to_base(
             container_status=ContainerStatusResponse(**status)
         )
     except RuntimeError as e:
-        logger.error(f"Container reset failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Container reset failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Container reset failed. Check server logs for details.")
 
 
 # ============================================================================
@@ -529,7 +539,7 @@ async def sync_tools_from_manifests(
 
     except Exception as e:
         logger.error(f"Tool sync failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Tool sync failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Tool sync failed. Check server logs for details.")
 
 
 @router.get("/tool-info/{tool_name}")
@@ -558,4 +568,4 @@ async def get_tool_info(
         raise
     except Exception as e:
         logger.error(f"Failed to get tool info: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get tool info. Check server logs for details.")

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 import sys
 import os
@@ -14,6 +15,7 @@ from schemas import (
     TriggerTestRequest, TriggerTestResponse
 )
 from auth_dependencies import require_permission, get_current_user_optional, get_tenant_context, TenantContext
+from services.audit_service import log_tenant_event, TenantAuditActions
 from agent.router import AgentRouter
 # Import SenderMemory from the old location (agent/memory.py)
 import importlib.util
@@ -23,6 +25,26 @@ spec.loader.exec_module(sender_memory_module)
 SenderMemory = sender_memory_module.SenderMemory
 
 router = APIRouter()
+
+
+class HealthResponse(BaseModel):
+    status: str
+    service: str
+    version: str
+    timestamp: str
+
+
+class ReadinessComponentStatus(BaseModel):
+    status: str
+    error: Optional[str] = None
+
+
+class ReadinessResponse(BaseModel):
+    status: str
+    service: str
+    version: str
+    timestamp: str
+    components: Dict[str, ReadinessComponentStatus]
 
 # Global engine reference
 _engine = None
@@ -66,7 +88,7 @@ def get_db():
         db.close()
 
 
-@router.get("/api/health")
+@router.get("/api/health", response_model=HealthResponse)
 def health_check():
     """Health check endpoint with service metadata"""
     from datetime import datetime
@@ -78,6 +100,82 @@ def health_check():
         "version": settings.SERVICE_VERSION,
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }
+
+
+@router.get("/api/readiness", response_model=ReadinessResponse)
+def readiness_check():
+    """
+    Readiness probe — checks that critical dependencies are available.
+
+    Returns 200 when all components are healthy, 503 when any is degraded.
+    /api/health remains a lightweight liveness probe; this endpoint performs
+    real connectivity checks suitable for Kubernetes readiness gates.
+    """
+    from datetime import datetime
+    from fastapi.responses import JSONResponse
+    import settings
+    import logging
+
+    logger = logging.getLogger(__name__)
+    timestamp = datetime.utcnow().isoformat() + "Z"
+
+    # Guard against cold-start path where engine is not yet initialized
+    if _engine is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "service": settings.SERVICE_NAME,
+                "version": settings.SERVICE_VERSION,
+                "timestamp": timestamp,
+                "components": {
+                    "postgresql": {"status": "unhealthy", "error": "engine not initialized"},
+                },
+            },
+        )
+
+    components = {}
+
+    # --- PostgreSQL check ---
+    try:
+        from sqlalchemy.orm import sessionmaker
+        SessionLocal = sessionmaker(bind=_engine)
+        db = SessionLocal()
+        try:
+            db.execute(
+                __import__("sqlalchemy").text("SELECT 1")
+            )
+            components["postgresql"] = {"status": "healthy"}
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(f"Readiness: PostgreSQL check failed: {exc}")
+        components["postgresql"] = {"status": "unhealthy", "error": "database connection failed"}
+
+    # --- Aggregate ---
+    all_healthy = all(c["status"] == "healthy" for c in components.values())
+    payload = {
+        "status": "ready" if all_healthy else "degraded",
+        "service": settings.SERVICE_NAME,
+        "version": settings.SERVICE_VERSION,
+        "timestamp": timestamp,
+        "components": components,
+    }
+
+    status_code = 200 if all_healthy else 503
+    return JSONResponse(content=payload, status_code=status_code)
+
+
+@router.get("/api/user-guide")
+def get_user_guide():
+    """Serve USER_GUIDE.md content for the in-app help panel."""
+    from fastapi.responses import PlainTextResponse
+    from pathlib import Path
+
+    guide_path = Path("/app/USER_GUIDE.md")
+    if not guide_path.exists():
+        raise HTTPException(status_code=404, detail="User guide not found")
+    return PlainTextResponse(guide_path.read_text(encoding="utf-8"), media_type="text/markdown")
 
 
 @router.get("/api/config", response_model=ConfigResponse)
@@ -92,7 +190,7 @@ def get_config(
         raise HTTPException(status_code=404, detail="Config not found")
 
     # Parse JSON fields
-    # Note: enabled_tools removed - use AgentSkill table for web_search, weather, etc.
+    # Note: enabled_tools removed - use AgentSkill table
     config_dict = {
         **config.__dict__,
         "contact_mappings": json.loads(config.contact_mappings) if config.contact_mappings else {},
@@ -106,7 +204,8 @@ def update_config(
     update: ConfigUpdate,
     db: Session = Depends(get_db),
     request: Request = None,
-    current_user: User = Depends(require_permission("org.settings.write"))
+    current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context)
 ):
     import json
     import logging
@@ -115,6 +214,16 @@ def update_config(
     config = db.query(Config).first()
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
+
+    # BUG-067 FIX: Restrict global-scoped URL fields to global admin only
+    GLOBAL_ADMIN_ONLY_FIELDS = {"ollama_base_url"}
+    update_data = update.model_dump(exclude_unset=True)
+    restricted_fields = GLOBAL_ADMIN_ONLY_FIELDS & set(update_data.keys())
+    if restricted_fields and not getattr(current_user, 'is_global_admin', False):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Only global admins can modify: {', '.join(restricted_fields)}"
+        )
 
     # Track if filter-related fields changed
     filter_fields_changed = False
@@ -127,7 +236,7 @@ def update_config(
             value = json.dumps(value)
         elif key in ("group_keywords",) and isinstance(value, list):
             value = json.dumps(value)
-        # enabled_tools removed - use AgentSkill table for web_search, weather, etc.
+        # enabled_tools removed - use AgentSkill table
 
         # Check if filter-related field changed
         if key in filter_related_fields:
@@ -140,6 +249,8 @@ def update_config(
     config.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(config)
+
+    log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.SETTINGS_UPDATE, "config", str(config.id), {"fields": list(update.model_dump(exclude_unset=True).keys())}, request)
 
     # Hot-reload filter configuration if filter fields changed
     if filter_fields_changed and request and hasattr(request.app.state, 'watcher'):
@@ -194,7 +305,7 @@ def update_config(
             logger.error(f"Failed to apply WhatsApp conversation delay: {e}", exc_info=True)
 
     # Parse JSON fields for response
-    # Note: enabled_tools removed - use AgentSkill table for web_search, weather, etc.
+    # Note: enabled_tools removed - use AgentSkill table
     config_dict = {
         **config.__dict__,
         "contact_mappings": json.loads(config.contact_mappings) if config.contact_mappings else {},
@@ -300,7 +411,88 @@ def get_messages(
             pass
 
     messages = query.limit(limit).all()
-    return messages
+
+    def _looks_like_raw_identifier(value: Optional[str]) -> bool:
+        if not value:
+            return True
+        normalized = value.strip()
+        if not normalized:
+            return True
+        if "@" in normalized:
+            normalized = normalized.split("@")[0]
+        normalized = normalized.lstrip("+")
+        return normalized.isdigit()
+
+    enriched_messages = []
+    contact_services = {}
+
+    for message in messages:
+        enriched = {
+            "id": message.id,
+            "source_id": message.source_id,
+            "chat_name": message.chat_name,
+            "sender": message.sender,
+            "sender_name": message.sender_name,
+            "body": message.body,
+            "timestamp": message.timestamp,
+            "is_group": message.is_group,
+            "matched_filter": message.matched_filter,
+            "seen_at": message.seen_at,
+            "channel": message.channel,
+        }
+
+        tenant_id = getattr(message, "tenant_id", None)
+        if tenant_id:
+            from agent.contact_service_cached import CachedContactService
+
+            contact_service = contact_services.get(tenant_id)
+            if contact_service is None:
+                contact_service = CachedContactService(db, tenant_id=tenant_id)
+                contact_services[tenant_id] = contact_service
+
+            resolved_contact = None
+            for candidate in [
+                message.sender,
+                message.sender_name,
+                message.chat_name,
+            ]:
+                if not candidate:
+                    continue
+                resolved_contact = contact_service.identify_sender(candidate)
+                if resolved_contact:
+                    break
+
+            if resolved_contact:
+                friendly_name = resolved_contact.friendly_name
+
+                if (
+                    not enriched["sender_name"] or
+                    _looks_like_raw_identifier(enriched["sender_name"])
+                ):
+                    enriched["sender_name"] = friendly_name
+
+                if (
+                    not message.is_group and (
+                        not enriched["chat_name"] or
+                        _looks_like_raw_identifier(enriched["chat_name"]) or
+                        enriched["chat_name"] == enriched["sender"]
+                    )
+                ):
+                    enriched["chat_name"] = friendly_name
+            elif (
+                not message.is_group and
+                enriched["chat_name"] and
+                not _looks_like_raw_identifier(enriched["chat_name"]) and
+                (
+                    not enriched["sender_name"] or
+                    _looks_like_raw_identifier(enriched["sender_name"])
+                )
+            ):
+                enriched["sender_name"] = enriched["chat_name"]
+
+        enriched_messages.append(enriched)
+
+    return enriched_messages
 
 
 @router.get("/api/agent-runs", response_model=List[AgentRunResponse])
@@ -400,13 +592,13 @@ async def trigger_test(
         "model_name": agent.model_name,
         "system_prompt": agent.system_prompt,
         "memory_size": agent.memory_size or 5000,
-        # enabled_tools removed - use AgentSkill table for web_search, weather, etc.
+        # enabled_tools removed - use AgentSkill table
         "response_template": agent.response_template,
         "enable_semantic_search": agent.enable_semantic_search,
         "context_message_count": agent.context_message_count or 10,
     }
 
-    agent_router = AgentRouter(db, config_dict)
+    agent_router = AgentRouter(db, config_dict, tenant_id=agent.tenant_id)  # V060-CHN-006
 
     result = await agent_router.agent_service.process_message(
         sender_key=request.sender_key,
@@ -496,16 +688,11 @@ async def get_memory_stats(
         stats["senders_in_memory"] = db.query(Memory).count()
         agents = db.query(Agent).all()
     else:
-        # Filter Memory and Agents by tenant
-        tenant_agents = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).all()
-        tenant_agent_ids = [a.id for a in tenant_agents]
-
-        if tenant_agent_ids:
-            stats["senders_in_memory"] = db.query(Memory).filter(Memory.agent_id.in_(tenant_agent_ids)).count()
-        else:
-            stats["senders_in_memory"] = 0
-
-        agents = tenant_agents
+        # BUG-LOG-015: Memory now has tenant_id — filter directly at row level.
+        stats["senders_in_memory"] = db.query(Memory).filter(
+            Memory.tenant_id == ctx.tenant_id
+        ).count()
+        agents = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).all()
 
     # If semantic search is enabled, get vector store stats for visible agents
     if stats["semantic_search_enabled"]:
@@ -536,5 +723,46 @@ async def get_memory_stats(
             }
         except Exception as e:
             stats["vector_store"] = {"error": str(e)}
+
+    # BUG-450: Also check for external vector store instances (Qdrant, MongoDB, etc.)
+    # Runs unconditionally — a tenant can have an external store without ChromaDB's
+    # enable_semantic_search flag enabled.
+    try:
+        from models import VectorStoreInstance
+
+        vs_query = db.query(VectorStoreInstance).filter(
+            VectorStoreInstance.is_active == True,
+        )
+        if not ctx.is_global_admin:
+            vs_query = vs_query.filter(
+                VectorStoreInstance.tenant_id == ctx.tenant_id
+            )
+
+        active_instances = vs_query.all()
+
+        if active_instances:
+            if "vector_store" not in stats:
+                stats["vector_store"] = {
+                    "total_embeddings": 0,
+                    "per_agent_embeddings": {},
+                }
+
+            external_stores = []
+            for inst in active_instances:
+                external_stores.append({
+                    "id": inst.id,
+                    "vendor": inst.vendor,
+                    "instance_name": inst.instance_name,
+                    "health_status": inst.health_status or "unknown",
+                    "is_default": inst.is_default,
+                    "is_auto_provisioned": getattr(inst, 'is_auto_provisioned', False),
+                })
+
+            stats["vector_store"]["external_stores"] = external_stores
+            stats["vector_store"]["external_store_count"] = len(external_stores)
+            healthy_count = sum(1 for s in external_stores if s["health_status"] == "healthy")
+            stats["vector_store"]["external_healthy_count"] = healthy_count
+    except Exception as e:
+        logger.warning(f"Failed to query external vector stores: {e}")
 
     return stats

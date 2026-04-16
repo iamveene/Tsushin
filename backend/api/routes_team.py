@@ -8,7 +8,7 @@ IMPORTANT: Route order matters in FastAPI! Specific routes (e.g., /invitations, 
 must be defined BEFORE parameterized routes (e.g., /{user_id}) to avoid conflicts.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
@@ -16,15 +16,19 @@ from typing import Optional, List
 from datetime import datetime, timedelta
 
 from db import get_db
-from models_rbac import User, UserRole, Role, Tenant, UserInvitation
+from models_rbac import User, UserRole, Role, Tenant, UserInvitation, GlobalAdminAuditLog
 from auth_dependencies import (
     get_current_user_required,
     require_permission,
     TenantContext,
     get_tenant_context
 )
-from auth_utils import generate_invitation_token
+from auth_utils import generate_invitation_token, hash_token
 from services.email_service import send_invitation
+from services.audit_service import log_admin_action, AuditActions, log_tenant_event, TenantAuditActions
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/team", tags=["team"])
 
@@ -269,9 +273,55 @@ async def get_available_roles(
     return {"roles": available_roles}
 
 
+@router.get("/audit-logs")
+async def get_audit_logs(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    action: Optional[str] = None,
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user: User = Depends(require_permission("audit.read")),
+):
+    """
+    Get audit logs for the current tenant.
+
+    Requires: audit.read permission
+    """
+    query = ctx.db.query(GlobalAdminAuditLog).filter(
+        GlobalAdminAuditLog.target_tenant_id == ctx.tenant_id
+    )
+
+    if action:
+        query = query.filter(GlobalAdminAuditLog.action.like(f"{action}%"))
+
+    total = query.count()
+
+    logs = (
+        query.order_by(GlobalAdminAuditLog.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    result = []
+    for log in logs:
+        admin = ctx.db.query(User).filter(User.id == log.global_admin_id).first()
+        result.append({
+            "id": log.id,
+            "action": log.action,
+            "user": admin.full_name or admin.email if admin else "System",
+            "resource": f"{log.resource_type}/{log.resource_id}" if log.resource_type else None,
+            "timestamp": log.created_at.isoformat() if log.created_at else None,
+            "ipAddress": log.ip_address,
+            "details": log.details_json,
+        })
+
+    return {"logs": result, "total": total}
+
+
 @router.post("/invite", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED)
 async def invite_team_member(
     request: InvitationCreate,
+    http_request: Request,
     ctx: TenantContext = Depends(get_tenant_context),
     current_user: User = Depends(require_permission("users.invite")),
 ):
@@ -296,7 +346,7 @@ async def invite_team_member(
             )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email is already registered with another organization"
+            detail="Unable to invite this user. Please contact support if this is unexpected."
         )
 
     # Check if invitation already exists
@@ -313,8 +363,8 @@ async def invite_team_member(
             detail="Invitation already sent to this email"
         )
 
-    # Check tenant user limit
-    tenant = ctx.db.query(Tenant).filter(Tenant.id == ctx.tenant_id).first()
+    # Check tenant user limit (lock tenant row to prevent race conditions on concurrent invites)
+    tenant = ctx.db.query(Tenant).filter(Tenant.id == ctx.tenant_id).with_for_update().first()
     if tenant:
         current_users = ctx.db.query(User).filter(
             User.tenant_id == ctx.tenant_id,
@@ -348,13 +398,16 @@ async def invite_team_member(
             detail="Only owners can invite admins or owners"
         )
 
+    # BUG-071 FIX: Generate raw token for email, store hash in DB
+    raw_invitation_token = generate_invitation_token()
+
     # Create invitation
     invitation = UserInvitation(
         tenant_id=ctx.tenant_id,
         email=request.email,
         role_id=role.id,
         invited_by=ctx.user.id,
-        invitation_token=generate_invitation_token(),
+        invitation_token=hash_token(raw_invitation_token),
         expires_at=datetime.utcnow() + timedelta(days=7),
     )
     ctx.db.add(invitation)
@@ -365,15 +418,17 @@ async def invite_team_member(
     tenant = ctx.db.query(Tenant).filter(Tenant.id == ctx.tenant_id).first()
     tenant_name = tenant.name if tenant else "the organization"
 
-    # Send invitation email
+    # Send invitation email (use raw token, not hash)
     send_invitation(
         to_email=request.email,
         inviter_name=ctx.user.full_name or ctx.user.email,
         tenant_name=tenant_name,
         role_name=role.display_name,
-        invitation_token=invitation.invitation_token,
+        invitation_token=raw_invitation_token,
         personal_message=request.message,
     )
+
+    log_tenant_event(ctx.db, ctx.tenant_id, ctx.user.id, TenantAuditActions.TEAM_INVITE, "invitation", str(invitation.id), {"email": request.email, "role": request.role}, http_request)
 
     return invitation_to_response(invitation, ctx.db, include_link=True)
 
@@ -428,8 +483,9 @@ async def resend_invitation(
             detail="Invitation not found"
         )
 
-    # Regenerate token and extend expiry
-    invitation.invitation_token = generate_invitation_token()
+    # BUG-071 FIX: Regenerate token — store hash, use raw for email
+    raw_resend_token = generate_invitation_token()
+    invitation.invitation_token = hash_token(raw_resend_token)
     invitation.expires_at = datetime.utcnow() + timedelta(days=7)
 
     ctx.db.commit()
@@ -485,6 +541,7 @@ async def get_team_member(
 async def change_member_role(
     user_id: int,
     request: RoleChangeRequest,
+    http_request: Request,
     ctx: TenantContext = Depends(get_tenant_context),
     current_user: User = Depends(require_permission("users.manage")),
 ):
@@ -566,17 +623,42 @@ async def change_member_role(
 
     ctx.db.commit()
 
+    logger.info(
+        f"Role change: user {target_user.email} (id={user_id}) "
+        f"changed from '{target_role_name}' to '{request.role}' "
+        f"by user {ctx.user.email} (id={ctx.user.id}) "
+        f"in tenant {ctx.tenant_id}"
+    )
+
+    log_admin_action(
+        db=ctx.db,
+        admin=ctx.user,
+        action=AuditActions.USER_ROLE_CHANGE,
+        target_tenant_id=ctx.tenant_id,
+        resource_type="user",
+        resource_id=str(user_id),
+        details={
+            "email": target_user.email,
+            "old_role": target_role_name,
+            "new_role": request.role,
+            "changed_by": ctx.user.email,
+        },
+    )
+
+    log_tenant_event(ctx.db, ctx.tenant_id, ctx.user.id, TenantAuditActions.TEAM_ROLE_CHANGE, "user", str(user_id), {"email": target_user.email, "old_role": target_role_name, "new_role": request.role}, http_request)
+
     return user_to_response(target_user, ctx.tenant_id, ctx.db)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_team_member(
     user_id: int,
+    request: Request,
     ctx: TenantContext = Depends(get_tenant_context),
     current_user: User = Depends(require_permission("users.remove")),
 ):
     """
-    Remove a team member (soft delete).
+    Remove a team member (hard delete).
 
     Requires: users.remove permission
 
@@ -610,14 +692,47 @@ async def remove_team_member(
             detail="Cannot remove owner"
         )
 
-    # Soft delete
-    target_user.deleted_at = datetime.utcnow()
-    target_user.is_active = False
+    # Hard delete — soft delete causes SSO lockout since google_id
+    # remains linked to the deactivated record, preventing re-enrollment
+    removed_email = target_user.email
 
-    # Remove role assignment
-    ctx.db.query(UserRole).filter(
-        UserRole.user_id == user_id,
-        UserRole.tenant_id == ctx.tenant_id
-    ).delete()
+    # Clear all FK references before deletion
+    from models_rbac import PasswordResetToken, UserInvitation, GlobalAdminAuditLog, AuditEvent
+    from models import UserContactMapping
+    from sqlalchemy import text
 
+    # SET NULL on nullable FK columns
+    ctx.db.query(AuditEvent).filter(AuditEvent.user_id == user_id).update(
+        {AuditEvent.user_id: None}, synchronize_session=False
+    )
+    ctx.db.query(UserRole).filter(UserRole.assigned_by == user_id).update(
+        {UserRole.assigned_by: None}, synchronize_session=False
+    )
+    # Nullable created_by/updated_by columns across various tables
+    for tbl, col in [
+        ("shell_security_pattern", "created_by"), ("shell_security_pattern", "updated_by"),
+        ("sentinel_config", "created_by"), ("sentinel_config", "updated_by"),
+        ("sentinel_profile", "created_by"), ("sentinel_profile", "updated_by"),
+        ("sentinel_exception", "created_by"), ("sentinel_exception", "updated_by"),
+        ("api_client", "created_by"),
+        ("whatsapp_mcp_instance", "created_by"),
+        ("telegram_bot_instance", "created_by"),
+        ("google_oauth_credentials", "created_by"),
+    ]:
+        # tbl/col come from the literal (table, column) tuple above; uid is parameterized.
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+        ctx.db.execute(text(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = :uid"), {"uid": user_id})
+    ctx.db.execute(text("UPDATE system_integration SET configured_by_global_admin = NULL WHERE configured_by_global_admin = :uid"), {"uid": user_id})
+    ctx.db.execute(text("UPDATE tenant SET created_by_global_admin = NULL WHERE created_by_global_admin = :uid"), {"uid": user_id})
+
+    # Delete from tables with non-nullable FK
+    ctx.db.query(UserRole).filter(UserRole.user_id == user_id).delete()
+    ctx.db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user_id).delete()
+    ctx.db.query(UserInvitation).filter(UserInvitation.invited_by == user_id).delete()
+    ctx.db.query(GlobalAdminAuditLog).filter(GlobalAdminAuditLog.global_admin_id == user_id).delete()
+    ctx.db.query(UserContactMapping).filter(UserContactMapping.user_id == user_id).delete()
+
+    ctx.db.delete(target_user)
     ctx.db.commit()
+
+    log_tenant_event(ctx.db, ctx.tenant_id, ctx.user.id, TenantAuditActions.TEAM_REMOVE, "user", str(user_id), {"email": removed_email}, request)

@@ -20,6 +20,7 @@ from .semantic_memory import SemanticMemoryService
 from .fact_extractor import FactExtractor
 from .knowledge_service import KnowledgeService
 from .shared_memory_pool import SharedMemoryPool
+from .temporal_decay import DecayConfig
 
 
 class AgentMemorySystem:
@@ -35,7 +36,9 @@ class AgentMemorySystem:
         agent_id: int,
         db_session: Session,
         config: Dict,
-        persist_directory: str
+        persist_directory: str,
+        token_tracker=None,
+        vector_store_provider=None,
     ):
         """
         Initialize agent memory system.
@@ -45,17 +48,22 @@ class AgentMemorySystem:
             db_session: Database session for persistence
             config: Configuration dictionary
             persist_directory: Directory for vector store persistence
+            token_tracker: Optional token usage tracker
+            vector_store_provider: Optional ProviderBridgeStore for external vector store (v0.6.0).
+                                  When None, uses ChromaDB default via VectorStoreManager.
         """
         self.logger = logging.getLogger(__name__)
         self.agent_id = agent_id
         self.db = db_session
         self.config = config
+        self._tenant_id_cache: Optional[str] = None  # BUG-LOG-015: lazy-loaded from Agent
 
         # Layer 1 + 2: Working memory + Episodic memory (via SemanticMemoryService)
         self.semantic_memory = SemanticMemoryService(
             persist_directory=persist_directory,
             max_ring_buffer_size=config.get("memory_size", 10),
-            enable_semantic=config.get("enable_semantic_search", False)
+            enable_semantic=config.get("enable_semantic_search", False),
+            vector_store_override=vector_store_provider,
         )
 
         # Layer 3: Semantic Knowledge Base (facts about users)
@@ -66,7 +74,10 @@ class AgentMemorySystem:
         self.fact_extractor = FactExtractor(
             provider=config.get("model_provider"),
             model_name=config.get("model_name"),
-            db=db_session
+            db=db_session,
+            token_tracker=token_tracker,
+            tenant_id=config.get("tenant_id"),
+            provider_instance_id=config.get("provider_instance_id"),
         )
 
         # Layer 4: Shared Memory Pool (cross-agent knowledge)
@@ -76,10 +87,23 @@ class AgentMemorySystem:
         self.auto_extract_facts = config.get("auto_extract_facts", True)
         self.extraction_threshold = config.get("fact_extraction_threshold", 5)  # messages
 
+        # Temporal decay configuration (Item 37)
+        self.decay_config = DecayConfig.from_config_dict(config)
+
         # Load existing memory from database on startup
         self._load_memory_from_db()
 
         self.logger.info(f"AgentMemorySystem initialized for agent {agent_id}")
+
+    def _get_tenant_id(self) -> Optional[str]:
+        """BUG-LOG-015: lazy-load + cache the agent's tenant_id for Memory writes."""
+        if self._tenant_id_cache is not None:
+            return self._tenant_id_cache
+        from models import Agent as AgentModel
+        agent = self.db.query(AgentModel).filter(AgentModel.id == self.agent_id).first()
+        if agent and agent.tenant_id:
+            self._tenant_id_cache = agent.tenant_id
+        return self._tenant_id_cache
 
     def _load_memory_from_db(self) -> None:
         """
@@ -91,9 +115,18 @@ class AgentMemorySystem:
 
         try:
             # Load all memory records for this agent
-            memory_records = self.db.query(Memory).filter(
-                Memory.agent_id == self.agent_id
-            ).all()
+            # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
+            tenant_id = self._get_tenant_id()
+            query = self.db.query(Memory).filter(Memory.agent_id == self.agent_id)
+            if tenant_id:
+                query = query.filter(Memory.tenant_id == tenant_id)
+            else:
+                # BUG-LOG-015: audit trail for any read that skips the tenant_id
+                # filter (should never happen post-alembic 0024; guard only).
+                self.logger.warning(
+                    f"Memory load skipping tenant_id filter: agent {self.agent_id} has no resolvable tenant_id"
+                )
+            memory_records = query.all()
 
             loaded_count = 0
             for record in memory_records:
@@ -135,7 +168,7 @@ class AgentMemorySystem:
         metadata['agent_id'] = self.agent_id
 
         # Add to working memory + episodic memory
-        self.semantic_memory.add_message(
+        await self.semantic_memory.add_message(
             sender_key=user_id,
             role=role,
             content=content,
@@ -181,15 +214,20 @@ class AgentMemorySystem:
             'working_memory': [],       # Recent messages
             'episodic_memories': [],    # Relevant past conversations
             'semantic_facts': {},       # Known user information
-            'shared_knowledge': []      # Cross-agent knowledge
+            'shared_knowledge': [],     # Cross-agent knowledge
+            'okg_memories': None,       # v0.6.0 Layer 5: OKG long-term memory XML
         }
 
+        # Determine active decay config
+        active_decay = self.decay_config if self.decay_config.enabled else None
+
         # Layer 1 + 2: Get hybrid context from semantic memory
-        memory_context = self.semantic_memory.get_context(
+        memory_context = await self.semantic_memory.get_context(
             sender_key=user_id,
             current_message=current_message,
             max_semantic_results=self.config.get("semantic_search_results", 5),
-            similarity_threshold=self.config.get("semantic_similarity_threshold", 0.3)
+            similarity_threshold=self.config.get("semantic_similarity_threshold", 0.3),
+            decay_config=active_decay
         )
 
         context['working_memory'] = memory_context.get('recent_messages', [])
@@ -197,31 +235,43 @@ class AgentMemorySystem:
 
         # Layer 3: Get semantic knowledge about user
         if include_knowledge:
-            facts = self._get_user_facts(user_id)
+            facts = self._get_user_facts(user_id, decay_config=active_decay)
             context['semantic_facts'] = facts
 
         # Layer 4: Shared memory (cross-agent knowledge)
         if include_shared:
             shared_knowledge = self.shared_memory_pool.get_accessible_knowledge(
                 agent_id=self.agent_id,
-                limit=self.config.get("shared_memory_results", 5)
+                limit=self.config.get("shared_memory_results", 5),
+                decay_config=active_decay
             )
             context['shared_knowledge'] = shared_knowledge
 
+        # Layer 5: OKG long-term memory auto-recall (v0.6.0 Item 3)
+        try:
+            okg_context = await self._get_okg_context(user_id, current_message)
+            if okg_context:
+                context['okg_memories'] = okg_context
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"OKG auto-recall skipped: {e}")
+
         return context
 
-    def _get_user_facts(self, user_id: str) -> Dict:
+    def _get_user_facts(self, user_id: str, decay_config=None) -> Dict:
         """
         Get learned facts about a user from semantic knowledge base (Layer 3).
 
         Args:
             user_id: User identifier
+            decay_config: Optional DecayConfig for temporal decay
 
         Returns:
             Dictionary of facts organized by topic
         """
-        # Check cache first
-        if user_id in self.knowledge_cache:
+        # When decay is enabled, skip cache (need fresh decay calculations)
+        decay_enabled = decay_config is not None and getattr(decay_config, 'enabled', False)
+
+        if not decay_enabled and user_id in self.knowledge_cache:
             return self.knowledge_cache[user_id]
 
         # Query database
@@ -230,24 +280,50 @@ class AgentMemorySystem:
         facts_by_topic = {}
 
         try:
-            results = self.db.query(SemanticKnowledge).filter(
-                SemanticKnowledge.agent_id == self.agent_id,
-                SemanticKnowledge.user_id == user_id
-            ).all()
+            if decay_enabled:
+                # Use KnowledgeService with decay for proper filtering
+                fact_list = self.knowledge_service.get_user_facts(
+                    agent_id=self.agent_id,
+                    user_id=user_id,
+                    decay_config=decay_config
+                )
+                for fact in fact_list:
+                    topic = fact['topic']
+                    if topic not in facts_by_topic:
+                        facts_by_topic[topic] = {}
 
-            for fact in results:
-                topic = fact.topic
-                if topic not in facts_by_topic:
-                    facts_by_topic[topic] = {}
+                    fact_data = {
+                        'value': fact['value'],
+                        'confidence': fact['confidence'],
+                        'learned_at': fact.get('learned_at'),
+                    }
+                    if 'effective_confidence' in fact:
+                        fact_data['effective_confidence'] = fact['effective_confidence']
+                    if 'freshness' in fact:
+                        fact_data['freshness'] = fact['freshness']
+                    if 'decay_factor' in fact:
+                        fact_data['decay_factor'] = fact['decay_factor']
 
-                facts_by_topic[topic][fact.key] = {
-                    'value': fact.value,
-                    'confidence': fact.confidence,
-                    'learned_at': fact.learned_at.isoformat() if fact.learned_at else None
-                }
+                    facts_by_topic[topic][fact['key']] = fact_data
+            else:
+                results = self.db.query(SemanticKnowledge).filter(
+                    SemanticKnowledge.agent_id == self.agent_id,
+                    SemanticKnowledge.user_id == user_id
+                ).all()
 
-            # Cache the results
-            self.knowledge_cache[user_id] = facts_by_topic
+                for fact in results:
+                    topic = fact.topic
+                    if topic not in facts_by_topic:
+                        facts_by_topic[topic] = {}
+
+                    facts_by_topic[topic][fact.key] = {
+                        'value': fact.value,
+                        'confidence': fact.confidence,
+                        'learned_at': fact.learned_at.isoformat() if fact.learned_at else None
+                    }
+
+                # Cache the results (only when not using decay)
+                self.knowledge_cache[user_id] = facts_by_topic
 
         except Exception as e:
             self.logger.error(f"Failed to load user facts: {e}")
@@ -401,10 +477,20 @@ class AgentMemorySystem:
                 similarity = msg.get('similarity', 0)
                 content = msg['content']
                 sender_info = msg.get('sender_name', '')
+                freshness = msg.get('freshness', '')
+                decayed_score = msg.get('decayed_score')
+
+                # Build label parts
+                label_parts = [f"{similarity:.0%}"]
+                if decayed_score is not None:
+                    label_parts.append(f"eff:{decayed_score:.0%}")
+                if freshness:
+                    label_parts.append(freshness)
                 if sender_info:
-                    lines.append(f"[PAST - {similarity:.0%} - {sender_info}] {content}")
-                else:
-                    lines.append(f"[PAST - {similarity:.0%}] {content}")
+                    label_parts.append(sender_info)
+
+                label = " - ".join(label_parts)
+                lines.append(f"[PAST - {label}] {content}")
 
         # Semantic Knowledge (learned facts)
         if context['semantic_facts']:
@@ -419,7 +505,17 @@ class AgentMemorySystem:
                 for key, data in facts.items():
                     value = data['value']
                     confidence = data.get('confidence', 1.0)
-                    lines.append(f"  - {key}: {value} (confidence: {confidence:.0%})")
+                    eff_conf = data.get('effective_confidence')
+                    freshness = data.get('freshness', '')
+
+                    if eff_conf is not None:
+                        conf_str = f"confidence: {confidence:.0%}, effective: {eff_conf:.0%}"
+                        if freshness:
+                            conf_str += f", {freshness}"
+                    else:
+                        conf_str = f"confidence: {confidence:.0%}"
+
+                    lines.append(f"  - {key}: {value} ({conf_str})")
 
         # Adaptive Personality Context (Phase 4.8 Week 3)
         if adaptive_personality_enabled and user_id:
@@ -443,7 +539,96 @@ class AgentMemorySystem:
                 shared_by = item.get('shared_by_agent', 'unknown')
                 lines.append(f"  [{topic.upper()} - Agent {shared_by}] {content}")
 
+        # v0.6.0 Layer 5: OKG Long-Term Memory (XML block)
+        okg_block = context.get('okg_memories')
+        if okg_block:
+            lines.append("\n" + okg_block)
+
         return "\n".join(lines) if lines else "[No previous context]"
+
+    async def _get_okg_context(self, user_id: str, current_message: str) -> Optional[str]:
+        """
+        v0.6.0 Layer 5: Auto-recall OKG memories for context injection.
+
+        Only runs if okg_term_memory skill is enabled for this agent.
+        Returns XML block or None.
+        """
+        try:
+            from models import AgentSkill
+            skill = self.db.query(AgentSkill).filter(
+                AgentSkill.agent_id == self.agent_id,
+                AgentSkill.skill_type == "okg_term_memory",
+                AgentSkill.is_enabled == True,
+            ).first()
+
+            if not skill:
+                return None
+
+            skill_config = skill.config or {}
+            if not skill_config.get("auto_recall_enabled", True):
+                return None
+
+            from agent.memory.okg import OKGMemoryService, OKGContextInjector
+
+            # Get tenant_id from agent
+            from models import Agent as AgentModel
+            agent = self.db.query(AgentModel).filter(AgentModel.id == self.agent_id).first()
+            if not agent:
+                return None
+
+            # Resolve vector store provider
+            provider = None
+            try:
+                from agent.memory.providers.registry import VectorStoreRegistry
+                from agent.memory.providers.resolver import VectorStoreResolver
+                from agent.memory.providers.bridge import ProviderBridgeStore
+                from agent.memory.embedding_service import get_shared_embedding_service
+
+                instance_id = agent.vector_store_instance_id
+                if instance_id:
+                    registry = VectorStoreRegistry()
+                    resolver = VectorStoreResolver(registry)
+                    resolved = resolver.resolve(
+                        agent_id=self.agent_id,
+                        db=self.db,
+                        persist_directory=self.config.get("chroma_db_path", "./data/chroma"),
+                        vector_store_instance_id=instance_id,
+                        vector_store_mode=agent.vector_store_mode or "override",
+                        tenant_id=agent.tenant_id,
+                    )
+                    if resolved:
+                        embedding_service = get_shared_embedding_service()
+                        security_context = {
+                            "db": self.db,
+                            "tenant_id": agent.tenant_id,
+                            "agent_id": self.agent_id,
+                            "instance_id": instance_id,
+                        }
+                        provider = ProviderBridgeStore(
+                            resolved,
+                            embedding_service,
+                            security_context=security_context,
+                        )
+            except Exception:
+                pass
+
+            okg_service = OKGMemoryService(
+                agent_id=self.agent_id,
+                db_session=self.db,
+                tenant_id=agent.tenant_id,
+                vector_store_provider=provider,
+            )
+            injector = OKGContextInjector(okg_service)
+
+            return await injector.get_context_block(
+                user_id=user_id,
+                current_message=current_message,
+                limit=skill_config.get("auto_recall_limit", 5),
+                min_confidence=skill_config.get("auto_recall_min_confidence", 0.3),
+            )
+        except Exception as e:
+            self.logger.debug(f"OKG context injection skipped: {e}")
+            return None
 
     def _persist_memory_to_db(self, user_id: str) -> None:
         """
@@ -467,10 +652,21 @@ class AgentMemorySystem:
                 return
 
             # Check if memory record exists for this agent+sender
-            memory_record = self.db.query(Memory).filter(
+            # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
+            tenant_id = self._get_tenant_id()
+            query = self.db.query(Memory).filter(
                 Memory.agent_id == self.agent_id,
-                Memory.sender_key == user_id
-            ).first()
+                Memory.sender_key == user_id,
+            )
+            if tenant_id:
+                query = query.filter(Memory.tenant_id == tenant_id)
+            else:
+                # BUG-LOG-015: audit trail for any read that skips the tenant_id
+                # filter (should never happen post-alembic 0024; guard only).
+                self.logger.warning(
+                    f"Memory lookup skipping tenant_id filter: agent {self.agent_id} has no resolvable tenant_id (sender={user_id})"
+                )
+            memory_record = query.first()
 
             if memory_record:
                 # Update existing record
@@ -478,7 +674,13 @@ class AgentMemorySystem:
                 memory_record.updated_at = datetime.utcnow()
             else:
                 # Create new record
+                if not tenant_id:
+                    self.logger.warning(
+                        f"Skipping memory persistence: agent {self.agent_id} has no tenant_id"
+                    )
+                    return
                 memory_record = Memory(
+                    tenant_id=tenant_id,
                     agent_id=self.agent_id,
                     sender_key=user_id,
                     messages_json=messages
@@ -506,11 +708,22 @@ class AgentMemorySystem:
         self.semantic_memory.clear_sender(user_id)
 
         # Clear from database (Memory table)
+        # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
         try:
-            self.db.query(Memory).filter(
+            tenant_id = self._get_tenant_id()
+            query = self.db.query(Memory).filter(
                 Memory.agent_id == self.agent_id,
-                Memory.sender_key == user_id
-            ).delete()
+                Memory.sender_key == user_id,
+            )
+            if tenant_id:
+                query = query.filter(Memory.tenant_id == tenant_id)
+            else:
+                # BUG-LOG-015: audit trail for any delete that skips the tenant_id
+                # filter (should never happen post-alembic 0024; guard only).
+                self.logger.warning(
+                    f"Memory delete skipping tenant_id filter: agent {self.agent_id} has no resolvable tenant_id (sender={user_id})"
+                )
+            query.delete(synchronize_session=False)
             self.db.commit()
             self.logger.info(f"Cleared memory for agent {self.agent_id}, user {user_id}")
         except Exception as e:
@@ -561,6 +774,36 @@ class AgentMemorySystem:
             self.logger.error(f"Failed to count facts: {e}")
             stats['knowledge_facts_total'] = 0
 
+        # Decay configuration and freshness distribution
+        stats['decay_config'] = {
+            'enabled': self.decay_config.enabled,
+            'decay_lambda': self.decay_config.decay_lambda,
+            'archive_threshold': self.decay_config.archive_threshold,
+            'mmr_lambda': self.decay_config.mmr_lambda,
+        }
+
+        if self.decay_config.enabled:
+            try:
+                from .temporal_decay import compute_freshness_label
+                now = datetime.utcnow()
+                facts = self.db.query(SemanticKnowledge).filter(
+                    SemanticKnowledge.agent_id == self.agent_id
+                ).all()
+
+                freshness_dist = {'fresh': 0, 'fading': 0, 'stale': 0, 'archived': 0}
+                for fact in facts:
+                    last_accessed = getattr(fact, 'last_accessed_at', None)
+                    label = compute_freshness_label(
+                        last_accessed, now,
+                        self.decay_config.decay_lambda,
+                        self.decay_config.archive_threshold
+                    )
+                    freshness_dist[label['freshness']] += 1
+
+                stats['freshness_distribution'] = freshness_dist
+            except Exception as e:
+                self.logger.warning(f"Failed to compute freshness distribution: {e}")
+
         return stats
 
     async def _maybe_extract_facts(self, user_id: str) -> None:
@@ -572,7 +815,7 @@ class AgentMemorySystem:
         """
         try:
             # Get recent conversation from working memory
-            context = self.semantic_memory.get_context(
+            context = await self.semantic_memory.get_context(
                 sender_key=user_id,
                 current_message="",
                 max_semantic_results=0  # Only need recent messages
@@ -598,6 +841,10 @@ class AgentMemorySystem:
                 agent_id=self.agent_id
             )
 
+            # MemGuard Layer B: Validate facts before storage
+            if facts:
+                facts = self._validate_facts_memguard(facts, user_id)
+
             # Store extracted facts
             for fact in facts:
                 success = self.knowledge_service.store_fact(
@@ -620,29 +867,142 @@ class AgentMemorySystem:
         except Exception as e:
             self.logger.error(f"Fact extraction failed: {e}")
 
-    async def extract_facts_now(self, user_id: str) -> List[Dict]:
+    def _validate_facts_memguard(self, facts: List[Dict], user_id: str) -> List[Dict]:
+        """
+        MemGuard Layer B: Validate extracted facts before storage.
+
+        Runs fact validation through MemGuardService to catch:
+        - Credential-like values
+        - Command patterns in instruction facts
+        - Suspicious overrides of established facts
+
+        Fail-open: returns all facts if validation errors occur.
+
+        Args:
+            facts: List of extracted fact dicts
+            user_id: User identifier
+
+        Returns:
+            Filtered list of validated facts
+        """
+        try:
+            tenant_id = self._get_tenant_id()
+            if not tenant_id:
+                return facts  # Can't validate without tenant context
+
+            from services.sentinel_service import SentinelService
+            sentinel = SentinelService(self.db, tenant_id)
+            effective_config = sentinel.get_effective_config(self.agent_id)
+
+            memguard_enabled = effective_config.detection_config.get(
+                "memory_poisoning", {}
+            ).get("enabled", True)
+
+            if not memguard_enabled:
+                return facts
+
+            from services.memguard_service import MemGuardService
+            memguard = MemGuardService(self.db, tenant_id)
+
+            detection_mode = getattr(effective_config, "detection_mode", "block")
+
+            # Batch-fetch existing facts once (not per-fact)
+            existing_facts = self.knowledge_service.get_user_facts(
+                agent_id=self.agent_id,
+                user_id=user_id
+            )
+
+            validated_facts = []
+            blocked_count = 0
+            flagged_count = 0
+
+            for fact in facts:
+                validation = memguard.validate_fact(
+                    fact=fact,
+                    existing_facts=existing_facts,
+                    agent_id=self.agent_id,
+                    user_id=user_id,
+                    detection_mode=detection_mode,
+                )
+
+                if validation.is_valid:
+                    validated_facts.append(fact)
+                    if validation.flagged:
+                        flagged_count += 1
+                        self.logger.info(
+                            f"🛡️ MEMGUARD Layer B (detect_only): Flagged fact allowed - "
+                            f"topic={fact.get('topic')}, key={fact.get('key')}: {validation.reason}"
+                        )
+                else:
+                    blocked_count += 1
+                    self.logger.warning(
+                        f"🛡️ MEMGUARD Layer B: Blocked fact - "
+                        f"topic={fact.get('topic')}, key={fact.get('key')}: {validation.reason}"
+                    )
+
+            if blocked_count > 0:
+                self.logger.info(
+                    f"🛡️ MEMGUARD Layer B: {blocked_count}/{len(facts)} facts blocked for {user_id}"
+                )
+            if flagged_count > 0:
+                self.logger.info(
+                    f"🛡️ MEMGUARD Layer B: {flagged_count}/{len(facts)} facts flagged (allowed) for {user_id}"
+                )
+
+            return validated_facts
+
+        except Exception as e:
+            self.logger.warning(f"MemGuard Layer B validation failed, allowing all facts: {e}")
+            return facts
+
+    async def extract_facts_now(
+        self,
+        user_id: str,
+        alternate_user_ids: Optional[List[str]] = None
+    ) -> List[Dict]:
         """
         Manually trigger fact extraction for a user conversation.
 
         Args:
             user_id: User identifier
+            alternate_user_ids: Optional fallback memory keys to probe when
+                recent conversation history is stored under a shared or
+                channel-scoped alias.
 
         Returns:
             List of extracted facts
         """
         try:
-            # Get full conversation from working memory
-            context = self.semantic_memory.get_context(
-                sender_key=user_id,
-                current_message="",
-                max_semantic_results=0
-            )
+            candidate_user_ids = [user_id]
+            for candidate in alternate_user_ids or []:
+                if candidate and candidate not in candidate_user_ids:
+                    candidate_user_ids.append(candidate)
 
-            conversation = context.get('recent_messages', [])
+            conversation = []
+            resolved_history_key = user_id
+            for candidate_user_id in candidate_user_ids:
+                context = await self.semantic_memory.get_context(
+                    sender_key=candidate_user_id,
+                    current_message="",
+                    max_semantic_results=0
+                )
+                conversation = context.get('recent_messages', [])
+                if conversation:
+                    resolved_history_key = candidate_user_id
+                    break
 
             if not conversation:
-                self.logger.warning(f"No conversation history for {user_id}")
+                self.logger.warning(
+                    f"No conversation history for {user_id}"
+                    f" (checked aliases: {candidate_user_ids})"
+                )
                 return []
+
+            if resolved_history_key != user_id:
+                self.logger.info(
+                    f"Manual extraction for {user_id} resolved conversation history"
+                    f" via alias {resolved_history_key}"
+                )
 
             # Extract facts
             facts = await self.fact_extractor.extract_facts(

@@ -36,6 +36,26 @@ class ProjectCommandService:
 
     # BUG-003 Fix: Built-in patterns for commands not in database
     BUILTIN_PATTERNS = {
+        "enter": [
+            (r"^(?:/enter|enter project)\s+(.+)$", {"language_code": "en", "response_template": '📁 Now working in project "{project_name}". Ask questions or send files to add documents.', "pattern_str": r"^(?:/enter|enter project)\s+(.+)$"}),
+            (r"^(?:/entrar|entrar(?:\s+no)?\s+projeto)\s+(.+)$", {"language_code": "pt", "response_template": '📁 Agora voce esta no projeto "{project_name}". Envie perguntas ou arquivos para adicionar documentos.', "pattern_str": r"^(?:/entrar|entrar(?:\s+no)?\s+projeto)\s+(.+)$"}),
+        ],
+        "exit": [
+            (r"^(?:/exit|exit project)$", {"language_code": "en", "response_template": '✅ Left project "{project_name}". {summary}', "pattern_str": r"^(?:/exit|exit project)$"}),
+            (r"^(?:/sair|sair do projeto)$", {"language_code": "pt", "response_template": '✅ Saiu do projeto "{project_name}". {summary}', "pattern_str": r"^(?:/sair|sair do projeto)$"}),
+        ],
+        "list": [
+            (r"^(?:/list|list projects)$", {"language_code": "en", "response_template": "📋 Your projects:\n{project_list}", "pattern_str": r"^(?:/list|list projects)$"}),
+            (r"^(?:/listar|listar projetos)$", {"language_code": "pt", "response_template": "📋 Seus projetos:\n{project_list}", "pattern_str": r"^(?:/listar|listar projetos)$"}),
+        ],
+        "upload": [
+            (r"^(?:/add\s+to\s+project|add to project)$", {"language_code": "en", "response_template": '📎 Document "{filename}" added to project ({chunks} chunks processed).', "pattern_str": r"^(?:/add\s+to\s+project|add to project)$"}),
+            (r"^(?:/adicionar\s+ao\s+projeto|adicionar ao projeto)$", {"language_code": "pt", "response_template": '📎 Documento "{filename}" adicionado ao projeto ({chunks} chunks processados).', "pattern_str": r"^(?:/adicionar\s+ao\s+projeto|adicionar ao projeto)$"}),
+        ],
+        "help": [
+            (r"^(?:/help|project help)$", {"language_code": "en", "response_template": None, "pattern_str": r"^(?:/help|project help)$"}),
+            (r"^(?:/ajuda|ajuda do projeto)$", {"language_code": "pt", "response_template": None, "pattern_str": r"^(?:/ajuda|ajuda do projeto)$"}),
+        ],
         "info": [
             (r"^/project\s+info$", {"language_code": "en", "response_template": None, "pattern_str": r"^/project\s+info$"}),
             (r"^/projeto\s+info$", {"language_code": "pt", "response_template": None, "pattern_str": r"^/projeto\s+info$"}),

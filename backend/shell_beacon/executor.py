@@ -329,6 +329,9 @@ class CommandExecutor:
 
             logger.debug(f"Executing: {command} (cwd: {self.working_dir})")
 
+            # Offensive-security beacon: executing shell commands IS the feature. Commands arrive
+            # via an authenticated C2 channel and are sanitized by _sanitize_command() above.
+            # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true
             result = subprocess.run(
                 full_command,
                 shell=True,

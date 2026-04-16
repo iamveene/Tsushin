@@ -388,7 +388,9 @@ class ShellSecurityService:
         commands: List[str],
         allowed_commands: Optional[List[str]] = None,
         allowed_paths: Optional[List[str]] = None,
-        require_approval_for_high_risk: bool = True
+        require_approval_for_high_risk: bool = True,
+        tenant_id: Optional[str] = None,
+        db: Optional[Session] = None
     ) -> Tuple[bool, SecurityCheckResult]:
         """
         Check multiple commands and return aggregated result.
@@ -398,6 +400,8 @@ class ShellSecurityService:
             allowed_commands: Optional whitelist
             allowed_paths: Optional path restrictions
             require_approval_for_high_risk: Whether to require approval for high-risk
+            tenant_id: Tenant ID for loading tenant-specific patterns (Phase 19)
+            db: Database session for loading patterns (Phase 19)
 
         Returns:
             Tuple of (all_allowed, aggregated_result)
@@ -412,7 +416,9 @@ class ShellSecurityService:
                 cmd,
                 allowed_commands,
                 allowed_paths,
-                require_approval_for_high_risk
+                require_approval_for_high_risk,
+                tenant_id=tenant_id,
+                db=db
             )
 
             if not result.allowed:
@@ -569,6 +575,52 @@ class ShellSecurityService:
                 return False, f"Path '{path}' not in allowed directories"
 
         return True, None
+
+    @staticmethod
+    def scan_for_network_imports(script_content: str) -> list:
+        """Check script content for network-related imports that may indicate data exfiltration.
+
+        Scans Python import statements and shell commands that could be used
+        to make outbound network connections from within a sandboxed environment.
+
+        Args:
+            script_content: Source code or script text to analyze.
+
+        Returns:
+            List of warning strings describing detected network imports.
+        """
+        NETWORK_PATTERNS = [
+            # Python imports
+            (r'\bimport\s+requests\b', 'requests'),
+            (r'\bfrom\s+requests\b', 'requests'),
+            (r'\bimport\s+urllib\b', 'urllib'),
+            (r'\bfrom\s+urllib\b', 'urllib'),
+            (r'\bimport\s+httpx\b', 'httpx'),
+            (r'\bfrom\s+httpx\b', 'httpx'),
+            (r'\bimport\s+aiohttp\b', 'aiohttp'),
+            (r'\bimport\s+socket\b', 'socket'),
+            (r'\bimport\s+http\.client\b', 'http.client'),
+            # Shell commands
+            (r'\bcurl\s+', 'curl command'),
+            (r'\bwget\s+', 'wget command'),
+            # Bash network tools
+            (r'\bnc\s', 'nc (netcat) command'),
+            (r'\bncat\s', 'ncat command'),
+            (r'/dev/tcp/', '/dev/tcp redirection'),
+            (r'/dev/udp/', '/dev/udp redirection'),
+            (r'\bsocat\s', 'socat command'),
+            (r'\bfetch\s', 'fetch command'),
+            # Node.js imports
+            (r'require\([\'"](?:http|https|net|dgram|node-fetch|axios|got|request)[\'"\)]', 'Node.js network module'),
+            (r'import\s+.*from\s+[\'"](?:http|https|net|node-fetch|axios)[\'"]', 'Node.js network import'),
+        ]
+
+        warnings = []
+        for pattern, name in NETWORK_PATTERNS:
+            if re.search(pattern, script_content):
+                warnings.append(f"Network import detected: {name}")
+
+        return warnings
 
     def get_risk_summary(self, result: SecurityCheckResult) -> str:
         """Generate a human-readable summary of security check result."""

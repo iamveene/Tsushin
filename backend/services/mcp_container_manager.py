@@ -6,20 +6,28 @@ Manages Docker containers for WhatsApp MCP instances.
 Handles container lifecycle: create, start, stop, restart, delete.
 """
 
+import hashlib
 import os
+import re
 import time
 import logging
-import docker
 import requests
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Any, Optional, Dict, Tuple
+from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from models import WhatsAppMCPInstance, Agent
 from services.port_allocator import get_port_allocator
 from services.mcp_auth_service import generate_mcp_secret
 from services.docker_network_utils import resolve_tsushin_network_name
+from services.container_runtime import (
+    get_container_runtime,
+    ContainerRuntime,
+    ContainerNotFoundError,
+    ContainerRuntimeError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,20 +36,27 @@ class MCPContainerManager:
     """Manages Docker containers for WhatsApp MCP instances"""
 
     IMAGE_NAME = "tsushin/whatsapp-mcp:latest"
-    CONTAINER_PREFIX = "mcp-"
     HEALTH_CHECK_TIMEOUT = 60  # seconds
     HEALTH_CHECK_INTERVAL = 5  # seconds
+    DNS_FALLBACK_ENV = "WHATSAPP_MCP_DNS_SERVERS"
+    TESTER_CONTAINER_NAME = "tester-mcp"
+    TESTER_API_URL = os.getenv("TESTER_MCP_API_URL", "http://tester-mcp:8080/api")
+    TESTER_CONTAINER_ENV = "TESTER_MCP_CONTAINER_NAME"
 
-    def __init__(self):
-        """Initialize Docker client"""
-        try:
-            self.docker = docker.from_env()
-            logger.info("Docker client initialized successfully")
-        except docker.errors.DockerException as e:
-            logger.error(f"Failed to initialize Docker client: {e}")
-            raise RuntimeError(
-                f"Docker is not available or not running. Please ensure Docker is installed and running. Error: {e}"
-            )
+    def __init__(self, tenant_id: Optional[str] = None):
+        """Initialize container runtime"""
+        self.runtime: ContainerRuntime = get_container_runtime()
+        self.tenant_id = tenant_id
+        self._resolved_tester_name: Optional[str] = None
+        self._resolved_tester_api_url: Optional[str] = None
+        self._resolved_tester_source: Optional[str] = None
+        logger.info("MCPContainerManager initialized with container runtime")
+
+    def _resolve_network_name(self) -> str:
+        """Resolve the tsushin network name."""
+        if hasattr(self.runtime, 'raw_client'):
+            return resolve_tsushin_network_name(self.runtime.raw_client)
+        return "tsushin-network"
 
     def create_instance(
         self,
@@ -79,7 +94,9 @@ class MCPContainerManager:
         logger.info(f"Generated API secret for MCP authentication")
 
         # 2. Generate container name (unique with timestamp, includes type)
-        container_name = f"{self.CONTAINER_PREFIX}{instance_type}-{tenant_id}_{int(time.time())}"
+        # BUG-448: Use TSN_STACK_NAME prefix for runtime container isolation
+        stack_prefix = f"{self._get_stack_name()}-mcp-"
+        container_name = f"{stack_prefix}{instance_type}-{tenant_id}_{int(time.time())}"
 
         # 3. Create volume directories (unique per instance)
         session_dir = self._create_session_directory(tenant_id, container_name)
@@ -88,7 +105,8 @@ class MCPContainerManager:
         # 4. Start container
         try:
             container = self._start_container(container_name, port, session_dir, phone_number, api_secret)
-            logger.info(f"Container {container_name} started with ID {container.id}")
+            container_id = container.id if hasattr(container, 'id') else str(container)
+            logger.info(f"Container {container_name} started with ID {container_id}")
 
         except Exception as e:
             logger.error(f"Failed to start container: {e}")
@@ -96,7 +114,6 @@ class MCPContainerManager:
 
         # 5. Use container name for Docker DNS resolution (more robust than IP)
         # Container name is resolvable within the Docker network
-        container.reload()  # Refresh container info
         logger.info(f"Container {container_name} created on tsushin network")
 
         # 6. Convert session_dir to container path for watcher
@@ -133,7 +150,7 @@ class MCPContainerManager:
             session_data_path=container_session_dir,
             status="starting",
             health_status="unknown",
-            container_id=container.id,
+            container_id=container_id,
             created_by=created_by,
             last_started_at=datetime.utcnow(),
             # Phase Security-1: API authentication
@@ -144,6 +161,7 @@ class MCPContainerManager:
         db.add(instance)
         db.commit()
         db.refresh(instance)
+        self.reconcile_instance(instance, db)
 
         logger.info(f"MCP instance {instance.id} created in database")
 
@@ -199,7 +217,7 @@ class MCPContainerManager:
         session_dir: str,
         phone_number: str,
         api_secret: Optional[str] = None
-    ) -> docker.models.containers.Container:
+    ):
         """
         Start Docker container
 
@@ -211,10 +229,10 @@ class MCPContainerManager:
             api_secret: API authentication secret (Phase Security-1)
 
         Returns:
-            Docker container object
+            Container object
 
         Raises:
-            docker.errors.DockerException: If container start fails
+            ContainerRuntimeError: If container start fails
         """
         # Convert session_dir to absolute path
         session_dir_abs = os.path.abspath(session_dir)
@@ -242,10 +260,11 @@ class MCPContainerManager:
         logger.info(f"Volume mount: {session_dir_abs} -> /app/store")
 
         # Check if tsushin network exists, create if not
-        tsushin_network = self._get_or_create_tsushin_network()
+        network_name = self._resolve_network_name()
+        self.runtime.get_or_create_network(network_name)
 
-        container = self.docker.containers.run(
-            self.IMAGE_NAME,
+        container = self.runtime.create_container(
+            image=self.IMAGE_NAME,
             name=container_name,
             ports={'8080/tcp': ('127.0.0.1', port)},  # Also expose on localhost for debugging
             volumes={
@@ -262,24 +281,20 @@ class MCPContainerManager:
                 # Phase Security-1: API authentication secret
                 'MCP_API_SECRET': api_secret or ''
             },
-            detach=True,
             restart_policy={"Name": "unless-stopped"},
-            network=tsushin_network.name,  # Connect to tsushin network for backend communication
-            command=["--port", "8080"]
+            network=network_name,  # Connect to tsushin network for backend communication
+            command=["--port", "8080"],
+            dns=self._get_dns_servers(),
         )
 
         return container
 
     def _get_or_create_tsushin_network(self):
         """Get or create the tsushin Docker network"""
-        network_name = resolve_tsushin_network_name(self.docker)
-        try:
-            return self.docker.networks.get(network_name)
-        except docker.errors.NotFound:
-            logger.info(f"Creating Docker network: {network_name}")
-            return self.docker.networks.create(network_name, driver="bridge")
+        network_name = self._resolve_network_name()
+        return self.runtime.get_or_create_network(network_name)
 
-    def _ensure_container_on_tsushin_network(self, container):
+    def _ensure_container_on_tsushin_network(self, container_name_or_id: str):
         """
         Ensure container is connected to tsushin network for backend communication.
 
@@ -288,42 +303,184 @@ class MCPContainerManager:
         2. If container was manually started or network was disconnected, this reconnects it
 
         Args:
-            container: Docker container object
+            container_name_or_id: Container name or ID
         """
-        network_name = resolve_tsushin_network_name(self.docker)
+        network_name = self._resolve_network_name()
         try:
-            container.reload()  # Refresh container info
-            networks = container.attrs.get('NetworkSettings', {}).get('Networks', {})
-
-            if network_name not in networks:
-                logger.info(f"Connecting container {container.name} to {network_name}")
-                tsushin_network = self._get_or_create_tsushin_network()
-                tsushin_network.connect(container)
-                logger.info(f"Container {container.name} connected to {network_name}")
-            else:
-                logger.debug(f"Container {container.name} already on {network_name}")
-
+            self.runtime.ensure_container_on_network(container_name_or_id, network_name)
         except Exception as e:
             logger.error(f"Failed to ensure container on tsushin network: {e}")
             # Don't raise - container might still work via localhost fallback
 
-    def _get_container_ip(self, container) -> str:
-        """Get container IP address on tsushin network"""
-        network_name = resolve_tsushin_network_name(self.docker)
+    def _ensure_container_dns_alias(self, container_name_or_id: str, dns_alias: str):
+        """Ensure the container is reachable on the tsushin network via a short DNS alias."""
+        network_name = self._resolve_network_name()
         try:
-            networks = container.attrs.get('NetworkSettings', {}).get('Networks', {})
-            if network_name in networks:
-                return networks[network_name].get('IPAddress', '')
-            # Fallback to first available network IP
-            for net_name, net_config in networks.items():
-                ip = net_config.get('IPAddress', '')
-                if ip:
-                    logger.warning(f"Container not on {network_name}, using {net_name} IP: {ip}")
-                    return ip
-            return ''
+            self.runtime.ensure_container_on_network(
+                container_name_or_id,
+                network_name,
+                aliases=[dns_alias],
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to apply DNS alias '{dns_alias}' for {container_name_or_id}: {e}"
+            )
+
+    def _get_container_ip(self, container_name_or_id: str) -> str:
+        """Get container IP address on tsushin network"""
+        network_name = self._resolve_network_name()
+        try:
+            return self.runtime.get_container_network_ip(container_name_or_id, network_name)
         except Exception as e:
             logger.error(f"Failed to get container IP: {e}")
             return ''
+
+    def _sanitize_container_ref(self, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        value = value.strip()
+        return value or None
+
+    def _get_stack_alias(self) -> str:
+        stack_name = self._get_stack_name().lower()
+        stack_alias = stack_name[len("tsushin-"):] if stack_name.startswith("tsushin-") else stack_name
+        stack_alias = re.sub(r"[^a-z0-9]+", "-", stack_alias).strip("-")
+        return (stack_alias[:12] or "tsn")
+
+    def _build_runtime_dns_alias(self, instance: WhatsAppMCPInstance) -> str:
+        tenant_hash = hashlib.md5((instance.tenant_id or "").encode("utf-8")).hexdigest()[:8]
+        instance_kind = (instance.instance_type or "agent").strip().lower()
+        if instance_kind not in {"agent", "tester"}:
+            instance_kind = "agent"
+        alias = f"mcp-{self._get_stack_alias()}-{instance_kind}-{tenant_hash}-{instance.id}"
+        alias = re.sub(r"[^a-z0-9-]", "-", alias.lower())
+        alias = re.sub(r"-+", "-", alias).strip("-")
+        return alias[:63].rstrip("-")
+
+    def _get_dns_servers(self) -> Optional[list[str]]:
+        raw_value = os.getenv(self.DNS_FALLBACK_ENV, "").strip()
+        if not raw_value:
+            return None
+        servers = [item.strip() for item in raw_value.split(",") if item.strip()]
+        return servers or None
+
+    def _canonical_session_data_path(self, instance: WhatsAppMCPInstance) -> str:
+        """Return the container-visible session directory path for an instance."""
+        return str(Path("/app/data") / "mcp" / instance.tenant_id / instance.container_name / "store")
+
+    def _canonical_messages_db_path(self, instance: WhatsAppMCPInstance) -> str:
+        return str(Path(self._canonical_session_data_path(instance)) / "messages.db")
+
+    def _extract_host_port(self, container_attrs: Dict[str, Any]) -> Optional[int]:
+        try:
+            port_info = (
+                container_attrs.get("NetworkSettings", {})
+                .get("Ports", {})
+                .get("8080/tcp")
+            )
+            if not port_info:
+                return None
+            host_port = port_info[0].get("HostPort")
+            return int(host_port) if host_port else None
+        except (TypeError, ValueError, IndexError, AttributeError):
+            return None
+
+    def _resolve_container(self, instance: WhatsAppMCPInstance, db: Optional[Session] = None) -> Tuple[Optional[Any], Optional[str]]:
+        """
+        Resolve a container by ID first, then by name.
+
+        Returns:
+            (container_object, preferred_reference)
+        """
+        refs = []
+        container_id = self._sanitize_container_ref(instance.container_id)
+        if instance.container_id != container_id:
+            instance.container_id = container_id
+            if db is not None:
+                db.flush()
+        if container_id:
+            refs.append(container_id)
+        container_name = self._sanitize_container_ref(instance.container_name)
+        if container_name and container_name not in refs:
+            refs.append(container_name)
+
+        for ref in refs:
+            try:
+                container = self.runtime.get_container(ref)
+                container_id = container.id if hasattr(container, "id") else str(container)
+                if instance.container_id != container_id:
+                    instance.container_id = container_id
+                    if db is not None:
+                        db.flush()
+                # Prefer container name for later lifecycle calls; it survives ID churn.
+                return container, instance.container_name or container_id
+            except ContainerNotFoundError:
+                continue
+
+        return None, None
+
+    def reconcile_instance(self, instance: WhatsAppMCPInstance, db: Optional[Session] = None) -> Dict[str, Any]:
+        """
+        Repair stale instance metadata from deterministic conventions and container attrs.
+
+        This keeps health checks, QR flows, and watcher startup aligned with runtime truth.
+        """
+        changes: Dict[str, Any] = {}
+
+        expected_dns_alias = self._build_runtime_dns_alias(instance)
+        expected_session_path = self._canonical_session_data_path(instance)
+        expected_messages_db_path = self._canonical_messages_db_path(instance)
+        expected_api_url = f"http://{expected_dns_alias}:8080/api"
+
+        normalized_container_id = self._sanitize_container_ref(instance.container_id)
+        if instance.container_id != normalized_container_id:
+            instance.container_id = normalized_container_id
+            changes["container_id"] = normalized_container_id
+
+        if instance.session_data_path != expected_session_path:
+            instance.session_data_path = expected_session_path
+            changes["session_data_path"] = expected_session_path
+
+        if instance.messages_db_path != expected_messages_db_path:
+            instance.messages_db_path = expected_messages_db_path
+            changes["messages_db_path"] = expected_messages_db_path
+
+        container, container_ref = self._resolve_container(instance, db)
+        if container_ref:
+            changes["container_ref"] = container_ref
+
+        if container is not None:
+            container_id = container.id if hasattr(container, "id") else str(container)
+            if instance.container_id != container_id:
+                instance.container_id = container_id
+                changes["container_id"] = container_id
+
+            try:
+                attrs = self.runtime.get_container_attrs(container_ref)
+                network_settings = attrs.get("NetworkSettings") or attrs.get("network_settings") or {}
+                networks = network_settings.get("Networks", {}) if isinstance(network_settings, dict) else {}
+                current_aliases = networks.get(self._resolve_network_name(), {}).get("Aliases", []) or []
+                if expected_dns_alias not in current_aliases:
+                    self._ensure_container_dns_alias(container_ref, expected_dns_alias)
+                    changes["mcp_dns_alias"] = expected_dns_alias
+                host_port = self._extract_host_port(attrs)
+                if host_port and instance.mcp_port != host_port:
+                    instance.mcp_port = host_port
+                    changes["mcp_port"] = host_port
+            except Exception as e:
+                logger.debug(f"Could not inspect attrs for {instance.container_name}: {e}")
+
+        if instance.mcp_api_url != expected_api_url:
+            instance.mcp_api_url = expected_api_url
+            changes["mcp_api_url"] = expected_api_url
+            changes["mcp_dns_alias"] = expected_dns_alias
+
+        if db is not None and changes:
+            db.commit()
+            db.refresh(instance)
+            logger.info(f"Reconciled MCP instance {instance.id}: {sorted(changes.keys())}")
+
+        return changes
 
     def start_instance(self, instance_id: int, db: Session):
         """
@@ -342,55 +499,45 @@ class MCPContainerManager:
             raise ValueError(f"MCP instance {instance_id} not found")
 
         logger.info(f"Starting MCP instance {instance_id} (container {instance.container_name})")
+        self.reconcile_instance(instance, db)
 
-        container = None
+        container_found = False
 
-        # Try to get container by ID first
-        try:
-            container = self.docker.containers.get(instance.container_id)
-        except docker.errors.NotFound:
-            logger.warning(f"Container {instance.container_id} not found by ID, trying by name...")
-
-        # Try by name if ID failed
-        if not container:
-            try:
-                container = self.docker.containers.get(instance.container_name)
-                # Update container_id in database
-                instance.container_id = container.id
-                db.commit()
-                logger.info(f"Found container by name, updated ID to {container.id}")
-            except docker.errors.NotFound:
-                logger.warning(f"Container {instance.container_name} not found, will recreate...")
+        # Try to resolve the existing container first
+        container, container_ref = self._resolve_container(instance, db)
+        if container is not None:
+            container_found = True
+        else:
+            logger.warning(f"Container {instance.container_name} not found, will recreate...")
 
         # If container exists, just start it
-        if container:
+        if container_found:
             try:
-                container.start()
+                self.runtime.start_container(container_ref or instance.container_name)
 
                 # Ensure container is connected to tsushin network for backend communication
-                self._ensure_container_on_tsushin_network(container)
+                self._ensure_container_on_tsushin_network(container_ref or instance.container_name)
 
                 instance.status = "starting"
                 instance.last_started_at = datetime.utcnow()
                 db.commit()
                 logger.info(f"Container {instance.container_name} started")
                 return
-            except docker.errors.APIError as e:
+            except ContainerRuntimeError as e:
                 logger.error(f"Failed to start existing container: {e}")
                 # Container might be corrupted, try to recreate
                 try:
-                    container.remove(force=True)
-                except:
+                    self.runtime.remove_container(container_ref, force=True)
+                except (ContainerNotFoundError, ContainerRuntimeError):
                     pass
-                container = None
+                container_found = False
 
         # Recreate container if it doesn't exist
-        if not container:
+        if not container_found:
             logger.info(f"Recreating container for instance {instance_id}")
             try:
-                # Extract session directory from stored path
-                # session_data_path is like /app/data/mcp/tenant_xxx/container_name/store
-                session_dir = os.path.dirname(instance.session_data_path)  # Remove /store
+                # session_data_path already points at the store directory mounted as /app/store
+                session_dir = instance.session_data_path
 
                 # Create container (pass api_secret for Phase Security-1)
                 new_container = self._start_container(
@@ -402,12 +549,13 @@ class MCPContainerManager:
                 )
 
                 # Update database with new container ID
-                instance.container_id = new_container.id
+                new_container_id = new_container.id if hasattr(new_container, 'id') else str(new_container)
+                instance.container_id = new_container_id
                 instance.status = "starting"
                 instance.last_started_at = datetime.utcnow()
                 db.commit()
 
-                logger.info(f"Recreated container {instance.container_name} with ID {new_container.id}")
+                logger.info(f"Recreated container {instance.container_name} with ID {new_container_id}")
                 return
 
             except Exception as e:
@@ -435,10 +583,11 @@ class MCPContainerManager:
             raise ValueError(f"MCP instance {instance_id} not found")
 
         logger.info(f"Stopping MCP instance {instance_id} (container {instance.container_name})")
+        self.reconcile_instance(instance, db)
+        _, container_ref = self._resolve_container(instance, db)
 
         try:
-            container = self.docker.containers.get(instance.container_id)
-            container.stop(timeout=timeout)
+            self.runtime.stop_container(container_ref or instance.container_name, timeout=timeout)
 
             instance.status = "stopped"
             instance.last_stopped_at = datetime.utcnow()
@@ -446,13 +595,13 @@ class MCPContainerManager:
 
             logger.info(f"Container {instance.container_name} stopped")
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             logger.warning(f"Container {instance.container_id} not found (already removed?)")
             instance.status = "stopped"
             instance.health_status = "unavailable"
             db.commit()
 
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             logger.error(f"Failed to stop container: {e}")
             raise RuntimeError(f"Failed to stop container: {e}")
 
@@ -497,18 +646,19 @@ class MCPContainerManager:
             raise ValueError(f"MCP instance {instance_id} not found")
 
         logger.info(f"Deleting MCP instance {instance_id} (container {instance.container_name})")
+        self.reconcile_instance(instance, db)
+        _, container_ref = self._resolve_container(instance, db)
 
         # 1. Stop and remove container
         try:
-            container = self.docker.containers.get(instance.container_id)
-            container.stop(timeout=10)
-            container.remove()
+            self.runtime.stop_container(container_ref or instance.container_name, timeout=10)
+            self.runtime.remove_container(container_ref or instance.container_name)
             logger.info(f"Container {instance.container_name} removed")
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             logger.warning(f"Container {instance.container_id} not found (already removed?)")
 
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             logger.error(f"Failed to remove container: {e}")
             # Continue with database cleanup even if container removal fails
 
@@ -535,7 +685,7 @@ class MCPContainerManager:
         db.commit()
         logger.info(f"MCP instance {instance_id} deleted from database")
 
-    def get_qr_code(self, instance: WhatsAppMCPInstance) -> Optional[str]:
+    def get_qr_code(self, instance: WhatsAppMCPInstance, db: Optional[Session] = None) -> Optional[str]:
         """
         Fetch QR code from MCP API with retry logic
 
@@ -548,6 +698,7 @@ class MCPContainerManager:
         from services.mcp_auth_service import get_auth_headers
 
         max_retries = 2
+        self.reconcile_instance(instance, db)
         # Phase Security-1: Include auth headers for MCP API requests
         headers = get_auth_headers(instance.api_secret)
 
@@ -635,55 +786,48 @@ class MCPContainerManager:
             raise ValueError(f"MCP instance {instance_id} not found")
 
         logger.info(f"Logging out MCP instance {instance_id} (container {instance.container_name})")
+        self.reconcile_instance(instance, db)
 
         backup_path = None
 
         try:
-            # Helper to get container by ID or name (IDs can become stale after rebuild)
-            def get_container():
-                try:
-                    return self.docker.containers.get(instance.container_id)
-                except docker.errors.NotFound:
-                    logger.warning(f"Container {instance.container_id} not found by ID, trying by name...")
-                    try:
-                        container = self.docker.containers.get(instance.container_name)
-                        # Update container_id in database
-                        instance.container_id = container.id
-                        db.commit()
-                        logger.info(f"Found container by name, updated ID to {container.id}")
-                        return container
-                    except docker.errors.NotFound:
-                        return None
+            # Helper to get container identifier (tries ID then name)
+            def find_container_ref() -> Optional[str]:
+                _, resolved_ref = self._resolve_container(instance, db)
+                return resolved_ref
 
             # 2. Call WhatsApp logout API (if container is running)
-            container = get_container()
-            if container and container.status == 'running':
-                logger.info("Calling WhatsApp logout API to unpair device")
-                try:
-                    # Phase Security-1: Include auth headers for MCP API requests
-                    from services.mcp_auth_service import get_auth_headers
-                    headers = get_auth_headers(instance.api_secret)
-                    logout_response = requests.post(
-                        f"{instance.mcp_api_url}/logout",
-                        headers=headers,
-                        timeout=10
-                    )
-                    if logout_response.status_code == 200:
-                        logger.info("WhatsApp logout API call successful")
-                    else:
-                        logger.warning(f"WhatsApp logout API returned {logout_response.status_code}: {logout_response.text}")
-                except requests.exceptions.RequestException as e:
-                    logger.warning(f"Failed to call WhatsApp logout API (continuing anyway): {e}")
-            elif not container:
+            container_ref = find_container_ref()
+            if container_ref:
+                container_status = self.runtime.get_container_status(container_ref)
+                if container_status == 'running':
+                    logger.info("Calling WhatsApp logout API to unpair device")
+                    try:
+                        from services.mcp_auth_service import get_auth_headers
+                        headers = get_auth_headers(instance.api_secret)
+                        logout_response = requests.post(
+                            f"{instance.mcp_api_url}/logout",
+                            headers=headers,
+                            timeout=10
+                        )
+                        if logout_response.status_code == 200:
+                            logger.info("WhatsApp logout API call successful")
+                        else:
+                            logger.warning(f"WhatsApp logout API returned {logout_response.status_code}: {logout_response.text}")
+                    except requests.exceptions.RequestException as e:
+                        logger.warning(f"Failed to call WhatsApp logout API (continuing anyway): {e}")
+            else:
                 logger.info("Container not found, skipping logout API call")
 
             # 3. Stop container
             logger.info(f"Stopping container {instance.container_name}")
-            container = get_container()  # Refresh container reference
-            if container and container.status == 'running':
-                container.stop(timeout=10)
-                logger.info("Container stopped")
-            elif not container:
+            container_ref = find_container_ref()  # Refresh reference
+            if container_ref:
+                container_status = self.runtime.get_container_status(container_ref)
+                if container_status == 'running':
+                    self.runtime.stop_container(container_ref, timeout=10)
+                    logger.info("Container stopped")
+            else:
                 logger.warning(f"Container {instance.container_name} not found, continuing...")
 
             # 4. Get session file path
@@ -705,18 +849,20 @@ class MCPContainerManager:
 
             # 7. Start container
             logger.info("Starting container to regenerate QR code")
-            container = get_container()  # Use helper that tries ID then name
-            if not container:
-                raise RuntimeError("Container not found, cannot restart")
+            container_ref = find_container_ref()
             try:
-                container.start()
-                logger.info("Container started")
+                if container_ref:
+                    self.runtime.start_container(container_ref)
+                    logger.info("Container started")
+                else:
+                    logger.info("Container missing during logout reset, recreating it")
+                    self.start_instance(instance_id, db)
 
                 instance.status = "starting"
                 instance.last_started_at = datetime.utcnow()
                 db.commit()
 
-            except docker.errors.APIError as e:
+            except ContainerRuntimeError as e:
                 # Try to restore backup if start fails
                 if backup_path and Path(backup_path).exists():
                     logger.error(f"Container failed to start, attempting to restore backup: {e}")
@@ -839,7 +985,329 @@ class MCPContainerManager:
         logger.warning(f"QR code not available after {timeout}s timeout")
         return False
 
-    def health_check(self, instance: WhatsAppMCPInstance) -> Dict[str, any]:
+    def _extract_container_env(self, container: Any) -> Dict[str, str]:
+        attrs = getattr(container, "attrs", {}) or {}
+        env_items = attrs.get("Config", {}).get("Env", []) or []
+        env_map: Dict[str, str] = {}
+        for item in env_items:
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            env_map[key] = value
+        return env_map
+
+    def _get_container_env(self, container_name_or_id: str) -> Dict[str, str]:
+        try:
+            container = self.runtime.get_container(container_name_or_id)
+        except ContainerNotFoundError:
+            return {}
+        return self._extract_container_env(container)
+
+    @staticmethod
+    def normalize_phone_number(phone_number: Optional[str]) -> str:
+        return "".join(ch for ch in (phone_number or "") if ch.isdigit())
+
+    def _reset_tester_target(self) -> None:
+        self._resolved_tester_name = None
+        self._resolved_tester_api_url = None
+        self._resolved_tester_source = None
+
+    def _set_tester_target(self, name: str, api_url: str, source: str) -> None:
+        self._resolved_tester_name = name
+        self._resolved_tester_api_url = api_url.rstrip("/")
+        self._resolved_tester_source = source
+
+    def _get_stack_name(self) -> str:
+        return (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+
+    def _get_explicit_tester_target(self) -> Optional[Tuple[str, str]]:
+        explicit_name = (os.getenv(self.TESTER_CONTAINER_ENV) or "").strip()
+        if explicit_name:
+            return explicit_name, f"http://{explicit_name}:8080/api"
+
+        explicit_api_url = (os.getenv("TESTER_MCP_API_URL") or "").strip()
+        if explicit_api_url:
+            parsed = urlparse(explicit_api_url)
+            if parsed.hostname:
+                return parsed.hostname, explicit_api_url.rstrip("/")
+
+        return None
+
+    def _get_default_tester_target(self) -> Tuple[str, str]:
+        explicit_target = self._get_explicit_tester_target()
+        if explicit_target:
+            return explicit_target
+
+        return self.TESTER_CONTAINER_NAME, self.TESTER_API_URL.rstrip("/")
+
+    def _get_tester_container_candidates(self) -> list[str]:
+        stack_name = self._get_stack_name()
+        stack_alias = stack_name[len("tsushin-"):] if stack_name.startswith("tsushin-") else stack_name
+
+        candidates = []
+        explicit_target = self._get_explicit_tester_target()
+        if explicit_target:
+            candidates.append(explicit_target[0])
+
+        for name in (
+            f"{stack_name}-tester-mcp",
+            f"{stack_name}-ui-tester",
+            f"{stack_alias}-ui-tester",
+            self.TESTER_CONTAINER_NAME,
+        ):
+            if name:
+                candidates.append(name)
+
+        deduped: list[str] = []
+        for name in candidates:
+            if name not in deduped:
+                deduped.append(name)
+        return deduped
+
+    def _compose_tester_api_url_for(self, container_name: str) -> str:
+        explicit_target = self._get_explicit_tester_target()
+        if explicit_target:
+            explicit_name, explicit_api_url = explicit_target
+            if container_name == explicit_name:
+                return explicit_api_url.rstrip("/")
+        return f"http://{container_name}:8080/api"
+
+    def _get_compose_tester_container(self) -> Optional[Any]:
+        for container_name in self._get_tester_container_candidates():
+            try:
+                container = self.runtime.get_container(container_name)
+                self._set_tester_target(
+                    container_name,
+                    self._compose_tester_api_url_for(container_name),
+                    "compose",
+                )
+                return container
+            except ContainerNotFoundError:
+                continue
+        return None
+
+    def _require_tester_target(self) -> Tuple[str, str]:
+        tester_container = self._get_tester_container()
+        if tester_container is None:
+            raise RuntimeError("Tester container not found")
+
+        tester_name = self._resolved_tester_name or self.TESTER_CONTAINER_NAME
+        tester_api_url = self._resolved_tester_api_url or self.TESTER_API_URL.rstrip("/")
+        return tester_name, tester_api_url
+
+    def _get_tester_container(self) -> Optional[Any]:
+        """BUG-380: Try compose-managed tester first, then fall back to runtime tester instances."""
+        self._reset_tester_target()
+
+        # Try compose-managed tester
+        compose_tester = self._get_compose_tester_container()
+        if compose_tester is not None:
+            return compose_tester
+
+        # Fall back to runtime-created tester instances (type=tester)
+        if not self.tenant_id:
+            return None
+
+        try:
+            from models import WhatsAppMCPInstance
+            from db import get_db
+            db = next(get_db())
+            try:
+                tester_instance = db.query(WhatsAppMCPInstance).filter(
+                    WhatsAppMCPInstance.tenant_id == self.tenant_id,
+                    WhatsAppMCPInstance.instance_type == "tester",
+                    WhatsAppMCPInstance.status.in_(["running", "starting"]),
+                    WhatsAppMCPInstance.container_name.isnot(None),
+                ).order_by(WhatsAppMCPInstance.id.desc()).first()
+                if tester_instance and tester_instance.container_name:
+                    try:
+                        container = self.runtime.get_container(tester_instance.container_name)
+                        self._set_tester_target(
+                            tester_instance.container_name,
+                            f"http://{tester_instance.container_name}:8080/api",
+                            "runtime",
+                        )
+                        return container
+                    except ContainerNotFoundError:
+                        pass
+            finally:
+                db.close()
+        except Exception as e:
+            logger.debug(f"Runtime tester lookup failed: {e}")
+
+        return None
+
+    def _get_tester_headers(self) -> Dict[str, str]:
+        tester_container = self._get_tester_container()
+        if tester_container is None:
+            return {}
+
+        tester_secret = self._extract_container_env(tester_container).get("MCP_API_SECRET")
+        if not tester_secret:
+            return {}
+
+        from services.mcp_auth_service import get_auth_headers
+        return get_auth_headers(tester_secret)
+
+    def get_tester_status(self) -> Dict[str, Any]:
+        tester_name, tester_api_url = self._get_default_tester_target()
+        tester_status = {
+            "name": tester_name,
+            "api_url": tester_api_url,
+            "status": "unavailable",
+            "container_state": "not_found",
+            "api_reachable": False,
+            "connected": False,
+            "authenticated": False,
+            "needs_reauth": False,
+            "is_reconnecting": False,
+            "reconnect_attempts": 0,
+            "session_age_sec": 0,
+            "last_activity_sec": 0,
+            "container_id": None,
+            "image": None,
+            "error": None,
+            "qr_available": False,
+        }
+
+        tester_container = self._get_tester_container()
+        if self._resolved_tester_name:
+            tester_name = self._resolved_tester_name
+            tester_api_url = self._resolved_tester_api_url or tester_api_url
+            tester_status["name"] = tester_name
+            tester_status["api_url"] = tester_api_url
+            tester_status["source"] = self._resolved_tester_source or "compose"
+        else:
+            tester_status["source"] = "compose"
+
+        if tester_container is None:
+            tester_status["error"] = "Tester container not found"
+            return tester_status
+
+        try:
+            self._ensure_container_on_tsushin_network(tester_name)
+        except Exception:
+            pass
+
+        try:
+            attrs = self.runtime.get_container_attrs(tester_name)
+            tester_status["container_state"] = attrs.get("status", "unknown")
+            tester_status["container_id"] = attrs.get("id")
+            image_tags = attrs.get("image_tags") or []
+            tester_status["image"] = image_tags[0] if image_tags else None
+        except Exception as e:
+            tester_status["error"] = str(e)
+            return tester_status
+
+        if tester_status["container_state"] != "running":
+            tester_status["status"] = "unhealthy"
+            return tester_status
+
+        headers = self._get_tester_headers()
+
+        try:
+            response = requests.get(f"{tester_api_url}/health", headers=headers, timeout=5)
+            if response.status_code != 200:
+                tester_status["status"] = "degraded"
+                tester_status["error"] = f"Tester health returned HTTP {response.status_code}"
+                return tester_status
+
+            payload = response.json()
+            tester_status.update({
+                "status": payload.get("status", "healthy"),
+                "api_reachable": True,
+                "connected": payload.get("connected", False),
+                "authenticated": payload.get("authenticated", False),
+                "needs_reauth": payload.get("needs_reauth", False),
+                "is_reconnecting": payload.get("is_reconnecting", False),
+                "reconnect_attempts": payload.get("reconnect_attempts", 0),
+                "session_age_sec": payload.get("session_age_sec", 0),
+                "last_activity_sec": payload.get("last_activity_sec", 0),
+            })
+        except requests.RequestException as e:
+            tester_status["status"] = "degraded"
+            tester_status["error"] = str(e)
+            return tester_status
+
+        try:
+            qr_response = requests.get(f"{tester_api_url}/qr-code", headers=headers, timeout=5)
+            if qr_response.status_code == 200:
+                tester_status["qr_available"] = bool(qr_response.json().get("qr_code"))
+        except requests.RequestException:
+            pass
+
+        return tester_status
+
+    def get_tester_phone_number(self) -> Optional[str]:
+        tester_container = self._get_tester_container()
+        if tester_container is None:
+            return None
+        env_map = self._extract_container_env(tester_container)
+        phone_number = (env_map.get("PHONE_NUMBER") or "").strip()
+        return phone_number or None
+
+    def get_tester_qr_code(self) -> Optional[str]:
+        _, tester_api_url = self._require_tester_target()
+        headers = self._get_tester_headers()
+        try:
+            response = requests.get(f"{tester_api_url}/qr-code", headers=headers, timeout=10)
+            if response.status_code != 200:
+                return None
+            return response.json().get("qr_code")
+        except requests.RequestException:
+            return None
+
+    def restart_tester(self) -> Dict[str, Any]:
+        tester_name, _ = self._require_tester_target()
+        self.runtime.restart_container(tester_name, timeout=15)
+        return {"success": True, "message": "Tester MCP restarting"}
+
+    def logout_tester(self) -> Dict[str, Any]:
+        return self.reset_tester_auth()
+
+    def reset_tester_auth(self) -> Dict[str, Any]:
+        tester_name, tester_api_url = self._require_tester_target()
+        headers = self._get_tester_headers()
+        logout_error: Optional[str] = None
+
+        try:
+            response = requests.post(f"{tester_api_url}/logout", headers=headers, timeout=10)
+            if response.status_code == 200:
+                return response.json()
+            logout_error = f"Tester logout failed with HTTP {response.status_code}"
+        except requests.RequestException as exc:
+            logout_error = str(exc)
+
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        cleanup_cmd = [
+            "sh",
+            "-lc",
+            (
+                "if [ -f /app/store/whatsapp.db ]; then "
+                f"cp /app/store/whatsapp.db /app/store/whatsapp.db.backup.{timestamp}; "
+                "fi; "
+                "rm -f /app/store/whatsapp.db /app/store/whatsapp.db-shm /app/store/whatsapp.db-wal"
+            ),
+        ]
+
+        try:
+            result = self.runtime.exec_run(tester_name, cleanup_cmd, user="root")
+            exit_code = getattr(result, "exit_code", 0)
+            if exit_code not in (0, None):
+                output = getattr(result, "output", b"")
+                if isinstance(output, bytes):
+                    output = output.decode("utf-8", errors="ignore")
+                raise RuntimeError(output or "unknown tester cleanup error")
+            self.runtime.restart_container(tester_name, timeout=15)
+            return {
+                "success": True,
+                "message": "Tester authentication reset via filesystem cleanup",
+                "fallback_error": logout_error,
+            }
+        except (ContainerNotFoundError, ContainerRuntimeError, RuntimeError) as exc:
+            raise RuntimeError(logout_error or str(exc))
+
+    def health_check(self, instance: WhatsAppMCPInstance, db: Optional[Session] = None) -> Dict[str, any]:
         """
         Check container and API health with enhanced session monitoring
 
@@ -863,24 +1331,18 @@ class MCPContainerManager:
             'last_activity_sec': 0
         }
 
-        container = None
+        container_ref = None
 
         try:
-            # 1. Check container status - try by ID first, then by name
-            try:
-                container = self.docker.containers.get(instance.container_id)
-                logger.debug(f"Found container by ID: {instance.container_id}")
-            except docker.errors.NotFound:
-                # Try by container name as fallback (more robust to ID changes)
-                try:
-                    container = self.docker.containers.get(instance.container_name)
-                    logger.info(f"Found container by name (ID was stale): {instance.container_name}")
-                except docker.errors.NotFound:
-                    raise docker.errors.NotFound(f"Container not found by ID or name")
+            self.reconcile_instance(instance, db)
+
+            # 1. Check container status - recover cleanly from missing/stale container_id
+            _, container_ref = self._resolve_container(instance, db)
+            if not container_ref:
+                raise ContainerNotFoundError("Container not found by ID or name")
 
             # Get container state with detailed info
-            container.reload()  # Refresh container attributes
-            container_state = container.status  # running, exited, restarting, paused, dead, created
+            container_state = self.runtime.get_container_status(container_ref)
             health_data['container_state'] = container_state
 
             logger.debug(f"Container {instance.container_name} state: {container_state}")
@@ -892,7 +1354,7 @@ class MCPContainerManager:
                 return health_data
 
             # 2.5. Ensure container is on the correct network (self-healing)
-            self._ensure_container_on_tsushin_network(container)
+            self._ensure_container_on_tsushin_network(container_ref)
 
             # 3. Check API health endpoint with retry logic
             api_healthy = False
@@ -928,21 +1390,21 @@ class MCPContainerManager:
                             # Alert if re-authentication is needed
                             if health_data['needs_reauth']:
                                 logger.warning(
-                                    f"⚠️  MCP instance {instance.id} ({instance.phone_number}) requires re-authentication. "
+                                    f"MCP instance {instance.id} ({instance.phone_number}) requires re-authentication. "
                                     f"QR code scan needed."
                                 )
 
                             # Alert if reconnection attempts are high
                             if health_data['reconnect_attempts'] >= 5:
                                 logger.warning(
-                                    f"⚠️  MCP instance {instance.id} ({instance.phone_number}) has {health_data['reconnect_attempts']} "
+                                    f"MCP instance {instance.id} ({instance.phone_number}) has {health_data['reconnect_attempts']} "
                                     f"reconnection attempts. Session may be unstable."
                                 )
 
                             # Alert if session has been inactive for too long (>5 minutes)
                             if health_data['last_activity_sec'] > 300:
                                 logger.warning(
-                                    f"⚠️  MCP instance {instance.id} ({instance.phone_number}) has been inactive for "
+                                    f"MCP instance {instance.id} ({instance.phone_number}) has been inactive for "
                                     f"{health_data['last_activity_sec']//60} minutes."
                                 )
 
@@ -988,15 +1450,28 @@ class MCPContainerManager:
             else:
                 health_data['status'] = 'unhealthy'
 
-        except docker.errors.NotFound:
+        except ContainerNotFoundError:
             health_data['status'] = 'unavailable'
             health_data['container_state'] = 'not_found'
-            health_data['error'] = 'Container not found'
+            health_data['error'] = 'Container not found. Verify the WhatsApp container is still present or restart the instance.'
             logger.error(f"Container not found for instance {instance.id} (id={instance.container_id}, name={instance.container_name})")
 
-        except docker.errors.APIError as e:
+        except ContainerRuntimeError as e:
             health_data['status'] = 'error'
             health_data['error'] = str(e)
-            logger.error(f"Docker API error for instance {instance.id}: {e}")
+            logger.error(f"Runtime error for instance {instance.id}: {e}")
 
         return health_data
+
+    def reconcile_all_instances(self, db: Session) -> Dict[int, Dict[str, Any]]:
+        """Repair stale metadata for every WhatsApp MCP instance row."""
+        reconciled: Dict[int, Dict[str, Any]] = {}
+        instances = db.query(WhatsAppMCPInstance).all()
+        for instance in instances:
+            changes = self.reconcile_instance(instance, db=None)
+            if changes:
+                reconciled[instance.id] = changes
+        if reconciled:
+            db.commit()
+            logger.info(f"Reconciled {len(reconciled)} WhatsApp MCP instance(s) at startup")
+        return reconciled

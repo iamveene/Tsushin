@@ -1,8 +1,6 @@
 # Tester WhatsApp MCP
 
-**Phase 9: Application Containerization**
-
-A containerized WhatsApp MCP instance dedicated for QA testing and agent validation.
+A standalone or legacy WhatsApp MCP surface dedicated to QA testing and agent validation.
 
 ## Overview
 
@@ -12,49 +10,43 @@ The Tester WhatsApp MCP provides an isolated WhatsApp bridge for:
 - Message inspection and verification
 - Agent function testing
 
-## Usage
+The current repository root compose stack does **not** define a `tester-mcp` service or a `testing` profile. In current Tsushin builds, Hub tester controls prefer a legacy standalone `tester-mcp` container when present and otherwise target the tenant's active runtime tester instance.
 
-### With Docker Compose (Recommended)
-
-```bash
-# Start with testing profile
-docker compose --profile testing up -d
-
-# View logs
-docker compose logs -f tester-mcp
-```
-
-### Standalone
+## Standalone Usage
 
 ```bash
-# Build
-docker build -t tsushin/tester-mcp:latest .
+# Build from the repository root
+docker build -t tsushin/tester-mcp:latest backend/tester-mcp
 
 # Run
 docker run -d \
   --name tester-mcp \
   -p 8088:8080 \
-  -v ./store:/app/store \
-  tsushin/tester-mcp:latest
+  -e MCP_API_SECRET=change-me \
+  -v "$(pwd)/backend/tester-mcp/store:/app/store" \
+  tsushin/tester-mcp:latest \
+  --port 8080
 ```
 
 ## Configuration
 
-| Environment Variable | Description | Default |
-|---------------------|-------------|---------|
-| `PHONE_NUMBER` | WhatsApp phone number for tester | - |
-| `PORT` | Internal port (container) | 8080 |
+| Setting | Type | Description | Default |
+|--------|------|-------------|---------|
+| `--port` | CLI flag | REST API port exposed by the Go service inside the container | `8080` |
+| `MCP_API_SECRET` | Environment variable | Optional Bearer token that protects API endpoints when set | unset |
 
 ## API Endpoints
 
-- `GET /health` - Health check
+- `GET /api/health` - Health check
 - `POST /api/send` - Send message
 - `POST /api/download` - Download media
 - `GET /api/qr-code` - Get QR code for authentication
 
+If `MCP_API_SECRET` is set, protected endpoints require `Authorization: Bearer <token>`.
+
 ## QA Integration
 
-When enabled in the Hub configuration, this MCP instance can be used for:
+When enabled in the Hub configuration, this surface can be used for:
 1. Sending test messages to agents
 2. Verifying agent responses
 3. Testing scheduled conversations

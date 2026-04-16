@@ -3,9 +3,10 @@ Contact Service - Handles user/agent identification and mention detection
 Phase 4.2: Contact Management System
 """
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from sqlalchemy.orm import Session
-from models import Contact
+from sqlalchemy import or_
+from models import Contact, ContactChannelMapping
 import re
 
 
@@ -15,8 +16,17 @@ class ContactService:
     Provides mention detection and user recognition capabilities.
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, tenant_id: Optional[str] = None):
+        """
+        V060-CHN-006: tenant_id scopes all contact queries to a single tenant.
+        Optional for backwards-compat with legacy call sites, but queries that
+        touch Contact/ContactChannelMapping will ALWAYS filter by tenant_id
+        when it is set. When unset, queries remain broad — callers that haven't
+        been upgraded yet preserve legacy behavior (log a warning if caller can
+        access other tenants' contacts).
+        """
         self.db = db
+        self.tenant_id = tenant_id
         # CACHE REMOVED: Query database directly for reliability
         # No more stale data issues after updates
 
@@ -24,19 +34,25 @@ class ContactService:
         """No-op: Cache removed, queries are always fresh"""
         pass
 
+    def _apply_tenant_filter(self, query):
+        """V060-CHN-006: Scope Contact queries to self.tenant_id when set."""
+        if self.tenant_id:
+            return query.filter(Contact.tenant_id == self.tenant_id)
+        return query
+
     def get_agent_contacts(self) -> List[Contact]:
         """Get all active agent contacts"""
-        return self.db.query(Contact).filter(
+        return self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.role == "agent"
-        ).all()
+        )).all()
 
     def get_user_contacts(self) -> List[Contact]:
         """Get all active user contacts"""
-        return self.db.query(Contact).filter(
+        return self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.role == "user"
-        ).all()
+        )).all()
 
     def get_dm_trigger_contacts(self) -> List[Contact]:
         """
@@ -46,10 +62,10 @@ class ContactService:
         Returns:
             List of Contact objects with is_dm_trigger enabled
         """
-        return self.db.query(Contact).filter(
+        return self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.is_dm_trigger == True
-        ).all()
+        )).all()
 
     def identify_sender(self, sender: str, sender_name: str = None) -> Optional[Contact]:
         """
@@ -65,21 +81,53 @@ class ContactService:
         # Normalize sender (remove + prefix)
         sender_normalized = sender.lstrip("+")
 
-        # Search by phone number (query database directly)
-        contact = self.db.query(Contact).filter(
+        # Search by phone number (query database directly) — V060-CHN-006 tenant scoped
+        contact = self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.phone_number.like(f"%{sender_normalized}")
-        ).first()
+        )).first()
         if contact:
             return contact
 
-        # Search by WhatsApp ID (query database directly)
-        contact = self.db.query(Contact).filter(
+        # Search by WhatsApp ID (query database directly) — V060-CHN-006 tenant scoped
+        contact = self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
             Contact.whatsapp_id == sender_normalized
-        ).first()
+        )).first()
+        if contact:
+            return contact
 
-        return contact
+        # Fallback: Search by channel mapping (supports Slack, Discord, etc.)
+        return self._lookup_by_channel_mapping(sender_normalized) or self._lookup_by_channel_mapping(sender)
+
+    def _lookup_by_channel_mapping(self, identifier: str) -> Optional[Contact]:
+        """
+        Lookup contact via ContactChannelMapping table.
+        Handles both exact matches (Discord snowflake) and composite
+        identifiers (Slack workspace_id:user_id).
+        V060-CHN-006: scoped to self.tenant_id when set.
+        """
+        if not identifier:
+            return None
+
+        mapping_q = self.db.query(ContactChannelMapping).filter(
+            or_(
+                ContactChannelMapping.channel_identifier == identifier,
+                ContactChannelMapping.channel_identifier.like(f"%:{identifier}")
+            )
+        )
+        if self.tenant_id:
+            mapping_q = mapping_q.filter(ContactChannelMapping.tenant_id == self.tenant_id)
+        mapping = mapping_q.first()
+
+        if mapping:
+            contact = self._apply_tenant_filter(self.db.query(Contact).filter(
+                Contact.id == mapping.contact_id,
+                Contact.is_active == True
+            )).first()
+            return contact
+
+        return None
 
     def detect_mentions(self, message_body: str) -> List[Contact]:
         """
@@ -117,8 +165,10 @@ class ContactService:
         """
         mention_normalized = mention.lstrip("+").lower()
 
-        # Get all active contacts (query database directly)
-        contacts = self.db.query(Contact).filter(Contact.is_active == True).all()
+        # Get all active contacts (query database directly) — V060-CHN-006 tenant scoped
+        contacts = self._apply_tenant_filter(
+            self.db.query(Contact).filter(Contact.is_active == True)
+        ).all()
 
         for contact in contacts:
             # Check friendly name (case-insensitive)
@@ -183,6 +233,40 @@ class ContactService:
         for contact in mentioned:
             if contact.role == "agent":
                 return contact
+        return None
+
+    def extract_mention_and_command(self, message_body: str) -> Optional[Tuple[Contact, str]]:
+        """
+        Extract an agent mention followed by a slash command from a message.
+
+        Supports patterns:
+          @agentname /command args
+          @agentname /tool name cmd params
+
+        Returns:
+            Tuple of (agent_contact, slash_command_text) or None
+        """
+        # Match @mention followed by /command
+        pattern = r'^@([\w+]+)\s+(/\S+.*)$'
+        match = re.match(pattern, message_body.strip(), re.DOTALL)
+        if not match:
+            return None
+
+        mention_name = match.group(1)
+        command_text = match.group(2).strip()
+
+        # Resolve mention to an agent contact using existing detection logic
+        # Use the same resolution as detect_mentions but for a single name
+        contacts = self.detect_mentions(f"@{mention_name}")
+        agent_contact = None
+        for contact in contacts:
+            if contact.role == "agent":
+                agent_contact = contact
+                break
+
+        if agent_contact:
+            return (agent_contact, command_text)
+
         return None
 
     def format_contacts_for_context(self, agent_id: Optional[int] = None) -> str:

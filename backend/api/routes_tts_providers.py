@@ -152,10 +152,10 @@ def list_tts_providers(
             for p in providers
         ]
     except Exception as e:
-        logger.error(f"Failed to list TTS providers: {e}")
+        logger.exception(f"Failed to list TTS providers: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list providers: {str(e)}"
+            detail="Failed to list providers. Check server logs for details."
         )
 
 
@@ -184,10 +184,10 @@ async def get_provider_status(
             details=status_result.details
         )
     except Exception as e:
-        logger.error(f"Failed to get provider status: {e}")
+        logger.exception(f"Failed to get provider status: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get provider status: {str(e)}"
+            detail="Failed to get provider status. Check server logs for details."
         )
 
 
@@ -226,10 +226,10 @@ def get_provider_voices(
             for v in voices
         ]
     except Exception as e:
-        logger.error(f"Failed to get provider voices: {e}")
+        logger.exception(f"Failed to get provider voices: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get voices: {str(e)}"
+            detail="Failed to get voices. Check server logs for details."
         )
 
 
@@ -447,8 +447,8 @@ def get_kokoro_voices_by_language(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get Kokoro voices: {e}")
+        logger.exception(f"Failed to get Kokoro voices: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get voices: {str(e)}"
+            detail="Failed to get voices. Check server logs for details."
         )

@@ -27,7 +27,8 @@ repos:
         name: check for merge conflicts
       - id: check-yaml
         name: check yaml syntax
-        exclude: ^(frontend/node_modules/|backend/venv/)
+        args: ['--unsafe']
+        exclude: ^(frontend/node_modules/|backend/venv/|k8s/.*/templates/)
       - id: detect-private-key
         name: detect private keys
       - id: end-of-file-fixer

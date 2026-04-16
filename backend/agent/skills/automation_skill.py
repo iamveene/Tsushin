@@ -42,7 +42,7 @@ class AutomationSkill(BaseSkill):
     skill_type = "automation"
     skill_name = "Automation"
     skill_description = "Multi-step workflow automation and process orchestration"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     def __init__(self):
         """Initialize the automation skill."""
@@ -74,8 +74,12 @@ class AutomationSkill(BaseSkill):
         Returns:
             True if message is automation-related, False otherwise
         """
+        config = getattr(self, '_config', {}) or {}
+        if not self.is_legacy_enabled(config):
+            return False
+
         # Check if skill is enabled in config
-        if not self._config.get('is_enabled', True):
+        if not config.get('is_enabled', True):
             return False
 
         body_lower = message.body.lower()
@@ -607,6 +611,8 @@ Need more help? Check the documentation or use `/help automation`
                 )
 
             flow_identifier = arguments.get("flow_identifier")
+            if isinstance(flow_identifier, str):
+                flow_identifier = flow_identifier.strip().strip('"').strip("'")
             if not flow_identifier:
                 return SkillResult(
                     success=False,

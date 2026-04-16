@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tsushin.fullname" . }}-backend
+  namespace: {{ include "tsushin.namespace" . }}
+  labels:
+    {{- include "tsushin.backend.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.backend.hpa.enabled }}
+  replicas: {{ .Values.backend.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "tsushin.backend.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "tsushin.backend.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "tsushin.backend.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 30
+
+      # -----------------------------------------------------------------------
+      # Init container — run Alembic migrations before the app starts
+      # -----------------------------------------------------------------------
+      {{- if .Values.migration.enabled }}
+      initContainers:
+        - name: migrate
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          command: ["python", "-m", "alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "tsushin.configMapName" . }}
+            - secretRef:
+                name: {{ include "tsushin.secretName" . }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      {{- end }}
+
+      containers:
+        # ---------------------------------------------------------------------
+        # Backend application container
+        # ---------------------------------------------------------------------
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "tsushin.configMapName" . }}
+            - secretRef:
+                name: {{ include "tsushin.secretName" . }}
+          {{- if .Values.cloudsql.enabled }}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tsushin.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: "postgresql://tsushin:$(POSTGRES_PASSWORD)@127.0.0.1:{{ .Values.cloudsql.port }}/tsushin"
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: logs
+              mountPath: /app/logs
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.backend.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.backend.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.probes.readiness.failureThreshold }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.backend.probes.startup.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.probes.startup.failureThreshold }}
+
+        # ---------------------------------------------------------------------
+        # Cloud SQL Proxy sidecar
+        # ---------------------------------------------------------------------
+        {{- if .Values.cloudsql.enabled }}
+        - name: cloud-sql-proxy
+          image: {{ .Values.cloudsql.image }}
+          args:
+            - {{ .Values.cloudsql.instanceConnectionName | quote }}
+            - "--port={{ .Values.cloudsql.port }}"
+            - "--auto-iam-authn"
+          ports:
+            - name: cloudsql
+              containerPort: {{ .Values.cloudsql.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.cloudsql.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+        {{- end }}
+
+      volumes:
+        - name: data
+          {{- if .Values.persistence.data.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tsushin.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: logs
+          emptyDir: {}

@@ -42,7 +42,20 @@ class FlightSearchSkill(BaseSkill):
     skill_type = "flight_search"
     skill_name = "Flight Search"
     skill_description = "Search for flights using configured provider (Amadeus, Skyscanner, etc.)"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
+
+    def _resolve_tenant_id(self) -> Optional[str]:
+        """Resolve tenant_id from agent context for API key lookups."""
+        agent_id = getattr(self, '_agent_id', None)
+        if agent_id and self._db_session:
+            try:
+                from models import Agent
+                agent = self._db_session.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    return agent.tenant_id
+            except Exception:
+                pass
+        return None
 
     def __init__(self, db: Optional[Session] = None, provider_name: str = "amadeus"):
         """
@@ -125,9 +138,9 @@ class FlightSearchSkill(BaseSkill):
             if not self._db_session:
                 from sqlalchemy.orm import sessionmaker
                 from db import get_engine
-                import os
+                import settings
 
-                engine = get_engine(os.getenv("INTERNAL_DB_PATH", "./data/agent.db"))
+                engine = get_engine(settings.DATABASE_URL)
                 SessionLocal = sessionmaker(bind=engine)
                 self._db_session = SessionLocal()
 
@@ -167,6 +180,7 @@ class FlightSearchSkill(BaseSkill):
                 adults=parameters.get('adults', 1),
                 currency=parameters.get('currency', provider_settings.get('default_currency', 'BRL')),
                 max_results=provider_settings.get('max_results', 5),
+                sort_by=parameters.get('sort_by', 'best'),
                 provider_name=provider_name
             )
 
@@ -209,6 +223,7 @@ class FlightSearchSkill(BaseSkill):
         adults: int = 1,
         currency: str = "BRL",
         max_results: int = 5,
+        sort_by: str = "best",
         provider_name: Optional[str] = None
     ) -> Dict:
         """
@@ -260,7 +275,8 @@ class FlightSearchSkill(BaseSkill):
                 return_date=return_date,
                 adults=adults,
                 currency=currency,
-                max_results=max_results
+                max_results=max_results,
+                sort_by=sort_by
             )
 
             # Execute search
@@ -318,7 +334,9 @@ class FlightSearchSkill(BaseSkill):
             ai_client = AIClient(
                 provider=skill_config.get('model_provider', 'gemini'),
                 model_name=skill_config.get('model_name', 'gemini-2.5-flash'),
-                db=self._db_session
+                db=self._db_session,
+                token_tracker=self._token_tracker,
+                tenant_id=self._resolve_tenant_id()
             )
 
             system_prompt = """You are a flight search parameter extractor. Parse flight requests and return ONLY valid JSON."""
@@ -332,7 +350,8 @@ Return ONLY a JSON object with these fields (no other text):
     "departure_date": "YYYY-MM-DD",
     "return_date": "YYYY-MM-DD or null for one-way trips",
     "adults": number of passengers (1-9, default 1 if not specified),
-    "currency": "3-letter currency code"
+    "currency": "3-letter currency code",
+    "sort_by": "'best' or 'cheapest' (default 'best')"
 }}
 
 Common airport codes:
@@ -346,27 +365,31 @@ Passenger count patterns (Portuguese):
 - "para mim e minha esposa" / "eu e mais uma pessoa" → adults: 2
 - No mention of passengers → adults: 1 (default)
 
+Sort preference patterns:
+- "cheapest" / "lowest price" / "mais barato" / "mais baratos" / "menor preço" → sort_by: "cheapest"
+- "best" / "melhor" / "melhores" / no mention of sort preference → sort_by: "best"
+
 Examples:
 
 1. One-way, 1 passenger (English):
    "Flights from London to New York on Feb 28"
-   → {{"origin": "LHR", "destination": "JFK", "departure_date": "2026-02-28", "return_date": null, "adults": 1, "currency": "USD"}}
+   → {{"origin": "LHR", "destination": "JFK", "departure_date": "2026-02-28", "return_date": null, "adults": 1, "currency": "USD", "sort_by": "best"}}
 
 2. Round-trip, 1 passenger (Portuguese):
    "Voos de São Paulo para Buenos Aires dia 15/03, volta dia 20/03"
-   → {{"origin": "GRU", "destination": "EZE", "departure_date": "2026-03-15", "return_date": "2026-03-20", "adults": 1, "currency": "BRL"}}
+   → {{"origin": "GRU", "destination": "EZE", "departure_date": "2026-03-15", "return_date": "2026-03-20", "adults": 1, "currency": "BRL", "sort_by": "best"}}
 
 3. Round-trip, 2 passengers (Portuguese):
    "busque voos para dois passageiros saindo de VIX para FCO dia 4 de Junho de 2026 volta dia 22 de Junho de 2026 em BRL"
-   → {{"origin": "VIX", "destination": "FCO", "departure_date": "2026-06-04", "return_date": "2026-06-22", "adults": 2, "currency": "BRL"}}
+   → {{"origin": "VIX", "destination": "FCO", "departure_date": "2026-06-04", "return_date": "2026-06-22", "adults": 2, "currency": "BRL", "sort_by": "best"}}
 
-4. One-way, 1 passenger (Portuguese):
-   "busque voos saindo de VIX para FCO dia 4 de Junho de 2026 em BRL"
-   → {{"origin": "VIX", "destination": "FCO", "departure_date": "2026-06-04", "return_date": null, "adults": 1, "currency": "BRL"}}
+4. One-way, cheapest (Portuguese):
+   "busque os voos mais baratos saindo de VIX para FCO dia 4 de Junho de 2026 em BRL"
+   → {{"origin": "VIX", "destination": "FCO", "departure_date": "2026-06-04", "return_date": null, "adults": 1, "currency": "BRL", "sort_by": "cheapest"}}
 
-5. Round-trip, 3 passengers (English):
-   "Find flights for 3 adults from NYC to LAX on March 10 returning March 17"
-   → {{"origin": "JFK", "destination": "LAX", "departure_date": "2026-03-10", "return_date": "2026-03-17", "adults": 3, "currency": "USD"}}
+5. Round-trip, cheapest (English):
+   "Find the cheapest flights for 3 adults from NYC to LAX on March 10 returning March 17"
+   → {{"origin": "JFK", "destination": "LAX", "departure_date": "2026-03-10", "return_date": "2026-03-17", "adults": 3, "currency": "USD", "sort_by": "cheapest"}}
 
 Current date: {datetime.now().strftime('%Y-%m-%d')}
 
@@ -493,6 +516,12 @@ Return JSON only:"""
                         "type": "string",
                         "description": "Currency code for prices (e.g., 'USD', 'BRL', 'EUR')",
                         "default": "BRL"
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["best", "cheapest"],
+                        "description": "Sort order: 'best' (Google's algorithm balancing price, duration, stops) or 'cheapest' (lowest price first)",
+                        "default": "best"
                     }
                 },
                 "required": ["origin", "destination", "departure_date"]
@@ -536,6 +565,7 @@ Return JSON only:"""
         return_date = arguments.get("return_date")
         passengers = arguments.get("passengers", 1)
         currency = arguments.get("currency", config.get("settings", {}).get("default_currency", "BRL"))
+        sort_by = arguments.get("sort_by", "best")
 
         # Validate required arguments
         if not origin:
@@ -566,9 +596,9 @@ Return JSON only:"""
             if not self._db_session:
                 from sqlalchemy.orm import sessionmaker
                 from db import get_engine
-                import os
+                import settings
 
-                engine = get_engine(os.getenv("INTERNAL_DB_PATH", "./data/agent.db"))
+                engine = get_engine(settings.DATABASE_URL)
                 SessionLocal = sessionmaker(bind=engine)
                 self._db_session = SessionLocal()
 
@@ -598,6 +628,7 @@ Return JSON only:"""
                 adults=passengers,
                 currency=currency,
                 max_results=max_results,
+                sort_by=sort_by,
                 provider_name=provider_name
             )
 
@@ -670,14 +701,7 @@ Return JSON only:"""
         """
         return {
             "execution_mode": "hybrid",
-            "keywords": [
-                # English
-                "flight", "flights", "fly", "airfare", "airline", "airplane",
-                "plane ticket", "air ticket", "book flight",
-                # Portuguese
-                "voo", "voos", "passagem", "passagens", "aérea", "aéreas",
-                "voar", "avião", "companhia aérea", "bilhete aéreo"
-            ],
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "provider": "google_flights",  # Default provider - uses SerpApi

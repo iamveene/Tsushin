@@ -6,6 +6,7 @@ Implementation of FlightSearchProvider interface for Google Flights.
 import logging
 import httpx
 import json
+import re
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -82,6 +83,50 @@ class GoogleFlightsProvider(FlightSearchProvider):
     def get_provider_name(self) -> str:
         return "google_flights"
 
+    @staticmethod
+    def _normalize_date(date_str: str) -> str:
+        """
+        Normalize a date string to YYYY-MM-DD format.
+
+        SerpApi requires outbound_date/return_date in strict YYYY-MM-DD format.
+        LLM-extracted dates may arrive with surrounding quotes, whitespace, or
+        other non-date characters (e.g. "'2026-04-07'" or '"2026-04-07"').
+
+        Args:
+            date_str: Raw date string to normalize
+
+        Returns:
+            Cleaned date string in YYYY-MM-DD format
+
+        Raises:
+            ValueError: If the date cannot be parsed into YYYY-MM-DD
+        """
+        if not date_str:
+            raise ValueError("Date string is empty or None")
+
+        # Strip whitespace and surrounding quotes (single, double, backticks)
+        cleaned = date_str.strip().strip("'\"`").strip()
+
+        # Try strict YYYY-MM-DD match first (most common case)
+        match = re.search(r'(\d{4}-\d{2}-\d{2})', cleaned)
+        if match:
+            candidate = match.group(1)
+            # Validate it's a real date
+            datetime.strptime(candidate, "%Y-%m-%d")
+            return candidate
+
+        # Try other common date formats
+        for fmt in ("%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y", "%m-%d-%Y", "%m/%d/%Y"):
+            try:
+                parsed = datetime.strptime(cleaned, fmt)
+                return parsed.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+
+        raise ValueError(
+            f"Cannot parse date '{date_str}' (cleaned: '{cleaned}') into YYYY-MM-DD format"
+        )
+
     async def search_flights(self, request: FlightSearchRequest) -> FlightSearchResponse:
         """
         Execute flight search using SerpApi (Google Flights Engine).
@@ -91,12 +136,26 @@ class GoogleFlightsProvider(FlightSearchProvider):
             self.search_request = request
 
             # 1. Prepare Parameters
+            # BUG-316 fix: Normalize dates to strict YYYY-MM-DD before sending to SerpApi.
+            # LLM-extracted dates may arrive with surrounding quotes or extra characters.
+            try:
+                normalized_departure = self._normalize_date(request.departure_date)
+            except ValueError as e:
+                logger.error(f"Invalid departure_date '{request.departure_date}': {e}")
+                return FlightSearchResponse(
+                    success=False,
+                    offers=[],
+                    provider=self.provider_name,
+                    search_request=request,
+                    error=f"Invalid departure date format: {request.departure_date}. Expected YYYY-MM-DD."
+                )
+
             params = {
                 "engine": "google_flights",
                 "api_key": self.api_key,
                 "departure_id": request.origin,
                 "arrival_id": request.destination,
-                "outbound_date": request.departure_date,
+                "outbound_date": normalized_departure,
                 "currency": request.currency or self.currency,
                 "hl": self.hl,
                 "adults": request.adults,
@@ -107,6 +166,10 @@ class GoogleFlightsProvider(FlightSearchProvider):
                                                                 # SerpApi documentation says: stops: 0 (Any), 1 (Nonstop), 2 (1 stop), 3 (2 stops)
                                                                 # Let's assume prefer_direct means "Nonstop" -> stops=1
             }
+
+            # Sort order: 1 = Best (default), 2 = Price (cheapest first)
+            sort_map = {"best": "1", "cheapest": "2"}
+            params["sort_by"] = sort_map.get(request.sort_by, "1")
 
             # SerpApi is sensitive to locale on some routes (e.g., VIX ↔ FCO round-trip).
             # Use Brazil locale when currency or language indicates PT/BR.
@@ -119,7 +182,19 @@ class GoogleFlightsProvider(FlightSearchProvider):
                 params["stops"] = "1"
 
             if request.return_date:
-                params["return_date"] = request.return_date
+                # BUG-316 fix: Normalize return_date as well
+                try:
+                    normalized_return = self._normalize_date(request.return_date)
+                except ValueError as e:
+                    logger.error(f"Invalid return_date '{request.return_date}': {e}")
+                    return FlightSearchResponse(
+                        success=False,
+                        offers=[],
+                        provider=self.provider_name,
+                        search_request=request,
+                        error=f"Invalid return date format: {request.return_date}. Expected YYYY-MM-DD."
+                    )
+                params["return_date"] = normalized_return
                 params["type"] = "1" # Round trip
             else:
                 params["type"] = "2" # One way
@@ -164,8 +239,10 @@ class GoogleFlightsProvider(FlightSearchProvider):
 
                 # 4. For round-trip, fetch return flights for top offers
                 if request.return_date and offers:
-                    # Limit to top N offers to avoid too many API calls
-                    max_return_lookups = min(request.max_results, 5)
+                    # Cast a wider net: fetch returns for more outbound options
+                    # to find cheaper outbound+return pairings, especially in
+                    # "cheapest" mode.  We cap API calls at 10 to stay reasonable.
+                    max_return_lookups = min(len(offers), 10)
 
                     for offer in offers[:max_return_lookups]:
                         if hasattr(offer, '_departure_token') and offer._departure_token:
@@ -174,9 +251,17 @@ class GoogleFlightsProvider(FlightSearchProvider):
                                     request, offer._departure_token, client
                                 )
                                 if return_data:
-                                    self._populate_return_info(offer, return_data)
+                                    self._populate_return_info(
+                                        offer, return_data,
+                                        pick_cheapest=request.sort_by == "cheapest"
+                                    )
                             except Exception as e:
                                 logger.warning(f"Failed to fetch return flights: {e}")
+
+                    # Re-sort by total price when in cheapest mode so the
+                    # cheapest outbound+return combos float to the top.
+                    if request.sort_by == "cheapest":
+                        offers.sort(key=lambda o: o.price)
 
                 return FlightSearchResponse(
                     success=True,
@@ -300,18 +385,21 @@ class GoogleFlightsProvider(FlightSearchProvider):
         """Fetch return flight options using the departure_token from outbound search."""
         try:
             # SerpApi requires base parameters + departure_token for return flights
+            sort_map = {"best": "1", "cheapest": "2"}
+            # BUG-316 fix: Normalize dates for return flight lookup as well
             params = {
                 "engine": "google_flights",
                 "api_key": self.api_key,
                 "departure_id": request.origin,
                 "arrival_id": request.destination,
-                "outbound_date": request.departure_date,
-                "return_date": request.return_date,
+                "outbound_date": self._normalize_date(request.departure_date),
+                "return_date": self._normalize_date(request.return_date),
                 "departure_token": departure_token,
                 "currency": request.currency or self.currency,
                 "hl": self.hl,
                 "type": "1",  # Round trip
                 "adults": request.adults,
+                "sort_by": sort_map.get(request.sort_by, "1"),
             }
 
             logger.debug(f"Fetching return flights with token: {departure_token[:50]}...")
@@ -334,18 +422,48 @@ class GoogleFlightsProvider(FlightSearchProvider):
             logger.warning(f"Exception fetching return flights: {e}")
             return None
 
-    def _populate_return_info(self, offer: FlightOffer, return_data: Dict) -> None:
-        """Populate return flight information in the offer from fetched data."""
-        try:
-            # Get the best return flight option
-            return_flights = return_data.get("best_flights", []) or return_data.get("other_flights", [])
+    def _populate_return_info(self, offer: FlightOffer, return_data: Dict,
+                              pick_cheapest: bool = False) -> None:
+        """Populate return flight information in the offer from fetched data.
 
-            if not return_flights:
+        Args:
+            offer: The outbound FlightOffer to populate with return info.
+            return_data: Raw SerpApi response for the return leg.
+            pick_cheapest: When True, scan all return options (best + other)
+                           and select the one with the lowest price, then
+                           update the offer's total price to reflect the
+                           cheapest outbound+return combination.
+        """
+        try:
+            best_returns = return_data.get("best_flights", [])
+            other_returns = return_data.get("other_flights", [])
+
+            if not best_returns and not other_returns:
                 logger.debug("No return flights found in response")
                 return
 
-            # Use the first (best) return option
-            best_return = return_flights[0]
+            if pick_cheapest:
+                # Scan ALL return options and pick cheapest by price
+                all_returns = best_returns + other_returns
+                priced = [r for r in all_returns if r.get("price")]
+                if priced:
+                    best_return = min(priced, key=lambda r: float(r["price"]))
+                    # Update offer total price: SerpApi return price is the
+                    # round-trip total for this outbound+return pair.
+                    best_return_price = float(best_return["price"])
+                    if best_return_price > 0 and best_return_price != offer.price:
+                        logger.info(
+                            f"Cheapest return pairing: {offer.price:.0f} -> "
+                            f"{best_return_price:.0f} (saved {offer.price - best_return_price:.0f})"
+                        )
+                        offer.price = best_return_price
+                else:
+                    # No priced returns — fall back to first available
+                    best_return = (best_returns or other_returns)[0]
+            else:
+                # Default: use the first (best) return option
+                return_flights = best_returns or other_returns
+                best_return = return_flights[0]
             flights_data = best_return.get("flights", [])
 
             if not flights_data:

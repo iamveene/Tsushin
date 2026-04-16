@@ -124,16 +124,18 @@ class TTSProvider(ABC):
     between different providers without code changes.
     """
 
-    def __init__(self, db=None, token_tracker=None):
+    def __init__(self, db=None, token_tracker=None, tenant_id=None):
         """
         Initialize provider.
 
         Args:
             db: Database session (optional, for API key lookup)
             token_tracker: TokenTracker instance for usage tracking
+            tenant_id: Tenant ID for multi-tenant API key isolation
         """
         self.db = db
         self.token_tracker = token_tracker
+        self.tenant_id = tenant_id
         self.provider_name = self.get_provider_name()
         self.logger = logging.getLogger(f"{__name__}.{self.provider_name}")
 

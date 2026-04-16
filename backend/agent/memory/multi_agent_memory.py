@@ -36,7 +36,8 @@ class MultiAgentMemoryManager:
         self,
         db_session: Session,
         config: Dict,
-        base_chroma_dir: str = "./data/chroma"
+        base_chroma_dir: str = "./data/chroma",
+        token_tracker=None
     ):
         """
         Initialize multi-agent memory manager.
@@ -45,11 +46,13 @@ class MultiAgentMemoryManager:
             db_session: Database session for persistence
             config: Configuration dictionary with memory settings
             base_chroma_dir: Base directory for ChromaDB collections
+            token_tracker: Optional TokenTracker for LLM cost monitoring (Phase 0.6.0)
         """
         self.logger = logging.getLogger(__name__)
         self.db = db_session
         self.config = config
         self.base_chroma_dir = base_chroma_dir
+        self.token_tracker = token_tracker
 
         # Agent memory instances (lazy loaded)
         # Phase 4.8 Week 3: Using AgentMemorySystem for full 4-layer memory
@@ -83,6 +86,19 @@ class MultiAgentMemoryManager:
                     'model_name': agent.model_name,
                     'temperature': getattr(agent, 'temperature', None),
                     'max_tokens': getattr(agent, 'max_tokens', None),
+                    # Item 37: Temporal memory decay fields
+                    'memory_decay_enabled': getattr(agent, 'memory_decay_enabled', False),
+                    'memory_decay_lambda': getattr(agent, 'memory_decay_lambda', None),
+                    'memory_decay_archive_threshold': getattr(agent, 'memory_decay_archive_threshold', None),
+                    'memory_decay_mmr_lambda': getattr(agent, 'memory_decay_mmr_lambda', None),
+                    # BUG V060-MEM-021: Semantic search fields must be passed from agent model
+                    # Without these, AgentMemorySystem defaults enable_semantic to False,
+                    # breaking ChromaDB indexing for all queue-processed channels
+                    'enable_semantic_search': getattr(agent, 'enable_semantic_search', True),
+                    'semantic_search_results': getattr(agent, 'semantic_search_results', 10),
+                    'semantic_similarity_threshold': getattr(agent, 'semantic_similarity_threshold', 0.5),
+                    'memory_size': getattr(agent, 'memory_size', None) or agent_config.get('memory_size', 10),
+                    'memory_isolation_mode': getattr(agent, 'memory_isolation_mode', 'isolated'),
                 })
                 self.logger.info(f"Fetched agent {agent_id} LLM config: provider={agent.model_provider}, model={agent.model_name}")
                 return agent_config
@@ -114,11 +130,16 @@ class MultiAgentMemoryManager:
             else:
                 config_to_use = agent_config
 
+            # v0.6.0: Resolve external vector store provider if configured
+            vector_store_provider = self._resolve_vector_store(agent_id, persist_dir)
+
             memory = AgentMemorySystem(
                 agent_id=agent_id,
                 db_session=self.db,
                 config=config_to_use,
-                persist_directory=persist_dir
+                persist_directory=persist_dir,
+                token_tracker=self.token_tracker,
+                vector_store_provider=vector_store_provider,
             )
 
             self.agent_memories[agent_id] = memory
@@ -126,6 +147,73 @@ class MultiAgentMemoryManager:
             self.logger.info(f"Created AgentMemorySystem for agent {agent_id} (memory_size={memory_size})")
 
         return self.agent_memories[agent_id]
+
+    def _resolve_vector_store(self, agent_id: int, persist_dir: str):
+        """
+        v0.6.0: Resolve agent's vector store configuration to a ProviderBridgeStore.
+
+        Returns None when agent uses ChromaDB default (vector_store_instance_id IS NULL).
+        Fails open to None (ChromaDB) on any error.
+        """
+        try:
+            from models import Agent
+            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+            if not agent:
+                return None
+
+            # Three-tier resolution: Agent override → Tenant default → ChromaDB
+            instance_id = agent.vector_store_instance_id
+            if not instance_id:
+                try:
+                    from models import VectorStoreInstance as VSI
+                    default_vs = self.db.query(VSI).filter(
+                        VSI.tenant_id == agent.tenant_id,
+                        VSI.is_default == True,
+                        VSI.is_active == True,
+                    ).first()
+                    if default_vs:
+                        instance_id = default_vs.id
+                except Exception:
+                    pass
+
+            if not instance_id:
+                return None  # ChromaDB default
+
+            from agent.memory.providers.registry import VectorStoreRegistry
+            from agent.memory.providers.resolver import VectorStoreResolver
+            from agent.memory.providers.bridge import ProviderBridgeStore
+            from agent.memory.embedding_service import get_shared_embedding_service
+
+            registry = VectorStoreRegistry()
+            resolver = VectorStoreResolver(registry)
+            resolved = resolver.resolve(
+                agent_id=agent_id,
+                db=self.db,
+                persist_directory=persist_dir,
+                vector_store_instance_id=instance_id,
+                vector_store_mode=agent.vector_store_mode or "override",
+                tenant_id=agent.tenant_id,
+            )
+
+            if resolved is None:
+                return None
+
+            embedding_service = get_shared_embedding_service()
+            # v0.6.0 Item 4: Pass security context for post-retrieval MemGuard checks
+            security_context = {
+                "db": self.db,
+                "tenant_id": agent.tenant_id,
+                "agent_id": agent_id,
+                "instance_id": instance_id,
+            }
+            return ProviderBridgeStore(resolved, embedding_service, security_context=security_context)
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to resolve vector store for agent {agent_id}, "
+                f"falling back to ChromaDB: {e}"
+            )
+            return None
 
     def _get_agent_isolation_mode(self, agent_id: int) -> str:
         """

@@ -26,6 +26,7 @@ export interface AgentNodeData {
   isActive: boolean
   modelProvider?: string
   modelName?: string
+  avatar?: string | null
   // Phase 3: Badge and channel data
   memoryIsolationMode?: MemoryIsolationMode
   skillsCount?: number
@@ -47,6 +48,8 @@ export interface AgentNodeData {
   hasActiveSkill?: boolean   // Skill is being used (visible even when collapsed)
   hasActiveKb?: boolean      // KB is being accessed (visible even when collapsed)
   isFading?: boolean         // Post-processing coordinated fade-out
+  // A2A: depth indicator during active agent-to-agent chains
+  a2aDepth?: number
 }
 
 export interface ContactNodeData {
@@ -73,12 +76,13 @@ export interface ProjectNodeData {
 
 export interface ChannelNodeData {
   type: 'channel'
-  channelType: 'whatsapp' | 'telegram' | 'playground' | 'phone' | 'discord' | 'email' | 'sms'
+  channelType: 'whatsapp' | 'telegram' | 'playground' | 'phone' | 'discord' | 'email' | 'sms' | 'webhook'
   label: string
   // Phase 3: Instance details
   instanceId?: number
   phoneNumber?: string
   botUsername?: string
+  webhookName?: string  // v0.6.0: Webhook integration name (for webhook nodes)
   status?: ChannelStatus
   healthStatus?: string
   // Phase 8: Real-time activity (separate from isActive to avoid dimming node via BaseNode)
@@ -185,6 +189,68 @@ export interface SkillProviderNodeData {
   isFading?: boolean   // Post-processing coordinated fade-out
 }
 
+// Phase F (v1.6.0): Security hierarchy node types for Sentinel profile visualization
+
+export type SecurityDetectionMode = 'block' | 'detect_only' | 'off'
+
+export interface SecurityProfileBadge {
+  id: number
+  name: string
+  slug: string
+}
+
+export interface SecurityEffectiveProfile extends SecurityProfileBadge {
+  source: 'skill' | 'agent' | 'tenant' | 'system'
+}
+
+export interface TenantSecurityNodeData {
+  type: 'tenant-security'
+  tenantId: string
+  tenantName: string
+  profile: SecurityProfileBadge | null
+  effectiveProfile: SecurityEffectiveProfile | null
+  detectionMode: SecurityDetectionMode
+  aggressivenessLevel: number
+  isEnabled: boolean
+}
+
+export interface SecuritySkillData {
+  skillType: string
+  skillName: string
+  isEnabled: boolean
+  profile: SecurityProfileBadge | null
+  effectiveProfile: SecurityEffectiveProfile | null
+  detectionMode: SecurityDetectionMode
+}
+
+export interface AgentSecurityNodeData {
+  type: 'agent-security'
+  id: number
+  name: string
+  isActive: boolean
+  profile: SecurityProfileBadge | null
+  effectiveProfile: SecurityEffectiveProfile | null
+  detectionMode: SecurityDetectionMode
+  aggressivenessLevel: number
+  isEnabled: boolean
+  skillsCount: number
+  skills: SecuritySkillData[]
+  isExpanded?: boolean
+  onExpand?: (agentId: number) => void
+  onCollapse?: (agentId: number) => void
+}
+
+export interface SkillSecurityNodeData {
+  type: 'skill-security'
+  skillType: string
+  skillName: string
+  isEnabled: boolean
+  parentAgentId: number
+  profile: SecurityProfileBadge | null
+  effectiveProfile: SecurityEffectiveProfile | null
+  detectionMode: SecurityDetectionMode
+}
+
 // Union type for all node data
 export type GraphNodeData =
   | AgentNodeData
@@ -197,13 +263,16 @@ export type GraphNodeData =
   | KnowledgeSummaryNodeData
   | SkillCategoryNodeData
   | SkillProviderNodeData
+  | TenantSecurityNodeData
+  | AgentSecurityNodeData
+  | SkillSecurityNodeData
 
 // Custom node type for React Flow
 export type GraphNode = Node<GraphNodeData>
 export type GraphEdge = Edge
 
 // Graph view types
-export type GraphViewType = 'agents' | 'users' | 'projects'
+export type GraphViewType = 'agents' | 'users' | 'projects' | 'security'
 
 // Graph configuration
 export interface GraphConfig {
@@ -214,4 +283,33 @@ export interface GraphConfig {
 // Graph filters for the left panel
 export interface GraphFilters {
   showInactiveAgents: boolean
+}
+
+// ============================================================
+// A2A (Agent-to-Agent) Visualization Types
+// ============================================================
+
+// Represents an active A2A session tracked in the graph view
+export interface A2ASessionInfo {
+  initiatorId: number
+  targetId: number
+  sessionType: 'ask' | 'delegate'
+  depth: number
+  startTime: number
+}
+
+// Edge data for a comm permission link between two agents
+export interface CommPermissionEdgeData {
+  permissionId: number
+  sourceAgentId: number
+  targetAgentId: number
+  isEnabled: boolean
+}
+
+// Extension of ActivityState — A2A session tracking fields
+// (ActivityState itself lives in GraphCanvas.tsx; these fields are
+//  added here for type-sharing across A2A graph components)
+export interface A2AActivityExtension {
+  activeA2ASessions: Map<string, A2ASessionInfo>
+  fadingA2ASessions: Set<string>
 }

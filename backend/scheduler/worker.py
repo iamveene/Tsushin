@@ -116,11 +116,18 @@ class SchedulerWorker:
             logger.info("Getting database session...")
             with get_session(self.engine) as db:
                 logger.info("Creating SchedulerService...")
-                service = SchedulerService(db)
+                # Phase 0.6.0: Create TokenTracker for background worker cost monitoring
+                from analytics.token_tracker import TokenTracker
+                token_tracker = TokenTracker(db)
+                # Untenanted service just for the cross-tenant due-events poll.
+                # Per-event execution uses a freshly-constructed service scoped
+                # to event.tenant_id so ContactService lookups are tenant-safe
+                # (V060-CHN-006 follow-up).
+                poll_service = SchedulerService(db, token_tracker=token_tracker)
 
                 # Get events that are due for execution
                 logger.info("Querying for due events...")
-                due_events = service.get_due_events()
+                due_events = poll_service.get_due_events()
                 logger.info(f"Query returned {len(due_events) if due_events else 0} events")
 
                 if not due_events:
@@ -129,11 +136,16 @@ class SchedulerWorker:
 
                 logger.info(f"Found {len(due_events)} event(s) due for execution")
 
-                # Execute each event
+                # Execute each event with a tenant-scoped SchedulerService
                 for event in due_events:
                     try:
                         logger.info(f"Executing event {event.id} ({event.event_type})")
-                        service.execute_event(event)
+                        event_service = SchedulerService(
+                            db,
+                            token_tracker=token_tracker,
+                            tenant_id=getattr(event, "tenant_id", None),
+                        )
+                        event_service.execute_event(event)
                         logger.info(f"Successfully executed event {event.id}")
 
                     except Exception as e:
