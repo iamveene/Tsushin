@@ -445,6 +445,11 @@ export function useWatcherActivity(
           a2aFadeTimeoutRef.current.delete(sessionKey)
         }
 
+        // Glow the target agent node while it processes the A2A request
+        const targetId = event.target_agent_id
+        setProcessingAgents(prev => { const n = new Set(prev); n.add(targetId); return n })
+        agentStartTimeRef.current.set(targetId, Date.now())
+
         setA2aSessions(prev => {
           const next = new Map(prev)
           next.set(sessionKey, {
@@ -466,6 +471,17 @@ export function useWatcherActivity(
         const startTime = a2aStartTimeRef.current.get(sessionKey)
         const elapsed = startTime ? Date.now() - startTime : MIN_AGENT_GLOW_DURATION
         const remaining = Math.max(0, MIN_AGENT_GLOW_DURATION - elapsed)
+
+        // Fade out the target agent node
+        const targetId = event.target_agent_id
+        const targetStart = agentStartTimeRef.current.get(targetId)
+        const targetElapsed = targetStart ? Date.now() - targetStart : MIN_AGENT_GLOW_DURATION
+        const targetRemaining = Math.max(0, MIN_AGENT_GLOW_DURATION - targetElapsed)
+        if (targetRemaining > 0) {
+          setTimeout(() => startCoordinatedFadeOut(targetId), targetRemaining)
+        } else {
+          startCoordinatedFadeOut(targetId)
+        }
 
         const startA2AFadeOut = () => {
           setFadingA2ASessions(prev => { const n = new Set(prev); n.add(sessionKey); return n })
