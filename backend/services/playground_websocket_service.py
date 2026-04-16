@@ -183,6 +183,33 @@ class PlaygroundWebSocketService:
                             else:
                                 self.logger.warning(f"[Auto-rename WS] Thread {thread_id} skipped: already has {message_count} messages")
 
+                    # Invoke post-response hooks (knowledge sharing, OKG auto-capture, etc.)
+                    if accumulated_response:
+                        try:
+                            from agent.ai_client import AIClient
+                            sender_key = f"playground_u{self.user_id}_a{agent_id}_t{thread_id}"
+                            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+                            ai_client = AIClient(
+                                provider="gemini",
+                                model_name="gemini-2.5-flash-lite",
+                                db=self.db,
+                                tenant_id=agent.tenant_id if agent else None,
+                            )
+                            await self.playground_service._invoke_post_response_hooks(
+                                agent_id=agent_id,
+                                user_message=message,
+                                agent_response=accumulated_response,
+                                context={
+                                    "sender_key": sender_key,
+                                    "sender_name": f"Playground User {self.user_id}",
+                                    "is_group": False,
+                                    "chat_id": sender_key,
+                                },
+                                ai_client=ai_client,
+                            )
+                        except Exception as e:
+                            self.logger.error(f"Post-response hooks error (non-blocking): {e}")
+
                     # Send completion with rename info
                     # FIX 2026-01-30: Include agent_id for frontend to use in loadThreads callback
                     yield {
