@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### TTS Audio Response Regression Fix (`develop`, 2026-04-16)
+
+- **BUG-548 fix (Kokoro TTS):** Kokoro TTS container was not running — it requires `docker-compose --profile tts` to start. Started the container; verified synthesis and WhatsApp audio delivery working.
+- **BUG-549 fix (OpenAI TTS / tenant_id not propagated):** The TTS pipeline never passed `tenant_id` from the router through the TTS skill to the TTS provider's `get_api_key()` call. Only system-wide keys (tenant_id=NULL) were searched, making tenant-specific keys invisible. Fixed by adding `tenant_id` parameter across the full chain: `TTSProvider` base class → `TTSProviderRegistry.get_provider()` → `AudioTTSSkill.process_response()` → `router.py`.
+- **BUG-550 fix (Provider instance key not used for TTS):** `get_api_key()` only checked the `api_key` table (Service API Keys), but users configure OpenAI keys as Provider Instances in Hub → AI Providers. Added Step 3 fallback to `get_api_key()`: when no service API key exists, resolves the default `provider_instance` for the matching vendor. This allows TTS to reuse the same OpenAI key configured for LLM chat without requiring a separate Service API Key entry.
+- **Files changed:** `tts_provider.py`, `tts_registry.py`, `audio_tts_skill.py`, `router.py`, `openai_tts_provider.py`, `elevenlabs_tts_provider.py`, `kokoro_tts_provider.py`, `api_key_service.py`
+
 ### Fact Extraction Visibility Fix (`develop`, 2026-04-16)
 
 - **BUG-546 fix:** Knowledge list endpoint (`GET /api/agents/{id}/knowledge`) now returns all facts across all users when no `user_id` filter is provided. Previously returned empty due to unimplemented stub.
