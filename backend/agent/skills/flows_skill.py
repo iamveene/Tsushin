@@ -138,8 +138,8 @@ class FlowsSkill(BaseSkill):
                 logger.warning(f"FlowsSkill: Error getting tenant_id: {e}")
 
         try:
-            # If agent_id is provided and no explicit provider, try to load from DB
-            if agent_id and not config.get('scheduler_provider'):
+            # Always check DB first — AgentSkillIntegration overrides config defaults
+            if agent_id:
                 return SchedulerProviderFactory.get_provider_for_agent(
                     agent_id=agent_id,
                     db=self._db_session
