@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.0-patch.4 (2026-04-16)
+
+Promotion of `develop` → `main`. Consolidates all post-patch.3 work (channels, installer SSL, memory scoping, sentinel parser, skill fixes, UX wizards, regression results) into the v0.6.0 release line. README refreshed with v0.6.0 highlights.
+
 ### Slack & Discord setup wizards (`develop`, 2026-04-16)
 
 Replaces the bare `SlackSetupModal` / `DiscordSetupModal` (5 fields and a Save button with no context) with guided multi-step wizards modeled on `WhatsAppSetupWizard`. Surfaced because multiple QA testers got stuck on "where do I find a bot token?" / "what scopes do I need?" / "where does the webhook URL go?" — the bare modals demanded values without telling users where they live on Slack/Discord.

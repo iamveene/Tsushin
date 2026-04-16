@@ -39,6 +39,53 @@
 
 ---
 
+## What's New in v0.6.0
+
+v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes since the last `main` release:
+
+**Channels & Communication**
+- **Slack and Discord — first complete end-to-end** (V060-CHN-001/002/031). Slack runs on both Socket Mode (self-managed `SocketModeClient` per integration) and HTTP Events; Discord runs on HTTP Interactions with per-tenant Ed25519 signature verification. Threaded replies are preserved (`thread_ts`), bot-authored messages are filtered to prevent reply loops, and every saved token uses per-tenant PBKDF2-derived Fernet encryption (closes a silent token-decrypt regression).
+- **Guided setup wizards** — `SlackSetupWizard` (5 steps, pre-filled Slack app manifest JSON) and `DiscordSetupWizard` (6 steps, including user-install fallback for accounts without Manage Server permission). Replaces the old bare-token modals that had users hunting the Slack/Discord portals blind.
+- **Tenant Public Base URL** — new `tenant.public_base_url` setting (migration `0034`) surfaces the exact webhook URLs to paste back into the Slack Events / Discord Interactions portals, with inline `cloudflared tunnel --url http://localhost:8081` guidance when unset.
+- **Remote Access via Cloudflare Tunnel** — per-tenant gated public exposure for HTTP-path channel integrations.
+- **Agent ↔ Channel binding UI** — `AgentChannelsManager` now renders Slack and Discord cards alongside Playground/WhatsApp/Telegram/Webhook, with an instance selector per channel.
+
+**Memory & Knowledge**
+- **Vector Stores** — per-agent override/complement/shadow modes with a creation wizard that can attach the new store to existing agents in one flow. Chroma (built-in), Qdrant (auto-provisioned when available), Pinecone, MongoDB Atlas.
+- **Own Knowledge Graph (OKG)** — `okg_store` / `okg_recall` / `okg_forget` multi-tool registration; LLM-argument coercion handles common string↔array and string↔boolean mismatches so tool calls don't fail on shape.
+- **Memory tenant-scoping** — defense-in-depth `tenant_id` filter added to every read/delete path (`agent_memory_system`, `memory_management_service`, `routes_memory`, playground services) in addition to the write-side column that shipped in 0.5.0.
+
+**AI Provider Efficiency**
+- **Anthropic prompt caching** — 3 breakpoint `cache_control` with a relocation trick for the dynamic tail; 40–65% token-cost reduction for chat-heavy workloads.
+- **Default Anthropic model** bumped to `claude-haiku-4-5`.
+
+**Security & Sentinel**
+- **Sentinel parser** now derives valid threat types dynamically from `DETECTION_REGISTRY` instead of a hard-coded 5-entry allowlist. Regression tests (`test_sentinel_unified_parse.py`, 10 cases) guard against future re-introduction.
+- **Docker hardening, per-client rate limits, PostgreSQL password rotation** (BUG-055/057/062).
+- **BUG-LOG-015** — memory tenant-scoping read-path bypass fully closed, with `test_memory_tenant_scoping.py` (7 cases) asserting tenant isolation at query level.
+
+**Installer & Deployment**
+- **IP-address installs** — self-signed SAN now emits `IP:<addr>,DNS:localhost,IP:127.0.0.1,IP:::1` (previously invalid `DNS:<IP>`, rejected by browsers/curl). Stale-SAN auto-detection and regeneration on installer re-runs.
+- **Let's Encrypt staging mode** (`--le-staging`) — uses the LE staging directory so operators can rehearse the full ACME flow without burning production rate-limit budget.
+- **Manual-cert pre-flight validation** — key↔cert match, expiry window, SAN coverage, optional intermediate chain bundle support (resolves deployments behind Sectigo/GoDaddy).
+- **SSL config persistence** across installer re-runs (`SSL_LE_STAGING`, `SSL_CERT_PATH`, `SSL_KEY_PATH`, `SSL_CERT_CHAIN_PATH`).
+- **Frontend rebuild on `NEXT_PUBLIC_API_URL` change** — the installer diffs the previous `.env` and rebuilds the image no-cache instead of silently shipping a stale cached bundle.
+
+**Platform & Tooling**
+- **Next.js 16** upgrade — `outputFileTracingRoot`, `turbopack.root`, typed-routes reference in `next-env.d.ts`.
+- **Flows integration** — `flows_skill` now queries `AgentSkillIntegration` first (fixes Google Calendar provider being ignored in favor of config defaults). BUG-559 fully resolved.
+- **Automation skill** — strips embedded `"\"…\""` quotes around `flow_identifier` before lookup so LLM-formatted tool arguments stop failing with "Flow not found".
+- **Agent switcher** default execution mode → `hybrid` (keyword + LLM tool paths both active).
+- **WhatsApp LID migration** — Contact auto-linking, UserAgentSession fallback via phone number, and ContactAgentMapping dual-key lookup handle WhatsApp's phone-ID → Linked-ID transition.
+- **TTS pipeline** — `tenant_id` now propagates end-to-end (router → TTS skill → provider → `get_api_key`). Provider-instance fallback means tenants no longer need a duplicate "Service API Key" row just for TTS.
+- **Web search provider switching** (Brave ↔ Google/SerpAPI), **Flight search** (Google Flights via SerpAPI), **Gmail + Google Calendar** skills — all verified end-to-end against live providers.
+- **Logout spinner fix (BUG-544)** — hard navigation replaces the async `router.push('/auth/login')` that could leave `/` stuck on the loading screen.
+- **Graph View** — WebSocket resilience (indefinite reconnect + `visibilitychange` listener), brighter glow, target-node pulse during A2A, stale A2A-edge auto-cleanup.
+
+**Full change log**: [docs/changelog.md](docs/changelog.md) contains ~50 detailed entries for every fix, migration, wizard step, and regression-test suite that shipped in this release.
+
+---
+
 ## Quick Start
 
 ### Prerequisites
