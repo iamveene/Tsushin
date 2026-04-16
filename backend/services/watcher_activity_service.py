@@ -155,7 +155,7 @@ class WatcherActivityService:
             message["channel"] = channel
 
         await self._broadcast_to_tenant(tenant_id, message)
-        logger.debug(f"Emitted agent_processing: agent={agent_id}, status={status}, channel={channel}")
+        logger.info(f"Emitted agent_processing: agent={agent_id}, status={status}, channel={channel}")
 
     async def emit_skill_used(
         self,
@@ -399,7 +399,6 @@ def emit_agent_communication_async(
     depth: int = 1
 ):
     """Fire-and-forget wrapper for A2A communication events."""
-    service = WatcherActivityService.get_instance()
     service = WatcherActivityService.get_instance()
     try:
         loop = asyncio.get_running_loop()
