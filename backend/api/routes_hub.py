@@ -386,6 +386,10 @@ async def list_integrations(
 
     integrations = []
     for hub in hub_integrations:
+        # Skip unsupported integration types (e.g., shell probes)
+        if hub.type not in ('asana', 'calendar', 'gmail'):
+            continue
+
         # Get type-specific data by checking the type
         asana = None
         calendar = None
