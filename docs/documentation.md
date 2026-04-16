@@ -82,6 +82,8 @@ Tsushin ships as a Docker Compose stack defined in `docker-compose.yml`. The cor
 
 **Multi-stack note:** When SSL/Caddy is enabled, proxy upstreams must target stack-scoped container names (for example `tsushin-frontend:3030`, `tsushin-backend:8081`) rather than generic Docker aliases like `frontend` / `backend`. On the shared `tsushin-network`, generic aliases can resolve to another running Tsushin stack.
 
+**Browser → backend request path (v0.6.1):** the Next.js frontend proxies `/api/*` and `/ws/*` to the backend via `rewrites()` declared at `frontend/next.config.mjs`. The destination is read at request time from the `BACKEND_INTERNAL_URL` env var (defaults to `http://backend:8081`, the compose service DNS). This keeps every browser request same-origin with the frontend, so the httpOnly `tsushin_session` cookie (domain-scoped to the frontend) rides along automatically — including the Watcher activity WebSocket at `/ws/watcher/activity`. Replaces the v0.6.0 pattern of baking an absolute `NEXT_PUBLIC_API_URL` into the build, which dropped the cookie on cross-origin access.
+
 **Persistent data:**
 
 | Volume / bind | Container path | Contents |
@@ -236,6 +238,8 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 For remote Ubuntu VM installs that use a host-level Ollama daemon, start with `http://host.docker.internal:11434` inside Tsushin. If the Docker engine on that host does not resolve `host.docker.internal`, use the container bridge gateway instead (for example `http://172.18.0.1:11434`) and re-test the provider instance from the Hub.
 
 For repetitive QA runs, auth throttling can be raised or temporarily disabled without code changes by setting `TSN_AUTH_RATE_LIMIT` or `TSN_DISABLE_AUTH_RATE_LIMIT=true` in `.env` before recreating the backend container. This is intended for test automation and should not be left enabled on public production installs.
+
+**Installer re-runs are idempotent (v0.6.1):** running `python3 install.py` a second time against an existing install preserves `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, and `ASANA_ENCRYPTION_KEY` from the current `.env`. Fresh values are only generated on true first installs (no existing `.env`) or when a specific key is missing. This prevents the pre-v0.6.1 failure mode where re-runs rotated the postgres password while the postgres data volume still carried the old one — producing `FATAL: password authentication failed for user "tsushin"` and a backend crash loop. Source: `install.py:1317-1339`.
 
 ### 3.4 Verify health
 
@@ -590,11 +594,21 @@ Cloning is performed via the agents API (`api.deleteAgent`, `api.updateAgent` ex
 
 Two skills drive inter-agent behavior:
 
-- **Agent Switcher Skill** — `skill_type="agent_switcher"`, `execution_mode="tool"`. "Allows users to switch their default agent for direct messages via natural language commands." Claims detection-type exemption for `agent_takeover`.
-  Source: `backend/agent/skills/agent_switcher_skill.py:39-42`
+- **Agent Switcher Skill** — `skill_type="agent_switcher"`, `execution_mode="hybrid"` (default as of v0.6.0). "Allows users to switch their default agent for direct messages via natural language commands." Claims detection-type exemption for `agent_takeover`.
+  Source: `backend/agent/skills/agent_switcher_skill.py:37-43`
 
 - **Agent Communication Skill (A2A)** — `skill_type="agent_communication"`, `execution_mode="tool"`. "Ask other agents questions, discover available agents, or delegate tasks."
   Source: `backend/agent/skills/agent_communication_skill.py:28-31`
+
+**Agent Switcher execution modes** (v0.6.0):
+
+| Mode | Behavior |
+|---|---|
+| `tool` | LLM decides via MCP tool schema only. No keyword scanning. |
+| `legacy` | Keyword-only path (e.g., "Switch me to Support"). |
+| `hybrid` | **Default.** Both paths active — keyword triggers fire deterministically, and the LLM can also call the tool by name. Prevents keyword-only misses while keeping tool-calling precision. |
+
+Set the mode per-agent in Studio → Skills → Agent Switcher → Config. The schema is defined at `backend/agent/skills/agent_switcher_skill.py:505-509`.
 
 The Studio → Agent Communication page (`frontend/app/agents/communication/page.tsx`) mounts `AgentCommunicationManager` to manage inter-agent messaging permissions and monitor communication sessions.
 
@@ -1154,6 +1168,8 @@ Per-agent security UI: `frontend/app/agents/security/page.tsx` mounts per-agent 
 Unified execution engine for reusable workflows. DB: `flow_definition`, `flow_node`, `flow_run`, `flow_node_run`.
 Source: `backend/flows/flow_engine.py`, `backend/models.py:1528-1728`.
 
+> **v0.6.0 — Integration resolution (BUG-559):** `flows_skill` now queries `AgentSkillIntegration` first when resolving provider accounts (e.g., Google Calendar, Gmail). This means flows respect the agent's per-skill integration binding set in Studio, and only fall back to system-wide config defaults if no binding exists. Previously the Google Calendar provider was ignored in favor of the config default, causing calendar steps to write to the wrong account.
+
 ### 13.1 Flow Types
 
 `flow_definition.flow_type` values (Source: `backend/models.py:1563`): `conversation`, `notification`, `workflow`, `task`.
@@ -1385,6 +1401,24 @@ The wizard can also be launched manually from the Hub Communication tab or auto-
 **Hub Integration Summary:** A compact status strip above the Hub tab bar shows connection counts for AI Providers, WhatsApp, Telegram, Slack, Discord, and Webhooks at a glance.
 
 **Settings Progressive Disclosure:** The Settings page groups cards into "Essential" (Organization, Team Members, System AI, Integrations) always visible, and "Advanced" collapsed by default.
+
+#### 15.1.1 Migration: LID support (v0.6.0)
+
+WhatsApp is rolling out **Linked Device IDs (LIDs)** — a new identifier format that replaces the historical phone-number-based JID for many participants (especially in group chats, where privacy rules now obscure direct phone numbers). v0.6.0 ships three coordinated changes so existing Tsushin tenants upgrading from 0.5.x don't lose contact continuity:
+
+1. **Contact auto-linking** — when an inbound message arrives with a new LID, the adapter looks up the existing `Contact` row by phone number (if the phone number is still exposed) and attaches the LID as an alternate identifier on the contact's `ContactChannelMapping`. No manual merge required.
+   Source: `backend/channels/whatsapp/adapter.py` + `backend/services/contact_service.py`.
+
+2. **UserAgentSession fallback via phone number** — `UserAgentSession` lookups (used for per-contact default agent resolution) now try LID-keyed rows first, then fall back to phone-number-keyed rows. Sessions created before the migration keep working until they're rewritten on next contact, at which point they get upgraded to LID keys.
+   Source: `backend/services/user_agent_session_service.py`.
+
+3. **ContactAgentMapping dual-key lookup** — `ContactAgentMapping` resolution accepts either a LID or a phone-number key and returns the first match. This keeps slash-command permissions, default-agent assignments, and DM trigger rules pointing at the right contact even as WhatsApp phases in LIDs for groups.
+   Source: `backend/services/contact_agent_mapping_service.py`.
+
+**Operational notes:**
+- No migration script is required — the upgrade is transparent. Existing contacts continue to work; LIDs are attached on the fly as they arrive.
+- If you see a group member that Tsushin treats as a new contact after the upgrade (because WhatsApp switched them to LID-only exposure), open the contact modal and add the previous phone number as an alternate identifier. The bot will then recognize both.
+- Sentinel audit events for WhatsApp continue to log the original raw identifier (LID or phone), so the audit trail survives the transition.
 
 ### 15.2 Telegram
 
@@ -1886,7 +1920,7 @@ This means: adding a new provider in Hub automatically makes it available everyw
 
 `backend/services/model_discovery_service.py` auto-fetches the vendor's `/models` endpoint (for OpenAI-compatible providers) and populates `available_models`. Used by the frontend Provider form to let the user pick which models to expose.
 
-### 19.4 Model Pricing
+### 19.5 Model Pricing
 
 **Source:** `frontend/app/settings/model-pricing/page.tsx`, `backend/api/routes_model_pricing.py`
 
@@ -1900,6 +1934,32 @@ UI table columns (`model-pricing/page.tsx:326-347`):
 - Actions (Edit / Save)
 
 Filters: "All" or a provider badge filter (`page.tsx:292-323`). Tenants without `org.settings.write` see read-only mode (gate at top of file).
+
+### 19.6 Anthropic Prompt Caching — v0.6.0
+
+v0.6.0 enables Anthropic's **prompt caching** across all Claude requests. Caching reuses Anthropic-side computation of stable prompt prefixes (system prompt, persona, skill instructions, knowledge snippets) across subsequent requests, so the LLM only re-processes the dynamic tail of the conversation. Tenants with chat-heavy workloads see a **40–65% reduction in input token cost** with no behavioral change.
+
+**How it works (3 breakpoints + relocation trick):**
+
+Anthropic supports up to four `cache_control` breakpoints per request. Tsushin uses three, strategically placed to maximize hit rate:
+
+| # | Position | Cached content | Rationale |
+|---|---|---|---|
+| 1 | End of system prompt | Persona, tone preset, agent rules, skill catalog | Stable across every turn of the same agent |
+| 2 | End of tool definitions block | MCP schemas, sandboxed tool defs, custom skill descriptors | Changes only when skills are added/removed |
+| 3 | Just before the current user turn | Conversation history + any retrieved-knowledge context | The "relocation trick" — cache point moves forward as the conversation grows, so each prior turn gets cached on its way past breakpoint 3 |
+
+**Default Anthropic model:** `claude-haiku-4-5` (v0.6.0 bump). The default is set in `backend/services/provider_instance_service.py` and surfaces in the agent Create modal under Hub → AI Providers → Anthropic → Default Model. Override per-agent in the agent config UI.
+
+**Sources:**
+- `backend/providers/anthropic_provider.py` — breakpoint placement and `cache_control` injection
+- `backend/services/token_tracker.py` — cache-hit accounting in the Watcher billing dashboard
+
+**Requirements & caveats:**
+- Requires Anthropic API access with prompt caching enabled (on by default for all Anthropic accounts in 2025+).
+- Cache hits appear in the Playground debug panel and in `/api/usage` token summaries under `cache_read_input_tokens` / `cache_creation_input_tokens`.
+- Cache TTL is Anthropic-managed (5 minutes idle, or evicted under load). Tsushin does not persist anything client-side.
+- No configuration is required — it's always on for Anthropic requests. To disable for a specific agent (rare — e.g., if you want to rehearse a cold token count), set `provider_config.cache_enabled = false` in the agent config JSON.
 
 ---
 
@@ -3087,6 +3147,15 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `TSN_LOG_FILE` | `logs/tsushin.log` | Log file path. | `LOG_FILE` | `settings.py:96` |
 | `TSN_LOG_LEVEL` | `INFO` | Root log level. | `LOG_LEVEL` | `settings.py:97` |
 | `TSN_LOG_FORMAT` | `text` | `text` or `json` (structured logs for K8s). | — | `settings.py:98` |
+
+**Notable emitted log lines** (useful grep patterns for operators):
+
+| Pattern | Purpose | Source |
+|---|---|---|
+| `🤖 AIClient.generate(): provider=…` | Every LLM call records provider + model + operation type. | `backend/agent/ai_client.py:377` |
+| `🔍 Web search: provider=…, query=…` | Every web search records which provider (Brave / SerpAPI / Tavily / etc.) handled the query. Query is truncated to 120 chars. Emitted from all three search code paths (slash command, skill, legacy tool). v0.6.1 BUG-9. | `backend/services/search_command_service.py:146`, `backend/agent/skills/search_skill.py:210`, `backend/agent/tools/search_tool.py:62` |
+| `⚡ Emitted agent_processing: agent=…, status=start/end, listeners=…` | Watcher activity WebSocket emits. `listeners=0` means no Graph View is subscribed for that tenant; `listeners≥1` means the Graph View glow will fire on the node. | `backend/services/watcher_activity_service.py` |
+| `⚡ Graph View WS registered: tenant=…, total=…` | A new browser subscribed to `/ws/watcher/activity`. | `backend/api/watcher_activity_websocket.py` |
 
 ### A.4 Security / Auth
 

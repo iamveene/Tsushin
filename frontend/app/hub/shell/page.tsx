@@ -140,7 +140,7 @@ export default function ShellDashboardPage() {
   const [sentinelLoading, setSentinelLoading] = useState(false)
   const [savingSentinel, setSavingSentinel] = useState(false)
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
+  const apiUrl = ''
 
   const loadIntegrations = useCallback(async () => {
     try {

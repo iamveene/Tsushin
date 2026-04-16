@@ -76,7 +76,7 @@ export default function SkillsPanel({ agentId }: SkillsPanelProps) {
     setError(null)
 
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
+      const baseUrl = ''
 
       // Fetch both agent skills and available skills
       const [agentRes, availableRes] = await Promise.all([

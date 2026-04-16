@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { isPublicPath } from '@/lib/public-paths'
 
 export function middleware(request: NextRequest) {
   const { nextUrl } = request
@@ -14,6 +15,21 @@ export function middleware(request: NextRequest) {
   // Redirect authenticated users away from login page
   if (nextUrl.pathname === '/auth/login' && request.cookies.has('tsushin_session')) {
     return NextResponse.redirect(new URL('/', request.url))
+  }
+
+  // BUG-4: server-side belt-and-braces — unauthenticated users hitting a
+  // protected path get redirected before client JS even runs, eliminating
+  // the "Loading Tsushin..." spinner stall on fresh installs or expired
+  // cookies. Skip Next.js internals and public paths (auth/setup). Both
+  // middleware and AuthContext.loadUser() guard on isPublicPath(), so no
+  // redirect loop is possible.
+  if (
+    !request.cookies.has('tsushin_session') &&
+    !isPublicPath(nextUrl.pathname) &&
+    !nextUrl.pathname.startsWith('/_next') &&
+    nextUrl.pathname !== '/favicon.ico'
+  ) {
+    return NextResponse.redirect(new URL('/auth/login', request.url))
   }
 
   const sslMode = (process.env.TSN_SSL_MODE || '').toLowerCase()

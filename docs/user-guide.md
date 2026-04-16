@@ -23,12 +23,23 @@ This guide walks you through using the Tsushin platform from a user's perspectiv
 15. [Slash Commands Reference](#15-slash-commands-reference)
 16. [Using the Public API](#16-using-the-public-api)
 17. [Audit and Compliance](#17-audit-and-compliance)
+18. [Remote Access (System Administrators)](#18-remote-access-system-administrators)
 
 ---
 
 ## 1. Getting Started
 
 Welcome to Tsushin -- your multi-tenant AI agent platform. This section walks you through going from zero to your first AI conversation.
+
+### For Administrators: Installer Options (v0.6.0)
+
+If you're the administrator installing Tsushin for your organization, run `python3 install.py` from the repository root. v0.6.0 adds three installer behaviors worth knowing about:
+
+- **`--le-staging`** -- when combined with `--domain` and `--email`, uses the Let's Encrypt **staging** directory instead of production. Use this to rehearse the full ACME flow without burning your production rate-limit budget (LE limits you to ~5 failed challenges per domain per hour on production). Example: `python3 install.py --defaults --domain app.example.com --email you@example.com --le-staging`.
+- **IP-address installs now work correctly.** The self-signed SAN now emits `IP:<addr>,DNS:localhost,IP:127.0.0.1,IP:::1` (the old format `DNS:<IP>` was rejected by browsers and curl). If you're accessing Tsushin by IP (e.g., `https://10.0.0.5`), the installer detects a stale SAN from a prior run and regenerates automatically.
+- **Frontend rebuild on API URL change.** If you rerun the installer and change `NEXT_PUBLIC_API_URL`, the installer diffs the previous `.env` and rebuilds the frontend image with `--no-cache`. Previously it would silently ship a stale cached bundle and leave the UI pointing at the old URL.
+
+Full installer reference, GKE/Helm, GCP Secret Manager, and `.env` details live in [documentation.md §3 Quick Start](documentation.md#3-quick-start) and [§4 Deployment & Operations](documentation.md#4-deployment--operations).
 
 ### First Login and Setup Wizard
 
@@ -129,6 +140,10 @@ You can have multiple instances of the same provider type (e.g., two different O
 
 When you add a provider, Tsushin automatically queries its API to discover available models. To configure cost tracking, go to **Settings > Model Pricing** to set per-model input and output costs (per 1M tokens). These costs appear in the Watcher billing dashboard.
 
+**Anthropic prompt caching (v0.6.0):**
+
+Anthropic requests are automatically **prompt-cached** — Claude caches the stable prefix of each conversation (system prompt, persona, skill catalog, knowledge snippets) and reuses it on subsequent turns. For chat-heavy workloads this typically cuts input token cost by **40–65%** with no configuration required on your end. Cache hits show up in the Playground debug panel as `cache_read_input_tokens`. The default Anthropic model in v0.6.0 is `claude-haiku-4-5` — you can override per-agent in the agent config. Technical details: [documentation.md §19.6](documentation.md#196-anthropic-prompt-caching--v060).
+
 ### Hub Integrations
 
 The Hub is your integration marketplace. Beyond AI providers, you can connect external services.
@@ -222,7 +237,7 @@ Use the **Clone** action on the Agents list to duplicate an agent with all confi
 
 Two built-in skills for agents to work together:
 
-- **Agent Switcher** -- lets users switch their default agent via natural language (e.g., "Switch me to the Support agent").
+- **Agent Switcher** -- lets users switch their default agent via natural language (e.g., "Switch me to the Support agent"). **Default execution mode in v0.6.0 is `hybrid`** — both the keyword trigger ("Switch me to ...") and the LLM tool call work, so deterministic phrasings never miss and the LLM can also route on intent.
 - **Agent Communication (A2A)** -- allows agents to ask other agents questions, discover agents, or delegate tasks.
 
 Manage inter-agent messaging from **Studio > Agent Communication**.
@@ -365,6 +380,16 @@ Tsushin supports six communication channels. Each connects your AI agents to the
 - **Conversation Delay** -- adds a pause before replying (default: 5 seconds) for a more human feel.
 
 **Assign to an agent:** On the agent's **Channels** tab, set **WhatsApp Integration** to this instance.
+
+**Upgrading from 0.5.x — WhatsApp LID migration (v0.6.0):**
+
+WhatsApp is rolling out **Linked Device IDs (LIDs)** — a new privacy-aware identifier that replaces the phone-number JID for many participants (especially in groups). v0.6.0 handles this transparently:
+
+- Existing contacts keep working -- the adapter auto-links new LIDs to existing contacts by phone number on first message.
+- Per-contact default agents (`UserAgentSession`) and slash-command permissions (`ContactAgentMapping`) accept either LID or phone-number keys.
+- If a group member appears as a new contact after the upgrade (because WhatsApp now exposes only their LID), open the contact's edit modal and add the previous phone number as an alternate identifier to re-link them.
+
+No migration script is needed. Full details: [documentation.md §15.1.1](documentation.md#1511-migration-lid-support-v060).
 
 ### Telegram
 
@@ -947,3 +972,38 @@ Stream events to an external syslog collector:
 5. Save.
 
 Events are formatted using the RFC 5424 syslog standard and delivered asynchronously.
+
+---
+
+## 18. Remote Access (System Administrators)
+
+> **Audience:** Global Admins only. Regular tenant owners and members do not see this feature.
+
+v0.6.0 introduces **Remote Access via Cloudflare Tunnel** — a one-click way to expose your Tsushin instance on a public HTTPS URL without opening firewall ports or managing a reverse proxy. It is **off by default** at both the system level and the per-tenant level, so nothing becomes internet-reachable until you explicitly enable it.
+
+**Why you might use this:**
+- Collaborate with external teams, testers, or auditors without VPN provisioning.
+- Give Slack, Discord, or Webhook channels a stable HTTPS callback URL when running Tsushin on a laptop or a private network.
+- Expose a short-lived demo environment.
+
+**Two modes:**
+
+| Mode | URL style | Lifetime | Use case |
+|---|---|---|---|
+| **Quick** | `https://<random>.trycloudflare.com` | Lives only while cloudflared is running; new URL each start | Dev, demos, short tests |
+| **Named** | Custom FQDN you own (e.g., `https://tsushin.acme.com`) | Stable across restarts, bound to your Cloudflare Zero Trust account | Production, enterprise |
+
+**Setting it up:**
+
+1. Log in as a **Global Admin** and navigate to **System Administration > Remote Access** (`/system/remote-access`).
+2. For **Quick Mode**: just click **Start**. Cloudflare hands you a throwaway HTTPS URL within a few seconds.
+3. For **Named Mode**: create a tunnel in your Cloudflare Zero Trust dashboard, copy the connector token, paste it into the Remote Access config, then **Start**.
+4. **Enable per-tenant entitlement:** toggle Remote Access for each tenant you want to let in. Users from tenants that are not entitled see a login banner (*"Remote access is not enabled for this tenant"*) and a 403 is written to their tenant audit log as `auth.remote_access.denied`.
+
+**Security posture:**
+
+Cloudflare Tunnel makes the entire Tsushin app reachable on one public URL, so authentication and tenant entitlement become the sole gate. v0.6.0 has tightened which routes are anonymous (health, webhook receive, login) versus authenticated (everything else). Under Named Mode you can stack additional Zero Trust Access policies on top if you need them.
+
+**Disabling remote access instantly:** `/system/remote-access` > **Tunnel Status** > **Stop**. The tunnel subprocess exits and no new requests can reach the instance from the public URL until you start it again.
+
+Full technical reference (architecture diagram, supervisor behavior, troubleshooting, route hardening list): [documentation.md §22.5](documentation.md#225-remote-access-cloudflare-tunnel--v060).

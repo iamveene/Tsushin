@@ -195,10 +195,12 @@ export function useWatcherActivity(
   }, [a2aSessions])
 
   const getWebSocketUrl = useCallback(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
-    const wsProtocol = apiUrl.startsWith('https') ? 'wss' : 'ws'
-    const host = apiUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')
-    return `${wsProtocol}://${host}/ws/watcher/activity`
+    // v0.6.1 BUG-5/7/8 fix: build the WS URL from window.location.host so the
+    // upgrade stays same-origin with the page (httpOnly cookie rides along).
+    // Next.js rewrites (see next.config.mjs) proxy /ws/* to the backend.
+    if (typeof window === 'undefined') return ''
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    return `${wsProtocol}://${window.location.host}/ws/watcher/activity`
   }, [])
 
   const updateConnectionState = useCallback((state: ActivityConnectionState) => {

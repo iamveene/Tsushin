@@ -36,12 +36,13 @@ export class PlaygroundWebSocket {
   }
 
   private getWebSocketUrl(): string {
-    // Convert HTTP(S) API URL to WS(S) URL
-    // HIGH-001 FIX: Token no longer sent in URL query params for security
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
-    const wsProtocol = apiUrl.startsWith('https') ? 'wss' : 'ws'
-    const host = apiUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')
-    return `${wsProtocol}://${host}/ws/playground`
+    // v0.6.1 BUG-5/7/8 fix: build from window.location so the WS upgrade stays
+    // same-origin with the page — httpOnly cookie rides along. Next.js rewrites
+    // (see next.config.mjs) proxy /ws/* to the backend over the Docker network.
+    // HIGH-001 FIX: Token no longer sent in URL query params for security.
+    if (typeof window === 'undefined') return ''
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    return `${wsProtocol}://${window.location.host}/ws/playground`
   }
 
   connect() {
@@ -60,6 +61,11 @@ export class PlaygroundWebSocket {
 
     try {
       const url = this.getWebSocketUrl()
+      if (!url) {
+        console.warn('[WebSocket] No WebSocket URL available (likely SSR); skipping connect')
+        this.setConnectionState('disconnected')
+        return
+      }
       console.log('[WebSocket] Connecting to:', url)
 
       this.ws = new WebSocket(url)

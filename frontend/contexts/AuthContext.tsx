@@ -9,6 +9,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
+import { isPublicPath } from '@/lib/public-paths'
 
 // User type matching backend response
 interface User {
@@ -67,8 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return
     }
 
-    const isPublicPage = pathname?.startsWith('/auth') || pathname?.startsWith('/setup')
-    if (isPublicPage) {
+    if (isPublicPath(pathname)) {
       _cleanupLegacyToken()
       setLoading(false)
       return
@@ -96,6 +96,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!isCancelled) {
           console.debug('No active session:', error)
           setUser(null)
+          setLoading(false)
+          // BUG-4: hard-redirect unauthenticated users (mirrors logout pattern,
+          // avoids the router.push-vs-spinner race referenced by BUG-544).
+          //
+          // CRITICAL: if the request failed because the cookie is STALE (present
+          // but invalid — e.g., DB wiped but browser still has the old JWT),
+          // the middleware will keep bouncing /auth/login → / while AuthContext
+          // bounces / → /auth/login. We must clear the cookie on the backend
+          // first (HttpOnly can't be cleared client-side) so the next request
+          // is truly unauthenticated and the middleware stops redirecting.
+          if (typeof window !== 'undefined' && !isPublicPath(pathname)) {
+            api.logout().catch(() => { /* best-effort — cookie may already be gone */ })
+              .finally(() => { window.location.href = '/auth/login' })
+            return
+          }
         }
       } finally {
         if (!isCancelled) {
@@ -240,12 +255,12 @@ export function useRequireAuth() {
   const pathname = usePathname() || ''
 
   useEffect(() => {
-    // Skip auth redirect for public pages (login, signup, setup, etc.)
-    const isPublicPage = pathname.startsWith('/auth') || pathname.startsWith('/setup')
-    if (!loading && !user && !isPublicPage) {
-      router.push('/auth/login')
-    }
-  }, [user, loading, router, pathname])
+    // BUG-4: AuthContext.loadUser() is the primary redirect path — it clears
+    // the stale cookie via api.logout() and then hard-redirects. This hook is
+    // intentionally a no-op now: firing a second redirect from here would
+    // race the cookie-clear, leaving the stale cookie in place and bouncing
+    // the user between / and /auth/login forever.
+  }, [user, loading, pathname])
 
   return { user, loading, hasPermission }
 }

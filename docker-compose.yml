@@ -207,6 +207,9 @@ services:
     environment:
       - NODE_ENV=production
       - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
+      # v0.6.1 BUG-5/7/8 fix: runtime URL the Next.js rewrites() proxy targets.
+      # Read at request time from the Node.js process (NOT a build arg).
+      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://backend:8081}
     depends_on:
       backend:
         condition: service_healthy
