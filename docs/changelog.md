@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### OKG & MCP Skill Regression Fixes (`develop`, 2026-04-16)
+
+- **BUG-551 fix (OKG multi-tool registration):** The deprecated `get_skill_tool_definitions()` method (used by the main agent pipeline) only registered `okg_store` via the single-tool `get_mcp_tool_definition()` call, leaving `okg_recall` and `okg_forget` invisible to the LLM. Added multi-tool branch that checks `get_all_mcp_tool_definitions()` and registers all tools when count > 1.
+- **BUG-552 fix (string-to-array coercion):** LLMs frequently send `tags` fields as comma-separated strings instead of JSON arrays, causing `"Field 'tags' must be an array"` validation errors. Added automatic string-to-array coercion in `_validate_arguments()`.
+- **BUG-553 fix (string-to-boolean coercion):** LLMs send boolean fields like `include_symbols` as string `"true"`/`"false"` instead of native booleans, causing validation errors. Added string-to-boolean coercion.
+- **BUG-554 fix (MCP SSRF blocking Docker containers):** The MCP connection manager's SSRF validator blocked private IPs (Docker network addresses) during `get_or_connect()`, even though the creation route already allowed them via `allow_private=True`. Added `allow_private=True` to the connection manager's SSRF check for consistency.
+- **Files changed:** `skill_manager.py`, `connection_manager.py`
+
 ### TTS Audio Response Regression Fix (`develop`, 2026-04-16)
 
 - **BUG-548 fix (Kokoro TTS):** Kokoro TTS container was not running — it requires `docker-compose --profile tts` to start. Started the container; verified synthesis and WhatsApp audio delivery working.
