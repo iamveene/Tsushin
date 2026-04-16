@@ -1025,6 +1025,22 @@ Per-agent override uses `agent.vector_store_mode`:
 - `shadow` — writes duplicated to secondary for migration/testing.
 Source: `backend/models.py:372-373`.
 
+### Per-Agent Vector Store UI
+
+Studio > Agent > Configuration now includes a **Vector Store** section (`frontend/components/AgentConfigurationManager.tsx`) with:
+- Status indicator showing current vector store (per-agent override, tenant default, or ChromaDB built-in)
+- Dropdown to select from available vector store instances or "Use Tenant Default"
+- Mode selector (Override/Complement/Shadow) shown when an override is selected
+- Link to Hub > Vector Stores if no instances are configured
+
+### Post-Creation Agent Attachment Wizard
+
+When creating a new vector store in Hub > Vector Stores (`frontend/components/vector-stores/VectorStoreConfigModal.tsx`), after successful creation an optional "Attach to Agents" step appears:
+- Lists all active agents with checkboxes
+- Shows which agents already have a vector store override
+- Assigns the new store with `override` mode to selected agents
+- Skippable — users can attach later via Studio > Agent > Configuration
+
 ---
 
 ## 12. Security — Sentinel
@@ -1903,6 +1919,16 @@ The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate
 Custom third-party MCP servers can be registered via stdio or SSE transports. The `connection_manager` maintains the active MCP client sessions and exposes them to agent skills.
 
 **Stdio transport toolbox bootstrap (BUG-512, 2026-04-10):** stdio MCP servers run their binary inside the tenant's toolbox container. `MCPConnectionManager.get_or_connect` now calls `ToolboxContainerService.ensure_container_running(tenant_id, db)` before constructing a stdio transport, so first-time `POST /api/mcp-servers/{id}/test` calls and first-time runtime invocations create or start the toolbox container on demand. Prior to this, fresh installs would error with `Container not found for tenant ... Please start it first` because there was no first-class UI action to bootstrap the toolbox. SSE and streamable_http transports are unaffected.
+
+### 20.7.1 MCP Server Creation Wizard
+
+After creating a new MCP server in Hub > MCP Servers, a 3-step wizard (`frontend/components/mcp/MCPServerWizard.tsx`) guides users through:
+
+1. **Success + Tool Discovery** — shows server name, connection status, and discovered tools list
+2. **Create Custom Skill** — pre-populates a custom skill form with the MCP server and selected tool; user can customize name and description
+3. **Assign to Agents** — lists active agents with checkboxes to assign the new custom skill
+
+Each step is skippable. The wizard eliminates the need to navigate between Hub > MCP Servers, Studio > Custom Skills, and Studio > Agent > Custom Skills tabs.
 
 ### 20.8 OAuth Token Refresh Worker
 

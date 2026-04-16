@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### UX Wizards & Skill Error Handling (`develop`, 2026-04-15)
+
+- **Per-Agent Vector Store Selector:** Added a "Vector Store" section to the Agent Configuration page (Studio > Agent > Configuration) with a dropdown to select a specific vector store instance for the agent, overriding the tenant default. Includes a mode selector (Override/Complement/Shadow) and a status indicator showing whether the agent uses a per-agent override, tenant default, or built-in ChromaDB.
+- **Vector Store Creation Wizard — Attach to Agents:** After creating a new vector store in Hub > Vector Stores, a wizard step appears to optionally assign the new store to one or more existing agents directly from the modal. Eliminates the need to navigate to each agent's configuration page separately.
+- **MCP Server Creation Wizard:** After creating a new MCP server in Hub > MCP Servers, a 3-step wizard guides users through: (1) reviewing discovered tools, (2) creating a custom skill linked to an MCP tool, and (3) assigning the skill to agents. Each step is skippable.
+- **Improved Skill Error Handling:** Backend skill operations now return specific error messages (ValueError for validation issues) instead of a generic "Skill operation failed" message. Frontend displays the actual error detail to users.
+
 ### Playground & AI Client Fixes (`develop`, 2026-04-15)
 
 - **Playground stuck at "Processing your message..." when WebSocket unavailable (CRITICAL):** The HTTP fallback path used async queue mode, which depends on WebSocket for result delivery. When `wss://` fails (e.g. self-signed cert not trusted for programmatic WebSocket connections), the queue result notification never reaches the frontend. Fixed: HTTP fallback now uses `?sync=true` when WebSocket is disconnected, so the LLM response returns inline in the HTTP response. No WebSocket dependency for basic chat functionality.
