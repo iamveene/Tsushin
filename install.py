@@ -265,6 +265,17 @@ class TsushinInstaller:
         self.config['SSL_MODE'] = self._normalize_ssl_mode(env_vars.get('SSL_MODE', 'disabled'))
         self.config['SSL_DOMAIN'] = env_vars.get('SSL_DOMAIN', '')
         self.config['SSL_EMAIL'] = env_vars.get('SSL_EMAIL', '')
+        # Persist the LE staging flag so non-interactive re-runs don't silently
+        # flip production ACME when a previous run opted into staging (or vice
+        # versa) — the Caddyfile generator reads SSL_LE_STAGING from config.
+        self.config['SSL_LE_STAGING'] = env_vars.get('SSL_LE_STAGING', '')
+        # Manual-cert paths — non-interactive re-run with SSL_MODE=manual
+        # calls copy_manual_certs(), which indexes self.config['SSL_CERT_PATH']
+        # / SSL_KEY_PATH. Without these here, the installer would KeyError on
+        # re-run for any user who previously configured manual SSL.
+        self.config['SSL_CERT_PATH'] = env_vars.get('SSL_CERT_PATH', '')
+        self.config['SSL_KEY_PATH'] = env_vars.get('SSL_KEY_PATH', '')
+        self.config['SSL_CERT_CHAIN_PATH'] = env_vars.get('SSL_CERT_CHAIN_PATH', '')
         self.config['TSN_AUTH_RATE_LIMIT'] = env_vars.get('TSN_AUTH_RATE_LIMIT', '')
         self.config['TSN_DISABLE_AUTH_RATE_LIMIT'] = env_vars.get('TSN_DISABLE_AUTH_RATE_LIMIT', '')
         self.config['NEXT_PUBLIC_API_URL'] = env_vars.get(
@@ -890,6 +901,42 @@ class TsushinInstaller:
         except socket.error:
             return False
 
+    def _has_stale_ip_dns_san(self, cert_path: Path, ip_domain: str) -> bool:
+        """Return True if cert at cert_path encodes ip_domain as a DNSName SAN.
+
+        This detects the pre-fix behaviour where the installer emitted
+        ``DNS:10.x.x.x`` instead of ``IP:10.x.x.x`` — an RFC 5280 violation
+        that browsers reject. Used to trigger one-time auto-regeneration on
+        re-runs of affected installs. Returns False on any parse error or if
+        the cert correctly encodes the IP as an iPAddress SAN.
+        """
+        try:
+            from cryptography import x509
+            from cryptography.x509.oid import ExtensionOID
+            import ipaddress
+
+            cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+            try:
+                san_ext = cert.extensions.get_extension_for_oid(
+                    ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+                )
+            except x509.ExtensionNotFound:
+                return False
+            san = san_ext.value
+            # If the IP correctly appears as iPAddress, no regen needed.
+            try:
+                target_ip = ipaddress.ip_address(ip_domain)
+                if target_ip in san.get_values_for_type(x509.IPAddress):
+                    return False
+            except ValueError:
+                return False
+            # If it appears (incorrectly) as DNSName, it's the stale cert.
+            dns_values = [str(v).lower() for v in san.get_values_for_type(x509.DNSName)]
+            return ip_domain.lower() in dns_values
+        except Exception:
+            # Best-effort only — errors mean we leave the existing cert alone.
+            return False
+
     def _get_stack_name(self) -> str:
         return (self.config.get('TSN_STACK_NAME') or 'tsushin').strip() or 'tsushin'
 
@@ -1104,8 +1151,26 @@ class TsushinInstaller:
         domain = self.config.get('SSL_DOMAIN', 'localhost')
 
         if cert_path.exists() and key_path.exists():
-            print_info("Self-signed certificates already exist, skipping generation.")
-            return
+            # One-time migration for installs affected by the DNS-for-IP SAN
+            # bug: when the configured domain is an IP literal and the existing
+            # cert encodes that IP as a DNSName SAN entry (invalid per RFC
+            # 5280), delete the stale pair and fall through to regeneration.
+            # This makes the IP SAN fix reach existing installs automatically
+            # instead of requiring users to manually remove the broken cert.
+            if self._is_ip(domain) and self._has_stale_ip_dns_san(cert_path, domain):
+                print_warning(
+                    f"Existing self-signed cert encodes IP '{domain}' as a DNSName SAN "
+                    "(invalid per RFC 5280). Regenerating with IP SAN."
+                )
+                try:
+                    cert_path.unlink()
+                    key_path.unlink()
+                except Exception as exc:
+                    print_warning(f"Could not remove stale cert files: {exc}")
+                    return
+            else:
+                print_info("Self-signed certificates already exist, skipping generation.")
+                return
 
         certs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1347,6 +1412,9 @@ SSL_MODE={ssl_mode}
 SSL_DOMAIN={self.config.get('SSL_DOMAIN', '')}
 SSL_EMAIL={self.config.get('SSL_EMAIL', '')}
 SSL_LE_STAGING={self.config.get('SSL_LE_STAGING', '')}
+SSL_CERT_PATH={self.config.get('SSL_CERT_PATH', '')}
+SSL_KEY_PATH={self.config.get('SSL_KEY_PATH', '')}
+SSL_CERT_CHAIN_PATH={self.config.get('SSL_CERT_CHAIN_PATH', '')}
 TSN_SSL_MODE={ssl_mode}
 TSN_CORS_ORIGINS={','.join(cors_origins)}
 HTTP_PORT=80
