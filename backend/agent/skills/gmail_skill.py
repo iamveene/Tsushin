@@ -1108,7 +1108,7 @@ class GmailSkill(BaseSkill):
         return {
             "execution_mode": "hybrid",
             "enabled": True,
-            "keywords": cls.EMAIL_KEYWORDS,
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "integration_id": None,  # Must be configured per-agent

@@ -701,14 +701,7 @@ Return JSON only:"""
         """
         return {
             "execution_mode": "hybrid",
-            "keywords": [
-                # English
-                "flight", "flights", "fly", "airfare", "airline", "airplane",
-                "plane ticket", "air ticket", "book flight",
-                # Portuguese
-                "voo", "voos", "passagem", "passagens", "aérea", "aéreas",
-                "voar", "avião", "companhia aérea", "bilhete aéreo"
-            ],
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "provider": "google_flights",  # Default provider - uses SerpApi

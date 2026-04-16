@@ -488,12 +488,7 @@ class AgentSwitcherSkill(BaseSkill):
         - Portuguese: invocar
         """
         return {
-            "keywords": [
-                # English
-                "invoke",   # invoke
-                # Portuguese
-                "invocar",  # invoke
-            ],
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash-lite"
         }

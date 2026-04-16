@@ -733,14 +733,7 @@ Return JSON array only:"""
             Default config dict
         """
         return {
-            "keywords": [
-                # English
-                "browser", "browse", "navigate", "screenshot", "webpage", "website",
-                "web page", "go to",
-                # Portuguese
-                "navegador", "navegar", "captura de tela", "pagina", "site",
-                "acessar"
-            ],
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "provider_type": "playwright",

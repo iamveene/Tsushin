@@ -1479,20 +1479,7 @@ Return ONLY a valid JSON object, no other text."""
         """
         return {
             # Phase 7.1.3: Minimal keywords with verb forms for grammatical coverage
-            "keywords": [
-                # Portuguese - noun + verb conjugations
-                "lembrete", "lembrar", "lembre", "lembra",
-                # English - noun + verb forms
-                "reminder", "remind",
-                # System name
-                "flows", "flow",
-                # Calendar keywords (for Google Calendar provider)
-                "calendar", "meeting", "reunião", "evento",
-                "schedule", "agendar", "agenda",
-                # Delete/Update keywords
-                "delete", "deletar", "remover", "cancelar", "cancel",
-                "update", "atualizar", "modificar", "alterar", "mudar"
-            ],
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",  # DEPRECATED: Use intent_detection_model instead
             # Phase 7.5: Configurable intent detection model

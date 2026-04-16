@@ -360,14 +360,7 @@ Search query:"""
         """
         return {
             "provider": "brave",  # Default provider
-            "keywords": [
-                # English
-                "search", "search for", "look up", "find", "google",
-                "what is", "who is", "how to", "define",
-                # Portuguese
-                "busque", "buscar", "pesquise", "pesquisar", "procure", "procurar",
-                "o que é", "quem é", "como fazer", "definição"
-            ],
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "max_results": 5,
