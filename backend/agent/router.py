@@ -240,6 +240,7 @@ class AgentRouter:
                     f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
                     f"to contact '{exact_matches[0].friendly_name}' via exact chat metadata '{candidate}'"
                 )
+                self._auto_link_whatsapp_lid(exact_matches[0], sender_normalized)
                 return exact_matches[0]
 
             candidate_lower = candidate.lower()
@@ -252,6 +253,7 @@ class AgentRouter:
                     f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
                     f"to contact '{partial_matches[0].friendly_name}' via partial chat metadata '{candidate}'"
                 )
+                self._auto_link_whatsapp_lid(partial_matches[0], sender_normalized)
                 return partial_matches[0]
 
         try:
@@ -260,6 +262,29 @@ class AgentRouter:
             return discovery.auto_link_contact(self.db, sender_normalized, self.logger)
         except Exception:
             return None
+
+    def _auto_link_whatsapp_lid(self, contact: Contact, sender_id: str):
+        """Auto-link a WhatsApp LID to a contact when resolved via name matching.
+        WhatsApp transitioned from phone-based to LID-based sender IDs.
+        Once linked, future lookups by LID will succeed directly."""
+        if not sender_id or not contact:
+            return
+        phone_stripped = (contact.phone_number or "").lstrip("+").strip()
+        if sender_id == phone_stripped:
+            return
+        if contact.whatsapp_id and contact.whatsapp_id == sender_id:
+            return
+        if not contact.whatsapp_id:
+            contact.whatsapp_id = sender_id
+            try:
+                self.db.commit()
+                self.logger.info(
+                    f"[LID AUTO-LINK] Linked WhatsApp LID {sender_id} to contact "
+                    f"'{contact.friendly_name}' (phone: {contact.phone_number})"
+                )
+            except Exception as e:
+                self.db.rollback()
+                self.logger.warning(f"[LID AUTO-LINK] Failed to save: {e}")
 
     def get_agent_config(self, agent: Agent) -> Dict:
         """
@@ -724,6 +749,20 @@ class AgentRouter:
             saved_session = self.db.query(UserAgentSession).filter(
                 UserAgentSession.user_identifier == sender_key
             ).first()
+
+            # WhatsApp LID migration: if sender is a LID, also try the contact's phone
+            if not saved_session and not message.get("is_group"):
+                _contact = self._resolve_direct_message_contact(message, sender)
+                if _contact and _contact.phone_number:
+                    _phone = _contact.phone_number.lstrip("+").strip()
+                    if _phone and _phone != sender_key:
+                        saved_session = self.db.query(UserAgentSession).filter(
+                            UserAgentSession.user_identifier == _phone
+                        ).first()
+                        if saved_session:
+                            saved_session.user_identifier = sender_key
+                            self.db.commit()
+                            self.logger.info(f"[LID MIGRATION] Updated UserAgentSession from phone {_phone} to LID {sender_key}")
 
             if saved_session:
                 agent = self.db.query(Agent).filter(Agent.id == saved_session.agent_id).first()
@@ -2389,6 +2428,9 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             recipient = message.get("chat_id", "")  # Use chat_id for reply
 
             # Phase 7.3: Check if agent has TTS skill enabled
+            # Skip TTS for agent-switch confirmations — these should always be text
+            _tool_used = result.get("tool_used") or ""
+            _skip_tts = _tool_used in ("skill:switch_agent",)
             audio_path = None
             try:
                 tts_skill_config = await self.skill_manager.get_skill_config(
@@ -2398,7 +2440,7 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                 )
 
                 # Note: Use 'is not None' because empty config {} is valid but falsy
-                if tts_skill_config is not None:
+                if tts_skill_config is not None and not _skip_tts:
                     self.logger.info("TTS skill enabled for this agent, converting response to audio")
 
                     # Get TTS skill instance
