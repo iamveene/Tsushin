@@ -27,6 +27,7 @@ import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelec
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
 import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
+import MCPServerWizard from '@/components/mcp/MCPServerWizard'
 import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/TypeaheadChipInput'
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
@@ -346,6 +347,7 @@ export default function HubPage() {
   const [mcpServers, setMcpServers] = useState<any[]>([])
   const [mcpServersLoading, setMcpServersLoading] = useState(false)
   const [showMcpServerModal, setShowMcpServerModal] = useState(false)
+  const [mcpWizardServer, setMcpWizardServer] = useState<{ id: number; server_name: string } | null>(null)
   const [mcpServerForm, setMcpServerForm] = useState({
     server_name: '',
     description: '',
@@ -766,8 +768,16 @@ export default function HubPage() {
         payload.auth_header_name = mcpServerForm.auth_header_name
       }
 
-      await api.createMCPServer(payload)
+      const createdServer = await api.createMCPServer(payload)
       toast.success('MCP server created successfully')
+
+      if (createdServer?.id) {
+        try {
+          await api.testMCPServer(createdServer.id)
+        } catch { /* test is optional — tools may still be discoverable */ }
+        setMcpWizardServer({ id: createdServer.id, server_name: createdServer.server_name || payload.server_name })
+      }
+
       setShowMcpServerModal(false)
       setMcpServerForm({
         server_name: '', description: '', transport_type: 'sse', server_url: '',
@@ -4789,6 +4799,14 @@ export default function HubPage() {
         onClose={() => { setShowVectorStoreModal(false); setEditingVectorStore(null) }}
         onSave={loadVectorStoreInstances}
         instance={editingVectorStore}
+      />
+
+      {/* MCP Server Creation Wizard */}
+      <MCPServerWizard
+        isOpen={mcpWizardServer !== null}
+        onClose={() => setMcpWizardServer(null)}
+        mcpServer={mcpWizardServer}
+        onComplete={loadMcpServers}
       />
 
       {/* Vertex AI Configuration Modal */}
