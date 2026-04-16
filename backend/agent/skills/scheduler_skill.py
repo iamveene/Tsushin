@@ -1180,7 +1180,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             provider = SchedulerProviderFactory.get_provider_for_agent(
                 agent_id=agent_id,
                 db=self._db_session,
-                skill_type="scheduler"
+                skill_type="flows"
             )
 
             # Query events
@@ -1290,7 +1290,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             provider = SchedulerProviderFactory.get_provider_for_agent(
                 agent_id=agent_id,
                 db=self._db_session,
-                skill_type="scheduler"
+                skill_type="flows"
             )
 
             # Create event via provider's unified interface
