@@ -40,7 +40,7 @@ class AgentSwitcherSkill(BaseSkill):
     skill_type = "agent_switcher"
     skill_name = "Agent Switcher"
     skill_description = "Allows users to switch their default agent for direct messages via natural language commands"
-    execution_mode = "tool"
+    execution_mode = "hybrid"
 
     def __init__(self):
         super().__init__()
@@ -315,9 +315,11 @@ class AgentSwitcherSkill(BaseSkill):
             candidate = (candidate or "").strip()
             if not candidate:
                 continue
-            contact = contact_service.identify_sender(candidate)
-            if contact:
-                return contact
+            normalized = candidate.split("@")[0].lstrip("+")
+            for attempt in [normalized, candidate]:
+                contact = contact_service.identify_sender(attempt)
+                if contact:
+                    return contact
 
         candidate_name = (chat_name or "").strip()
         if candidate_name and not candidate_name.isdigit():

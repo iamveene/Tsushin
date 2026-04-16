@@ -15,7 +15,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models import Agent, TonePreset, Contact, ContactAgentMapping, Config, AgentSkill, SandboxedTool, AgentSandboxedTool, Persona
+from models import Agent, TonePreset, Contact, ContactAgentMapping, Config, AgentSkill, SandboxedTool, AgentSandboxedTool, Persona, UserAgentSession
 from models_rbac import User, Tenant
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from services.audit_service import log_tenant_event, TenantAuditActions
@@ -1077,6 +1077,33 @@ def get_contact_agent_mapping(
     return None
 
 
+def _sync_user_agent_session(db: Session, contact: Contact, agent_id: int = None):
+    """Sync UserAgentSession when ContactAgentMapping changes via UI.
+    Without this, the saved session (from previous agent-switcher invocations)
+    overrides UI changes because it has higher routing priority.
+    Handles both phone-based and WhatsApp LID-based session identifiers."""
+    phone = (contact.phone_number or "").lstrip("+").strip()
+    whatsapp = (contact.whatsapp_id or "").strip()
+    from sqlalchemy import or_
+    candidates = [c for c in [phone, whatsapp] if c]
+    if not candidates:
+        return
+    sessions = db.query(UserAgentSession).filter(
+        or_(*[UserAgentSession.user_identifier == c for c in candidates])
+    ).all()
+    if agent_id is not None:
+        if sessions:
+            for s in sessions:
+                s.agent_id = agent_id
+                s.updated_at = datetime.utcnow()
+        else:
+            identifier = whatsapp or phone
+            db.add(UserAgentSession(user_identifier=identifier, agent_id=agent_id))
+    else:
+        for s in sessions:
+            db.delete(s)
+
+
 @router.post("/contact-agent-mappings", response_model=ContactAgentMappingResponse, status_code=201)
 def create_contact_agent_mapping(
     mapping: ContactAgentMappingCreate,
@@ -1114,6 +1141,7 @@ def create_contact_agent_mapping(
         # Update existing mapping
         existing.agent_id = mapping.agent_id
         existing.updated_at = datetime.utcnow()
+        _sync_user_agent_session(db, contact, mapping.agent_id)
         db.commit()
         db.refresh(existing)
 
@@ -1135,6 +1163,7 @@ def create_contact_agent_mapping(
         mapping_data["tenant_id"] = current_user.tenant_id
         new_mapping = ContactAgentMapping(**mapping_data)
         db.add(new_mapping)
+        _sync_user_agent_session(db, contact, mapping.agent_id)
         db.commit()
         db.refresh(new_mapping)
 
@@ -1176,6 +1205,7 @@ def delete_contact_agent_mapping(
         raise HTTPException(status_code=404, detail="Mapping not found")
 
     db.delete(mapping)
+    _sync_user_agent_session(db, contact, agent_id=None)
     db.commit()
     return None
 

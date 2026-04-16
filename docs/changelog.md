@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Agent Switching & WhatsApp LID Migration Fix (`develop`, 2026-04-16)
+
+- **BUG-559 fix (Kira can't switch agents):** Agent switcher's `execution_mode` was set to `"tool"` (LLM-only), disabling the keyword trigger path. When AI fallback classification failed (e.g., missing API key), the switch silently dropped. Changed default to `"hybrid"` so both keyword and LLM tool paths work. Also improved `_identify_sender` to normalize `@s.whatsapp.net` suffixes before contact lookup.
+- **BUG-560 fix (agent switch responses sent as audio):** In tool mode, the switch_agent result goes through the LLM response pipeline, which applies TTS if the agent has audio_tts enabled. Added `_skip_tts` check in the router's TTS section: when `tool_used` is `"skill:switch_agent"`, TTS is bypassed and the confirmation is sent as text.
+- **BUG-561 fix (UI agent assignment not taking effect):** `UserAgentSession` (from previous agent-switcher invocations) has absolute routing priority over `ContactAgentMapping` (set by UI). Changing the assigned agent in the UI updated the mapping but not the session, so messages kept going to the old agent. Added `_sync_user_agent_session()` helper that updates/creates/deletes the session whenever the ContactAgentMapping API is called.
+- **BUG-562 fix (WhatsApp LID sender format breaking contact identification):** WhatsApp transitioned from phone-based sender IDs (e.g., `5527999616279`) to Linked IDs (e.g., `259029628641423`). This broke contact lookup, UserAgentSession matching, and agent switching. Fixed with three changes: (1) auto-link LID as `whatsapp_id` on Contact when resolved via name matching, (2) UserAgentSession lookup falls back to contact's phone number and migrates the session identifier to the current LID, (3) `_sync_user_agent_session` searches by both phone and LID.
+- **Files changed:** `agent_switcher_skill.py`, `router.py`, `routes_agents.py`
+
 ### Graph View Glowing Regression Fix (`develop`, 2026-04-16)
 
 - **BUG-555 fix (WebSocket never-give-up reconnection):** Graph View glow animations stopped working after backend restarts because the WebSocket reconnection logic gave up after 5 attempts. Removed the reconnection limit — WebSocket now retries indefinitely with 10s backoff cap. Added `visibilitychange` listener to auto-reconnect when user switches back to the tab.
