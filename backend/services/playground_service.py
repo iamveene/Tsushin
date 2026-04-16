@@ -1255,15 +1255,6 @@ class PlaygroundService:
                 return
 
             # STEP 3: Try to process with skills FIRST (before AI)
-            # Phase 8: Emit activity start event for streaming
-            emit_agent_processing_async(
-                tenant_id=agent.tenant_id,
-                agent_id=agent_id,
-                status="start",
-                sender_key=sender_key,
-                channel="playground"
-            )
-
             from agent.skills.skill_manager import get_skill_manager
             from agent.skills.base import InboundMessage
             skill_manager = get_skill_manager()
@@ -1292,6 +1283,14 @@ class PlaygroundService:
 
                 if skill_result and skill_result.success:
                     self.logger.info(f"[STREAMING] Message processed by skill: {skill_result.output[:100]}...")
+
+                    emit_agent_processing_async(
+                        tenant_id=agent.tenant_id,
+                        agent_id=agent_id,
+                        status="start",
+                        sender_key=sender_key,
+                        channel="playground"
+                    )
 
                     # Stream the skill response
                     skill_output = skill_result.output

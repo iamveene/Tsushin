@@ -122,7 +122,7 @@ export function useWatcherActivity(
   const reconnectAttemptsRef = useRef(0)
   // connectRef ensures the reconnect timer always calls the latest connect, not a stale closure
   const connectRef = useRef<() => void>(() => {})
-  const maxReconnectAttempts = 5
+  const maxReconnectAttempts = 15
   const pingIntervalMs = 30000 // 30 seconds
 
   // Timeout refs
@@ -557,7 +557,7 @@ export function useWatcherActivity(
 
         // Attempt reconnect if not intentionally closed
         if (options.enabled && event.code !== 1000 && reconnectAttemptsRef.current < maxReconnectAttempts) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000)
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 10000)
           console.log(`[WatcherActivity] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current + 1})`)
           reconnectAttemptsRef.current++
 
