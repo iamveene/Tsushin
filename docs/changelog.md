@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Slack & Discord setup wizards (`develop`, 2026-04-16)
+
+Replaces the bare `SlackSetupModal` / `DiscordSetupModal` (5 fields and a Save button with no context) with guided multi-step wizards modeled on `WhatsAppSetupWizard`. Surfaced because multiple QA testers got stuck on "where do I find a bot token?" / "what scopes do I need?" / "where does the webhook URL go?" — the bare modals demanded values without telling users where they live on Slack/Discord.
+
+**SlackSetupWizard** (`frontend/components/SlackSetupWizard.tsx`, 5 steps):
+1. **Welcome** — pick mode (Socket Mode recommended vs HTTP Events) with the trade-offs explained side-by-side. Yellow warning if HTTP mode is chosen while `tenant.public_base_url` is unset, with the `cloudflared` command inline.
+2. **Create App** — exact `api.slack.com/apps` clicks, plus the full Slack manifest JSON pre-filled with every required scope and bot event (with a Copy button). One paste covers OAuth scopes (`chat:write`, `channels:read/history`, `groups:history`, `im:read/write/history`, `mpim:history`, `files:write`, `users:read`, `app_mentions:read`), bot events, and the Socket Mode toggle.
+3. **Get Tokens** — branches on mode: Socket path walks through generating an App-Level Token with `connections:write`; HTTP path lists App ID + Signing Secret on Basic Information. Each step references the exact Slack menu location.
+4. **Paste & Save** — credentials form + DM policy + format validation (xoxb- / xapp- / hex), with HTTP-mode URL preview before saving.
+5. **Done** — for HTTP mode shows the exact Events Request URL (`{public_base_url}/api/channels/slack/{id}/events`) with a Copy button to paste back into Slack's Event Subscriptions; explains how to `/invite @bot` and assign an agent.
+
+**DiscordSetupWizard** (`frontend/components/DiscordSetupWizard.tsx`, 6 steps):
+1. **Welcome** — explains the HTTP Interactions architecture (vs Gateway), with a green ✓ if `public_base_url` is detected or amber warning + `cloudflared tunnel --url http://localhost:8081` inline if missing.
+2. **Create App** — Discord Dev Portal walkthrough including the captcha note.
+3. **Get Credentials** — three values (Application ID, Public Key, Bot Token) with where to find each, the Bot-page Privileged Intents toggle, AND the Installation-page scope/permissions config (`bot` + `applications.commands` scopes, with all 8 bot permissions enumerated and explained: View Channels, Send Messages, Send Messages in Threads, Read Message History, Embed Links, Attach Files, Add Reactions, Use Slash Commands).
+4. **Paste & Save** — credentials form with Ed25519 hex format validation (64 chars).
+5. **Set Webhook URL** — surfaces the exact `{public_base_url}/api/channels/discord/{id}/interactions` URL with a Copy button and the three Discord-portal clicks to paste it back. Explains the PING-PONG verification (only succeeds if Tsushin's per-tenant Ed25519 signature handler returns Type 1 to Discord's verification PING).
+6. **Invite Bot** — surfaces **both** install paths: Server Install (recommended, requires Manage Server) AND User Install fallback (no server permission needed — for personal Discord accounts that can't add bots to any guild). The User Install fallback was added because real-world testing on `iamveene` confirmed the dropdown shows "No items to show" when the user lacks Manage Server in any guild — historically a hard wall, now a one-click alternate path.
+
+**Hub crash fix:**
+- `frontend/app/hub/page.tsx` lines 3162 and 3243 were reading `integration.allowed_channels.length` and `integration.allowed_guilds.length` directly. Both fields became optional in `client.ts` after the first wave of channel work (matches what backend returns when no allowlist is configured), so the unguarded `.length` access crashed the entire Hub page with "Cannot read properties of undefined (reading 'length')" — manifesting as Chrome's "This page couldn't load" the moment any Slack or Discord integration existed without an allowlist. Fixed both with `?.length ?? 0`.
+
+**Files changed:**
+- `frontend/components/SlackSetupWizard.tsx` (new, 470 lines)
+- `frontend/components/DiscordSetupWizard.tsx` (new, 360 lines)
+- `frontend/components/SlackSetupModal.tsx` (deleted, superseded)
+- `frontend/components/DiscordSetupModal.tsx` (deleted, superseded)
+- `frontend/app/hub/page.tsx` (imports renamed + `.length` safety)
+
 ### Slack & Discord channels — first complete E2E (`develop`, 2026-04-16)
 
 First-ever end-to-end test of the Slack and Discord channels surfaced multiple regressions and design gaps that blocked production use. Closes V060-CHN-001/002/031, BUG-313 frontend half, plus a previously hidden token-encryption defect that affected both channels.
