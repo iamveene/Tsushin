@@ -183,9 +183,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
         await api.disableAgentSkill(agentId, skillType)
       }
       loadData()
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to toggle skill:', err)
-      alert('Failed to toggle skill')
+      alert(err?.message || 'Failed to toggle skill')
     }
   }
 
@@ -209,9 +209,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
       } else {
         openConfig(skillType)
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to add skill:', err)
-      alert('Failed to add skill')
+      alert(err?.message || 'Failed to add skill')
     }
   }
 

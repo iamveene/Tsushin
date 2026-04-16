@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, Agent, TonePreset, Persona, ProviderInstance, VENDOR_LABELS } from '@/lib/client'
+import { api, Agent, TonePreset, Persona, ProviderInstance, VectorStoreInstance, VENDOR_LABELS } from '@/lib/client'
 import {
   InfoIcon, TargetIcon, TheaterIcon, BotIcon, KeyIcon, LightbulbIcon,
-  SettingsIcon, ClipboardIcon, SparklesIcon, ScaleIcon, LinkIcon
+  SettingsIcon, ClipboardIcon, SparklesIcon, ScaleIcon, LinkIcon, DatabaseIcon
 } from '@/components/ui/icons'
 
 interface Props {
@@ -32,6 +32,12 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   const [isActive, setIsActive] = useState(true)
   const [isDefault, setIsDefault] = useState(false)
 
+  // Vector Store (per-agent override)
+  const [vectorStoreInstanceId, setVectorStoreInstanceId] = useState<number | null>(null)
+  const [vectorStoreMode, setVectorStoreMode] = useState('override')
+  const [vectorStoreInstances, setVectorStoreInstances] = useState<VectorStoreInstance[]>([])
+  const [defaultVectorStoreId, setDefaultVectorStoreId] = useState<number | null>(null)
+
   // Trigger configuration (per-agent)
   const [triggerDmEnabled, setTriggerDmEnabled] = useState<boolean | null>(null)
   const [triggerGroupFilters, setTriggerGroupFilters] = useState<string[]>([])
@@ -50,10 +56,12 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [agentData, personasData, allInstancesData] = await Promise.all([
+      const [agentData, personasData, allInstancesData, vectorStoresData, defaultVsData] = await Promise.all([
         api.getAgent(agentId),
         api.getPersonas(true), // Only active personas
         api.getProviderInstances(),  // All configured provider instances (no vendor filter)
+        api.getVectorStoreInstances().catch(() => []),
+        api.getDefaultVectorStore().catch(() => ({ default_vector_store_instance_id: null, instance: null })),
       ])
 
       setAgent(agentData)
@@ -80,6 +88,12 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       // Store all instances and filter for the agent's current vendor
       setAllInstances(allInstancesData)
       setProviderInstances(allInstancesData.filter(i => i.vendor === agentData.model_provider))
+
+      // Vector store configuration
+      setVectorStoreInstances(vectorStoresData)
+      setDefaultVectorStoreId(defaultVsData.default_vector_store_instance_id)
+      setVectorStoreInstanceId(agentData.vector_store_instance_id || null)
+      setVectorStoreMode(agentData.vector_store_mode || 'override')
 
       // Trigger configuration
       setTriggerDmEnabled(agentData.trigger_dm_enabled ?? null)
@@ -113,6 +127,10 @@ export default function AgentConfigurationManager({ agentId }: Props) {
         provider_instance_id: providerInstanceId,
         is_active: isActive,
         is_default: isDefault,
+
+        // Vector store (per-agent override)
+        vector_store_instance_id: vectorStoreInstanceId,
+        vector_store_mode: vectorStoreInstanceId ? vectorStoreMode : null,
 
         // Trigger configuration (per-agent)
         trigger_dm_enabled: triggerDmEnabled,
@@ -415,6 +433,66 @@ export default function AgentConfigurationManager({ agentId }: Props) {
               </div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Vector Store */}
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
+        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><DatabaseIcon size={20} /> Vector Store</h3>
+        <p className="text-sm text-tsushin-slate mb-4">
+          Select a vector store for long-term memory and knowledge retrieval. Leave blank to use the tenant default.
+        </p>
+
+        <div className="space-y-4">
+          <div className="text-xs text-tsushin-slate px-2 py-1.5 rounded bg-tsushin-ink/50">
+            {vectorStoreInstanceId ? (
+              <>Using: <span className="text-teal-400">{vectorStoreInstances.find(v => v.id === vectorStoreInstanceId)?.instance_name || 'Custom'}</span> (per-agent override)</>
+            ) : defaultVectorStoreId ? (
+              <>Using tenant default: <span className="text-teal-400">{vectorStoreInstances.find(v => v.id === defaultVectorStoreId)?.instance_name || 'Unknown'}</span></>
+            ) : (
+              <>Using default: <span className="text-gray-400">ChromaDB (built-in)</span></>
+            )}
+          </div>
+
+          {vectorStoreInstances.length > 0 ? (
+            <select
+              value={vectorStoreInstanceId || ''}
+              onChange={(e) => setVectorStoreInstanceId(e.target.value ? parseInt(e.target.value) : null)}
+              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+            >
+              <option value="">Use Tenant Default</option>
+              {vectorStoreInstances.map((inst) => (
+                <option key={inst.id} value={inst.id}>
+                  {inst.instance_name} ({inst.vendor}){inst.health_status === 'healthy' ? '' : ` [${inst.health_status}]`}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-xs text-tsushin-slate">
+              No vector stores configured.
+              <a href="/hub" className="text-teal-400 hover:underline ml-1">Configure in Hub &gt; Vector Stores</a>
+            </div>
+          )}
+
+          {vectorStoreInstanceId && (
+            <div>
+              <label className="block text-sm font-medium mb-2">Vector Store Mode</label>
+              <select
+                value={vectorStoreMode}
+                onChange={(e) => setVectorStoreMode(e.target.value)}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+              >
+                <option value="override">Override (use only this store)</option>
+                <option value="complement">Complement (use this + default)</option>
+                <option value="shadow">Shadow (write to both, read from default)</option>
+              </select>
+              <p className="text-xs text-tsushin-slate mt-1">
+                {vectorStoreMode === 'override' && 'All reads and writes go to this store only.'}
+                {vectorStoreMode === 'complement' && 'Reads check both stores; writes go to both.'}
+                {vectorStoreMode === 'shadow' && 'Writes go to both stores; reads only from the default.'}
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

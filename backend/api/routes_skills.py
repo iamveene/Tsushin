@@ -309,9 +309,11 @@ async def update_skill(
 
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error updating skill: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Skill operation failed")
+        logger.error(f"Error updating skill ({type(e).__name__}): {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Skill operation failed. Please try again.")
 
 
 @router.delete("/agents/{agent_id}/skills/{skill_type}")

@@ -5,7 +5,7 @@ import Modal from '@/components/ui/Modal'
 import MongoAtlasConfigForm from './MongoAtlasConfigForm'
 import PineconeConfigForm from './PineconeConfigForm'
 import QdrantConfigForm from './QdrantConfigForm'
-import { api, VectorStoreInstance, VectorStoreInstanceCreate } from '@/lib/client'
+import { api, Agent, VectorStoreInstance, VectorStoreInstanceCreate } from '@/lib/client'
 
 interface SecurityConfig {
   pre_storage_block_threshold: number
@@ -62,6 +62,13 @@ export default function VectorStoreConfigModal({
   const [securityExpanded, setSecurityExpanded] = useState(false)
   const [securityConfig, setSecurityConfig] = useState<SecurityConfig>({ ...DEFAULT_SECURITY_CONFIG })
 
+  // Post-creation agent attachment wizard
+  const [showAgentAttachment, setShowAgentAttachment] = useState(false)
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [selectedAgentIds, setSelectedAgentIds] = useState<Set<number>>(new Set())
+  const [attachingAgents, setAttachingAgents] = useState(false)
+  const [createdInstanceId, setCreatedInstanceId] = useState<number | null>(null)
+
   // Wrap connectionConfig onChange to detect credential field changes
   const handleConfigChange = (config: Record<string, any>) => {
     const credFields = ['api_key', 'cluster_uri']
@@ -112,6 +119,17 @@ export default function VectorStoreConfigModal({
       }
       setError(null)
       setTestResult(null)
+      setShowAgentAttachment(false)
+      setAgents([])
+      setSelectedAgentIds(new Set())
+      setCreatedInstanceId(null)
+      setAttachingAgents(false)
+    } else {
+      setShowAgentAttachment(false)
+      setAgents([])
+      setSelectedAgentIds(new Set())
+      setCreatedInstanceId(null)
+      setAttachingAgents(false)
     }
   }, [isOpen, instance])
 
@@ -158,7 +176,7 @@ export default function VectorStoreConfigModal({
           is_default: isDefault,
         })
       } else {
-        await api.createVectorStoreInstance({
+        const newInstance = await api.createVectorStoreInstance({
           vendor,
           instance_name: instanceName,
           description: description || undefined,
@@ -169,6 +187,17 @@ export default function VectorStoreConfigModal({
           auto_provision: autoProvision,
           mem_limit: autoProvision ? memLimit : undefined,
         })
+
+        if (newInstance?.id) {
+          setCreatedInstanceId(newInstance.id)
+          try {
+            const agentsList = await api.getAgents(true)
+            setAgents(agentsList)
+          } catch { /* agent list fetch is optional */ }
+          setShowAgentAttachment(true)
+          setSaving(false)
+          return
+        }
       }
 
       onSave()
@@ -178,6 +207,31 @@ export default function VectorStoreConfigModal({
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleAttachAgents = async () => {
+    if (!createdInstanceId || selectedAgentIds.size === 0) return
+    setAttachingAgents(true)
+    try {
+      for (const agentId of Array.from(selectedAgentIds)) {
+        await api.updateAgent(agentId, {
+          vector_store_instance_id: createdInstanceId,
+          vector_store_mode: 'override',
+        })
+      }
+      onSave()
+      onClose()
+    } catch (err: any) {
+      setError(err.message || 'Failed to attach agents')
+    } finally {
+      setAttachingAgents(false)
+    }
+  }
+
+  const handleSkipAttachment = () => {
+    setShowAgentAttachment(false)
+    onSave()
+    onClose()
   }
 
   const handleTest = async () => {
@@ -235,6 +289,95 @@ export default function VectorStoreConfigModal({
       </div>
     </div>
   )
+
+  const attachmentFooter = (
+    <div className="flex items-center justify-between w-full">
+      <button
+        onClick={handleSkipAttachment}
+        className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors"
+      >
+        Skip
+      </button>
+      <button
+        onClick={handleAttachAgents}
+        disabled={selectedAgentIds.size === 0 || attachingAgents}
+        className="px-4 py-2 text-sm bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg disabled:opacity-50 transition-colors"
+      >
+        {attachingAgents ? 'Attaching...' : `Attach to ${selectedAgentIds.size} Agent${selectedAgentIds.size !== 1 ? 's' : ''}`}
+      </button>
+    </div>
+  )
+
+  if (showAgentAttachment) {
+    return (
+      <Modal
+        isOpen={isOpen}
+        onClose={handleSkipAttachment}
+        title="Attach to Agents"
+        footer={attachmentFooter}
+        size="lg"
+      >
+        <div className="space-y-5">
+          {error && (
+            <div className="px-3 py-2 bg-red-400/10 border border-red-400/20 rounded-lg text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
+          <div className="text-center">
+            <div className="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-white mb-1">Vector Store Created</h3>
+            <p className="text-sm text-gray-400">Assign this vector store to agents for long-term memory (optional)</p>
+          </div>
+
+          {agents.length > 0 ? (
+            <div className="max-h-64 overflow-y-auto space-y-1 border border-white/10 rounded-lg p-3">
+              {agents.map((agent) => (
+                <label
+                  key={agent.id}
+                  className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-white/5 cursor-pointer transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedAgentIds.has(agent.id)}
+                    onChange={(e) => {
+                      const newSet = new Set(selectedAgentIds)
+                      if (e.target.checked) newSet.add(agent.id)
+                      else newSet.delete(agent.id)
+                      setSelectedAgentIds(newSet)
+                    }}
+                    className="w-4 h-4 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-[#0a0a0f]"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-white truncate">{agent.contact_name}</div>
+                    <div className="text-xs text-gray-500">
+                      {agent.model_provider}/{agent.model_name}
+                      {agent.vector_store_instance_id ? ' (has override)' : ''}
+                    </div>
+                  </div>
+                  {agent.is_default && (
+                    <span className="text-xs text-teal-400 shrink-0">Default</span>
+                  )}
+                </label>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-6 text-sm text-gray-500">
+              No active agents found.
+            </div>
+          )}
+
+          <div className="text-xs text-gray-500 text-center">
+            You can also assign vector stores later in Studio &gt; Agent &gt; Configuration.
+          </div>
+        </div>
+      </Modal>
+    )
+  }
 
   return (
     <Modal
