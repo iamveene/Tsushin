@@ -176,9 +176,8 @@ class KokoroTTSProvider(TTSProvider):
     # Supported languages
     SUPPORTED_LANGUAGES = ["pt", "en", "es", "ja", "zh", "fr", "de", "it"]
 
-    def __init__(self, db=None, token_tracker=None):
-        super().__init__(db=db, token_tracker=token_tracker)
-        # VOICE-005 Fix: Auto-detect Docker environment for correct default URL.
+    def __init__(self, db=None, token_tracker=None, tenant_id=None):
+        super().__init__(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
         self.service_url = os.getenv("KOKORO_SERVICE_URL", _get_default_kokoro_service_url())
 
     def get_provider_name(self) -> str:

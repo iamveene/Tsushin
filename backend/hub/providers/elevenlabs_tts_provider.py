@@ -97,18 +97,18 @@ class ElevenLabsTTSProvider(TTSProvider):
         ),
     }
 
-    def __init__(self, db=None, token_tracker=None):
-        super().__init__(db=db, token_tracker=token_tracker)
+    def __init__(self, db=None, token_tracker=None, tenant_id=None):
+        super().__init__(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
         self._api_key: Optional[str] = None
 
     def _get_api_key(self) -> Optional[str]:
-        """Get ElevenLabs API key from database or environment."""
+        """Get ElevenLabs API key from database (tenant-specific or system-wide)."""
         if self._api_key:
             return self._api_key
 
         if self.db:
             from services.api_key_service import get_api_key
-            key = get_api_key('elevenlabs', self.db)
+            key = get_api_key('elevenlabs', self.db, tenant_id=self.tenant_id)
             if key:
                 self._api_key = key
                 return key

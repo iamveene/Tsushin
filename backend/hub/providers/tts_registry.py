@@ -62,7 +62,8 @@ class TTSProviderRegistry:
         cls,
         provider_name: str,
         db: Optional[Session] = None,
-        token_tracker=None
+        token_tracker=None,
+        tenant_id: str = None
     ) -> Optional[TTSProvider]:
         """
         Get an instance of the specified provider.
@@ -71,6 +72,7 @@ class TTSProviderRegistry:
             provider_name: Provider identifier (e.g., "openai", "kokoro")
             db: Database session (for API key lookup)
             token_tracker: TokenTracker instance for usage tracking
+            tenant_id: Tenant ID for multi-tenant API key isolation
 
         Returns:
             Instantiated provider or None if not found
@@ -88,7 +90,7 @@ class TTSProviderRegistry:
 
         # Instantiate provider
         try:
-            provider = provider_class(db=db, token_tracker=token_tracker)
+            provider = provider_class(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
             logger.debug(f"Instantiated TTS provider: {provider_name}")
             return provider
         except Exception as e:

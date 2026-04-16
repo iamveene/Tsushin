@@ -2413,7 +2413,8 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         config=tts_skill_config,
                         agent_id=agent_id,
                         sender_key=sender_key,
-                        message_id=message.get("id")
+                        message_id=message.get("id"),
+                        tenant_id=agent_tenant_id
                     )
 
                     if tts_result.success and tts_result.metadata.get("audio_path"):

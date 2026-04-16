@@ -99,13 +99,31 @@ def _encrypt_api_key(plaintext_key: str, service: str, tenant_id: Optional[str],
         return None
 
 
+def _decrypt_provider_instance_key(encrypted_key: str, tenant_id: str, db: Session) -> Optional[str]:
+    """Decrypt a provider instance API key."""
+    try:
+        from hub.security import TokenEncryption
+        from services.encryption_key_service import get_api_key_encryption_key
+
+        encryption_key = get_api_key_encryption_key(db)
+        if not encryption_key:
+            return None
+        encryptor = TokenEncryption(encryption_key.encode())
+        identifier = f"provider_instance_{tenant_id}"
+        return encryptor.decrypt(encrypted_key, identifier)
+    except Exception as e:
+        logger.error(f"Failed to decrypt provider instance key: {e}")
+        return None
+
+
 def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> Optional[str]:
     """
     Get API key for a service.
 
     Priority order:
-    1. Tenant-specific database key (if tenant_id provided)
-    2. System-wide database key (tenant_id = NULL)
+    1. Tenant-specific service API key (if tenant_id provided)
+    2. System-wide service API key (tenant_id = NULL)
+    3. Provider instance key (default instance for matching vendor)
 
     Args:
         service: Service name ('anthropic', 'openai', 'gemini', 'openrouter', 'brave_search', 'amadeus', 'serpapi')
@@ -149,8 +167,29 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
     except Exception as e:
         logger.warning(f"Failed to load system-wide API key from database for {service}: {e}")
 
-    # Not found — no env var fallback, keys must be in DB
-    logger.warning(f"No API key found for {service}. Configure via Settings → Integrations or Hub → API Keys.")
+    # Step 3: Fall back to provider instance key (reuse LLM provider key for TTS etc.)
+    if tenant_id:
+        try:
+            from models import ProviderInstance
+            instance = db.query(ProviderInstance).filter(
+                ProviderInstance.vendor == service,
+                ProviderInstance.tenant_id == tenant_id,
+                ProviderInstance.is_active == True,
+                ProviderInstance.is_default == True,
+                ProviderInstance.api_key_encrypted.isnot(None)
+            ).first()
+
+            if instance:
+                key = _decrypt_provider_instance_key(
+                    instance.api_key_encrypted, tenant_id, db
+                )
+                if key:
+                    logger.info(f" Using provider instance key for {service} (instance: {instance.instance_name})")
+                    return key
+        except Exception as e:
+            logger.warning(f"Failed to load provider instance key for {service}: {e}")
+
+    logger.warning(f"No API key found for {service}. Configure via Hub → AI Providers or Service API Keys.")
     return None
 
 
