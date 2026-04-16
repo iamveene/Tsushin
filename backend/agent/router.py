@@ -97,6 +97,9 @@ class AgentRouter:
         self.telegram_instance_id = telegram_instance_id
         # v0.6.0: Track which Webhook instance this router serves
         self.webhook_instance_id = webhook_instance_id
+        # V060-CHN-031: Stash inbound Slack thread_ts so _send_message auto-threads
+        # outbound replies into the original message's thread. Set in route_message.
+        self._inbound_slack_thread_ts: Optional[str] = None
 
         # Phase 6.11.3: Initialize CachedContactService for faster lookups
         # V060-CHN-006: Pass tenant_id to prevent cross-tenant contact leakage.
@@ -608,11 +611,19 @@ class AgentRouter:
                 self.logger.error(f"No adapter registered for channel: {channel}")
                 return False
 
+            # V060-CHN-031: Auto-inject Slack thread_ts so replies thread under
+            # the inbound message (set in route_message). The adapter accepts
+            # thread_ts via **kwargs and ignores it for non-Slack channels.
+            send_kwargs = {}
+            if channel == "slack" and self._inbound_slack_thread_ts:
+                send_kwargs["thread_ts"] = self._inbound_slack_thread_ts
+
             result = await adapter.send_message(
                 to=recipient,
                 text=message_text,
                 media_path=media_path,
-                agent_id=agent_id
+                agent_id=agent_id,
+                **send_kwargs,
             )
 
             if not result.success:
@@ -1339,6 +1350,14 @@ class AgentRouter:
         message_text = message.get("body", "")
         message_timestamp = message.get("timestamp", 0)
         sender_name = message.get("sender_name", "Unknown")
+
+        # V060-CHN-031: Capture inbound Slack thread_ts so any outbound replies
+        # generated during this turn auto-thread under the original message.
+        # Falls back to message["ts"] (the user's own message id) if the user
+        # was not already in a thread — this mirrors the Slack UX where a reply
+        # opens a new thread anchored to the message that triggered the bot.
+        if message.get("channel") == "slack":
+            self._inbound_slack_thread_ts = message.get("thread_ts")
 
         # Phase 4.2: Identify sender using ContactService
         sender = message.get("sender", "")

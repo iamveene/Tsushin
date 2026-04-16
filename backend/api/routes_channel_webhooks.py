@@ -29,9 +29,44 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import DiscordIntegration, SlackIntegration
+from hub.security import TokenEncryption
+from models import Agent, DiscordIntegration, SlackIntegration
 from services.encryption_key_service import get_slack_encryption_key
-from cryptography.fernet import Fernet
+from services.message_queue_service import MessageQueueService
+from cryptography.fernet import Fernet  # noqa: F401  (kept for backward-compat imports)
+
+
+def _resolve_agent_id_for_slack(db: Session, integration: SlackIntegration) -> Optional[int]:
+    """Return the agent_id bound to this Slack integration, or None.
+
+    If multiple agents are bound, picks the lowest id deterministically. The
+    AgentChannelsManager UI prevents binding more than one agent per integration
+    today, but we tolerate the data shape regardless.
+    """
+    agent = (
+        db.query(Agent)
+        .filter(
+            Agent.slack_integration_id == integration.id,
+            Agent.tenant_id == integration.tenant_id,
+        )
+        .order_by(Agent.id.asc())
+        .first()
+    )
+    return agent.id if agent else None
+
+
+def _resolve_agent_id_for_discord(db: Session, integration: DiscordIntegration) -> Optional[int]:
+    """Return the agent_id bound to this Discord integration, or None."""
+    agent = (
+        db.query(Agent)
+        .filter(
+            Agent.discord_integration_id == integration.id,
+            Agent.tenant_id == integration.tenant_id,
+        )
+        .order_by(Agent.id.asc())
+        .first()
+    )
+    return agent.id if agent else None
 
 logger = logging.getLogger(__name__)
 
@@ -158,13 +193,46 @@ async def discord_interactions(
         return {"type": 1}
 
     # 7. Handle application commands and other interactions
-    # For now, acknowledge with a deferred response. Full command processing
-    # will be implemented in the Discord message handler service.
+    # V060-CHN-002: Enqueue the interaction so the QueueWorker.
+    # _process_discord_message dispatcher can route it through AgentRouter.
+    # Discord requires an HTTP response within 3 seconds, so we ACK here and
+    # let the worker post the actual reply via the follow-up webhook URL the
+    # adapter is configured against.
     if interaction_type in (2, 3, 5):
         logger.info(
             f"Discord interaction type={interaction_type} received for integration {integration_id} "
             f"(tenant={integration.tenant_id})"
         )
+
+        agent_id = _resolve_agent_id_for_discord(db, integration)
+        if agent_id is None:
+            logger.warning(
+                f"Discord interaction for integration {integration.id} dropped: no agent assigned. "
+                "Bind an agent in the Hub → Agent → Channels tab to receive Discord messages."
+            )
+            # Still ACK so Discord doesn't retry — there's no recoverable handler.
+            return {"type": 5}
+
+        try:
+            user = (payload.get("member") or {}).get("user") or payload.get("user") or {}
+            sender_key = f"discord:{user.get('id', 'unknown')}"
+            queue_service = MessageQueueService(db)
+            queue_service.enqueue(
+                channel="discord",
+                tenant_id=integration.tenant_id,
+                agent_id=agent_id,
+                sender_key=sender_key,
+                payload={
+                    "interaction": payload,
+                    "discord_integration_id": integration.id,
+                },
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to enqueue Discord interaction for integration {integration.id}: {e}",
+                exc_info=True,
+            )
+            # Still ACK — failing to enqueue is a backend bug, not Discord's fault.
 
         # Type 5 = DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
         # This tells Discord "we received the interaction, response is coming"
@@ -346,14 +414,16 @@ async def slack_events(
             detail="Integration misconfigured: no signing_secret for HTTP mode"
         )
 
-    # Decrypt signing secret
+    # Decrypt signing secret using TokenEncryption (per-tenant key derivation)
+    # to match how routes_slack.py encrypts it. Pre-V060-CHN-002 this used raw
+    # Fernet which never matched the encrypt side.
     try:
         encryption_key = get_slack_encryption_key(db)
         if not encryption_key:
             raise HTTPException(status_code=500, detail="Slack encryption key not available")
 
-        cipher = Fernet(encryption_key.encode())
-        signing_secret = cipher.decrypt(integration.signing_secret_encrypted.encode()).decode()
+        enc = TokenEncryption(encryption_key.encode())
+        signing_secret = enc.decrypt(integration.signing_secret_encrypted, integration.tenant_id)
     except Exception as e:
         logger.error(f"Failed to decrypt signing_secret for Slack integration {integration.id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to decrypt integration credentials")
@@ -403,8 +473,48 @@ async def slack_events(
             f"(tenant={integration.tenant_id})"
         )
 
-        # TODO: Route events to the Slack message handler service
-        # For now, acknowledge receipt (Slack expects 200 within 3 seconds)
+        # V060-CHN-002: Enqueue events that carry a user message so the
+        # QueueWorker._process_slack_message dispatcher can route them through
+        # AgentRouter. We deliberately filter out:
+        #   - bot_message subtypes (event.get('bot_id') set) — prevents reply loops
+        #   - non-user events (channel_joined, reaction_added, etc.)
+        if event_subtype != "message":
+            return {"ok": True}
+        if event.get("bot_id") or event.get("subtype") == "bot_message":
+            # Skip messages from bots (including ourselves) to avoid loops.
+            return {"ok": True}
+        if not event.get("user") or not event.get("text"):
+            return {"ok": True}
+
+        agent_id = _resolve_agent_id_for_slack(db, integration)
+        if agent_id is None:
+            logger.warning(
+                f"Slack event for integration {integration.id} dropped: no agent assigned. "
+                "Bind an agent in the Hub → Agent → Channels tab to receive Slack messages."
+            )
+            return {"ok": True}
+
+        try:
+            sender_key = f"slack:{payload.get('team_id', '')}:{event.get('user', '')}"
+            queue_service = MessageQueueService(db)
+            queue_service.enqueue(
+                channel="slack",
+                tenant_id=integration.tenant_id,
+                agent_id=agent_id,
+                sender_key=sender_key,
+                payload={
+                    "event": event,
+                    "team_id": payload.get("team_id"),
+                    "slack_integration_id": integration.id,
+                },
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to enqueue Slack event for integration {integration.id}: {e}",
+                exc_info=True,
+            )
+
+        # Slack expects 200 within 3 seconds — always ACK once enqueued (or filtered).
         return {"ok": True}
 
     # 8. Unknown event type — acknowledge anyway to prevent Slack retries

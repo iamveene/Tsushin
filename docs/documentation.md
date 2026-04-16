@@ -1445,18 +1445,22 @@ Capability flags (`adapter.py:20-26`):
 
 **E2E setup — Slack channel:**
 
-1. **Create a Slack App** at [api.slack.com/apps](https://api.slack.com/apps):
-   - Add bot token scopes: `chat:write`, `channels:read`, `users:read`, `files:write` (minimum).
-   - For Socket Mode: enable Socket Mode and generate an app-level token (`xapp-...`).
-   - For HTTP Events API: set the Request URL and copy the Signing Secret.
-2. **Install the app** to your workspace — copy the `xoxb-` bot token.
-3. Navigate to **Hub → Channels → Slack** in the UI.
-4. Click **Add Integration** — paste the bot token and app token (or signing secret for HTTP mode).
-5. Choose mode: **Socket Mode** (recommended — no public URL needed) or **HTTP Events API**.
+1. **Create a Slack App** at [api.slack.com/apps](https://api.slack.com/apps) (the "From a manifest" option is the fastest way — Tsushin's recommended manifest enables Socket Mode and the bot scopes below in one shot):
+   - Bot scopes: `app_mentions:read`, `channels:history`, `channels:read`, `chat:write`, `files:write`, `groups:history`, `im:history`, `im:read`, `im:write`, `mpim:history`, `users:read`.
+   - Bot events: `app_mention`, `message.channels`, `message.groups`, `message.im`, `message.mpim`.
+   - For **Socket Mode** (recommended): enable Socket Mode under Settings, then generate an **App-Level Token** with the `connections:write` scope (you'll get an `xapp-...` token).
+   - For **HTTP Events API**: the Tsushin UI will show you the exact Request URL after you save the integration — paste that into Event Subscriptions → Request URL. Also copy the Signing Secret and App ID from Basic Information.
+2. **Install the app** to your workspace — copy the `xoxb-` bot token from OAuth & Permissions.
+3. (HTTP mode only) Configure your tenant's **Public Base URL** in Hub → Communication first — this is the publicly-reachable HTTPS URL Slack will POST to. Socket Mode does not need this.
+4. Navigate to **Hub → Channels → Slack** in the UI.
+5. Click **Connect Workspace** — paste the bot token plus the App-Level Token (Socket Mode) or the App ID + Signing Secret (HTTP mode). The modal will preview the exact webhook URL for HTTP mode.
 6. Set `dm_policy` — `open` to accept all DMs, `allowlist` to restrict to specific channels, or `disabled`.
 7. If using allowlist, add the Slack channel IDs where the bot should operate.
-8. **Assign to an agent** — on the agent's Channels tab, set `slack_integration_id`.
-9. **Test** — message the bot in an allowed channel or DM; it should respond via the assigned agent.
+8. **Assign to an agent** — on the agent's Channels tab, enable the Slack channel and pick the workspace.
+9. **Invite the bot** to your channel: `/invite @<bot name>` from inside Slack.
+10. **Test** — message the bot in the allowed channel or DM; it should respond via the assigned agent. Replies in channel are auto-threaded under the original message (V060-CHN-031).
+
+**How Socket Mode is wired (V060-CHN-002):** `SlackSocketModeManager` (in `backend/services/slack_socket_mode_manager.py`) is started by `app.py`'s lifespan and spins up one `slack_sdk.socket_mode.aiohttp.SocketModeClient` per active `mode='socket'` integration. The integration's create/update/delete endpoints in `routes_slack.py` call `restart_one()` / `stop_one()` so workers track integration state without a backend restart. The worker filters out non-message events and bot-authored messages, then enqueues the rest into `message_queue` (channel='slack'); the `QueueWorker._process_slack_message` dispatcher routes through `AgentRouter` and the bot replies via the existing `SlackChannelAdapter`.
 
 ### 15.4 Discord
 
@@ -1489,15 +1493,19 @@ Capability flags (`adapter.py:27-33`):
 
 **E2E setup — Discord channel:**
 
-1. **Create a Discord Application** at [discord.com/developers](https://discord.com/developers/applications).
-2. Under **Bot** settings: reset/copy the bot token, enable **Message Content Intent** and other required Gateway Intents.
-3. Under **OAuth2 → URL Generator**: select `bot` scope and required permissions (`Send Messages`, `Read Message History`, `Attach Files`). Use the generated URL to invite the bot to your server.
-4. Navigate to **Hub → Channels → Discord** in the UI.
-5. Click **Add Integration** — paste the bot token and the Application ID.
-6. Set `dm_policy` and `allowed_guilds` to control where the bot responds.
-7. Optionally configure `guild_channel_config` for per-guild channel restrictions.
-8. **Assign to an agent** — on the agent's Channels tab, set `discord_integration_id`.
-9. **Test** — message the bot in a Discord channel or DM; it should respond via the assigned agent.
+1. Configure your tenant's **Public Base URL** in Hub → Communication first. Discord requires a publicly-reachable HTTPS URL for the Interactions endpoint — there is no Socket Mode equivalent. For local dev, run `cloudflared tunnel --url http://localhost:8081` and paste the resulting `https://*.trycloudflare.com` URL.
+2. **Create a Discord Application** at [discord.com/developers](https://discord.com/developers/applications).
+3. On **General Information**: copy the **Application ID** and the **Public Key** (64-character hex Ed25519). Both are required by Tsushin.
+4. Under **Bot**: reset and copy the bot token; enable **Message Content Intent** under Privileged Gateway Intents.
+5. Under **OAuth2 → URL Generator**: select scopes `bot` + `applications.commands` and permissions `Send Messages`, `Read Message History`, `Attach Files`, `Read Messages/View Channels`. Use the generated URL to invite the bot to your server.
+6. Navigate to **Hub → Channels → Discord** in the UI.
+7. Click **Connect Bot** — paste the **Application ID**, **Bot Token**, and **Public Key**. The modal will preview the exact Interactions Endpoint URL after save.
+8. Copy that URL and paste it into Discord Dev Portal → General Information → **Interactions Endpoint URL**, then click Save Changes. Discord PINGs the URL for verification — Tsushin handles the PING automatically with the per-integration public key (BUG-311 fix).
+9. Set `dm_policy` and `allowed_guilds` to control where the bot responds.
+10. **Assign to an agent** — on the agent's Channels tab, enable the Discord channel and pick the bot.
+11. **Test** — DM the bot in Discord or invoke it from a server channel; it should respond via the assigned agent.
+
+**Why HTTP Interactions, not Gateway:** Tsushin uses Discord's HTTP Interactions endpoint (Ed25519-signed) rather than the Gateway WebSocket because it's stateless, scales horizontally, and doesn't require per-process bot session tracking. Inbound interactions arrive at `/api/channels/discord/{integration_id}/interactions`; the route ACKs Discord with a Type 5 (deferred response) within the 3-second window, then enqueues the interaction into `message_queue` (channel='discord'). `QueueWorker._process_discord_message` routes the message through `AgentRouter` and the agent's reply is sent via `DiscordChannelAdapter` (REST API).
 
 ### 15.5 Webhook
 

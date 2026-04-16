@@ -487,14 +487,29 @@ class QueueWorker:
             "semantic_similarity_threshold": getattr(config, "semantic_similarity_threshold", 0.3),
         }
 
-        # Normalize Slack event into router message envelope
+        # Normalize Slack event into router message envelope.
+        # V060-CHN-002: include "id" (router uses it as MessageCache.source_id;
+        # missing it causes a KeyError that dead-letters every Slack message).
+        # Slack's event_ts is unique per event in a workspace, so use it.
+        slack_event_id = (
+            event.get("client_msg_id")
+            or event.get("event_ts")
+            or event.get("ts")
+            or f"slack_{item.id}"
+        )
         message = {
+            "id": f"slack:{payload.get('team_id', '')}:{slack_event_id}",
             "channel": "slack",
             "sender": f"{payload.get('team_id', '')}:{event.get('user', '')}",
             "sender_name": event.get("user", ""),
             "body": event.get("text", ""),
-            "to": event.get("channel"),  # Slack channel ID to reply to
+            # V060-CHN-002: AgentRouter uses message["chat_id"] (with fallback
+            # to message["sender"]) when picking the outbound recipient. For
+            # Slack the recipient is the channel/IM id the message arrived on.
+            "chat_id": event.get("channel"),
+            "to": event.get("channel"),
             "thread_ts": event.get("thread_ts") or event.get("ts"),
+            "timestamp": float(event.get("ts", 0)) if event.get("ts") else 0,
             "tenant_id": item.tenant_id,
             "agent_id": item.agent_id,
             "slack_integration_id": slack_integration_id,
@@ -545,15 +560,26 @@ class QueueWorker:
             if opt.get("type") == 3 and opt.get("value"):  # STRING option
                 command_text += f" {opt.get('value')}"
 
+        # V060-CHN-002: include "id" so router's MessageCache lookup doesn't
+        # KeyError. Discord interaction ids are unique per interaction.
+        discord_event_id = interaction.get("id") or f"discord_{item.id}"
         message = {
+            "id": f"discord:{discord_event_id}",
             "channel": "discord",
             "sender": f"discord:{user.get('id', '')}",
             "sender_name": user.get("username", ""),
             "body": command_text.strip(),
+            # V060-CHN-002: chat_id = Discord channel id (snowflake) — adapter
+            # validates it as a 17-20 digit numeric string.
+            "chat_id": interaction.get("channel_id"),
             "to": interaction.get("channel_id"),
+            "timestamp": 0,
             "tenant_id": item.tenant_id,
             "agent_id": item.agent_id,
             "discord_integration_id": discord_integration_id,
+            # Discord follow-up needs the interaction token to send the actual reply
+            "discord_interaction_token": interaction.get("token"),
+            "discord_application_id": interaction.get("application_id"),
         }
 
         agent_router = AgentRouter(

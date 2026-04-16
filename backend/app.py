@@ -112,6 +112,7 @@ from api.routes_commands import router as commands_router
 from api.routes_user_contact_mapping import router as user_contact_mapping_router
 # Phase 7.9: RBAC & Multi-tenancy
 from api.routes_tenants import router as tenants_router
+from api.routes_tenant_settings import router as tenant_settings_router
 from api.routes_team import router as team_router
 # Plans Management
 from api.routes_plans import router as plans_router
@@ -674,6 +675,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error initializing Telegram Watcher Manager: {e}", exc_info=True)
 
+    # V060-CHN-002: Initialize Slack Socket Mode Manager
+    try:
+        from services.slack_socket_mode_manager import SlackSocketModeManager
+        slack_socket_manager = SlackSocketModeManager(db_session_factory=SessionLocal)
+        app.state.slack_socket_mode_manager = slack_socket_manager
+        await slack_socket_manager.start_all()
+        logging.info("Slack Socket Mode Manager initialized")
+    except Exception as e:
+        logging.error(f"Error initializing Slack Socket Mode Manager: {e}", exc_info=True)
+
     # Start scheduler worker (Phase 6.4) for scheduled_event table
     try:
         start_scheduler_worker(engine, poll_interval_seconds=10)
@@ -845,6 +856,14 @@ async def lifespan(app: FastAPI):
             logging.info("Telegram Watcher Manager stopped")
         except Exception as e:
             logging.error(f"Error stopping Telegram Watcher Manager: {e}", exc_info=True)
+
+    # V060-CHN-002: Stop Slack Socket Mode Manager
+    if hasattr(app.state, 'slack_socket_mode_manager'):
+        try:
+            await app.state.slack_socket_mode_manager.stop_all()
+            logging.info("Slack Socket Mode Manager stopped")
+        except Exception as e:
+            logging.error(f"Error stopping Slack Socket Mode Manager: {e}", exc_info=True)
 
     # v0.6.0 Item 38: Stop Channel Health Service
     if hasattr(app.state, 'channel_health_service'):
@@ -1205,6 +1224,7 @@ app.include_router(projects_router)  # Phase 14.4: Projects
 app.include_router(commands_router)  # Phase 16: Slash Commands
 app.include_router(user_contact_mapping_router)  # Playground - User Contact Mapping
 app.include_router(tenants_router)  # Phase 7.9 - Tenant Management
+app.include_router(tenant_settings_router)  # v0.6.0 - Tenant self-service settings (public_base_url)
 app.include_router(team_router)  # Phase 7.9 - Team Management
 app.include_router(plans_router)  # Plans Management
 app.include_router(sso_config_router)  # SSO Configuration
