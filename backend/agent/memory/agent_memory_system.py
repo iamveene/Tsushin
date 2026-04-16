@@ -115,9 +115,12 @@ class AgentMemorySystem:
 
         try:
             # Load all memory records for this agent
-            memory_records = self.db.query(Memory).filter(
-                Memory.agent_id == self.agent_id
-            ).all()
+            # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
+            tenant_id = self._get_tenant_id()
+            query = self.db.query(Memory).filter(Memory.agent_id == self.agent_id)
+            if tenant_id:
+                query = query.filter(Memory.tenant_id == tenant_id)
+            memory_records = query.all()
 
             loaded_count = 0
             for record in memory_records:
@@ -643,10 +646,15 @@ class AgentMemorySystem:
                 return
 
             # Check if memory record exists for this agent+sender
-            memory_record = self.db.query(Memory).filter(
+            # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
+            tenant_id = self._get_tenant_id()
+            query = self.db.query(Memory).filter(
                 Memory.agent_id == self.agent_id,
-                Memory.sender_key == user_id
-            ).first()
+                Memory.sender_key == user_id,
+            )
+            if tenant_id:
+                query = query.filter(Memory.tenant_id == tenant_id)
+            memory_record = query.first()
 
             if memory_record:
                 # Update existing record
@@ -654,7 +662,6 @@ class AgentMemorySystem:
                 memory_record.updated_at = datetime.utcnow()
             else:
                 # Create new record
-                tenant_id = self._get_tenant_id()
                 if not tenant_id:
                     self.logger.warning(
                         f"Skipping memory persistence: agent {self.agent_id} has no tenant_id"
@@ -689,11 +696,16 @@ class AgentMemorySystem:
         self.semantic_memory.clear_sender(user_id)
 
         # Clear from database (Memory table)
+        # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
         try:
-            self.db.query(Memory).filter(
+            tenant_id = self._get_tenant_id()
+            query = self.db.query(Memory).filter(
                 Memory.agent_id == self.agent_id,
-                Memory.sender_key == user_id
-            ).delete()
+                Memory.sender_key == user_id,
+            )
+            if tenant_id:
+                query = query.filter(Memory.tenant_id == tenant_id)
+            query.delete(synchronize_session=False)
             self.db.commit()
             self.logger.info(f"Cleared memory for agent {self.agent_id}, user {user_id}")
         except Exception as e:

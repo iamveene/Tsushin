@@ -1430,8 +1430,13 @@ class SentinelService:
         """
         Parse unified classification LLM response.
 
-        The unified response format is:
-        {"threat_type": "none|prompt_injection|agent_takeover|poisoning|shell_malicious", "score": 0.0-1.0, "reason": "..."}
+        Valid threat_type values: "none" + all keys in DETECTION_REGISTRY
+        (see backend/services/sentinel_detections.py). Currently 8 detection
+        types: prompt_injection, agent_takeover, poisoning, shell_malicious,
+        memory_poisoning, agent_escalation, browser_ssrf, vector_store_poisoning.
+
+        Response format:
+        {"threat_type": "<valid_type>", "score": 0.0-1.0, "reason": "..."}
         """
         answer = llm_result.get("answer", "")
 

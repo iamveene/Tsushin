@@ -6,6 +6,11 @@ New tenants are already created with max_agents=10 via auth_service.py.
 Revision ID: 0032
 Revises: 0031
 """
+revision = "0032"
+down_revision = "0031"
+branch_labels = None
+depends_on = None
+
 from alembic import op
 
 

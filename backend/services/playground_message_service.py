@@ -68,9 +68,12 @@ class PlaygroundMessageService:
                 thread.recipient,
             ]
 
+        # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
+        # ConversationThread has a tenant_id column — use it as the source of truth.
         for key in candidate_keys:
             memory = self.db.query(Memory).filter(
                 Memory.agent_id == agent_id,
+                Memory.tenant_id == thread.tenant_id,
                 Memory.sender_key == key
             ).first()
             if memory:
@@ -277,8 +280,10 @@ class PlaygroundMessageService:
 
                 if result.get("status") == "success":
                     # Re-query the memory to get fresh data after send_message persisted
+                    # BUG-LOG-015: tenant_id filter (PK lookup is already safe, but belt-and-suspenders).
                     refreshed_memory = self.db.query(Memory).filter(
-                        Memory.id == memory.id
+                        Memory.id == memory.id,
+                        Memory.tenant_id == thread.tenant_id,
                     ).first()
 
                     return {

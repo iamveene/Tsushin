@@ -82,6 +82,11 @@ after install:
         help="Email for Let's Encrypt certificate notifications. Required with --domain",
     )
     parser.add_argument(
+        "--le-staging",
+        action="store_true",
+        help="Use Let's Encrypt staging environment (for testing, avoids production rate limits). Only valid with --domain",
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=8081,
@@ -107,6 +112,8 @@ after install:
         parser.error("--domain requires --email for Let's Encrypt certificate notifications")
     if args.email and not args.domain:
         parser.error("--email requires --domain")
+    if args.le_staging and not args.domain:
+        parser.error("--le-staging requires --domain")
 
     return args
 
@@ -205,6 +212,10 @@ class TsushinInstaller:
         self.config = {"TSN_STACK_NAME": stack_name}
         self.interactive = is_interactive()
         self.args = args or argparse.Namespace(defaults=False, http=False, domain=None, port=8081, frontend_port=3030)
+        # Set to True when the frontend Docker image must be rebuilt with
+        # --no-cache (because NEXT_PUBLIC_API_URL changed and Next.js bakes
+        # that value into the static build at image-build time).
+        self._force_frontend_rebuild = False
 
     @staticmethod
     def _normalize_ssl_mode(value: str) -> str:
@@ -633,6 +644,14 @@ class TsushinInstaller:
         )
         self.config['SSL_EMAIL'] = email
 
+        # Staging option — use LE staging to avoid production rate limits when testing
+        staging_choice = safe_input(
+            f"{Colors.BOLD}Use Let's Encrypt staging (for testing, avoids rate limits)? [y/N]:{Colors.ENDC} "
+        ).strip().lower()
+        if staging_choice == 'y':
+            self.config['SSL_LE_STAGING'] = 'true'
+            print_warning("Staging certs are not trusted by browsers — switch to production mode for real deploys.")
+
         # Port availability check
         for port in [80, 443]:
             if self.check_port_in_use(port):
@@ -644,13 +663,14 @@ class TsushinInstaller:
                     self.config['SSL_MODE'] = 'disabled'
                     return
 
-        # DNS validation
+        # DNS + reachability validation
         self._validate_domain_dns(domain)
 
     def _prompt_manual_certs(self, public_host: str):
         """Prompt for manual certificate configuration"""
         print()
         print_info("Provide paths to your existing SSL certificate and private key.")
+        print_info("An optional intermediate/chain bundle may be supplied if your CA requires it.")
         print()
 
         domain = self.prompt_with_validation(
@@ -674,6 +694,173 @@ class TsushinInstaller:
             error_msg="File not found. Please provide a valid path to the key file."
         )
         self.config['SSL_KEY_PATH'] = str(Path(key_path).expanduser().resolve())
+
+        # Optional chain/intermediate bundle (pressing Enter skips)
+        chain_raw = safe_input(
+            f"{Colors.BOLD}Path to certificate chain/intermediate bundle (optional, Enter to skip):{Colors.ENDC} "
+        ).strip()
+        if chain_raw:
+            chain_expanded = Path(chain_raw).expanduser()
+            if not chain_expanded.exists() or not chain_expanded.is_file():
+                print_warning(f"Chain file not found: {chain_raw} — continuing without chain.")
+            else:
+                self.config['SSL_CERT_CHAIN_PATH'] = str(chain_expanded.resolve())
+
+        # Validate the cert/key pair BEFORE deploy. Hard errors for mismatch
+        # or expired cert; warn-and-confirm for domain coverage.
+        ok, errors, warnings = self._validate_cert_pair(
+            cert_path=Path(self.config['SSL_CERT_PATH']),
+            key_path=Path(self.config['SSL_KEY_PATH']),
+            chain_path=Path(self.config['SSL_CERT_CHAIN_PATH']) if self.config.get('SSL_CERT_CHAIN_PATH') else None,
+            domain=domain,
+        )
+        for w in warnings:
+            print_warning(w)
+        if not ok:
+            for e in errors:
+                print_error(e)
+            print_info("Re-run the installer with valid certificates, or choose a different SSL mode.")
+            sys.exit(1)
+
+    def _validate_cert_pair(self, cert_path: Path, key_path: Path,
+                             chain_path: Optional[Path], domain: str):
+        """Validate a user-provided cert/key pair before deployment.
+
+        Checks (hard errors vs warnings):
+          - Cert and key parse as PEM                  → hard error
+          - Cert public key matches private key         → hard error
+          - Cert is not expired                         → hard error
+          - Cert expires within 30 days                 → warning
+          - Cert SAN/CN covers the configured domain    → warning (confirm)
+          - Chain (if provided) parses and issuer chain  → hard error on malformed
+
+        Returns (ok, errors, warnings).
+        """
+        errors: List[str] = []
+        warnings: List[str] = []
+
+        try:
+            from cryptography import x509
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.x509.oid import NameOID, ExtensionOID
+            import ipaddress
+        except Exception as exc:  # pragma: no cover - installer bootstraps cryptography
+            errors.append(f"cryptography library unavailable: {exc}")
+            return False, errors, warnings
+
+        # Load cert
+        try:
+            cert_bytes = cert_path.read_bytes()
+            cert = x509.load_pem_x509_certificate(cert_bytes)
+        except Exception as exc:
+            errors.append(f"Certificate failed to parse as PEM: {exc}")
+            return False, errors, warnings
+
+        # Load key (no password support — match existing behavior)
+        try:
+            key_bytes = key_path.read_bytes()
+            private_key = serialization.load_pem_private_key(key_bytes, password=None)
+        except TypeError:
+            errors.append("Private key appears to be passphrase-protected. Tsushin requires an unencrypted key.")
+            return False, errors, warnings
+        except Exception as exc:
+            errors.append(f"Private key failed to parse as PEM: {exc}")
+            return False, errors, warnings
+
+        # Key/cert match — compare public key serialized form (works for RSA/EC/Ed25519)
+        try:
+            cert_pub = cert.public_key().public_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            key_pub = private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            if cert_pub != key_pub:
+                errors.append("Certificate and private key do not match (public keys differ).")
+        except Exception as exc:
+            errors.append(f"Could not compare certificate and key public keys: {exc}")
+
+        # Expiry check — prefer timezone-aware attributes (cryptography >=42), fall back otherwise.
+        try:
+            not_after = getattr(cert, 'not_valid_after_utc', None) or cert.not_valid_after
+            if not_after.tzinfo is None:
+                from datetime import timezone
+                not_after = not_after.replace(tzinfo=timezone.utc)
+            from datetime import datetime, timezone, timedelta
+            now = datetime.now(timezone.utc)
+            if not_after <= now:
+                errors.append(f"Certificate has expired (notAfter={not_after.isoformat()}).")
+            elif not_after - now < timedelta(days=30):
+                warnings.append(
+                    f"Certificate expires in less than 30 days (notAfter={not_after.isoformat()})."
+                )
+        except Exception as exc:
+            warnings.append(f"Could not determine certificate expiry: {exc}")
+
+        # Domain coverage — walk SAN (DNSName for hostnames, IPAddress for IPs), fall back to CN
+        try:
+            is_ip_domain = self._is_ip(domain)
+            covered = False
+            try:
+                san_ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+                san = san_ext.value
+                if is_ip_domain:
+                    try:
+                        target_ip = ipaddress.ip_address(domain)
+                        covered = target_ip in san.get_values_for_type(x509.IPAddress)
+                    except ValueError:
+                        covered = False
+                else:
+                    dns_names = [n.lower() for n in san.get_values_for_type(x509.DNSName)]
+                    target = domain.lower()
+                    covered = target in dns_names or any(
+                        n.startswith('*.') and target.endswith(n[1:]) for n in dns_names
+                    )
+            except x509.ExtensionNotFound:
+                covered = False
+
+            if not covered:
+                # Fall back to CN
+                try:
+                    cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+                    cn = cn_attrs[0].value.lower() if cn_attrs else ""
+                    if cn and cn == domain.lower():
+                        covered = True
+                except Exception:
+                    pass
+
+            if not covered:
+                warnings.append(
+                    f"Certificate does not cover the configured domain '{domain}' (checked SAN and CN). "
+                    "Browsers will reject it. Continue only if you are certain this is correct."
+                )
+                confirm = safe_input(
+                    f"{Colors.BOLD}Proceed with mismatched certificate? [y/N]:{Colors.ENDC} "
+                ).strip().lower()
+                if confirm != 'y':
+                    errors.append("User declined to proceed with a domain-mismatched certificate.")
+        except Exception as exc:
+            warnings.append(f"Could not verify certificate domain coverage: {exc}")
+
+        # Optional chain validation
+        if chain_path is not None:
+            try:
+                chain_bytes = chain_path.read_bytes()
+                chain_certs = x509.load_pem_x509_certificates(chain_bytes)
+                if not chain_certs:
+                    errors.append(f"Chain file is empty or contains no PEM certificates: {chain_path}")
+                else:
+                    if cert.issuer != chain_certs[0].subject:
+                        warnings.append(
+                            "Leaf certificate issuer does not match the first certificate in the chain. "
+                            "Caddy may still accept it, but the chain order is unusual."
+                        )
+            except Exception as exc:
+                errors.append(f"Chain file failed to parse: {exc}")
+
+        return (len(errors) == 0), errors, warnings
 
     def _prompt_selfsigned(self, public_host: str):
         """Prompt for self-signed certificate configuration"""
@@ -724,12 +911,40 @@ class TsushinInstaller:
 
         return stack_path
 
+    def _sync_cert_files(self, filenames: List[str]):
+        """Mirror cert files from caddy/{stack}/certs/ to legacy caddy/certs/.
+
+        The legacy path is kept in sync only when the stack name is the
+        default ``tsushin`` — custom stack names do not touch legacy paths.
+        Reduces inline duplication in self-signed / manual cert flows.
+        """
+        if self._get_stack_name() != "tsushin":
+            return
+        stack_certs = self._get_caddy_stack_dir() / "certs"
+        legacy_certs = self._get_caddy_legacy_dir() / "certs"
+        legacy_certs.mkdir(parents=True, exist_ok=True)
+        for name in filenames:
+            src = stack_certs / name
+            if src.exists():
+                shutil.copy(src, legacy_certs / name)
+
     def _validate_domain_dns(self, domain: str):
-        """Validate that a domain resolves via DNS"""
+        """Validate that a domain resolves via DNS and is reachable.
+
+        Performs three checks (all advisory — any failure prompts the user):
+          1. DNS resolution (A/AAAA)
+          2. Resolved IPs match this server's public IP (detected via ipify)
+          3. HTTP reachability on port 80 (ACME HTTP-01 challenge path)
+
+        Common valid configurations (CNAME via CDN, Cloudflare proxy, NAT)
+        may fail check #2 or #3 but still work for ACME — so these are
+        warnings, not blockers.
+        """
+        # 1. DNS resolution
         try:
             resolved = socket.getaddrinfo(domain, None)
             resolved_ips = set(addr[4][0] for addr in resolved)
-            print_success(f"Domain {domain} resolves to: {', '.join(resolved_ips)}")
+            print_success(f"Domain {domain} resolves to: {', '.join(sorted(resolved_ips))}")
         except socket.gaierror:
             print_warning(f"Domain {domain} does not resolve (DNS lookup failed).")
             print_warning("Let's Encrypt will fail if the domain doesn't point to this server.")
@@ -737,6 +952,58 @@ class TsushinInstaller:
             if confirm != 'y':
                 print_info("Switching to disabled SSL mode.")
                 self.config['SSL_MODE'] = 'disabled'
+            return
+
+        # 2. Public IP comparison
+        server_public_ip = None
+        try:
+            server_public_ip = requests.get("https://api.ipify.org", timeout=5).text.strip()
+        except Exception:
+            # Network/endpoint unavailable — skip silently, don't block install
+            pass
+
+        if server_public_ip:
+            if server_public_ip not in resolved_ips:
+                print_warning(
+                    f"Domain resolves to {', '.join(sorted(resolved_ips))} "
+                    f"but this server's public IP is {server_public_ip}."
+                )
+                print_info(
+                    "This can be valid (CDN/CNAME/Cloudflare proxy) but often indicates DNS is "
+                    "pointing at the wrong host. ACME HTTP-01 will fail unless the domain routes to this server."
+                )
+                confirm = safe_input(f"{Colors.BOLD}Continue anyway? [y/N]:{Colors.ENDC} ").strip().lower()
+                if confirm != 'y':
+                    print_info("Switching to disabled SSL mode.")
+                    self.config['SSL_MODE'] = 'disabled'
+                    return
+            else:
+                print_success(f"Public IP ({server_public_ip}) matches one of the resolved addresses.")
+
+        # 3. HTTP reachability on port 80 (what ACME HTTP-01 uses)
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            requests.head(
+                f"http://{domain}/",
+                timeout=5,
+                allow_redirects=False,
+                # nosemgrep: python.requests.security.disabled-cert-validation.disabled-cert-validation
+                verify=False,
+            )
+            print_success(f"HTTP reachability to {domain} confirmed (port 80 responds).")
+        except requests.exceptions.ConnectionError:
+            print_warning(
+                f"Could not reach http://{domain}/ — ACME HTTP-01 requires port 80 open to the internet."
+            )
+            print_info("If your server is behind a firewall/NAT, ensure port 80 is forwarded.")
+            confirm = safe_input(f"{Colors.BOLD}Continue anyway? [y/N]:{Colors.ENDC} ").strip().lower()
+            if confirm != 'y':
+                print_info("Switching to disabled SSL mode.")
+                self.config['SSL_MODE'] = 'disabled'
+        except Exception:
+            # Timeouts, redirect handling quirks, etc. — don't block
+            pass
 
     def generate_caddyfile(self):
         """Generate Caddy reverse proxy configuration based on SSL mode.
@@ -781,8 +1048,15 @@ class TsushinInstaller:
 
         if ssl_mode == 'letsencrypt':
             email = self.config.get('SSL_EMAIL', '')
+            # Opt in to LE staging when requested — avoids production rate limits
+            # (5 failed validations per account, per hostname, per hour).
+            staging_enabled = str(self.config.get('SSL_LE_STAGING', '')).lower() in ('true', '1', 'yes')
+            global_lines = [f"    email {email}"]
+            if staging_enabled:
+                global_lines.append("    acme_ca https://acme-staging-v02.api.letsencrypt.org/directory")
+            global_block = "{\n" + "\n".join(global_lines) + "\n}\n\n"
             caddyfile_content = (
-                f"{{\n    email {email}\n}}\n\n"
+                f"{global_block}"
                 f"{snippet_block}\n\n"
                 f"{domain} {{\n    import tsushin_routes\n}}\n\n"
                 f"{remote_access_block}\n"
@@ -799,8 +1073,12 @@ class TsushinInstaller:
 
         elif ssl_mode == 'selfsigned':
             # default_sni ensures Caddy serves the cert even when clients don't
-            # send SNI (e.g., curl/browsers connecting via bare IP address)
-            global_block = f"{{\n    default_sni {domain}\n}}\n\n"
+            # send SNI (e.g., curl/browsers connecting via bare IP address).
+            # Caddy rejects IP literals in `default_sni` — fall back to
+            # `localhost` when the domain is an IP. The site-block label is
+            # still the IP (Caddy accepts IPs as site addresses).
+            sni_target = 'localhost' if self._is_ip(domain) else domain
+            global_block = f"{{\n    default_sni {sni_target}\n}}\n\n"
             caddyfile_content = (
                 f"{global_block}"
                 f"{snippet_block}\n\n"
@@ -839,6 +1117,17 @@ class TsushinInstaller:
             print_info("Using Caddy's 'tls internal' directive instead.")
             return
 
+        # Build subjectAltName: use IP: entry when domain is an IP literal,
+        # DNS: when it's a hostname. RFC 5280 requires IP addresses in
+        # iPAddress SAN entries — DNS:10.0.0.1 is invalid and browsers will
+        # reject it (NET::ERR_CERT_COMMON_NAME_INVALID) or fall back to CN.
+        if self._is_ip(domain):
+            primary_san = f"IP:{domain}"
+        else:
+            primary_san = f"DNS:{domain}"
+        san_entries = [primary_san, "DNS:localhost", "IP:127.0.0.1", "IP:::1"]
+        san_value = ",".join(san_entries)
+
         cmd = [
             "openssl", "req", "-x509", "-nodes",
             "-days", "365",
@@ -846,23 +1135,24 @@ class TsushinInstaller:
             "-keyout", str(key_path),
             "-out", str(cert_path),
             "-subj", f"/CN={domain}/O=Tsushin Dev/C=US",
-            "-addext", f"subjectAltName=DNS:{domain},DNS:localhost,IP:127.0.0.1"
+            "-addext", f"subjectAltName={san_value}"
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
-            if self._get_stack_name() == "tsushin":
-                legacy_certs_dir = self._get_caddy_legacy_dir() / "certs"
-                legacy_certs_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy(cert_path, legacy_certs_dir / "selfsigned.crt")
-                shutil.copy(key_path, legacy_certs_dir / "selfsigned.key")
+            self._sync_cert_files(["selfsigned.crt", "selfsigned.key"])
             print_success("Self-signed certificate generated")
         else:
             print_warning(f"Could not generate certificate: {result.stderr}")
             print_info("Caddy will generate its own self-signed certificate using 'tls internal'.")
 
     def copy_manual_certs(self):
-        """Copy user-provided certificates into caddy/certs/"""
+        """Copy user-provided certificates into caddy/{stack}/certs/.
+
+        When an optional intermediate/chain bundle is supplied via
+        SSL_CERT_CHAIN_PATH, the leaf cert and chain are concatenated into
+        the destination ``cert.pem`` (Caddy reads a single bundled PEM).
+        """
         ssl_mode = self.config.get('SSL_MODE', 'disabled')
         if ssl_mode != 'manual':
             return
@@ -872,15 +1162,28 @@ class TsushinInstaller:
 
         cert_src = Path(self.config['SSL_CERT_PATH'])
         key_src = Path(self.config['SSL_KEY_PATH'])
+        chain_src_str = self.config.get('SSL_CERT_CHAIN_PATH')
 
-        shutil.copy(cert_src, certs_dir / "cert.pem")
-        shutil.copy(key_src, certs_dir / "key.pem")
-        if self._get_stack_name() == "tsushin":
-            legacy_certs_dir = self._get_caddy_legacy_dir() / "certs"
-            legacy_certs_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(cert_src, legacy_certs_dir / "cert.pem")
-            shutil.copy(key_src, legacy_certs_dir / "key.pem")
-        print_success("SSL certificates copied to caddy/certs/")
+        dest_cert = certs_dir / "cert.pem"
+        dest_key = certs_dir / "key.pem"
+
+        # Write leaf cert, optionally with chain appended
+        cert_bytes = cert_src.read_bytes()
+        if chain_src_str:
+            chain_src = Path(chain_src_str)
+            # Ensure newline separation between PEM blocks
+            if not cert_bytes.endswith(b"\n"):
+                cert_bytes += b"\n"
+            cert_bytes += chain_src.read_bytes()
+        dest_cert.write_bytes(cert_bytes)
+
+        shutil.copy(key_src, dest_key)
+        self._sync_cert_files(["cert.pem", "key.pem"])
+
+        if chain_src_str:
+            print_success("SSL certificates (with chain) copied to caddy/certs/")
+        else:
+            print_success("SSL certificates copied to caddy/certs/")
 
     def prepare_data_directories(self):
         """Create required data directories with proper permissions"""
@@ -940,6 +1243,19 @@ class TsushinInstaller:
         # Get absolute path for HOST_BACKEND_DATA_PATH
         host_backend_data_path = str(self.backend_data_dir.absolute())
 
+        # Capture the previous NEXT_PUBLIC_API_URL (if any) so we can detect
+        # changes that require a cache-busting frontend rebuild. Next.js bakes
+        # NEXT_PUBLIC_* values into the static build at image-build time — a
+        # cached image carries the old URL forever and silently routes API
+        # calls to the wrong host.
+        previous_api_url = ""
+        if self.env_file.exists():
+            try:
+                previous_env_vars = self._read_env_file_vars()
+                previous_api_url = previous_env_vars.get('NEXT_PUBLIC_API_URL', '')
+            except Exception:
+                previous_api_url = ""
+
         # Determine URLs based on SSL mode
         ssl_mode = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
         access_type = self.config.get('ACCESS_TYPE', 'localhost')
@@ -956,6 +1272,16 @@ class TsushinInstaller:
         else:
             backend_url = f"http://localhost:{self.config['TSN_APP_PORT']}"
             frontend_url = f"http://localhost:{self.config['FRONTEND_PORT']}"
+
+        # Compare new backend_url against previous NEXT_PUBLIC_API_URL; if
+        # different (including the fresh-install case where previous is empty),
+        # schedule a --no-cache frontend rebuild in run_docker_compose.
+        if previous_api_url and previous_api_url != backend_url:
+            self._force_frontend_rebuild = True
+            print_info(
+                f"NEXT_PUBLIC_API_URL changed ({previous_api_url} -> {backend_url}); "
+                f"frontend will be rebuilt with --no-cache."
+            )
 
         cors_origins = [frontend_url]
         if ssl_mode != 'disabled':
@@ -1020,6 +1346,7 @@ ASANA_REDIRECT_URI={frontend_url}/hub/asana/callback
 SSL_MODE={ssl_mode}
 SSL_DOMAIN={self.config.get('SSL_DOMAIN', '')}
 SSL_EMAIL={self.config.get('SSL_EMAIL', '')}
+SSL_LE_STAGING={self.config.get('SSL_LE_STAGING', '')}
 TSN_SSL_MODE={ssl_mode}
 TSN_CORS_ORIGINS={','.join(cors_origins)}
 HTTP_PORT=80
@@ -1088,15 +1415,26 @@ KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
 
         # Build compose command with SSL override if enabled
         ssl_mode = self.config.get('SSL_MODE', 'disabled')
+        compose_file_args: List[str] = []
         if ssl_mode != 'disabled':
-            compose_cmd = self.docker_compose_cmd + [
-                "-f", "docker-compose.yml",
-                "-f", "docker-compose.ssl.yml",
-                "up", "--build", "-d"
-            ]
+            compose_file_args = ["-f", "docker-compose.yml", "-f", "docker-compose.ssl.yml"]
             print_info("SSL enabled: deploying with Caddy reverse proxy...")
-        else:
-            compose_cmd = self.docker_compose_cmd + ["up", "--build", "-d"]
+
+        # If NEXT_PUBLIC_API_URL changed, rebuild frontend without cache first.
+        # This is the only layer that bakes in build-time env vars; a cached
+        # image would keep the old API URL despite the new .env.
+        if self._force_frontend_rebuild:
+            print_info("Frontend rebuild required (API URL changed) — running build --no-cache frontend...")
+            rebuild_cmd = self.docker_compose_cmd + compose_file_args + [
+                "build", "--no-cache", "frontend"
+            ]
+            try:
+                subprocess.run(rebuild_cmd, cwd=self.root_dir, env=compose_env, check=True)
+                print_success("Frontend image rebuilt without cache")
+            except subprocess.CalledProcessError as exc:
+                print_warning(f"Frontend --no-cache rebuild failed (continuing with cached build): {exc}")
+
+        compose_cmd = self.docker_compose_cmd + compose_file_args + ["up", "--build", "-d"]
 
         try:
             process = subprocess.Popen(
@@ -1429,6 +1767,9 @@ KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
                 self.config['SSL_MODE'] = 'letsencrypt'
                 self.config['SSL_DOMAIN'] = self.args.domain
                 self.config['SSL_EMAIL'] = self.args.email
+                if self.args.le_staging:
+                    self.config['SSL_LE_STAGING'] = 'true'
+                    print_info("Let's Encrypt staging environment enabled (for testing only).")
             # Resolve URLs after SSL mode is finalized
             host = self.config['PUBLIC_HOST']
             self._resolve_urls(self.config['ACCESS_TYPE'], host, self.config['TSN_APP_PORT'])

@@ -1207,9 +1207,11 @@ async def get_memory_layers(
         possible_keys.append(f"playground_user_{current_user.id}")
         possible_keys.append(f"contact_{current_user.id}")
 
+        # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
         for key in possible_keys:
             memory_record = db.query(Memory).filter(
                 Memory.agent_id == agent_id,
+                Memory.tenant_id == current_user.tenant_id,
                 Memory.sender_key == key
             ).first()
             if memory_record:

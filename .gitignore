@@ -258,6 +258,8 @@ backend/tests/*
 !backend/tests/test_playground_memory_regressions.py
 !backend/tests/test_mcp_container_manager.py
 !backend/tests/test_routes_mcp_instances_tester.py
+!backend/tests/test_sentinel_unified_parse.py
+!backend/tests/test_memory_tenant_scoping.py
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py
 ops/check_openrouter_agent.py

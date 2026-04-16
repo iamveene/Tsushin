@@ -189,9 +189,12 @@ class PlaygroundThreadService:
                 thread.recipient,
             ]
 
+        # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
+        # ConversationThread.tenant_id is the source of truth for this query's scope.
         for key in candidate_keys:
             memory = self.db.query(Memory).filter(
                 Memory.agent_id == thread.agent_id,
+                Memory.tenant_id == thread.tenant_id,
                 Memory.sender_key == key,
             ).first()
             if memory:
@@ -202,6 +205,7 @@ class PlaygroundThreadService:
                 self.db.query(Memory)
                 .filter(
                     Memory.agent_id == thread.agent_id,
+                    Memory.tenant_id == thread.tenant_id,
                     Memory.sender_key.like(f"%{thread.recipient}%"),
                 )
                 .first()

@@ -158,6 +158,9 @@ python3 install.py --defaults
 # Unattended with Let's Encrypt (public domain required)
 python3 install.py --defaults --domain app.example.com --email you@example.com
 
+# Unattended with Let's Encrypt STAGING (for testing — avoids production rate limits)
+python3 install.py --defaults --domain app.example.com --email you@example.com --le-staging
+
 # Unattended HTTP-only (dev/test only — insecure)
 python3 install.py --defaults --http
 
@@ -165,7 +168,43 @@ python3 install.py --defaults --http
 python3 install.py --port 9090 --frontend-port 3031
 ```
 
-Source: `README.md:29-48`, `install.py:38-96`. `--http` and `--domain` are mutually exclusive and both require `--defaults` (`install.py:102-109`).
+Source: `README.md:29-48`, `install.py:38-96`. `--http` and `--domain` are mutually exclusive and both require `--defaults`; `--le-staging` requires `--domain`.
+
+#### SSL/TLS modes and troubleshooting
+
+The installer supports four SSL modes, all served through Caddy. Let's Encrypt issuance and renewal is handled by Caddy's built-in ACME client — no separate certbot container is involved.
+
+| Mode | When to use | Cert location |
+|---|---|---|
+| `disabled` | Local dev behind a VPN, or isolated test harnesses. Ports 80/443 are NOT bound; frontend/backend are exposed on the configured ports. | n/a |
+| `selfsigned` | Default for `--defaults` installs without `--domain`. Works on IP-address hosts (e.g., LAN VMs at `10.211.55.5`). Browsers will show a security warning until the cert is trusted. | `caddy/<stack>/certs/selfsigned.{crt,key}` |
+| `letsencrypt` | Public-facing deployment with a real domain pointing at this server. Requires ports 80 and 443 reachable from the internet. | Caddy-managed in the `caddy-data` volume |
+| `manual` | You already have a cert issued by your own CA or a public CA. Supports an optional chain/intermediate bundle. | `caddy/<stack>/certs/{cert,key}.pem` |
+
+**Self-signed on IP-address hosts.** When the domain passed to the installer is an IPv4/IPv6 literal, the generated certificate's `subjectAltName` now uses the `IP:` entry type (`IP:10.211.55.5`). Emitting `DNS:10.211.55.5` is invalid per RFC 5280 and causes browsers to show `NET::ERR_CERT_COMMON_NAME_INVALID`. The Caddyfile's `default_sni` also falls back to `localhost` for IP installs because Caddy rejects IP literals as SNI values.
+
+**Let's Encrypt pre-flight.** Before writing the Caddyfile, the installer (a) resolves the domain via DNS, (b) optionally fetches the server's public IP via `api.ipify.org` and compares it against the resolved IPs, and (c) performs a plain HTTP HEAD on port 80 (the ACME HTTP-01 challenge path). Mismatches and unreachable hosts surface as warnings — valid configurations behind Cloudflare proxy / CDN / NAT can still proceed.
+
+**LE rate-limit recovery.** Production LE limits each account+hostname pair to 5 failed validations per hour. If you hit this limit, re-run the installer with `--le-staging` to test against the staging environment (which has much higher limits) until your setup resolves validation correctly, then repeat without `--le-staging` for a trusted production certificate.
+
+**Manual-cert validation.** The installer validates the cert/key pair before copying it into the Caddy cert directory:
+
+- Key and cert public keys must match — mismatch is a hard error.
+- Cert must not be expired — expired is a hard error; expiring within 30 days is a warning only.
+- Cert SAN/CN must cover the configured domain — otherwise the installer asks for confirmation before proceeding.
+- Optional chain file is parsed and its first cert's subject is compared to the leaf cert's issuer for basic sanity.
+
+When a chain file is supplied, the installer concatenates `cert + chain` into the destination `caddy/<stack>/certs/cert.pem` (Caddy reads a single bundled PEM — no Caddyfile change needed).
+
+**Common errors and fixes.**
+
+- `tls: private key does not match certificate` at Caddy startup → cert/key pair mismatch. The installer now catches this before deploy and refuses to continue.
+- Browser shows `NET::ERR_CERT_COMMON_NAME_INVALID` on an IP-based self-signed install → regenerate the cert with the updated installer; the SAN will now contain `IP:<addr>` instead of `DNS:<addr>`.
+- Frontend API calls 404 or hit CORS after switching SSL mode → historically caused by the Next.js image caching `NEXT_PUBLIC_API_URL`. The installer now detects changes to this value and runs `docker compose build --no-cache frontend` before restarting.
+
+#### New `.env` key
+
+- `SSL_LE_STAGING` (blank or `true`) — when `true`, the generated Caddyfile injects `acme_ca https://acme-staging-v02.api.letsencrypt.org/directory` so Caddy issues certs from LE staging instead of production.
 
 For a remote Ubuntu VM, use the normal user flow: clone the repo on the VM, install Docker plus Docker Compose v2, and run `python3 install.py` from the repository root on that VM. For remote HTTP installs, the installer's final success output uses the public host/IP you entered rather than `localhost`.
 
@@ -906,7 +945,7 @@ Source: YAML manifests in `backend/tools/manifests/` (9 files). Seeding: `backen
 
 Source: `backend/agent/memory/agent_memory_system.py:1-32`.
 
-- **Layer 1 — Working Memory**: ring buffer of last N messages per sender key, stored in the `memory` table (`messages_json` JSON field). Fast in-context recall. Source: `backend/models.py:112-119`.
+- **Layer 1 — Working Memory**: ring buffer of last N messages per sender key, stored in the `memory` table (`messages_json` JSON field). Fast in-context recall. Source: `backend/models.py:130-144`. The `memory` table is keyed by `(tenant_id, agent_id, sender_key)` with a composite index `idx_memory_tenant_agent_sender`; every read and write path filters by `tenant_id` for DB-level cross-tenant isolation (see BUG-LOG-015).
 - **Layer 2 — Long-Term Episodic Memory**: unlimited conversation history with semantic search via a vector store (ChromaDB default). Implemented in `SemanticMemoryService` (`backend/agent/memory/semantic_memory.py`).
 - **Layer 3 — Semantic Knowledge Base**: learned facts about users, extracted by `FactExtractor` (`backend/agent/memory/fact_extractor.py`) and persisted via `KnowledgeService` (`backend/agent/memory/knowledge_service.py`).
 - **Layer 4 — Shared Memory Pool**: cross-agent knowledge, managed by `SharedMemoryPool` (`backend/agent/memory/shared_memory_pool.py`).

@@ -179,7 +179,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     api.logout().catch(console.error)
     _cleanupLegacyToken()
     setUser(null)
-    router.push('/auth/login')
+    // BUG-544: Hard navigation to /auth/login. router.push() raced the
+    // LayoutContent spinner branch (`if (loading || !user)` at
+    // LayoutContent.tsx:188) and could leave the user stuck on
+    // "Loading Tsushin..." forever when logging out from `/`.
+    if (typeof window !== 'undefined') {
+      window.location.href = '/auth/login'
+    } else {
+      router.push('/auth/login')
+    }
   }
 
   const forgotPasswordHandler = async (email: string) => {

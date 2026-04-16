@@ -95,10 +95,10 @@ async def get_memory_stats(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         stats = await service.get_memory_stats()
         return stats.to_dict()
     except Exception as e:
@@ -125,10 +125,10 @@ async def list_conversations(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         conversations = await service.list_conversations()
         return [conv.to_dict() for conv in conversations]
     except Exception as e:
@@ -155,10 +155,10 @@ async def get_conversation(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         details = await service.get_conversation(sender_key)
         return details.to_dict()
     except Exception as e:
@@ -187,10 +187,10 @@ async def delete_conversation(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         success = await service.delete_conversation(sender_key)
 
         if success:
@@ -224,10 +224,10 @@ async def clean_old_messages(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         report = await service.clean_old_messages(
             older_than_days=request.older_than_days,
             dry_run=request.dry_run
@@ -276,7 +276,7 @@ async def reset_agent_memory(
             )
 
         # Perform reset
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         result = await service.reset_agent_memory()
 
         return result
