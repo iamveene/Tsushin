@@ -67,7 +67,7 @@ class WatcherActivityService:
         if tenant_id not in self.tenant_connections:
             self.tenant_connections[tenant_id] = set()
         self.tenant_connections[tenant_id].add(websocket)
-        logger.info(f"Graph View connection registered: tenant={tenant_id}, total={len(self.tenant_connections[tenant_id])}")
+        print(f"⚡ Graph View WS registered: tenant={tenant_id}, total={len(self.tenant_connections[tenant_id])}")
 
     def unregister_connection(self, tenant_id: str, websocket: WebSocket):
         """
@@ -81,7 +81,7 @@ class WatcherActivityService:
             self.tenant_connections[tenant_id].discard(websocket)
             if not self.tenant_connections[tenant_id]:
                 del self.tenant_connections[tenant_id]
-            logger.info(f"Graph View connection unregistered: tenant={tenant_id}")
+            print(f"⚡ Graph View WS unregistered: tenant={tenant_id}, remaining={len(self.tenant_connections.get(tenant_id, set()))}")
 
     def get_connection_count(self, tenant_id: Optional[str] = None) -> int:
         """Get number of active connections, optionally filtered by tenant."""
@@ -105,7 +105,7 @@ class WatcherActivityService:
             return
 
         disconnected = set()
-        for websocket in self.tenant_connections[tenant_id]:
+        for websocket in set(self.tenant_connections[tenant_id]):
             try:
                 await websocket.send_json(message)
             except Exception as e:
@@ -142,7 +142,8 @@ class WatcherActivityService:
             channel: Optional channel type (e.g. "whatsapp", "playground")
         """
         if tenant_id not in self.tenant_connections:
-            return  # No listeners, skip
+            print(f"⚡ Watcher activity SKIPPED (no listeners): agent={agent_id}, status={status}, channel={channel}, tenant={tenant_id}, registered_tenants={list(self.tenant_connections.keys())}")
+            return
 
         message = {
             "type": "agent_processing",
@@ -155,7 +156,7 @@ class WatcherActivityService:
             message["channel"] = channel
 
         await self._broadcast_to_tenant(tenant_id, message)
-        logger.debug(f"Emitted agent_processing: agent={agent_id}, status={status}, channel={channel}")
+        print(f"⚡ Emitted agent_processing: agent={agent_id}, status={status}, channel={channel}, listeners={len(self.tenant_connections.get(tenant_id, set()))}")
 
     async def emit_skill_used(
         self,
@@ -216,6 +217,83 @@ class WatcherActivityService:
 
         await self._broadcast_to_tenant(tenant_id, message)
         logger.debug(f"Emitted kb_used: agent={agent_id}, docs={doc_count}, chunks={chunk_count}")
+
+    async def emit_channel_health(
+        self,
+        tenant_id: str,
+        channel_type: str,
+        instance_id: int,
+        circuit_state: str,
+        health_status: str,
+        latency_ms: float = None,
+        detail: str = None
+    ):
+        """
+        Emit channel health update event (Item 38).
+
+        Args:
+            tenant_id: Tenant ID
+            channel_type: Channel type (whatsapp, telegram)
+            instance_id: Channel instance ID
+            circuit_state: Circuit breaker state (closed, open, half_open)
+            health_status: Health status (healthy, unhealthy, degraded)
+            latency_ms: Health check latency in milliseconds
+            detail: Optional detail message
+        """
+        if tenant_id not in self.tenant_connections:
+            return  # No listeners, skip
+
+        message = {
+            "type": "channel_health",
+            "channel_type": channel_type,
+            "instance_id": instance_id,
+            "circuit_state": circuit_state,
+            "health_status": health_status,
+            "latency_ms": latency_ms,
+            "detail": detail,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+
+        await self._broadcast_to_tenant(tenant_id, message)
+        logger.debug(f"Emitted channel_health: {channel_type}/{instance_id}, state={circuit_state}")
+
+    async def emit_agent_communication(
+        self,
+        tenant_id: str,
+        initiator_agent_id: int,
+        target_agent_id: int,
+        session_id: int,
+        status: str,
+        session_type: str,
+        depth: int = 1
+    ) -> None:
+        """
+        Emit A2A communication event to Watcher WebSocket clients.
+
+        Args:
+            tenant_id: Tenant ID
+            initiator_agent_id: ID of the agent initiating the communication
+            target_agent_id: ID of the agent receiving the communication
+            session_id: AgentCommunicationSession ID
+            status: "start" or "end"
+            session_type: "ask" or "delegate" (maps to session_type in AgentCommunicationSession)
+            depth: Delegation depth (0-based from AgentCommunicationSession.depth, displayed as 1-based)
+        """
+        if tenant_id not in self.tenant_connections:
+            return  # No listeners, skip
+
+        message = {
+            "type": "agent_communication",
+            "initiator_agent_id": initiator_agent_id,
+            "target_agent_id": target_agent_id,
+            "session_id": session_id,
+            "status": status,
+            "session_type": session_type,
+            "depth": depth,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+        await self._broadcast_to_tenant(tenant_id, message)
+        logger.debug(f"Emitted agent_communication: {initiator_agent_id}->{target_agent_id}, status={status}, depth={depth}")
 
 
 # Convenience functions for fire-and-forget event emission
@@ -281,6 +359,58 @@ def emit_kb_used_async(
             agent_id=agent_id,
             doc_count=doc_count,
             chunk_count=chunk_count
+        ))
+    except RuntimeError:
+        pass
+
+
+def emit_channel_health_async(
+    tenant_id: str,
+    channel_type: str,
+    instance_id: int,
+    circuit_state: str,
+    health_status: str,
+    latency_ms: float = None,
+    detail: str = None
+):
+    """Fire-and-forget wrapper for channel health events (Item 38)."""
+    service = WatcherActivityService.get_instance()
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(service.emit_channel_health(
+            tenant_id=tenant_id,
+            channel_type=channel_type,
+            instance_id=instance_id,
+            circuit_state=circuit_state,
+            health_status=health_status,
+            latency_ms=latency_ms,
+            detail=detail
+        ))
+    except RuntimeError:
+        pass
+
+
+def emit_agent_communication_async(
+    tenant_id: str,
+    initiator_agent_id: int,
+    target_agent_id: int,
+    session_id: int,
+    status: str,
+    session_type: str,
+    depth: int = 1
+):
+    """Fire-and-forget wrapper for A2A communication events."""
+    service = WatcherActivityService.get_instance()
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(service.emit_agent_communication(
+            tenant_id=tenant_id,
+            initiator_agent_id=initiator_agent_id,
+            target_agent_id=target_agent_id,
+            session_id=session_id,
+            status=status,
+            session_type=session_type,
+            depth=depth
         ))
     except RuntimeError:
         pass

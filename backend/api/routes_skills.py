@@ -13,8 +13,12 @@ import logging
 
 from agent.skills import get_skill_manager
 from models import AgentSkill, Agent
-from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from models_rbac import User
+from auth_dependencies import (
+    TenantContext,
+    get_tenant_context,
+    require_permission,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -82,16 +86,23 @@ def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     return agent
 
 
 # API Endpoints
 
 @router.get("/skills/available")
-async def get_available_skills():
+async def get_available_skills(
+    _current_user = Depends(require_permission("agents.read")),
+):
     """
     Get list of all registered skill types.
+
+    v0.6.0 Remote Access hardening: requires ``agents.read``. This endpoint
+    enumerates every installed skill type (shell_beacon, code_executor,
+    web_search, etc.) along with its config schema, which is exactly the kind
+    of recon surface we do not want exposed on a publicly-tunneled instance.
 
     Returns:
         List of available skills with metadata:
@@ -110,7 +121,7 @@ async def get_available_skills():
         }
     except Exception as e:
         logger.error(f"Error listing available skills: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.get("/agents/{agent_id}/skills")
@@ -153,9 +164,11 @@ async def get_agent_skills(
             ],
             "count": len(skills)
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting skills for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.get("/agents/{agent_id}/skills/{skill_type}")
@@ -207,7 +220,7 @@ async def get_skill_config(
         raise
     except Exception as e:
         logger.error(f"Error getting skill config: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.put("/agents/{agent_id}/skills/{skill_type}")
@@ -296,9 +309,11 @@ async def update_skill(
 
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error updating skill: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error updating skill ({type(e).__name__}): {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Skill operation failed. Please try again.")
 
 
 @router.delete("/agents/{agent_id}/skills/{skill_type}")
@@ -337,6 +352,19 @@ async def disable_skill(
                 detail=f"Skill '{skill_type}' not found for agent {agent_id}"
             )
 
+        if skill_type == "agent_communication":
+            from models import AgentCommunicationPermission
+            stale = db.query(AgentCommunicationPermission).filter(
+                AgentCommunicationPermission.tenant_id == ctx.tenant_id,
+                (AgentCommunicationPermission.source_agent_id == agent_id) |
+                (AgentCommunicationPermission.target_agent_id == agent_id)
+            ).all()
+            for perm in stale:
+                db.delete(perm)
+            if stale:
+                db.commit()
+                logger.info(f"Auto-cleaned {len(stale)} A2A permissions for agent {agent_id} after skill removal")
+
         logger.info(f"Disabled skill '{skill_type}' for agent {agent_id}")
 
         return {
@@ -350,7 +378,7 @@ async def disable_skill(
         raise
     except Exception as e:
         logger.error(f"Error disabling skill: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")
 
 
 @router.post("/agents/{agent_id}/skills/{skill_type}/test")
@@ -415,9 +443,19 @@ async def test_skill(
             channel="test"  # Skills-as-Tools: skill testing endpoint
         )
 
-        # Get skill instance
+        # BUG-317 fix: Create skill instance using the same initialization path
+        # as the normal execution flow (process_message_with_skills). The bare
+        # `skill_class()` call was missing _config, _db_session, and _agent_id,
+        # causing config-driven skills (web_search, weather, etc.) to false-negative
+        # on can_handle() because they couldn't read their persisted config.
         skill_class = skill_manager.registry[skill_type]
-        skill_instance = skill_class()
+        skill_instance = skill_manager._create_skill_instance(skill_class, db, agent_id)
+
+        # Apply saved config, db session, and agent context (mirrors process_message_with_skills)
+        skill_instance._config = config
+        if hasattr(skill_instance, 'set_db_session'):
+            skill_instance.set_db_session(db)
+        skill_instance._agent_id = agent_id
 
         # Check if can handle
         can_handle = await skill_instance.can_handle(test_message)
@@ -428,6 +466,14 @@ async def test_skill(
                 "message": f"Skill '{skill_type}' cannot handle this message type",
                 "can_handle": False
             }
+
+        # Inject agent_id and tenant_id into config for process() (mirrors process_message_with_skills)
+        config['agent_id'] = agent_id
+        if 'tenant_id' not in config:
+            from models import Agent as AgentModel
+            agent_obj = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
+            if agent_obj:
+                config['tenant_id'] = agent_obj.tenant_id
 
         # Execute skill
         result = await skill_instance.process(test_message, config)
@@ -444,4 +490,4 @@ async def test_skill(
         raise
     except Exception as e:
         logger.error(f"Error testing skill: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Skill operation failed")

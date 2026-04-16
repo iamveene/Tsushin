@@ -27,8 +27,8 @@ class SkillContextService:
     for injection into LLM-based security analysis prompts.
     """
 
-    # Cache skill context for 5 minutes per agent
-    _cache: Dict[int, Tuple[datetime, Dict[str, Any]]] = {}
+    # Cache skill context for 5 minutes per tenant:agent
+    _cache: Dict[str, Tuple[datetime, Dict[str, Any]]] = {}
     _cache_ttl = timedelta(minutes=5)
 
     def __init__(self, db: Session):
@@ -40,7 +40,7 @@ class SkillContextService:
         """
         self.db = db
 
-    def get_agent_skill_context(self, agent_id: int) -> Dict[str, Any]:
+    def get_agent_skill_context(self, agent_id: int, tenant_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Get aggregated skill context for an agent.
 
@@ -49,6 +49,7 @@ class SkillContextService:
 
         Args:
             agent_id: Agent ID to get skills for
+            tenant_id: Tenant ID for cache isolation (prevents cross-tenant cache hits)
 
         Returns:
             Dict with:
@@ -58,16 +59,19 @@ class SkillContextService:
             - risk_notes: Combined security notes
             - formatted_context: Human-readable context string for LLM
         """
+        # Cache key includes tenant_id to prevent cross-tenant leakage
+        cache_key = f"{tenant_id or ''}:{agent_id}"
+
         # Check cache first
-        if agent_id in self._cache:
-            cached_time, cached_context = self._cache[agent_id]
+        if cache_key in self._cache:
+            cached_time, cached_context = self._cache[cache_key]
             if datetime.utcnow() - cached_time < self._cache_ttl:
                 logger.debug(f"Using cached skill context for agent {agent_id}")
                 return cached_context
 
         # Compute context and cache it
         context = self._compute_skill_context(agent_id)
-        self._cache[agent_id] = (datetime.utcnow(), context)
+        self._cache[cache_key] = (datetime.utcnow(), context)
         return context
 
     def _compute_skill_context(self, agent_id: int) -> Dict[str, Any]:
@@ -81,8 +85,9 @@ class SkillContextService:
             Aggregated skill context dict
         """
         try:
-            # Import skill manager here to avoid circular imports
+            # Import skill manager and models to ensure all SQLAlchemy mappers are configured
             from agent.skills import get_skill_manager
+            import models_rbac  # noqa: F401 — needed for User relationship resolution
             skill_manager = get_skill_manager()
 
             # Get enabled skills for agent
@@ -99,6 +104,7 @@ class SkillContextService:
             all_intents = []
             all_patterns = []
             all_risk_notes = []
+            all_exemptions = []
 
             for skill_record in skills:
                 skill_type = skill_record.skill_type
@@ -109,6 +115,16 @@ class SkillContextService:
 
                 skill_class = skill_manager.registry[skill_type]
                 enabled_skills.append(skill_class.skill_name)
+
+                # Collect auto-exemptions from enabled skills
+                if hasattr(skill_class, 'get_sentinel_exemptions'):
+                    try:
+                        exemptions = skill_class.get_sentinel_exemptions()
+                        if exemptions:
+                            all_exemptions.extend(exemptions)
+                            logger.debug(f"Skill {skill_type} exempts: {exemptions}")
+                    except Exception as e:
+                        logger.error(f"Error getting exemptions from {skill_type}: {e}")
 
                 # Get sentinel context if skill provides it
                 if hasattr(skill_class, 'get_sentinel_context'):
@@ -146,7 +162,8 @@ class SkillContextService:
                 "expected_intents": all_intents,
                 "expected_patterns": all_patterns,
                 "risk_notes": all_risk_notes,
-                "formatted_context": formatted
+                "formatted_context": formatted,
+                "auto_exemptions": list(set(all_exemptions)),
             }
 
         except Exception as e:
@@ -211,6 +228,15 @@ class SkillContextService:
 
         return "\n".join(lines)
 
+    def get_agent_sentinel_exemptions(self, agent_id: int, tenant_id: Optional[str] = None) -> list:
+        """
+        Get detection types auto-exempted by enabled skills on this agent.
+
+        Uses the same cached context as get_agent_skill_context().
+        """
+        ctx = self.get_agent_skill_context(agent_id, tenant_id=tenant_id)
+        return ctx.get("auto_exemptions", [])
+
     def _empty_context(self) -> Dict[str, Any]:
         """Return empty context for agents with no skills."""
         return {
@@ -218,10 +244,11 @@ class SkillContextService:
             "expected_intents": [],
             "expected_patterns": [],
             "risk_notes": [],
-            "formatted_context": ""
+            "formatted_context": "",
+            "auto_exemptions": [],
         }
 
-    def invalidate_cache(self, agent_id: int) -> None:
+    def invalidate_cache(self, agent_id: int, tenant_id: Optional[str] = None) -> None:
         """
         Invalidate cached context for an agent.
 
@@ -230,10 +257,20 @@ class SkillContextService:
 
         Args:
             agent_id: Agent ID to invalidate cache for
+            tenant_id: Tenant ID (if None, evicts all entries for this agent_id)
         """
-        if agent_id in self._cache:
-            del self._cache[agent_id]
-            logger.debug(f"Invalidated skill context cache for agent {agent_id}")
+        if tenant_id is not None:
+            cache_key = f"{tenant_id}:{agent_id}"
+            if cache_key in self._cache:
+                del self._cache[cache_key]
+                logger.debug(f"Invalidated skill context cache for agent {agent_id}")
+        else:
+            # Evict all entries matching this agent_id (any tenant)
+            keys_to_remove = [k for k in self._cache if k.endswith(f":{agent_id}")]
+            for k in keys_to_remove:
+                del self._cache[k]
+            if keys_to_remove:
+                logger.debug(f"Invalidated skill context cache for agent {agent_id} ({len(keys_to_remove)} entries)")
 
     @classmethod
     def clear_all_cache(cls) -> None:

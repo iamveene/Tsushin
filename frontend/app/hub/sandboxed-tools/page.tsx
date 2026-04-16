@@ -12,7 +12,9 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { useAuth } from '@/contexts/AuthContext'
+import { authenticatedFetch } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import Link from 'next/link'
 import {
@@ -23,6 +25,7 @@ import {
   PackageIcon,
   LightningIcon,
 } from '@/components/ui/icons'
+import ToggleSwitch from '@/components/ui/ToggleSwitch'
 
 type SubTabType = 'tools' | 'packages' | 'executions'
 
@@ -115,7 +118,7 @@ const PRE_INSTALLED_TOOLS: AvailableTool[] = [
 ]
 
 export default function CustomToolsPage() {
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
   const [activeTab, setActiveTab] = useState<SubTabType>('tools')
 
   // Container state
@@ -261,23 +264,12 @@ export default function CustomToolsPage() {
     }
   }, [isPolling])
 
-  // Listen for global refresh events
-  useEffect(() => {
-    const handleRefresh = () => {
-      loadContainerStatus()
-      loadTools()
-      loadPackages()
-    }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-    return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [])
+  useGlobalRefresh(() => { loadContainerStatus(); loadTools(); loadPackages() })
 
   const loadContainerStatus = async (showRefreshing = false) => {
     if (showRefreshing) setIsRefreshing(true)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/status`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/status`)
       if (response.ok) {
         const data = await response.json()
         setContainerStatus(data)
@@ -311,18 +303,14 @@ export default function CustomToolsPage() {
   const loadTools = async () => {
     setToolsLoading(true)
     try {
-      const response = await fetch(`${apiUrl}/api/custom-tools/`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/`)
       if (response.ok) {
         const data = await response.json()
         // Fetch commands for each tool
         const toolsWithCommands = await Promise.all(
           data.map(async (tool: CustomTool) => {
             try {
-              const cmdResponse = await fetch(`${apiUrl}/api/custom-tools/${tool.id}/commands`, {
-                headers: getAuthHeaders()
-              })
+              const cmdResponse = await authenticatedFetch(`${apiUrl}/api/custom-tools/${tool.id}/commands`)
               if (cmdResponse.ok) {
                 const commands = await cmdResponse.json()
                 return { ...tool, commands }
@@ -345,9 +333,7 @@ export default function CustomToolsPage() {
   const loadPackages = async () => {
     setPackagesLoading(true)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/packages`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/packages`)
       if (response.ok) {
         const data = await response.json()
         setPackages(data)
@@ -359,22 +345,13 @@ export default function CustomToolsPage() {
     }
   }
 
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem('tsushin_auth_token')
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }
-
   // Container actions
   const handleContainerAction = async (action: 'start' | 'stop' | 'restart') => {
     setContainerLoading(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/${action}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/${action}`, {
+        method: 'POST'
       })
       if (response.ok) {
         const data = await response.json()
@@ -401,9 +378,8 @@ export default function CustomToolsPage() {
     setContainerLoading(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/commit`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/commit`, {
+        method: 'POST'
       })
       if (response.ok) {
         setSuccess('Container committed to image successfully')
@@ -427,9 +403,8 @@ export default function CustomToolsPage() {
     setContainerLoading(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/reset`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/reset`, {
+        method: 'POST'
       })
       if (response.ok) {
         setSuccess('Container reset to base image')
@@ -457,9 +432,8 @@ export default function CustomToolsPage() {
     setSaving(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/toolbox/packages/install`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/toolbox/packages/install`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify(packageForm)
       })
       if (response.ok) {
@@ -490,9 +464,8 @@ export default function CustomToolsPage() {
     setError(null)
     try {
       // Step 1: Create the tool
-      const response = await fetch(`${apiUrl}/api/custom-tools/`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/`, {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           name: toolForm.name,
           tool_type: toolForm.tool_type,
@@ -512,9 +485,8 @@ export default function CustomToolsPage() {
 
       // Step 2: Create commands and parameters
       for (const cmd of toolForm.commands) {
-        const cmdResponse = await fetch(`${apiUrl}/api/custom-tools/commands/`, {
+        const cmdResponse = await authenticatedFetch(`${apiUrl}/api/custom-tools/commands/`, {
           method: 'POST',
-          headers: getAuthHeaders(),
           body: JSON.stringify({
             tool_id: createdTool.id,
             command_name: cmd.command_name,
@@ -529,9 +501,8 @@ export default function CustomToolsPage() {
 
           // Create parameters for this command
           for (const param of cmd.parameters) {
-            await fetch(`${apiUrl}/api/custom-tools/parameters/`, {
+            await authenticatedFetch(`${apiUrl}/api/custom-tools/parameters/`, {
               method: 'POST',
-              headers: getAuthHeaders(),
               body: JSON.stringify({
                 command_id: createdCommand.id,
                 parameter_name: param.parameter_name,
@@ -558,9 +529,8 @@ export default function CustomToolsPage() {
 
   const handleToggleTool = async (tool: CustomTool) => {
     try {
-      const response = await fetch(`${apiUrl}/api/custom-tools/${tool.id}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/${tool.id}`, {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ ...tool, is_enabled: !tool.is_enabled })
       })
       if (response.ok) {
@@ -575,9 +545,8 @@ export default function CustomToolsPage() {
     if (!confirm('Delete this tool?')) return
 
     try {
-      const response = await fetch(`${apiUrl}/api/custom-tools/${toolId}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/${toolId}`, {
+        method: 'DELETE'
       })
       if (response.ok) {
         setSuccess('Tool deleted')
@@ -595,9 +564,8 @@ export default function CustomToolsPage() {
     setSaving(true)
     setError(null)
     try {
-      const response = await fetch(`${apiUrl}/api/custom-tools/${editingTool.id}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/custom-tools/${editingTool.id}`, {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           name: editingTool.name,
           tool_type: editingTool.tool_type,
@@ -631,13 +599,24 @@ export default function CustomToolsPage() {
     return `px-2 py-1 text-xs font-medium border rounded-full ${colors[status] || colors.stopped}`
   }
 
+  if (!hasPermission('tools.read')) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="bg-red-900/20 border border-red-800 rounded-lg p-6">
+          <h3 className="text-lg font-semibold text-red-100 mb-2">Access Denied</h3>
+          <p className="text-sm text-red-200">You do not have permission to view this page.</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen animate-fade-in">
       {/* Header */}
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-6 flex items-center gap-4">
-          <Link href="/hub" className="text-tsushin-slate hover:text-white transition-colors">
-            ← Back to Hub
+          <Link href="/hub?tab=developer" className="text-tsushin-slate hover:text-white transition-colors">
+            ← Back to Developer Tools
           </Link>
         </div>
         <div className="flex justify-between items-start">
@@ -851,15 +830,11 @@ export default function CustomToolsPage() {
                             </div>
                             <h4 className="font-semibold text-white">{tool.name}</h4>
                           </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={tool.is_enabled}
-                              onChange={() => handleToggleTool(tool)}
-                              className="sr-only peer"
-                            />
-                            <div className="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-teal-500"></div>
-                          </label>
+                          <ToggleSwitch
+                            checked={tool.is_enabled}
+                            onChange={() => handleToggleTool(tool)}
+                            title={tool.is_enabled ? 'Disable tool' : 'Enable tool'}
+                          />
                         </div>
                         <p className="text-xs text-tsushin-slate mb-3 line-clamp-2">{tool.system_prompt}</p>
                         <div className="flex gap-2">

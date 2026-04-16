@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import type { A2ASessionInfo } from '@/components/watcher/graph/types'
 
 export type ActivityConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'error'
 
@@ -38,7 +39,19 @@ interface KbUsedEvent {
   timestamp: string
 }
 
-type ActivityEvent = AgentProcessingEvent | SkillUsedEvent | KbUsedEvent
+// A2A communication event — emitted at session start and end
+interface AgentCommunicationEvent {
+  type: 'agent_communication'
+  initiator_agent_id: number
+  target_agent_id: number
+  session_id: number
+  status: 'start' | 'end'
+  session_type: 'ask' | 'delegate'
+  depth: number
+  timestamp: string
+}
+
+type ActivityEvent = AgentProcessingEvent | SkillUsedEvent | KbUsedEvent | AgentCommunicationEvent
 
 // Skill usage info for UI
 export interface SkillUseInfo {
@@ -78,6 +91,10 @@ interface UseWatcherActivityReturn {
   fadingAgents: Set<number>
   fadingChannels: Set<string>
   isConnected: boolean
+  // A2A real-time session tracking
+  activeA2ASessions: Map<string, A2ASessionInfo>
+  fadingA2ASessions: Set<string>
+  agentA2ADepths: Map<number, number>
 }
 
 /**
@@ -88,7 +105,6 @@ interface UseWatcherActivityReturn {
  * @returns Activity state for Graph View
  */
 export function useWatcherActivity(
-  token: string | null,
   options: UseWatcherActivityOptions
 ): UseWatcherActivityReturn {
   const [connectionState, setConnectionState] = useState<ActivityConnectionState>('disconnected')
@@ -96,16 +112,23 @@ export function useWatcherActivity(
   // Session-based tracking: all activity tied to agent processing lifecycle
   const [processingSessions, setProcessingSessions] = useState<Map<number, ProcessingSession>>(new Map())
 
+  // A2A session tracking
+  const [a2aSessions, setA2aSessions] = useState<Map<string, A2ASessionInfo>>(new Map())
+  const [fadingA2ASessions, setFadingA2ASessions] = useState<Set<string>>(new Set())
+
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const reconnectAttemptsRef = useRef(0)
-  const maxReconnectAttempts = 5
+  // connectRef ensures the reconnect timer always calls the latest connect, not a stale closure
+  const connectRef = useRef<() => void>(() => {})
   const pingIntervalMs = 30000 // 30 seconds
 
   // Timeout refs
   const processingTimeoutRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
   const sessionFadeTimeoutRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+  const a2aFadeTimeoutRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const a2aStartTimeRef = useRef<Map<string, number>>(new Map())
 
   const PROCESSING_TIMEOUT = 30000 // 30 seconds safety timeout
   const MIN_AGENT_GLOW_DURATION = 5000 // Minimum visible glow for fast operations
@@ -159,6 +182,18 @@ export function useWatcherActivity(
     return channels
   }, [processingSessions])
 
+  // Derive max A2A depth per agent from active sessions (for depth badge on agent nodes)
+  const agentA2ADepths = useMemo(() => {
+    const map = new Map<number, number>()
+    a2aSessions.forEach(session => {
+      const existingInit = map.get(session.initiatorId) ?? 0
+      if (session.depth > existingInit) map.set(session.initiatorId, session.depth)
+      const existingTarget = map.get(session.targetId) ?? 0
+      if (session.depth > existingTarget) map.set(session.targetId, session.depth)
+    })
+    return map
+  }, [a2aSessions])
+
   const getWebSocketUrl = useCallback(() => {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
     const wsProtocol = apiUrl.startsWith('https') ? 'wss' : 'ws'
@@ -176,6 +211,8 @@ export function useWatcherActivity(
     processingTimeoutRef.current.clear()
     sessionFadeTimeoutRef.current.forEach(timeout => clearTimeout(timeout))
     sessionFadeTimeoutRef.current.clear()
+    a2aFadeTimeoutRef.current.forEach(timeout => clearTimeout(timeout))
+    a2aFadeTimeoutRef.current.clear()
   }, [])
 
   // Start coordinated fade-out for an agent's entire processing chain
@@ -393,11 +430,83 @@ export function useWatcherActivity(
         return next
       })
     }
+
+    if (data.type === 'agent_communication') {
+      const event = data as AgentCommunicationEvent
+      const sessionKey = String(event.session_id)
+
+      if (event.status === 'start') {
+        a2aStartTimeRef.current.set(sessionKey, Date.now())
+
+        // Cancel any pending fade for this session (re-used session_id edge case)
+        const existingFade = a2aFadeTimeoutRef.current.get(sessionKey)
+        if (existingFade) {
+          clearTimeout(existingFade)
+          a2aFadeTimeoutRef.current.delete(sessionKey)
+        }
+
+        // Glow the target agent node while it processes the A2A request
+        const targetId = event.target_agent_id
+        setProcessingAgents(prev => { const n = new Set(prev); n.add(targetId); return n })
+        agentStartTimeRef.current.set(targetId, Date.now())
+
+        setA2aSessions(prev => {
+          const next = new Map(prev)
+          next.set(sessionKey, {
+            initiatorId: event.initiator_agent_id,
+            targetId: event.target_agent_id,
+            sessionType: event.session_type,
+            depth: event.depth,
+            startTime: Date.now(),
+          })
+          return next
+        })
+        setFadingA2ASessions(prev => {
+          const next = new Set(prev)
+          next.delete(sessionKey)
+          return next
+        })
+      } else {
+        // status === 'end': enforce minimum glow duration then fade
+        const startTime = a2aStartTimeRef.current.get(sessionKey)
+        const elapsed = startTime ? Date.now() - startTime : MIN_AGENT_GLOW_DURATION
+        const remaining = Math.max(0, MIN_AGENT_GLOW_DURATION - elapsed)
+
+        // Fade out the target agent node
+        const targetId = event.target_agent_id
+        const targetStart = agentStartTimeRef.current.get(targetId)
+        const targetElapsed = targetStart ? Date.now() - targetStart : MIN_AGENT_GLOW_DURATION
+        const targetRemaining = Math.max(0, MIN_AGENT_GLOW_DURATION - targetElapsed)
+        if (targetRemaining > 0) {
+          setTimeout(() => startCoordinatedFadeOut(targetId), targetRemaining)
+        } else {
+          startCoordinatedFadeOut(targetId)
+        }
+
+        const startA2AFadeOut = () => {
+          setFadingA2ASessions(prev => { const n = new Set(prev); n.add(sessionKey); return n })
+          const cleanupTimeout = setTimeout(() => {
+            setA2aSessions(prev => { const n = new Map(prev); n.delete(sessionKey); return n })
+            setFadingA2ASessions(prev => { const n = new Set(prev); n.delete(sessionKey); return n })
+            a2aStartTimeRef.current.delete(sessionKey)
+            a2aFadeTimeoutRef.current.delete(sessionKey)
+          }, POST_PROCESSING_FADE_DURATION)
+          a2aFadeTimeoutRef.current.set(sessionKey, cleanupTimeout)
+        }
+
+        if (remaining > 0) {
+          const delayTimeout = setTimeout(startA2AFadeOut, remaining)
+          a2aFadeTimeoutRef.current.set(sessionKey, delayTimeout)
+        } else {
+          startA2AFadeOut()
+        }
+      }
+    }
   }, [updateConnectionState, startCoordinatedFadeOut])
 
   const connect = useCallback(() => {
-    if (!token || !options.enabled) {
-      console.log('[WatcherActivity] Skipping connect - token:', !!token, 'enabled:', options.enabled)
+    if (!options.enabled) {
+      console.log('[WatcherActivity] Skipping connect - enabled:', options.enabled)
       return
     }
 
@@ -422,14 +531,9 @@ export function useWatcherActivity(
       wsRef.current = ws
 
       ws.onopen = () => {
-        console.log('[WatcherActivity] Connection established, authenticating...')
+        // SEC-005 Phase 3: httpOnly cookie sent automatically with WS upgrade
+        console.log('[WatcherActivity] Connection established (cookie auth)')
         updateConnectionState('authenticating')
-
-        // Send auth message with token
-        ws.send(JSON.stringify({
-          type: 'auth',
-          token
-        }))
 
         // Start ping interval
         if (pingIntervalRef.current) {
@@ -466,14 +570,15 @@ export function useWatcherActivity(
           pingIntervalRef.current = null
         }
 
-        // Attempt reconnect if not intentionally closed
-        if (options.enabled && event.code !== 1000 && reconnectAttemptsRef.current < maxReconnectAttempts) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000)
-          console.log(`[WatcherActivity] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current + 1})`)
+        // Attempt reconnect if not intentionally closed — never give up
+        if (options.enabled && event.code !== 1000) {
+          const attempt = reconnectAttemptsRef.current
+          const delay = Math.min(1000 * Math.pow(2, Math.min(attempt, 4)), 10000)
+          console.log(`[WatcherActivity] Reconnecting in ${delay}ms (attempt ${attempt + 1})`)
           reconnectAttemptsRef.current++
 
           reconnectTimeoutRef.current = setTimeout(() => {
-            connect()
+            connectRef.current()
           }, delay)
         }
       }
@@ -481,7 +586,10 @@ export function useWatcherActivity(
       console.error('[WatcherActivity] Failed to create WebSocket:', err)
       updateConnectionState('error')
     }
-  }, [token, options.enabled, getWebSocketUrl, updateConnectionState, handleMessage])
+  }, [options.enabled, getWebSocketUrl, updateConnectionState, handleMessage])
+
+  // Keep connectRef current so the reconnect timer never uses a stale connect closure
+  useEffect(() => { connectRef.current = connect }, [connect])
 
   const disconnect = useCallback(() => {
     console.log('[WatcherActivity] Disconnecting...')
@@ -510,19 +618,43 @@ export function useWatcherActivity(
     // Reset state
     setProcessingAgents(new Set())
     setProcessingSessions(new Map())
+    setA2aSessions(new Map())
+    setFadingA2ASessions(new Set())
     updateConnectionState('disconnected')
   }, [clearAllTimeouts, updateConnectionState])
 
   // Connect on mount, disconnect on unmount
   useEffect(() => {
-    if (token && options.enabled) {
+    if (options.enabled) {
+      reconnectAttemptsRef.current = 0
       connect()
     }
 
     return () => {
       disconnect()
     }
-  }, [token, options.enabled]) // eslint-disable-line react-hooks/exhaustive-deps
+  // connect/disconnect intentionally omitted from deps — effect re-runs on enabled changes
+  // which is the only condition that should trigger reconnection; connectRef handles stale closure
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options.enabled])
+
+  // Reconnect when page becomes visible (user switches back to tab)
+  useEffect(() => {
+    if (!options.enabled) return
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' &&
+          wsRef.current?.readyState !== WebSocket.OPEN &&
+          wsRef.current?.readyState !== WebSocket.CONNECTING) {
+        console.log('[WatcherActivity] Page visible — reconnecting')
+        reconnectAttemptsRef.current = 0
+        connectRef.current()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [options.enabled])
 
   return {
     connectionState,
@@ -532,6 +664,9 @@ export function useWatcherActivity(
     recentKbUse,
     fadingAgents,
     fadingChannels,
-    isConnected: connectionState === 'connected'
+    isConnected: connectionState === 'connected',
+    activeA2ASessions: a2aSessions,
+    fadingA2ASessions,
+    agentA2ADepths,
   }
 }

@@ -10,8 +10,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, SSOConfig, PlatformSSOStatus, SSOConfigUpdate } from '@/lib/client'
+import { api, authenticatedFetch, SSOConfig, PlatformSSOStatus, SSOConfigUpdate } from '@/lib/client'
 import Link from 'next/link'
+import ToggleSwitch from '@/components/ui/ToggleSwitch'
 
 // Type for Google credentials from Hub API
 interface GoogleCredentials {
@@ -20,6 +21,7 @@ interface GoogleCredentials {
   client_id: string
   redirect_uri: string | null
   created_at: string
+  configured?: boolean
 }
 
 export default function SecuritySettingsPage() {
@@ -61,18 +63,14 @@ export default function SecuritySettingsPage() {
   // Fetch Google credentials from centralized location
   const fetchGoogleCredentials = useCallback(async () => {
     try {
-      const token = localStorage.getItem('tsushin_auth_token')
-      const response = await fetch(`${apiUrl}/api/hub/google/credentials`, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/credentials`)
 
       if (response.ok) {
         const data = await response.json()
-        setGoogleCredentials(data)
+        // BUG-343 fix: backend returns 200 with configured=false on fresh install
+        setGoogleCredentials(data && data.configured === false ? null : data)
       } else if (response.status === 404) {
+        // Legacy fallback: old backend versions still return 404
         setGoogleCredentials(null)
       }
     } catch (err) {
@@ -83,13 +81,7 @@ export default function SecuritySettingsPage() {
   // Fetch encryption keys from config
   const fetchEncryptionKeys = useCallback(async () => {
     try {
-      const token = localStorage.getItem('tsushin_auth_token')
-      const response = await fetch(`${apiUrl}/api/config`, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/config`)
 
       if (response.ok) {
         const config = await response.json()
@@ -142,18 +134,13 @@ export default function SecuritySettingsPage() {
     setEncryptionKeySuccess(null)
 
     try {
-      const token = localStorage.getItem('tsushin_auth_token')
       const updateData: any = {}
 
       if (googleEncryptionKey) updateData.google_encryption_key = googleEncryptionKey
       if (asanaEncryptionKey) updateData.asana_encryption_key = asanaEncryptionKey
 
-      const response = await fetch(`${apiUrl}/api/config`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/config`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
         body: JSON.stringify(updateData)
       })
 
@@ -206,6 +193,17 @@ export default function SecuritySettingsPage() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-gray-600 dark:text-gray-400">Loading...</div>
+      </div>
+    )
+  }
+
+  if (!hasPermission('org.settings.read')) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="bg-red-900/20 border border-red-800 rounded-lg p-6">
+          <h3 className="text-lg font-semibold text-red-100 mb-2">Access Denied</h3>
+          <p className="text-sm text-red-200">You do not have permission to view security settings.</p>
+        </div>
       </div>
     )
   }
@@ -335,16 +333,13 @@ export default function SecuritySettingsPage() {
                   Allow users to sign in using their Google account
                 </p>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={googleEnabled}
-                  onChange={(e) => setGoogleEnabled(e.target.checked)}
-                  disabled={!canEdit || !canUseSSO}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600 peer-disabled:opacity-50 peer-disabled:cursor-not-allowed"></div>
-              </label>
+              <ToggleSwitch
+                checked={googleEnabled}
+                onChange={(checked) => setGoogleEnabled(checked)}
+                disabled={!canEdit || !canUseSSO}
+                size="md"
+                title={googleEnabled ? 'Disable Google SSO' : 'Enable Google SSO'}
+              />
             </div>
 
             {!canUseSSO && (
@@ -394,16 +389,31 @@ export default function SecuritySettingsPage() {
                       Automatically create accounts for users who sign in with Google
                     </p>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={autoProvision}
-                      onChange={(e) => setAutoProvision(e.target.checked)}
-                      disabled={!canEdit}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600 peer-disabled:opacity-50 peer-disabled:cursor-not-allowed"></div>
-                  </label>
+                  <ToggleSwitch
+                    checked={autoProvision}
+                    onChange={(checked) => setAutoProvision(checked)}
+                    disabled={!canEdit}
+                    size="md"
+                    title={autoProvision ? 'Disable auto-provision' : 'Enable auto-provision'}
+                  />
+                </div>
+
+                {/* Auto-provision disclaimer */}
+                <div className={`rounded-md p-3 text-sm ${autoProvision ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200' : 'bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400'}`}>
+                  {autoProvision ? (
+                    <div>
+                      <p className="font-medium text-amber-900 dark:text-amber-100 mb-1">Auto-provisioning is enabled</p>
+                      <p>Any user with a Google account{' '}
+                        {/* domain restriction note */}
+                        can self-enroll and access your workspace on first sign-in. Their account will be created automatically with the default role selected below. You do not need to add them beforehand.
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="font-medium text-gray-700 dark:text-gray-300 mb-1">Pre-registration required (recommended)</p>
+                      <p>Users must be added to the team first (via Settings &gt; Team &gt; Invite) before they can sign in with Google SSO. This gives you full control over who can access your workspace.</p>
+                    </div>
+                  )}
                 </div>
 
                 {autoProvision && (
@@ -589,11 +599,12 @@ export default function SecuritySettingsPage() {
           <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-2">
             How Google Sign-In Works
           </h4>
-          <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1 list-disc list-inside">
-            <li>Users can sign in with their Google account from the login page</li>
-            <li>If a user's email is already registered, their accounts will be linked</li>
-            <li>With auto-provisioning, new users are created automatically</li>
-            <li>Domain restrictions limit which email addresses can sign in</li>
+          <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-2 list-disc list-inside">
+            <li><strong>Default (recommended):</strong> Users must be added to your team first via Settings &gt; Team &gt; Invite. Once added, they can sign in with Google SSO using the same email.</li>
+            <li><strong>With auto-provisioning:</strong> Any Google user (matching allowed domains, if set) can self-enroll on first sign-in — no invitation needed.</li>
+            <li>If a user&apos;s email is already registered, their Google account will be linked automatically on first SSO sign-in.</li>
+            <li>Domain restrictions limit which email addresses can sign in, regardless of provisioning mode.</li>
+            <li>Removing a user fully deletes their account, allowing them to be re-added and re-enrolled later.</li>
           </ul>
         </div>
       </div>

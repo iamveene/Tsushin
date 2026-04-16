@@ -15,10 +15,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal"
@@ -28,6 +30,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -45,14 +48,15 @@ var apiSecret string
 
 // Reconnection state management
 type ReconnectionState struct {
-	mutex              sync.RWMutex
-	reconnectAttempts  int
+	mutex                sync.RWMutex
+	reconnectAttempts    int
 	maxReconnectAttempts int
-	lastReconnectTime  time.Time
-	lastActivityTime   time.Time
-	sessionStartTime   time.Time
-	isReconnecting     bool
-	needsReauth        bool
+	lastReconnectTime    time.Time
+	lastActivityTime     time.Time
+	sessionStartTime     time.Time
+	isReconnecting       bool
+	reconnectLoopActive  bool
+	needsReauth          bool
 }
 
 var reconnectState = &ReconnectionState{
@@ -267,13 +271,13 @@ func (store *MessageStore) GetChats() (map[string]time.Time, error) {
 
 // InteractiveMessageData represents the JSON structure for interactive messages
 type InteractiveMessageData struct {
-	Type        string                   `json:"type"`
-	Header      string                   `json:"header,omitempty"`
-	Body        string                   `json:"body,omitempty"`
-	Footer      string                   `json:"footer,omitempty"`
-	Buttons     []InteractiveButton      `json:"buttons,omitempty"`
-	Sections    []InteractiveSection     `json:"sections,omitempty"`
-	NativeFlow  *NativeFlowData          `json:"native_flow,omitempty"`
+	Type       string               `json:"type"`
+	Header     string               `json:"header,omitempty"`
+	Body       string               `json:"body,omitempty"`
+	Footer     string               `json:"footer,omitempty"`
+	Buttons    []InteractiveButton  `json:"buttons,omitempty"`
+	Sections   []InteractiveSection `json:"sections,omitempty"`
+	NativeFlow *NativeFlowData      `json:"native_flow,omitempty"`
 }
 
 type InteractiveButton struct {
@@ -490,8 +494,8 @@ func formatButtonsResponseMessage(response *waProto.ButtonsResponseMessage) stri
 	}
 
 	data := map[string]interface{}{
-		"type":               "buttons_response",
-		"selected_button_id": response.GetSelectedButtonID(),
+		"type":                  "buttons_response",
+		"selected_button_id":    response.GetSelectedButtonID(),
 		"selected_display_text": response.GetSelectedDisplayText(),
 	}
 
@@ -504,7 +508,66 @@ func formatButtonsResponseMessage(response *waProto.ButtonsResponseMessage) stri
 }
 
 // Extract text content from a message
-func extractTextContent(msg *waProto.Message) string {
+func sanitizeMentionToken(value string) string {
+	var builder strings.Builder
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
+}
+
+func resolveContactDisplayName(client *whatsmeow.Client, jidStr string) string {
+	if client == nil || jidStr == "" {
+		return ""
+	}
+
+	jid, err := types.ParseJID(jidStr)
+	if err != nil {
+		return ""
+	}
+
+	contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
+	if err == nil {
+		for _, candidate := range []string{
+			contact.FullName,
+			contact.PushName,
+			contact.FirstName,
+			contact.BusinessName,
+		} {
+			if token := sanitizeMentionToken(candidate); token != "" {
+				return token
+			}
+		}
+	}
+
+	return sanitizeMentionToken(jid.User)
+}
+
+func hydrateMentionText(client *whatsmeow.Client, text string, contextInfo *waProto.ContextInfo) string {
+	if client == nil || contextInfo == nil || text == "" {
+		return text
+	}
+
+	for _, mentionedJID := range contextInfo.GetMentionedJID() {
+		rawID := strings.Split(mentionedJID, "@")[0]
+		if rawID == "" {
+			continue
+		}
+
+		displayToken := resolveContactDisplayName(client, mentionedJID)
+		if displayToken == "" {
+			continue
+		}
+
+		text = strings.ReplaceAll(text, "@"+rawID, "@"+displayToken)
+	}
+
+	return text
+}
+
+func extractTextContent(client *whatsmeow.Client, msg *waProto.Message) string {
 	if msg == nil {
 		return ""
 	}
@@ -514,7 +577,7 @@ func extractTextContent(msg *waProto.Message) string {
 		return text
 	}
 	if extendedText := msg.GetExtendedTextMessage(); extendedText != nil {
-		return extendedText.GetText()
+		return hydrateMentionText(client, extendedText.GetText(), extendedText.GetContextInfo())
 	}
 
 	// Handle InteractiveMessage (used by business bots like Unimed)
@@ -846,7 +909,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 
 	// Save message to database
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
-	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, logger)
+	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, msg.Info.PushName, logger)
 
 	// Update chat in database with the message timestamp (keeps last message time updated)
 	err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp)
@@ -855,7 +918,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	}
 
 	// Extract text content
-	content := extractTextContent(msg.Message)
+	content := extractTextContent(client, msg.Message)
 	fmt.Printf("🔍 Extracted content length: %d chars\n", len(content))
 
 	// Extract media info
@@ -1417,10 +1480,10 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 
 		// Parse the request body
 		var req struct {
-			Recipient    string `json:"recipient"`      // JID of the bot/chat
-			SelectedID   string `json:"selected_id"`    // The ID of the selected option
-			SelectedText string `json:"selected_text"`  // Display text of selection (optional)
-			ResponseType string `json:"response_type"`  // "list", "buttons", or "native_flow"
+			Recipient    string `json:"recipient"`     // JID of the bot/chat
+			SelectedID   string `json:"selected_id"`   // The ID of the selected option
+			SelectedText string `json:"selected_text"` // Display text of selection (optional)
+			ResponseType string `json:"response_type"` // "list", "buttons", or "native_flow"
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1475,8 +1538,8 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			// ListResponseMessage for list menu selections
 			msg = &waProto.Message{
 				ListResponseMessage: &waProto.ListResponseMessage{
-					Title:       proto.String(req.SelectedText),
-					ListType:    waProto.ListResponseMessage_SINGLE_SELECT.Enum(),
+					Title:    proto.String(req.SelectedText),
+					ListType: waProto.ListResponseMessage_SINGLE_SELECT.Enum(),
 					SingleSelectReply: &waProto.ListResponseMessage_SingleSelectReply{
 						SelectedRowID: proto.String(req.SelectedID),
 					},
@@ -1600,7 +1663,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		}
 
 		// Call IsOnWhatsApp to check if numbers are registered
-		results, err := client.IsOnWhatsApp(normalizedNumbers)
+		results, err := client.IsOnWhatsApp(r.Context(), normalizedNumbers)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -1821,6 +1884,217 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		}
 	}))
 
+	// Handler for listing WhatsApp groups from the local chats store.
+	// Supports optional substring filter via ?q= and limit via ?limit= (default 50, max 200).
+	// Used by the backend to power typeahead in Hub > Communications > WhatsApp filters.
+	http.HandleFunc("/api/groups", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+		limit := 50
+		if lp := r.URL.Query().Get("limit"); lp != "" {
+			var parsed int
+			if _, err := fmt.Sscanf(lp, "%d", &parsed); err == nil && parsed > 0 {
+				limit = parsed
+			}
+			if limit > 200 {
+				limit = 200
+			}
+		}
+
+		rows, err := messageStore.db.Query(`
+			SELECT jid, name FROM chats
+			WHERE jid LIKE '%@g.us' AND name IS NOT NULL AND name != ''
+			ORDER BY last_message_time DESC
+		`)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("Database query failed: %v", err),
+			})
+			return
+		}
+		defer rows.Close()
+
+		type GroupResponse struct {
+			JID  string `json:"jid"`
+			Name string `json:"name"`
+		}
+		groups := []GroupResponse{}
+		for rows.Next() {
+			var jid, name string
+			if err := rows.Scan(&jid, &name); err != nil {
+				continue
+			}
+			if q != "" && !strings.Contains(strings.ToLower(name), q) {
+				continue
+			}
+			groups = append(groups, GroupResponse{JID: jid, Name: name})
+			if len(groups) >= limit {
+				break
+			}
+		}
+		if err := rows.Err(); err != nil {
+			fmt.Printf("Warning: /api/groups rows iteration error: %v\n", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"groups":  groups,
+			"count":   len(groups),
+		})
+	}))
+
+	// Handler for listing WhatsApp contacts from the whatsmeow address book,
+	// merged with DM chats the user has messaged.
+	// Supports ?q= (case-insensitive name substring OR phone-prefix match) and ?limit= (default 50, max 200).
+	http.HandleFunc("/api/contacts", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+		qDigits := strings.TrimPrefix(q, "+")
+		// Strip non-digits from qDigits for phone-prefix matching
+		var digitsBuilder strings.Builder
+		for _, ch := range qDigits {
+			if ch >= '0' && ch <= '9' {
+				digitsBuilder.WriteRune(ch)
+			}
+		}
+		qDigits = digitsBuilder.String()
+
+		limit := 50
+		if lp := r.URL.Query().Get("limit"); lp != "" {
+			var parsed int
+			if _, err := fmt.Sscanf(lp, "%d", &parsed); err == nil && parsed > 0 {
+				limit = parsed
+			}
+			if limit > 200 {
+				limit = 200
+			}
+		}
+
+		if !client.IsLoggedIn() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "WhatsApp client not authenticated",
+			})
+			return
+		}
+
+		type ContactResponse struct {
+			JID   string `json:"jid"`
+			Phone string `json:"phone"`
+			Name  string `json:"name"`
+		}
+		byJID := map[string]ContactResponse{}
+
+		// Source 1: whatsmeow address book
+		contacts, err := client.Store.Contacts.GetAllContacts(r.Context())
+		if err == nil {
+			for jid, info := range contacts {
+				if jid.Server != types.DefaultUserServer { // "s.whatsapp.net"
+					continue
+				}
+				name := info.FullName
+				if name == "" {
+					name = info.PushName
+				}
+				if name == "" {
+					name = info.FirstName
+				}
+				if name == "" {
+					name = info.BusinessName
+				}
+				byJID[jid.String()] = ContactResponse{
+					JID:   jid.String(),
+					Phone: jid.User,
+					Name:  name,
+				}
+			}
+		}
+
+		// Source 2: DM chats the user has messaged (fallback for contacts not in address book)
+		dmRows, dmErr := messageStore.db.Query(`
+			SELECT jid, name FROM chats
+			WHERE jid LIKE '%@s.whatsapp.net'
+			ORDER BY last_message_time DESC
+		`)
+		if dmErr == nil {
+			defer dmRows.Close()
+			for dmRows.Next() {
+				var jid, name string
+				if err := dmRows.Scan(&jid, &name); err != nil {
+					continue
+				}
+				existing, found := byJID[jid]
+				phone := jid
+				if at := strings.Index(jid, "@"); at > 0 {
+					phone = jid[:at]
+				}
+				if !found {
+					byJID[jid] = ContactResponse{JID: jid, Phone: phone, Name: name}
+				} else if existing.Name == "" && name != "" {
+					existing.Name = name
+					byJID[jid] = existing
+				}
+			}
+			if err := dmRows.Err(); err != nil {
+				fmt.Printf("Warning: /api/contacts DM rows iteration error: %v\n", err)
+			}
+		}
+
+		// Filter + sort
+		results := []ContactResponse{}
+		for _, c := range byJID {
+			if q == "" {
+				results = append(results, c)
+				continue
+			}
+			if strings.Contains(strings.ToLower(c.Name), q) {
+				results = append(results, c)
+				continue
+			}
+			if qDigits != "" && strings.HasPrefix(c.Phone, qDigits) {
+				results = append(results, c)
+				continue
+			}
+		}
+		sort.Slice(results, func(i, j int) bool {
+			// Named contacts first, then by name (case-insensitive), then by phone
+			ai, aj := results[i].Name != "", results[j].Name != ""
+			if ai != aj {
+				return ai
+			}
+			ln := strings.ToLower(results[i].Name)
+			rn := strings.ToLower(results[j].Name)
+			if ln != rn {
+				return ln < rn
+			}
+			return results[i].Phone < results[j].Phone
+		})
+		if len(results) > limit {
+			results = results[:limit]
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"contacts": results,
+			"count":    len(results),
+		})
+	}))
+
 	// Start the server
 	serverAddr := fmt.Sprintf(":%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
@@ -1831,6 +2105,29 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			fmt.Printf("REST API server error: %v\n", err)
 		}
 	}()
+}
+
+// syncWAWebVersion fetches the latest WhatsApp Web client version from Meta
+// and applies it to whatsmeow's client payload. This prevents the server from
+// rejecting connections with code 405 (Client outdated) when the version
+// hardcoded in the pinned whatsmeow module falls behind WhatsApp's live version.
+// On failure, the built-in version is kept and a warning is logged.
+func syncWAWebVersion(logger waLog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	oldVer := store.GetWAVersion()
+	latestVer, err := whatsmeow.GetLatestVersion(ctx, nil)
+	if err != nil {
+		logger.Warnf("Failed to fetch latest WhatsApp Web version (using built-in %s): %v", oldVer, err)
+		return
+	}
+	if latestVer == nil || latestVer.IsZero() || *latestVer == oldVer {
+		logger.Infof("WhatsApp Web version is up-to-date: %s", oldVer)
+		return
+	}
+	store.SetWAVersion(*latestVer)
+	logger.Infof("Updated WhatsApp Web client version from %s to %s", oldVer, latestVer)
 }
 
 // updateActivityTime updates the last activity timestamp
@@ -1917,6 +2214,60 @@ func attemptReconnect(client *whatsmeow.Client, logger waLog.Logger) bool {
 	return false
 }
 
+func scheduleReconnectLoop(client *whatsmeow.Client, logger waLog.Logger, initialDelay time.Duration, reason string) {
+	go func() {
+		reconnectState.mutex.Lock()
+		if reconnectState.reconnectLoopActive || reconnectState.needsReauth {
+			reconnectState.mutex.Unlock()
+			return
+		}
+		reconnectState.reconnectLoopActive = true
+		reconnectState.mutex.Unlock()
+		defer func() {
+			reconnectState.mutex.Lock()
+			reconnectState.reconnectLoopActive = false
+			reconnectState.mutex.Unlock()
+		}()
+
+		if initialDelay > 0 {
+			time.Sleep(initialDelay)
+		}
+
+		for {
+			if client.IsConnected() && client.IsLoggedIn() {
+				return
+			}
+
+			reconnectState.mutex.RLock()
+			needsReauth := reconnectState.needsReauth
+			attempts := reconnectState.reconnectAttempts
+			maxAttempts := reconnectState.maxReconnectAttempts
+			reconnectState.mutex.RUnlock()
+
+			if needsReauth || attempts >= maxAttempts {
+				return
+			}
+
+			if attemptReconnect(client, logger) {
+				return
+			}
+
+			reconnectState.mutex.RLock()
+			needsReauth = reconnectState.needsReauth
+			attempts = reconnectState.reconnectAttempts
+			reconnectState.mutex.RUnlock()
+
+			if needsReauth || attempts >= maxAttempts {
+				return
+			}
+
+			wait := calculateBackoffDuration(attempts)
+			logger.Warnf("Reconnect loop (%s) still recovering; retrying in %v", reason, wait)
+			time.Sleep(wait)
+		}
+	}()
+}
+
 // startKeepalive sends periodic presence updates to maintain session
 func startKeepalive(client *whatsmeow.Client, logger waLog.Logger, stopChan <-chan struct{}) {
 	ticker := time.NewTicker(30 * time.Second)
@@ -1927,7 +2278,7 @@ func startKeepalive(client *whatsmeow.Client, logger waLog.Logger, stopChan <-ch
 		case <-ticker.C:
 			if client.IsConnected() && client.IsLoggedIn() {
 				// Send presence available to keep session alive
-				err := client.SendPresence(types.PresenceAvailable)
+				err := client.SendPresence(context.Background(), types.PresenceAvailable)
 				if err != nil {
 					logger.Warnf("Failed to send keepalive presence: %v", err)
 				} else {
@@ -1980,12 +2331,21 @@ func main() {
 		}
 	}
 
+	// Sync WhatsApp Web client version with Meta before creating the client.
+	// Fixes 405 "Client outdated" errors when the pinned whatsmeow version falls behind.
+	syncWAWebVersion(logger)
+
 	// Create client instance
 	client := whatsmeow.NewClient(deviceStore, logger)
 	if client == nil {
 		logger.Errorf("Failed to create WhatsApp client")
 		return
 	}
+
+	// Disable whatsmeow's internal auto-reconnect — we manage reconnects ourselves
+	// via attemptReconnect(). Leaving both active causes "websocket is already
+	// connected" races between the lib's reconnector and our goroutine.
+	client.EnableAutoReconnect = false
 
 	// Initialize message store
 	messageStore, err := NewMessageStore()
@@ -2027,14 +2387,7 @@ func main() {
 
 		case *events.Disconnected:
 			logger.Warnf("⚠️  Disconnected from WhatsApp")
-
-			// Attempt automatic reconnection
-			go func() {
-				time.Sleep(2 * time.Second) // Brief pause before reconnecting
-				if !client.IsConnected() {
-					attemptReconnect(client, logger)
-				}
-			}()
+			scheduleReconnectLoop(client, logger, 2*time.Second, "disconnect")
 
 		case *events.LoggedOut:
 			logger.Errorf("❌ Device logged out from WhatsApp (user unlinked from phone)")
@@ -2111,20 +2464,22 @@ func main() {
 
 		case *events.StreamError:
 			logger.Errorf("❌ Stream error: %v", v)
-
-			// Attempt reconnection for stream errors
-			go func() {
-				time.Sleep(5 * time.Second) // Wait a bit longer for stream errors
-				if !client.IsConnected() {
-					attemptReconnect(client, logger)
-				}
-			}()
+			scheduleReconnectLoop(client, logger, 5*time.Second, "stream_error")
 
 		case *events.TemporaryBan:
 			logger.Errorf("❌ Temporary ban from WhatsApp. Code: %s, Expire: %v", v.Code, v.Expire)
 			reconnectState.mutex.Lock()
 			reconnectState.reconnectAttempts = reconnectState.maxReconnectAttempts // Stop trying
 			reconnectState.mutex.Unlock()
+
+		case *events.ClientOutdated:
+			// WhatsApp rejected this client with 405 because the advertised web
+			// version is too old. Re-sync to the latest version and attempt a
+			// single reconnect. If this recurs, the whatsmeow dependency itself
+			// needs to be bumped (protocol/protobuf changes may be required).
+			logger.Errorf("❌ ClientOutdated (405) from WhatsApp — re-syncing version and reconnecting")
+			syncWAWebVersion(logger)
+			scheduleReconnectLoop(client, logger, 2*time.Second, "client_outdated")
 		}
 	})
 
@@ -2264,12 +2619,34 @@ func main() {
 	client.Disconnect()
 }
 
+func looksLikeRawIdentifier(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return true
+	}
+	if strings.Contains(trimmed, "@") {
+		trimmed = strings.SplitN(trimmed, "@", 2)[0]
+	}
+	trimmed = strings.TrimPrefix(trimmed, "+")
+	if trimmed == "" {
+		return true
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // GetChatName determines the appropriate name for a chat based on JID and other info
-func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types.JID, chatJID string, conversation interface{}, sender string, logger waLog.Logger) string {
-	// First, check if chat already exists in database with a name
+func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types.JID, chatJID string, conversation interface{}, sender string, fallbackName string, logger waLog.Logger) string {
+	// First, check if chat already exists in database with a usable name.
+	// Raw numeric IDs like "145230074499115" are refreshed because they break
+	// DM contact resolution when WhatsApp hides the real phone behind @lid.
 	var existingName string
 	err := messageStore.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chatJID).Scan(&existingName)
-	if err == nil && existingName != "" {
+	if err == nil && existingName != "" && existingName != chatJID && !looksLikeRawIdentifier(existingName) {
 		// Chat exists with a name, use that
 		logger.Infof("Using existing chat name for %s: %s", chatJID, existingName)
 		return existingName
@@ -2315,7 +2692,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 		// If we didn't get a name, try group info
 		if name == "" {
-			groupInfo, err := client.GetGroupInfo(jid)
+			groupInfo, err := client.GetGroupInfo(context.Background(), jid)
 			if err == nil && groupInfo.Name != "" {
 				name = groupInfo.Name
 			} else {
@@ -2329,10 +2706,18 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		// This is an individual contact
 		logger.Infof("Getting name for contact: %s", chatJID)
 
-		// Just use contact info (full name)
+		// Prefer the richest contact info available from WhatsApp.
 		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
 		if err == nil && contact.FullName != "" {
 			name = contact.FullName
+		} else if err == nil && contact.PushName != "" {
+			name = contact.PushName
+		} else if err == nil && contact.FirstName != "" {
+			name = contact.FirstName
+		} else if err == nil && contact.BusinessName != "" {
+			name = contact.BusinessName
+		} else if fallbackName != "" && !looksLikeRawIdentifier(fallbackName) {
+			name = fallbackName
 		} else if sender != "" {
 			// Fallback to sender
 			name = sender
@@ -2368,7 +2753,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 		}
 
 		// Get appropriate chat name by passing the history sync conversation directly
-		name := GetChatName(client, messageStore, jid, chatJID, conversation, "", logger)
+		name := GetChatName(client, messageStore, jid, chatJID, conversation, "", "", logger)
 
 		// Process messages
 		messages := conversation.Messages

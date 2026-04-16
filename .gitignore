@@ -66,7 +66,18 @@ ops/.pids/
 .idea/
 .claude/
 .cursor/
+# Internal/never-push files (bug tracker, playbooks, agent/roadmap notes)
 CLAUDE.md
+AGENTS.md
+BUGS.md
+ROADMAP.md
+deployment-test-playbook.md
+DEPLOYMENT-TEST-PLAYBOOK.md
+PLAYBOOK.md
+/deployment-*.md
+/internal-*.md
+/*-playbook.md
+/*_playbook.md
 *.swp
 *.swo
 *~
@@ -78,7 +89,11 @@ frontend/.next/
 frontend/out/
 frontend/build/
 
+# Build artifacts
+frontend/tsconfig.tsbuildinfo
+
 # Dependencies
+/package-lock.json
 frontend/package-lock.json
 frontend/yarn.lock
 frontend/pnpm-lock.yaml
@@ -126,8 +141,9 @@ archive/
 # PERSONAL/USER DATA - NEVER TRACK
 # ========================================
 
-# Private strategic documents
+# Private strategic documents and internal validation/audit notes
 .private/
+.private/**/*.md
 private/
 backend/private/
 
@@ -139,6 +155,9 @@ backend/data/workspace/
 backend/data/projects/
 backend/data/*.db*
 backend/data/*_report.json
+backend/data/*.py
+backend/data/*.sql
+backend/data/tester-mcp/store/
 
 # WhatsApp/MCP session data
 **/*.ogg
@@ -152,6 +171,15 @@ backend/data/*_report.json
 hub/amadeus/env.*
 !hub/amadeus/env.example
 
+# SSL certificates and generated Caddy config
+caddy/Caddyfile
+caddy/certs/*.crt
+caddy/certs/*.key
+caddy/certs/*.pem
+# Per-stack generated Caddy artifacts (install.py writes here per TSN_STACK_NAME)
+caddy/*/Caddyfile
+caddy/*/certs/
+
 # Test data
 test_data/
 temp/
@@ -164,6 +192,7 @@ backend/dev_tests/
 # (prevents accidental commits of dev test scripts)
 backend/test_*.py
 backend/run_*.py
+backend/run_*.txt
 backend/scripts/test_*.py
 backend/scripts/setup_*_test.py
 
@@ -220,19 +249,55 @@ backend/fix_agent_phone.py
 
 # Test infrastructure — all tests are local-only, not shipped to remote
 backend/tests/
+!backend/tests/
+backend/tests/*
+!backend/tests/test_remote_access_config_service.py
+!backend/tests/test_remote_access_migrations.py
+!backend/tests/test_remote_access_tunnel_service.py
+!backend/tests/test_cluster3_backend_regressions.py
+!backend/tests/test_playground_memory_regressions.py
+!backend/tests/test_mcp_container_manager.py
+!backend/tests/test_routes_mcp_instances_tester.py
+!backend/tests/test_sentinel_unified_parse.py
+!backend/tests/test_memory_tenant_scoping.py
+!backend/tests/test_installer_ssl.py
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py
+ops/check_openrouter_agent.py
+backend/check_*.py
+backend/debug_*.py
+backend/fix_shell_wait.py
+backend/e2e_test_results.txt
+backend/scripts/check_*.py
 backend/test-api.html
 
 # Root-level screenshots & dev artifacts
 /*.png
-/deployment-test-playbook.md
+/output/
 
-# Local-only directories (QA artifacts, test data, methodology docs, brand assets)
+# Dev/test scripts, temp files, internal notes (not for remote repo)
+backend/app.py.tmp
+backend/logs_backend.txt
+backend/logs_startup.txt
+backend/add_search_provider.py
+backend/complete_conversation*.py
+backend/complete_e2e_test.sh
+backend/execute_jt_flow.py
+backend/query_events.py
+backend/sync_mcp_databases.sh
+backend/asana_prompt.txt
+backend/hub/asana/*_old.py
+backend/hub/providers/KOKORO_TTS_FIX.md
+frontend/dark-mode-map.md
+
+# Local-only directories (QA artifacts, internal validation markdown, test data, methodology docs, brand assets)
 qa-screenshots/
 test-evidence/
+test-evidence/**/*.md
 test-screenshots/
 sample_data/
 test_documents/
 methodology/
 brand/
+deploy-to-vm.sh
+.fresh-install/

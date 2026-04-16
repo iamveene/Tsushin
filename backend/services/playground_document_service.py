@@ -137,7 +137,7 @@ class PlaygroundDocumentService:
             self.db.commit()
             self.db.refresh(doc)
 
-            # Process document asynchronously
+            # Process document and ensure status is always updated even if extraction fails.
             try:
                 await self._process_document(doc, chunk_size, chunk_overlap, embedding_model)
                 doc.status = "completed"
@@ -146,8 +146,8 @@ class PlaygroundDocumentService:
                 self.logger.error(f"Document processing failed: {e}", exc_info=True)
                 doc.status = "failed"
                 doc.error_message = str(e)
-
-            self.db.commit()
+            finally:
+                self.db.commit()
 
             return {
                 "status": "success",
@@ -285,6 +285,19 @@ class PlaygroundDocumentService:
                 except ImportError:
                     raise ImportError("Install striprtf for RTF support")
 
+            elif doc_type == 'image':
+                # BUG-359 FIX: For images, store a reference description.
+                # The actual image analysis is handled by the ImageAnalysisSkill
+                # when the agent processes the conversation with the image context.
+                filename = os.path.basename(file_path)
+                file_size = os.path.getsize(file_path)
+                return (
+                    f"[Image uploaded: {filename}]\n"
+                    f"File size: {file_size} bytes\n"
+                    f"File path: {file_path}\n"
+                    f"This image has been uploaded and is available for analysis."
+                )
+
             else:
                 # Try to read as plain text
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -298,14 +311,21 @@ class PlaygroundDocumentService:
         """Split text into overlapping chunks."""
         if not text:
             return []
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than zero")
+        if overlap < 0:
+            raise ValueError("overlap must be zero or greater")
 
         chunks = []
         start = 0
         text_len = len(text)
+        effective_overlap = min(overlap, max(chunk_size - 1, 0))
 
         while start < text_len:
-            end = start + chunk_size
+            end = min(start + chunk_size, text_len)
             chunk = text[start:end]
+            if not chunk:
+                break
 
             # Try to break at sentence or word boundary
             if end < text_len:
@@ -316,12 +336,17 @@ class PlaygroundDocumentService:
                         chunk = chunk[:last_sep + len(sep)]
                         break
 
-            chunks.append(chunk.strip())
-            start = start + len(chunk) - overlap
+            stripped_chunk = chunk.strip()
+            if stripped_chunk:
+                chunks.append(stripped_chunk)
 
-            # Prevent infinite loop
-            if start <= 0 and len(chunks) > 1:
+            if end >= text_len:
                 break
+
+            next_start = start + len(chunk) - effective_overlap
+            if next_start <= start:
+                next_start = end
+            start = next_start
 
         return [c for c in chunks if c]  # Remove empty chunks
 
@@ -348,9 +373,9 @@ class PlaygroundDocumentService:
                 metadata={"hnsw:space": "cosine"}
             )
 
-            # BUG-001 Fix: Use shared service with batched processing
+            # BUG-001 Fix: Use shared service with batched processing (async)
             embedding_service = get_shared_embedding_service(embedding_model)
-            embeddings = embedding_service.embed_batch_chunked(chunks, batch_size=50)
+            embeddings = await embedding_service.embed_batch_chunked_async(chunks, batch_size=50)
 
             # Validate we got embeddings for all chunks
             if len(embeddings) != len(chunks):
@@ -532,7 +557,7 @@ class PlaygroundDocumentService:
         """Search documents using semantic search."""
         try:
             import chromadb
-            from sentence_transformers import SentenceTransformer
+            from agent.memory.embedding_service import get_shared_embedding_service
             import settings
 
             persist_dir = getattr(settings, 'CHROMA_PERSIST_DIR', 'data/chroma')
@@ -546,8 +571,8 @@ class PlaygroundDocumentService:
                 return []  # No documents uploaded yet
 
             # Generate query embedding
-            model = SentenceTransformer("all-MiniLM-L6-v2")
-            query_embedding = model.encode([query], convert_to_numpy=True).tolist()[0]
+            embedding_service = get_shared_embedding_service("all-MiniLM-L6-v2")
+            query_embedding = await embedding_service.embed_text_async(query)
 
             # Search
             results = collection.query(

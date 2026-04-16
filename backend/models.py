@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -5,6 +7,16 @@ from sqlalchemy.sql import func
 from datetime import datetime
 
 Base = declarative_base()
+
+
+def get_remote_access_stack_name() -> str:
+    """Return the current Compose stack name for Remote Access defaults."""
+    return (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
+
+
+def get_remote_access_proxy_target_url() -> str:
+    """Return the stack-scoped Caddy proxy target used by Remote Access."""
+    return f"http://{get_remote_access_stack_name()}-proxy:80"
 
 class Config(Base):
     __tablename__ = "config"
@@ -20,7 +32,7 @@ class Config(Base):
     number_filters = Column(JSON, default=list)  # ["+5500000000001"]
 
     # Model Configuration
-    model_provider = Column(String(20), default="gemini")  # "openai" | "anthropic" | "gemini"
+    model_provider = Column(String(20), default="gemini")  # "openai" | "anthropic" | "gemini" | "groq" | "grok"
     model_name = Column(Text, default="gemini-2.5-pro")
 
     # Memory Configuration
@@ -44,6 +56,9 @@ class Config(Base):
 
     # Emergency Stop (Bug Fix 2026-01-06)
     emergency_stop = Column(Boolean, default=False)
+
+    # Sentinel fail behavior (LOG-020): "open" allows messages on Sentinel error, "closed" blocks them
+    sentinel_fail_behavior = Column(String(10), default="open")
 
     # Conversation delay (global, WhatsApp-only)
     whatsapp_conversation_delay_seconds = Column(Float, default=5.0)
@@ -83,13 +98,29 @@ class Config(Base):
     telegram_encryption_key = Column(String(500), nullable=True)  # Telegram bot token encryption (Fernet key)
     amadeus_encryption_key = Column(String(500), nullable=True)  # Amadeus API credentials encryption (Fernet key)
     api_key_encryption_key = Column(String(500), nullable=True)  # LLM API key encryption (Fernet key)
+    slack_encryption_key = Column(String(500), nullable=True)  # Slack token encryption (Fernet key) — v0.6.0 Item 33
+    discord_encryption_key = Column(String(500), nullable=True)  # Discord token encryption (Fernet key) — v0.6.0 Item 34
+    webhook_encryption_key = Column(String(500), nullable=True)  # Webhook HMAC secret encryption (Fernet key) — v0.6.0
+    remote_access_encryption_key = Column(String(500), nullable=True)  # Cloudflare Tunnel token encryption (Fernet key) — v0.6.0 Remote Access
 
     # System-Level AI Configuration (Phase 17: Tenant-Configurable System AI)
     # These settings control which AI provider/model is used for system operations
     # (intent classification, skill routing, AI summaries, flow processing)
     # This allows tenants to switch providers if one has issues (e.g., Gemini down)
-    system_ai_provider = Column(String(20), default="gemini")  # gemini, anthropic, openai, openrouter
+    system_ai_provider = Column(String(20), default="gemini")  # Legacy fallback — used only when provider_instance_id is NULL
     system_ai_model = Column(String(100), default="gemini-2.5-flash")  # Default: fast/cheap model for system ops
+    system_ai_provider_instance_id = Column(
+        Integer,
+        ForeignKey("provider_instance.id", ondelete="SET NULL"),
+        nullable=True
+    )  # Points to a ProviderInstance — preferred over system_ai_provider/model
+
+    # v0.6.0: Default Vector Store (tenant-wide)
+    default_vector_store_instance_id = Column(
+        Integer,
+        ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
+        nullable=True
+    )
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -100,14 +131,16 @@ class Memory(Base):
     __tablename__ = "memory"
 
     id = Column(Integer, primary_key=True)
+    # BUG-LOG-015: tenant_id enforces isolation at the DB level alongside agent_id.
+    # Backfilled from Agent.tenant_id by alembic 0024.
+    tenant_id = Column(String(50), nullable=False, index=True)
     agent_id = Column(Integer, nullable=False, index=True)  # FK to Agent - per-agent memory isolation
     sender_key = Column(String(255), nullable=False, index=True)  # chat_id or phone number
     messages_json = Column(JSON, default=list)  # [{"role": "user", "content": "...", "timestamp": "..."}]
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Unique constraint: one memory per agent per sender
     __table_args__ = (
-        {"sqlite_autoincrement": True},
+        Index('idx_memory_tenant_agent_sender', 'tenant_id', 'agent_id', 'sender_key'),
     )
 
 
@@ -144,7 +177,7 @@ class Contact(Base):
     __tablename__ = "contact"
 
     id = Column(Integer, primary_key=True)
-    friendly_name = Column(String(100), nullable=False, unique=True)  # "Alice", "Bob", "Agent1"
+    friendly_name = Column(String(100), nullable=False)  # "Alice", "Bob", "Agent1"
     whatsapp_id = Column(String(50), nullable=True, index=True)  # WhatsApp internal ID - DEPRECATED: Use channel_mappings
     phone_number = Column(String(20), nullable=True, index=True)  # Phone number - DEPRECATED: Use channel_mappings
 
@@ -155,6 +188,7 @@ class Contact(Base):
     role = Column(String(20), default="user")  # "user" | "agent"
     is_active = Column(Boolean, default=True)
     is_dm_trigger = Column(Boolean, default=True)  # Phase 4.3: Trigger agent on DM from this contact (default True for fresh installs)
+    slash_commands_enabled = Column(Boolean, nullable=True, default=None)  # Feature #12: NULL = use tenant default, True/False = explicit override
     notes = Column(Text)  # Optional notes about the contact
 
     # Phase 7.6.2: Multi-tenancy support
@@ -166,6 +200,10 @@ class Contact(Base):
 
     # Phase 10.2: Relationship to channel mappings
     channel_mappings = relationship("ContactChannelMapping", back_populates="contact", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint('friendly_name', 'tenant_id', name='uq_contact_friendly_name_tenant'),
+    )
 
 
 class ContactChannelMapping(Base):
@@ -299,6 +337,7 @@ class Agent(Base):
 
     # Configuration
     system_prompt = Column(Text, nullable=False)  # Can include {{PERSONA}} or {{TONE}} placeholder
+    description = Column(Text, nullable=True)  # Short human-readable description of the agent
     persona_id = Column(Integer, nullable=True)  # FK to Persona (replaces tone_preset_id/custom_tone)
 
     # Legacy tone fields (kept for backward compatibility, will be migrated)
@@ -309,10 +348,10 @@ class Agent(Base):
     keywords = Column(JSON, default=list)  # ["help", "assistant", "bot"]
 
     # Tool configuration - DEPRECATED: Migrated to Skills system
-    # enabled_tools removed - use AgentSkill table for skills like web_search, weather, web_scraping
+    # enabled_tools removed - use AgentSkill table for skills like web_search, web_scraping
 
     # Model configuration
-    model_provider = Column(String(20), default="gemini")  # "openai" | "anthropic" | "gemini"
+    model_provider = Column(String(20), default="gemini")  # "openai" | "anthropic" | "gemini" | "groq" | "grok"
     model_name = Column(String(100), default="gemini-2.5-pro")
 
     # Response formatting
@@ -338,11 +377,28 @@ class Agent(Base):
     semantic_similarity_threshold = Column(Float, default=0.5)  # Minimum similarity threshold (0.0-1.0)
     chroma_db_path = Column(String(500), nullable=True)  # Per-agent ChromaDB path
 
+    # v0.6.0 Item 37: Temporal Memory Decay
+    memory_decay_enabled = Column(Boolean, default=False)  # Master switch (existing agents unaffected)
+    memory_decay_lambda = Column(Float, default=0.01)  # Exponential decay rate (0.01 ≈ 69-day half-life)
+    memory_decay_archive_threshold = Column(Float, default=0.05)  # Auto-archive below this effective score
+    memory_decay_mmr_lambda = Column(Float, default=0.5)  # MMR diversity weight (0=max diversity, 1=pure relevance)
+
     # Phase 10: Channel Configuration
     # Determines which channels this agent can interact through
-    enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram
+    enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack, discord, webhook
     whatsapp_integration_id = Column(Integer, ForeignKey("whatsapp_mcp_instance.id", ondelete="SET NULL"), nullable=True)  # Specific MCP instance
     telegram_integration_id = Column(Integer, nullable=True)  # Future: FK to TelegramBotInstance
+    slack_integration_id = Column(Integer, ForeignKey("slack_integration.id", ondelete="SET NULL"), nullable=True)  # v0.6.0 Item 33: FK to SlackIntegration
+    discord_integration_id = Column(Integer, ForeignKey("discord_integration.id", ondelete="SET NULL"), nullable=True)  # v0.6.0 Item 34: FK to DiscordIntegration
+    webhook_integration_id = Column(Integer, ForeignKey("webhook_integration.id", ondelete="SET NULL"), nullable=True)  # v0.6.0: FK to WebhookIntegration
+    provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+
+    # v0.6.0: Vector Store Configuration
+    vector_store_instance_id = Column(Integer, ForeignKey("vector_store_instance.id", ondelete="SET NULL"), nullable=True)
+    vector_store_mode = Column(String(20), default="override")  # "override" | "complement" | "shadow"
+
+    # Avatar
+    avatar = Column(String(50), nullable=True, default=None)  # Avatar slug (e.g., "samurai", "robot", "ninja")
 
     # Status
     is_active = Column(Boolean, default=True)
@@ -371,6 +427,7 @@ class ContactAgentMapping(Base):
     id = Column(Integer, primary_key=True)
     contact_id = Column(Integer, nullable=False, index=True)  # FK to Contact
     agent_id = Column(Integer, nullable=False)  # FK to Agent
+    tenant_id = Column(String(100), nullable=True, index=True)  # BUG-LOG-012: Tenant isolation
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -385,7 +442,7 @@ class ApiKey(Base):
     __tablename__ = "api_key"
 
     id = Column(Integer, primary_key=True)
-    service = Column(String(50), nullable=False, index=True)  # 'anthropic', 'openai', 'gemini', 'brave_search', 'openweather'
+    service = Column(String(50), nullable=False, index=True)  # 'anthropic', 'openai', 'gemini', 'brave_search'
     api_key = Column(String(500), nullable=True)  # DEPRECATED: Plaintext key (kept for migration, set to NULL after encryption)
     api_key_encrypted = Column(Text, nullable=True)  # Phase SEC-001: Encrypted API key (Fernet)
     is_active = Column(Boolean, default=True)
@@ -399,8 +456,141 @@ class ApiKey(Base):
     # Unique constraint: one key per service per tenant
     __table_args__ = (
         Index('idx_api_key_service_tenant', 'service', 'tenant_id', unique=True),
-        {"sqlite_autoincrement": True},
     )
+
+
+class ProviderInstance(Base):
+    """
+    Phase 21: Multi-instance provider support.
+    Each tenant can configure multiple provider endpoints (e.g., multiple OpenAI-compatible
+    servers, Ollama instances, or custom LLM gateways) with independent API keys, base URLs,
+    and model availability. Agents reference a specific provider instance via FK.
+    """
+    __tablename__ = "provider_instance"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    vendor = Column(String(30), nullable=False)  # 'openai'|'anthropic'|'gemini'|'groq'|'grok'|'openrouter'|'vertex_ai'|'ollama'|'custom'
+    instance_name = Column(String(100), nullable=False)
+    base_url = Column(String(500), nullable=True)  # NULL = vendor default
+    api_key_encrypted = Column(Text, nullable=True)  # Fernet-encrypted
+    extra_config = Column(JSON, default=dict)  # Vendor-specific: vertex_ai stores project_id, region, sa_email
+    available_models = Column(JSON, default=list)
+    is_default = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    health_status = Column(String(20), default='unknown')  # healthy|degraded|unavailable|unknown
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'instance_name', name='uq_provider_instance_tenant_name'),
+        Index('idx_pi_tenant_vendor', 'tenant_id', 'vendor'),
+    )
+
+
+class ProviderUrlPolicy(Base):
+    """
+    Phase 21: URL allowlist/blocklist for provider base URLs.
+    Admins can restrict which base URLs tenants may connect to, preventing
+    SSRF and enforcing corporate proxy / gateway policies.
+    Scope can be 'global' (system-wide) or 'tenant' (per-tenant override).
+    """
+    __tablename__ = "provider_url_policy"
+
+    id = Column(Integer, primary_key=True)
+    scope = Column(String(10), nullable=False)  # 'global' | 'tenant'
+    tenant_id = Column(String(50), nullable=True)  # NULL when scope='global'
+    policy_type = Column(String(10), nullable=False)  # 'allowlist' | 'blocklist'
+    url_pattern = Column(String(500), nullable=False)
+    description = Column(String(255), nullable=True)
+    created_by = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProviderConnectionAudit(Base):
+    """
+    Phase 21: Audit trail for provider connection events.
+    Logs every connection attempt (health checks, model discovery, chat requests)
+    including the resolved IP address for SSRF post-incident analysis.
+    """
+    __tablename__ = "provider_connection_audit"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False)
+    user_id = Column(Integer, nullable=True)
+    provider_instance_id = Column(Integer, nullable=False)
+    action = Column(String(30), nullable=False)  # 'test_connection'|'model_discovery'|'chat_request'
+    resolved_ip = Column(String(45), nullable=True)
+    base_url = Column(String(500), nullable=True)
+    success = Column(Boolean, nullable=False)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ApiClient(Base):
+    """
+    Public API v1: OAuth2 client credentials for programmatic API access.
+    Each API client belongs to a tenant and has a role-based permission scope.
+    Secret is hashed with Argon2 (same as user passwords).
+    """
+    __tablename__ = "api_client"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    client_id = Column(String(50), unique=True, nullable=False, index=True)  # tsn_ci_<random>
+    client_secret_hash = Column(String(255), nullable=False)  # Argon2 hash of tsn_cs_<random>
+    client_secret_prefix = Column(String(12), nullable=False)  # First 12 chars for display/lookup
+    secret_rotated_at = Column(DateTime, nullable=True)  # tracks last rotation for JWT invalidation
+    role = Column(String(30), default='api_agent_only')  # api_owner, api_admin, api_member, api_readonly, api_agent_only, custom
+    custom_scopes = Column(JSON, nullable=True)  # Only when role='custom': ["agents.read", "agents.execute"]
+    is_active = Column(Boolean, default=True)
+    rate_limit_rpm = Column(Integer, default=60)  # Requests per minute
+    expires_at = Column(DateTime, nullable=True)  # Optional expiry date
+    last_used_at = Column(DateTime, nullable=True)
+    created_by = Column(Integer, ForeignKey('user.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('uq_api_client_tenant_name', 'tenant_id', 'name', unique=True),
+    )
+
+
+class ApiClientToken(Base):
+    """
+    Public API v1: Tracks issued JWT access tokens for audit and revocation.
+    Tokens are short-lived (1h TTL) and tied to a specific API client.
+    """
+    __tablename__ = "api_client_token"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    api_client_id = Column(Integer, ForeignKey('api_client.id', ondelete='CASCADE'), nullable=False, index=True)
+    token_hash = Column(String(255), nullable=False, index=True)  # SHA-256 of the JWT
+    scopes = Column(JSON, nullable=False)  # Scopes granted for this token
+    issued_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    ip_address = Column(String(45), nullable=True)  # Client IP for audit
+
+
+class ApiRequestLog(Base):
+    """
+    Public API v1: Request audit log for tracking API usage per client.
+    """
+    __tablename__ = "api_request_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    api_client_id = Column(Integer, ForeignKey('api_client.id'), nullable=False, index=True)
+    method = Column(String(10), nullable=False)  # GET, POST, PUT, DELETE
+    path = Column(String(500), nullable=False)  # /api/v1/agents
+    status_code = Column(Integer, nullable=False)
+    response_time_ms = Column(Integer, nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
 class SemanticKnowledge(Base):
@@ -419,6 +609,7 @@ class SemanticKnowledge(Base):
     confidence = Column(Float, default=1.0)  # Confidence score (0.0-1.0)
     learned_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_accessed_at = Column(DateTime, default=datetime.utcnow)  # v0.6.0 Item 37: Temporal Decay
 
 
 class SharedMemory(Base):
@@ -438,6 +629,7 @@ class SharedMemory(Base):
     tenant_id = Column(String(50), nullable=True, index=True)  # CRIT-010: Multi-tenancy isolation
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_accessed_at = Column(DateTime, default=datetime.utcnow)  # v0.6.0 Item 37: Temporal Decay
 
 
 class AgentRun(Base):
@@ -499,7 +691,6 @@ class TokenUsage(Base):
         Index('idx_token_usage_agent_created', 'agent_id', 'created_at'),
         Index('idx_token_usage_model_created', 'model_provider', 'model_name', 'created_at'),
         Index('idx_token_usage_operation_created', 'operation_type', 'created_at'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -541,7 +732,6 @@ class ModelPricing(Base):
     __table_args__ = (
         UniqueConstraint('tenant_id', 'model_provider', 'model_name', name='uix_model_pricing_tenant_model'),
         Index('idx_model_pricing_model', 'model_provider', 'model_name'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -560,10 +750,177 @@ class AgentSkill(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Unique constraint: one skill config per agent per skill type
+
+class CustomSkill(Base):
+    """
+    Phase 22: Custom Skills Foundation
+    Stores tenant-created custom skills that can be assigned to agents.
+    Supports instruction-based, script-based, and MCP server skill types.
+    """
+    __tablename__ = "custom_skill"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    source = Column(String(20), nullable=False, default='tenant')  # tenant|marketplace|builtin
+    slug = Column(String(100), nullable=False)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    icon = Column(String(10), nullable=True)  # emoji
+    skill_type_variant = Column(String(20), nullable=False, default='instruction')  # instruction|script|mcp_server
+    execution_mode = Column(String(20), nullable=False, default='tool')  # tool|hybrid|passive
+    instructions_md = Column(Text, nullable=True)
+    script_entrypoint = Column(String(50), nullable=True)
+    script_content = Column(Text, nullable=True)
+    script_language = Column(String(20), nullable=True)  # python|bash|nodejs
+    script_content_hash = Column(String(64), nullable=True)
+    input_schema = Column(JSON, default=dict)
+    output_schema = Column(JSON, nullable=True)
+    config_schema = Column(JSON, default=list)
+    trigger_mode = Column(String(20), default='llm_decided')  # keyword|always_on|llm_decided
+    trigger_keywords = Column(JSON, default=list)
+    priority = Column(Integer, default=50)
+    sentinel_profile_id = Column(Integer, nullable=True)
+    timeout_seconds = Column(Integer, nullable=False, default=30)
+    is_enabled = Column(Boolean, nullable=False, default=True)
+    scan_status = Column(String(20), default='pending')  # pending|clean|rejected
+    last_scan_result = Column(JSON, nullable=True)
+    version = Column(String(20), nullable=False, default='1.0.0')
+    mcp_server_id = Column(Integer, ForeignKey("mcp_server_config.id", ondelete="SET NULL"), nullable=True)
+    mcp_tool_name = Column(String(200), nullable=True)
+    created_by = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint('tenant_id', 'slug', name='uq_custom_skill_tenant_slug'),)
+
+
+class CustomSkillVersion(Base):
+    """
+    Phase 22: Custom Skills Foundation
+    Stores version snapshots of custom skills for audit and rollback.
+    """
+    __tablename__ = "custom_skill_version"
+
+    id = Column(Integer, primary_key=True)
+    custom_skill_id = Column(Integer, ForeignKey("custom_skill.id", ondelete="CASCADE"), nullable=False, index=True)
+    version = Column(String(20), nullable=False)
+    snapshot_json = Column(JSON, nullable=False)
+    changed_by = Column(Integer, nullable=True)
+    changed_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentCustomSkill(Base):
+    """
+    Phase 22: Custom Skills Foundation
+    Maps custom skills to agents with per-agent configuration overrides.
+    """
+    __tablename__ = "agent_custom_skill"
+
+    id = Column(Integer, primary_key=True)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    custom_skill_id = Column(Integer, ForeignKey("custom_skill.id", ondelete="CASCADE"), nullable=False, index=True)
+    is_enabled = Column(Boolean, default=True)
+    config = Column(JSON, default=dict)
+    priority_override = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint('agent_id', 'custom_skill_id', name='uq_agent_custom_skill'),)
+
+
+class CustomSkillExecution(Base):
+    """
+    Phase 22: Custom Skills Foundation
+    Logs execution history for custom skills for analytics and debugging.
+    """
+    __tablename__ = "custom_skill_execution"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    agent_id = Column(Integer, nullable=True)
+    custom_skill_id = Column(Integer, ForeignKey("custom_skill.id", ondelete="SET NULL"), nullable=True)
+    skill_name = Column(String(200), nullable=True)
+    input_json = Column(JSON, nullable=True)
+    output = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default='pending')  # pending|running|completed|failed
+    execution_time_ms = Column(Integer, nullable=True)
+    sentinel_result = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MCPServerConfig(Base):
+    """
+    Phase 22.4: MCP Server Integration
+    Stores external MCP server configurations for tenant tool providers.
+    Supports SSE, Streamable HTTP, and stdio transport types.
+    """
+    __tablename__ = "mcp_server_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    server_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    transport_type = Column(String(20), nullable=False)  # 'sse'|'streamable_http'|'stdio'
+    server_url = Column(String(500), nullable=True)  # For SSE/HTTP transports
+    auth_type = Column(String(20), default='none')  # 'none'|'bearer'|'header'|'api_key'
+    auth_token_encrypted = Column(Text, nullable=True)
+    auth_header_name = Column(String(100), nullable=True)
+    stdio_binary = Column(String(100), nullable=True)  # For stdio transport
+    stdio_args = Column(JSON, default=list)
+    trust_level = Column(String(20), default='untrusted')  # 'system'|'verified'|'untrusted'
+    connection_status = Column(String(20), default='disconnected')  # disconnected|connecting|healthy|degraded
+    max_retries = Column(Integer, default=3)
+    timeout_seconds = Column(Integer, default=30)
+    idle_timeout_seconds = Column(Integer, default=300)
+    is_active = Column(Boolean, default=True)
+    last_connected_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
     __table_args__ = (
-        {"sqlite_autoincrement": True},
+        UniqueConstraint('tenant_id', 'server_name', name='uq_mcp_server_tenant_name'),
     )
+
+
+class MCPDiscoveredTool(Base):
+    """
+    Phase 22.4: MCP Server Integration
+    Stores tools discovered from connected MCP servers.
+    Uses namespaced names ({server_name}__{tool_name}) to avoid collisions.
+    """
+    __tablename__ = "mcp_discovered_tool"
+
+    id = Column(Integer, primary_key=True)
+    server_id = Column(Integer, ForeignKey("mcp_server_config.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    tool_name = Column(String(200), nullable=False)
+    namespaced_name = Column(String(300), nullable=False)  # {server_name}__{tool_name}
+    description = Column(Text, nullable=True)
+    input_schema = Column(JSON, default=dict)
+    is_enabled = Column(Boolean, default=True)
+    scan_status = Column(String(20), default='pending')
+    discovered_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('server_id', 'tool_name', name='uq_mcp_tool_server_name'),
+    )
+
+
+class MCPServerHealth(Base):
+    """
+    Phase 22.4: MCP Server Integration
+    Stores health check history for MCP server connections.
+    """
+    __tablename__ = "mcp_server_health"
+
+    id = Column(Integer, primary_key=True)
+    server_id = Column(Integer, ForeignKey("mcp_server_config.id", ondelete="CASCADE"), nullable=False, index=True)
+    check_type = Column(String(20), nullable=False)  # 'ping'|'list_tools'|'manual'
+    success = Column(Boolean, nullable=False)
+    latency_ms = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)
+    checked_at = Column(DateTime, default=datetime.utcnow)
 
 
 class AgentKnowledge(Base):
@@ -829,7 +1186,6 @@ class ProjectSemanticMemory(Base):
     __table_args__ = (
         Index('idx_proj_semantic_project', 'project_id'),
         Index('idx_proj_semantic_sender', 'project_id', 'sender_key'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -857,7 +1213,6 @@ class ProjectFactMemory(Base):
         Index('idx_proj_fact_topic', 'project_id', 'topic'),
         Index('idx_proj_fact_sender', 'project_id', 'sender_key'),
         UniqueConstraint('project_id', 'sender_key', 'topic', 'key', name='uq_project_fact'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -894,7 +1249,6 @@ class SlashCommand(Base):
         Index('idx_slash_cmd_tenant', 'tenant_id'),
         Index('idx_slash_cmd_category', 'tenant_id', 'category'),
         UniqueConstraint('tenant_id', 'command_name', 'language_code', name='uq_slash_command'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -923,7 +1277,6 @@ class AgentProjectAccess(Base):
         UniqueConstraint('agent_id', 'project_id', name='uq_agent_project'),
         Index('idx_agent_project_agent', 'agent_id'),
         Index('idx_agent_project_project', 'project_id'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -957,7 +1310,6 @@ class UserProjectSession(Base):
         # One active session per user+agent+channel
         UniqueConstraint('tenant_id', 'sender_key', 'agent_id', 'channel', name='uq_user_project_session'),
         Index('idx_session_lookup', 'tenant_id', 'sender_key', 'channel'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -989,7 +1341,6 @@ class ProjectCommandPattern(Base):
     __table_args__ = (
         UniqueConstraint('tenant_id', 'command_type', 'language_code', name='uq_command_pattern'),
         Index('idx_command_pattern_tenant', 'tenant_id'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1040,6 +1391,10 @@ class SandboxedToolCommand(Base):
     timeout_seconds = Column(Integer, default=30)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    __table_args__ = (
+        UniqueConstraint('tool_id', 'command_name', name='uq_sandboxed_tool_command_name'),
+    )
+
 
 class SandboxedToolParameter(Base):
     """
@@ -1055,6 +1410,10 @@ class SandboxedToolParameter(Base):
     default_value = Column(Text)
     description = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('command_id', 'parameter_name', name='uq_sandboxed_tool_param_name'),
+    )
 
 
 class AgentSandboxedTool(Base):
@@ -1162,11 +1521,6 @@ class ScheduledEvent(Base):
     completed_at = Column(DateTime)
     error_message = Column(Text)
 
-    # Indexes for efficient querying
-    __table_args__ = (
-        {"sqlite_autoincrement": True},
-    )
-
 
 class ConversationLog(Base):
     """
@@ -1195,10 +1549,6 @@ class ConversationLog(Base):
     sentiment = Column(String(20))  # 'POSITIVE', 'NEUTRAL', 'NEGATIVE'
     topic_alignment = Column(String(20))  # 'ON_TRACK', 'DEVIATING', 'ACHIEVED'
 
-    __table_args__ = (
-        {"sqlite_autoincrement": True},
-    )
-
 
 class FlowDefinition(Base):
     """
@@ -1219,9 +1569,13 @@ class FlowDefinition(Base):
     description = Column(Text)
 
     # Phase 8.0: Execution Configuration (adapted from asm-platform)
-    execution_method = Column(String(20), default='immediate')  # 'immediate' | 'scheduled' | 'recurring'
+    execution_method = Column(String(20), default='immediate')  # 'immediate' | 'scheduled' | 'recurring' | 'keyword'
     scheduled_at = Column(DateTime, nullable=True)  # For scheduled execution
     recurrence_rule = Column(JSON, nullable=True)  # Cron-like config: {frequency, interval, days_of_week, timezone}
+
+    # BUG-336: Keyword trigger support — list of keywords/commands that fire this flow
+    # e.g. ["/testflow", "start report", "run workflow"]
+    trigger_keywords = Column(JSON, default=list, nullable=True)
 
     # Phase 8.0: Default agent for the flow (can be overridden per step)
     default_agent_id = Column(Integer, nullable=True)  # FK to Agent
@@ -1256,7 +1610,6 @@ class FlowDefinition(Base):
     __table_args__ = (
         Index("idx_flow_execution_method", "execution_method"),
         Index("idx_flow_next_execution", "next_execution_at"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1313,7 +1666,6 @@ class FlowNode(Base):
 
     __table_args__ = (
         UniqueConstraint('flow_definition_id', 'position', name='uq_flow_node_position'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1359,7 +1711,6 @@ class FlowRun(Base):
     __table_args__ = (
         Index("idx_flow_run_status", "status"),
         Index("idx_flow_run_tenant_status", "tenant_id", "status"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1406,7 +1757,6 @@ class FlowNodeRun(Base):
 
     __table_args__ = (
         Index("idx_step_run_status", "status"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1429,6 +1779,7 @@ class ConversationThread(Base):
     # Phase 14.1: Playground-specific fields
     tenant_id = Column(String(50), nullable=True, index=True)  # FK to tenant (for playground)
     user_id = Column(Integer, nullable=True, index=True)  # FK to user (for playground)
+    api_client_id = Column(String(100), nullable=True, index=True)  # BUG-367: API v1 client isolation
     thread_type = Column(String(20), default='flow', index=True)  # 'flow' or 'playground'
     title = Column(String(200), nullable=True)  # Thread name (auto-generated or user-set)
     folder = Column(String(100), nullable=True)  # Organization folder (e.g., "Work", "Personal")
@@ -1472,7 +1823,6 @@ class ConversationThread(Base):
         Index("idx_conversation_thread_active", "status", "recipient"),
         Index("idx_conversation_thread_playground", "tenant_id", "user_id", "agent_id", "thread_type"),
         Index("idx_conversation_thread_archived", "is_archived"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1488,7 +1838,8 @@ class HubIntegration(Base):
 
     Supported integrations:
     - Asana (task management via MCP)
-    - Slack (future)
+    - Discord (Phase 23: bot with per-integration public_key — BUG-311/313)
+    - Slack (Phase 23: workspace with per-integration signing_secret — BUG-312)
     - Linear (future)
     - GitHub (future)
     """
@@ -1517,6 +1868,7 @@ class HubIntegration(Base):
     # Health monitoring
     last_health_check = Column(DateTime)
     health_status = Column(String(20), default="unknown")  # "healthy", "degraded", "unavailable"
+    health_status_reason = Column(String(500), nullable=True)  # Why the status changed (e.g., "invalid_grant")
 
     # Relationships
     tokens = relationship("OAuthToken", back_populates="integration", cascade="all, delete-orphan")
@@ -1525,7 +1877,6 @@ class HubIntegration(Base):
         Index("idx_hub_integration_type_active", "type", "is_active"),
         Index("idx_hub_integration_health", "health_status"),
         Index("idx_hub_integration_tenant", "tenant_id"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1556,7 +1907,6 @@ class AsanaIntegration(HubIntegration):
     __table_args__ = (
         Index("idx_asana_workspace_gid", "workspace_gid"),
         Index("idx_asana_user_gid", "authorized_by_user_gid"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1593,10 +1943,6 @@ class AmadeusIntegration(HubIntegration):
     __mapper_args__ = {
         'polymorphic_identity': 'amadeus',
     }
-
-    __table_args__ = (
-        {"sqlite_autoincrement": True},
-    )
 
 
 # ============================================================================
@@ -1682,7 +2028,6 @@ class ShellIntegration(HubIntegration):
     __table_args__ = (
         Index("idx_shell_hostname", "hostname"),
         Index("idx_shell_last_checkin", "last_checkin"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1761,7 +2106,6 @@ class ShellCommand(Base):
         Index("idx_shell_command_shell_status", "shell_id", "status"),
         Index("idx_shell_command_tenant", "tenant_id"),
         Index("idx_shell_command_queued", "queued_at"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1814,7 +2158,6 @@ class ShellSecurityPattern(Base):
     __table_args__ = (
         Index("idx_security_pattern_tenant_active", "tenant_id", "is_active"),
         Index("idx_security_pattern_type", "pattern_type", "is_active"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1857,13 +2200,16 @@ class SentinelConfig(Base):
     detect_agent_takeover = Column(Boolean, default=True, nullable=False)
     detect_poisoning = Column(Boolean, default=True, nullable=False)
     detect_shell_malicious_intent = Column(Boolean, default=True, nullable=False)
+    detect_memory_poisoning = Column(Boolean, default=True, nullable=False)
+    detect_browser_ssrf = Column(Boolean, default=True, nullable=False)
+    detect_vector_store_poisoning = Column(Boolean, default=True, nullable=False)
 
     # Aggressiveness: 0=Off, 1=Moderate, 2=Aggressive, 3=Extra Aggressive
     aggressiveness_level = Column(Integer, default=1, nullable=False)
 
     # LLM configuration for analysis
     llm_provider = Column(String(20), default="gemini", nullable=False)
-    llm_model = Column(String(100), default="gemini-2.0-flash-lite", nullable=False)
+    llm_model = Column(String(100), default="gemini-2.5-flash-lite", nullable=False)
     llm_max_tokens = Column(Integer, default=256, nullable=False)
     llm_temperature = Column(Float, default=0.1, nullable=False)
 
@@ -1872,6 +2218,9 @@ class SentinelConfig(Base):
     agent_takeover_prompt = Column(Text, nullable=True)
     poisoning_prompt = Column(Text, nullable=True)
     shell_intent_prompt = Column(Text, nullable=True)
+    memory_poisoning_prompt = Column(Text, nullable=True)
+    browser_ssrf_prompt = Column(Text, nullable=True)
+    vector_store_poisoning_prompt = Column(Text, nullable=True)
 
     # Performance settings
     cache_ttl_seconds = Column(Integer, default=300, nullable=False)  # 5-minute cache
@@ -1912,7 +2261,6 @@ class SentinelConfig(Base):
 
     __table_args__ = (
         UniqueConstraint('tenant_id', name='uq_sentinel_config_tenant'),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -1939,16 +2287,16 @@ class SentinelAgentConfig(Base):
     enable_shell_analysis = Column(Boolean, nullable=True)
     aggressiveness_level = Column(Integer, nullable=True)
 
+    # Vector store access controls (Item 5)
+    vector_store_access_enabled = Column(Boolean, nullable=True)  # NULL = inherit
+    vector_store_allowed_configs = Column(JSON, nullable=True)  # List of allowed VectorStoreInstance IDs
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationship
     agent = relationship("Agent", backref="sentinel_agent_config")
-
-    __table_args__ = (
-        {"sqlite_autoincrement": True},
-    )
 
 
 class SentinelAnalysisLog(Base):
@@ -2005,7 +2353,6 @@ class SentinelAnalysisLog(Base):
     __table_args__ = (
         Index("idx_sentinel_log_tenant_threat", "tenant_id", "is_threat_detected", "created_at"),
         Index("idx_sentinel_log_detection_type", "detection_type", "created_at"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2042,7 +2389,6 @@ class SentinelAnalysisCache(Base):
         UniqueConstraint('tenant_id', 'input_hash', 'analysis_type', 'detection_type',
                          'aggressiveness_level', name='uq_sentinel_cache'),
         Index("idx_sentinel_cache_expires", "expires_at"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2117,7 +2463,148 @@ class SentinelException(Base):
     __table_args__ = (
         Index("idx_sentinel_exc_tenant_agent", "tenant_id", "agent_id"),
         Index("idx_sentinel_exc_active_priority", "is_active", "priority"),
-        {"sqlite_autoincrement": True},
+    )
+
+
+# ============================================================================
+# Phase v1.6.0: Sentinel Security Profiles
+# ============================================================================
+
+class SentinelProfile(Base):
+    """
+    Named, reusable security policy for Sentinel.
+
+    Profiles are self-contained security policy documents that can be assigned
+    at three levels: Tenant -> Agent -> Skill, with hierarchical fallback.
+
+    Replaces the flat column-per-setting approach in SentinelConfig/SentinelAgentConfig
+    with an extensible profile system.
+
+    Key features:
+    - System built-in profiles (off, permissive, moderate, aggressive)
+    - Tenant-created custom profiles
+    - JSON-based detection_overrides for zero-migration extensibility
+    - One default profile per tenant (partial unique index enforced)
+
+    Example:
+        System profile "Permissive" (is_system=True, is_default=True):
+        - detection_mode='detect_only', aggressiveness_level=1
+        - detection_overrides='{}' (all detections use registry defaults)
+
+        Tenant custom profile "Sales Team Permissive":
+        - detection_mode='detect_only', aggressiveness_level=1
+        - detection_overrides='{"shell_malicious": {"enabled": false}}'
+    """
+    __tablename__ = "sentinel_profile"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Identity
+    name = Column(String(100), nullable=False)
+    slug = Column(String(100), nullable=False)  # URL-friendly (e.g. "aggressive")
+    description = Column(Text, nullable=True)
+    tenant_id = Column(String(50), nullable=True)  # NULL = system built-in
+    is_system = Column(Boolean, default=False, nullable=False)  # System profiles: cannot delete/rename
+    is_default = Column(Boolean, default=False, nullable=False)  # Default fallback for this tenant
+
+    # Global settings
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    detection_mode = Column(String(20), default="block", nullable=False)  # 'block' | 'detect_only' | 'off'
+    okg_detection_mode = Column(String(20), default="block", nullable=False)  # V060-MEM-025: OKG-specific detection mode
+    aggressiveness_level = Column(Integer, default=1, nullable=False)  # 0=Off, 1=Moderate, 2=Aggressive, 3=Extra
+
+    # Component toggles
+    enable_prompt_analysis = Column(Boolean, default=True, nullable=False)
+    enable_tool_analysis = Column(Boolean, default=True, nullable=False)
+    enable_shell_analysis = Column(Boolean, default=True, nullable=False)
+    enable_slash_command_analysis = Column(Boolean, default=True, nullable=False)
+
+    # LLM configuration
+    llm_provider = Column(String(20), default="gemini", nullable=False)
+    llm_model = Column(String(100), default="gemini-2.5-flash-lite", nullable=False)
+    llm_max_tokens = Column(Integer, default=256, nullable=False)
+    llm_temperature = Column(Float, default=0.1, nullable=False)
+
+    # Performance
+    cache_ttl_seconds = Column(Integer, default=300, nullable=False)
+    max_input_chars = Column(Integer, default=5000, nullable=False)
+    timeout_seconds = Column(Float, default=5.0, nullable=False)
+
+    # Actions
+    block_on_detection = Column(Boolean, default=True, nullable=False)
+    log_all_analyses = Column(Boolean, default=False, nullable=False)
+
+    # Notifications
+    enable_notifications = Column(Boolean, default=True, nullable=False)
+    notification_on_block = Column(Boolean, default=True, nullable=False)
+    notification_on_detect = Column(Boolean, default=False, nullable=False)
+    notification_recipient = Column(String(100), nullable=True)
+    notification_message_template = Column(Text, nullable=True)
+
+    # Extensible per-detection config (JSON)
+    # Structure: {"prompt_injection": {"enabled": true, "custom_prompt": null}, ...}
+    # Keys absent from this JSON inherit defaults from DETECTION_REGISTRY.
+    detection_overrides = Column(Text, default="{}", nullable=False)
+
+    # Audit
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    creator = relationship("User", foreign_keys=[created_by], backref="created_sentinel_profiles")
+    updater = relationship("User", foreign_keys=[updated_by], backref="updated_sentinel_profiles")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "slug", name="uq_sentinel_profile_tenant_slug"),
+        Index("idx_sentinel_profile_tenant", "tenant_id"),
+        Index("idx_sentinel_profile_system", "is_system"),
+    )
+
+
+class SentinelProfileAssignment(Base):
+    """
+    Maps a Sentinel profile to a specific scope level.
+
+    Scope semantics (determines hierarchy level):
+    - (tenant, NULL, NULL)    = Tenant-level: applies to all agents
+    - (tenant, agent, NULL)   = Agent-level: applies to specific agent
+    - (tenant, agent, skill)  = Skill-level: applies to specific skill on agent
+
+    At most ONE assignment per unique (tenant_id, agent_id, skill_type) tuple.
+    The profile resolution walks: Skill -> Agent -> Tenant -> System Default.
+
+    Example:
+        Tenant "acme-corp" has:
+        - Tenant-level: "Moderate" profile (all agents inherit this)
+        - Agent 5: "Aggressive" profile (overrides tenant for this agent)
+        - Agent 5 + Shell: "Permissive" profile (overrides agent for shell skill only)
+    """
+    __tablename__ = "sentinel_profile_assignment"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Scope (determines hierarchy level)
+    tenant_id = Column(String(50), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=True)
+    skill_type = Column(String(50), nullable=True)  # NULL = agent-level (requires agent_id)
+
+    profile_id = Column(Integer, ForeignKey("sentinel_profile.id", ondelete="CASCADE"), nullable=False)
+
+    # Audit
+    assigned_by = Column(Integer, nullable=True)
+    assigned_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    profile = relationship("SentinelProfile", backref="assignments")
+    agent = relationship("Agent", backref="sentinel_profile_assignments")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "agent_id", "skill_type", name="uq_sentinel_profile_assignment_scope"),
+        Index("idx_profile_assign_tenant", "tenant_id"),
+        Index("idx_profile_assign_agent", "agent_id"),
+        Index("idx_profile_assign_profile", "profile_id"),
     )
 
 
@@ -2152,7 +2639,6 @@ class OAuthState(Base):
     __table_args__ = (
         Index("idx_oauth_state_token", "state_token"),
         Index("idx_oauth_state_expires", "expires_at"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2187,7 +2673,6 @@ class OAuthToken(Base):
     __table_args__ = (
         Index("idx_oauth_token_integration", "integration_id"),
         Index("idx_oauth_token_expires", "expires_at"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2216,7 +2701,6 @@ class UserAgentSession(Base):
 
     __table_args__ = (
         Index("idx_user_agent_session_identifier", "user_identifier"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2242,7 +2726,6 @@ class UserContactMapping(Base):
     __table_args__ = (
         Index("idx_user_contact_mapping_user", "user_id"),
         Index("idx_user_contact_mapping_contact", "contact_id"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2265,6 +2748,7 @@ class WhatsAppMCPInstance(Base):
     # Container identification
     container_name = Column(String(100), unique=True, nullable=False)  # e.g., "mcp-tenant123-1699999999"
     phone_number = Column(String(20), nullable=False)  # WhatsApp phone number
+    display_name = Column(String(100), nullable=True)  # Optional human-readable label (e.g., "Support Bot")
     instance_type = Column(String(20), default="agent", nullable=False)  # "agent" or "tester"
 
     # Networking
@@ -2279,6 +2763,11 @@ class WhatsAppMCPInstance(Base):
     status = Column(String(20), default="stopped")  # stopped, starting, running, error
     health_status = Column(String(20), default="unknown")  # unknown, healthy, unhealthy
     last_health_check = Column(DateTime, nullable=True)
+
+    # v0.6.0 Item 38: Circuit Breaker State
+    circuit_breaker_state = Column(String(20), default="closed")  # closed, open, half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
 
     # QR Code for WhatsApp authentication
     qr_code_data = Column(Text, nullable=True)  # Base64-encoded QR code image
@@ -2318,7 +2807,6 @@ class WhatsAppMCPInstance(Base):
         Index("idx_mcp_instance_tenant", "tenant_id"),
         Index("idx_mcp_instance_status", "status"),
         Index("idx_mcp_instance_port", "mcp_port"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2347,6 +2835,11 @@ class TelegramBotInstance(Base):
     status = Column(String(20), default="inactive")  # inactive, active, error
     health_status = Column(String(20), default="unknown")  # unknown, healthy, unhealthy
     last_health_check = Column(DateTime, nullable=True)
+
+    # v0.6.0 Item 38: Circuit Breaker State
+    circuit_breaker_state = Column(String(20), default="closed")  # closed, open, half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
 
     # Webhook configuration (optional, polling is default)
@@ -2366,7 +2859,157 @@ class TelegramBotInstance(Base):
         Index("idx_telegram_instance_tenant", "tenant_id"),
         Index("idx_telegram_instance_status", "status"),
         Index("idx_telegram_instance_username", "bot_username"),
-        {"sqlite_autoincrement": True},
+    )
+
+
+# ============================================================================
+# v0.6.0 Item 33: Slack Integration
+# ============================================================================
+
+class SlackIntegration(Base):
+    """
+    v0.6.0 Item 33: Slack Workspace Integration
+
+    Manages Slack workspace connections per tenant via Socket Mode or HTTP Events API.
+    Tokens are encrypted with Fernet (per-workspace key derivation).
+
+    Example:
+        Tenant "acme-corp" → Slack workspace "Acme HQ" (team_id: T0123ABC)
+    """
+    __tablename__ = "slack_integration"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(100), nullable=False, index=True)
+    workspace_id = Column(String(50), nullable=False)       # Slack team_id
+    app_id = Column(String(50), nullable=True, index=True)  # Slack App ID (A0xxxxx) — BUG-312 fix
+    workspace_name = Column(String(200))
+    bot_token_encrypted = Column(Text, nullable=False)       # xoxb-... (Fernet)
+    app_token_encrypted = Column(Text)                       # xapp-... (Socket Mode)
+    signing_secret_encrypted = Column(Text)                  # HTTP mode
+    mode = Column(String(20), default="socket")              # "socket" or "http"
+    bot_user_id = Column(String(50))                         # Bot's Slack user ID
+    is_active = Column(Boolean, default=True)
+    status = Column(String(20), default="inactive")          # inactive/connected/error
+    health_status = Column(String(20), default="unknown")    # v0.6.0 Item 38: unknown/healthy/unhealthy
+    last_health_check = Column(DateTime, nullable=True)      # v0.6.0 Item 38
+    dm_policy = Column(String(20), default="allowlist")      # open/allowlist/disabled
+    allowed_channels = Column(JSON, default=[])              # List of allowed channel_ids
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    # v0.6.0 Item 38: Circuit Breaker State
+    circuit_breaker_state = Column(String(20), default="closed")  # closed, open, half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index("idx_slack_integration_tenant", "tenant_id"),
+        Index("idx_slack_integration_status", "status"),
+    )
+
+
+class DiscordIntegration(Base):
+    """
+    v0.6.0 Item 34: Discord Bot Integration
+
+    Manages Discord bot connections per tenant via REST API (outbound) and
+    Gateway events (inbound). Bot token is encrypted with Fernet.
+
+    Example:
+        Tenant "acme-corp" → Discord Bot "Acme Bot" (application_id: 123456789)
+    """
+    __tablename__ = "discord_integration"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(100), nullable=False, index=True)
+    bot_token_encrypted = Column(Text, nullable=False)          # Bot token (Fernet)
+    application_id = Column(String(50), nullable=False)         # Discord Application ID
+    public_key = Column(String(128), nullable=True)             # Ed25519 public key for interaction verification (BUG-311/313 fix)
+    bot_user_id = Column(String(50))                            # Bot's Discord user ID
+    is_active = Column(Boolean, default=True)
+    status = Column(String(20), default="inactive")             # inactive/connected/error
+    health_status = Column(String(20), default="unknown")       # v0.6.0 Item 38: unknown/healthy/unhealthy
+    last_health_check = Column(DateTime, nullable=True)         # v0.6.0 Item 38
+    dm_policy = Column(String(20), default="allowlist")         # open/allowlist/disabled
+    allowed_guilds = Column(JSON, default=[])                   # List of allowed guild (server) IDs
+    guild_channel_config = Column(JSON, default={})             # Per-guild channel configuration
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    # v0.6.0 Item 38: Circuit Breaker State
+    circuit_breaker_state = Column(String(20), default="closed")  # closed, open, half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index("idx_discord_integration_tenant", "tenant_id"),
+        Index("idx_discord_integration_status", "status"),
+    )
+
+
+# ============================================================================
+# v0.6.0: Webhook-as-a-Channel Integration
+# ============================================================================
+
+class WebhookIntegration(Base):
+    """
+    v0.6.0: Webhook Channel Integration
+
+    Bidirectional HTTP webhook channel. External systems POST HMAC-signed
+    events to /api/webhooks/{id}/inbound; responses are optionally POSTed
+    back to customer-provided callback URL (also HMAC-signed).
+
+    Inbound auth: HMAC-SHA256 signature mandatory (X-Tsushin-Signature header)
+    + timestamp replay protection (X-Tsushin-Timestamp, ±5 min window).
+    Optional per-webhook IP allowlist + rate limit as defense-in-depth.
+
+    No container is spawned — webhooks are stateless HTTP in/out. Handlers
+    are FastAPI routes + shared QueueWorker (matches Telegram/Slack pattern).
+    """
+    __tablename__ = "webhook_integration"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+
+    # Inbound identity (HMAC key, encrypted with Fernet)
+    api_secret_encrypted = Column(Text, nullable=False)
+    api_secret_preview = Column(String(16), nullable=False)  # first 8 chars + "…" for UI
+
+    # Outbound callback (optional bidirectional mode)
+    callback_url = Column(String(500), nullable=True)
+    callback_enabled = Column(Boolean, default=False)
+
+    # Optional inbound defense layers
+    ip_allowlist_json = Column(Text, nullable=True)  # JSON list of CIDRs
+    rate_limit_rpm = Column(Integer, default=30)
+    max_payload_bytes = Column(Integer, default=1048576)  # 1 MB
+
+    # Status
+    is_active = Column(Boolean, default=True)
+    status = Column(String(20), default="active")  # active/paused/error
+    health_status = Column(String(20), default="unknown")  # unknown/healthy/unhealthy
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+
+    # v0.6.0 Item 38: Circuit Breaker State (for outbound callback failures)
+    circuit_breaker_state = Column(String(20), default="closed")  # closed/open/half_open
+    circuit_breaker_opened_at = Column(DateTime, nullable=True)
+    circuit_breaker_failure_count = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+
+    # Retry config
+    max_retry_attempts = Column(Integer, default=3)
+    retry_timeout_seconds = Column(Integer, default=300)
+
+    # Audit
+    created_by = Column(Integer, ForeignKey('user.id'), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_webhook_integration_tenant", "tenant_id"),
+        Index("idx_webhook_integration_status", "status"),
     )
 
 
@@ -2408,7 +3051,6 @@ class GoogleOAuthCredentials(Base):
 
     __table_args__ = (
         Index("idx_google_oauth_tenant", "tenant_id"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2449,7 +3091,6 @@ class GmailIntegration(HubIntegration):
 
     __table_args__ = (
         Index("idx_gmail_email", "email_address"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2497,7 +3138,6 @@ class CalendarIntegration(HubIntegration):
 
     __table_args__ = (
         Index("idx_calendar_email", "email_address"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2528,33 +3168,29 @@ class GoogleFlightsIntegration(HubIntegration):
         'polymorphic_identity': 'google_flights',
     }
 
-    __table_args__ = (
-        {"sqlite_autoincrement": True},
-    )
-
 
 class BrowserAutomationIntegration(HubIntegration):
     """
     Browser Automation Integration.
 
     Phase 14.5: Browser Automation Skill
+    Phase 35:   Session persistence, rich actions, multi-tab, error recovery
 
-    Stores configuration for browser automation providers (Playwright, MCP Browser).
-    Supports both container mode (isolated browser) and host mode (user's browser).
+    Stores Playwright browser automation configuration per tenant.
 
     Features:
-        - Container mode: Secure, isolated browser for public websites
-        - Host mode: Access user's authenticated sessions (Phase 8)
-        - Configurable viewport, timeout, user agent
-        - Multi-tenant support with per-user access control
+        - Headless Chromium/Firefox/WebKit in Docker container
+        - Configurable viewport, timeout, user agent, proxy
+        - Session persistence with idle timeout (Phase 35a)
+        - Multi-tenant support
     """
     __tablename__ = "browser_automation_integration"
 
     id = Column(Integer, ForeignKey("hub_integration.id"), primary_key=True)
 
     # Provider settings
-    provider_type = Column(String(50), default="playwright")  # "playwright" or "mcp_browser"
-    mode = Column(String(20), default="container")  # "container" or "host"
+    provider_type = Column(String(50), default="playwright")
+    mode = Column(String(20), default="container")
 
     # Browser configuration
     browser_type = Column(String(20), default="chromium")  # "chromium", "firefox", "webkit"
@@ -2566,19 +3202,23 @@ class BrowserAutomationIntegration(HubIntegration):
     user_agent = Column(Text, nullable=True)
     proxy_url = Column(Text, nullable=True)
 
-    # Host mode settings (Phase 8)
-    allowed_user_keys_json = Column(Text, nullable=True)  # JSON array of WhatsApp numbers
-    require_approval_per_action = Column(Boolean, default=False)
-    blocked_domains_json = Column(Text, nullable=True)  # JSON array of blocked domains
+    # Domain blocklist (JSON array)
+    blocked_domains_json = Column(Text, nullable=True)
+
+    # Domain allowlist (JSON array) — if non-empty, ONLY these domains are permitted
+    allowed_domains_json = Column(Text, nullable=True)
+
+    # Session persistence (Phase 35a)
+    session_persistence = Column(Boolean, default=False)
+    session_ttl_seconds = Column(Integer, default=300)  # 5-minute idle timeout
+
+    # CDP mode
+    cdp_url = Column(String(255), nullable=True, default="http://host.docker.internal:9222")
 
     # Polymorphic configuration
     __mapper_args__ = {
         'polymorphic_identity': 'browser_automation',
     }
-
-    __table_args__ = (
-        {"sqlite_autoincrement": True},
-    )
 
 
 class AgentSkillIntegration(Base):
@@ -2626,7 +3266,6 @@ class AgentSkillIntegration(Base):
     __table_args__ = (
         Index("idx_agent_skill_integration", "agent_id", "skill_type", unique=True),
         Index("idx_skill_integration_type", "skill_type"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2657,7 +3296,6 @@ class ConversationTag(Base):
 
     __table_args__ = (
         Index("idx_conversation_tag_tenant_user", "tenant_id", "user_id"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2684,7 +3322,6 @@ class ConversationInsight(Base):
 
     __table_args__ = (
         Index("idx_conversation_insight_tenant_user", "tenant_id", "user_id"),
-        {"sqlite_autoincrement": True},
     )
 
 
@@ -2712,65 +3349,340 @@ class ConversationLink(Base):
 
     __table_args__ = (
         Index("idx_conversation_link_tenant_user", "tenant_id", "user_id"),
-        {"sqlite_autoincrement": True},
     )
 
 
+
+
 # ============================================================================
-# Phase 8 (Browser Automation): Host Browser Audit Logging
+# Message Queue System
+# Async message processing with priority, retry, and dead-letter support.
 # ============================================================================
 
-class HostBrowserAuditLog(Base):
+class MessageQueue(Base):
     """
-    Audit log for host browser automation actions (security compliance).
-
-    Phase 8: Security audit logging for host mode browser operations.
-
-    All host mode browser actions MUST be logged for:
-    - Tracking actions on user's authenticated sessions
-    - Security investigation and incident response
-    - Compliance with data protection policies
-
-    Note: Container mode actions are NOT logged here (isolated environment).
+    Message Queue for asynchronous message processing.
+    Supports playground, WhatsApp, Telegram, and API channels.
+    Uses SELECT FOR UPDATE SKIP LOCKED for concurrent-safe claim.
     """
-    __tablename__ = "host_browser_audit_log"
+    __tablename__ = "message_queue"
 
     id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    channel = Column(String(20), nullable=False, index=True)  # "playground"|"whatsapp"|"telegram"|"api"
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    # "pending" | "processing" | "completed" | "failed" | "dead_letter"
 
-    # Multi-tenancy and user context
-    tenant_id = Column(String(50), nullable=False)
-    user_key = Column(String(100), nullable=False)  # WhatsApp number or user identifier
-    agent_id = Column(Integer, ForeignKey('agent.id'), nullable=True)
+    agent_id = Column(Integer, ForeignKey("agent.id"), nullable=False, index=True)
+    sender_key = Column(String(255), nullable=False)
 
-    # Action details
-    action = Column(String(50), nullable=False)  # navigate, click, fill, extract, screenshot, execute_script
-    url = Column(Text, nullable=True)  # Sanitized (sensitive query params redacted)
-    target_element = Column(String(255), nullable=True)  # CSS selector or element reference
+    payload = Column(JSON, nullable=False)
+    # Playground: {"user_id": int, "message": str, "thread_id": int|null, "media_type": str|null}
+    # WhatsApp:  {"message": dict}
+    # Telegram:  {"update": dict, "instance_id": int}
+    # API:       {"user_id": int, "message": str, "thread_id": int|null, "api_client_id": str}
+    # On completion, "result" key is added to payload for poll retrieval
 
-    # MCP details
-    mcp_tool = Column(String(100), nullable=False)  # Full MCP tool name used
-    mcp_params_hash = Column(String(64), nullable=True)  # SHA256 of params (privacy)
-
-    # Execution result
-    success = Column(Boolean, nullable=False)
+    priority = Column(Integer, default=0)
+    retry_count = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
     error_message = Column(Text, nullable=True)
-    duration_ms = Column(Integer, nullable=True)
 
-    # Security context
-    session_id = Column(String(100), nullable=True)  # Browser session identifier
-    ip_address = Column(String(45), nullable=True)  # Client IP (IPv4 or IPv6)
-
-    # Relationships
-    agent = relationship("Agent", backref="host_browser_audit_logs")
+    queued_at = Column(DateTime, default=datetime.utcnow, index=True)
+    processing_started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
-        Index("idx_host_browser_audit_timestamp", "timestamp"),
-        Index("idx_host_browser_audit_tenant", "tenant_id"),
-        Index("idx_host_browser_audit_user", "user_key"),
-        Index("idx_host_browser_audit_action", "action"),
-        {"sqlite_autoincrement": True},
+        Index("ix_mq_tenant_agent_status", "tenant_id", "agent_id", "status"),
+        Index("ix_mq_pending_priority", "status", "priority", "queued_at"),
     )
+
+
+# ============================================================================
+# v0.6.0 Item 38: Channel Health Monitor with Circuit Breakers
+# ============================================================================
+
+class ChannelHealthEvent(Base):
+    """
+    v0.6.0 Item 38: Records circuit breaker state transitions for audit trail.
+    Each row represents a single CLOSED→OPEN, OPEN→HALF_OPEN, or HALF_OPEN→CLOSED transition.
+    """
+    __tablename__ = "channel_health_event"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    channel_type = Column(String(20), nullable=False)           # whatsapp, telegram, slack, discord
+    instance_id = Column(Integer, nullable=False, index=True)   # FK conceptual to respective instance table
+    event_type = Column(String(50), nullable=True)              # e.g. "closed_to_open"
+    old_state = Column(String(20), nullable=False)              # closed, open, half_open
+    new_state = Column(String(20), nullable=False)
+    reason = Column(Text, nullable=True)                        # Human-readable transition reason
+    health_status = Column(String(20), nullable=True)           # healthy, unhealthy, degraded
+    latency_ms = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_health_event_tenant_channel", "tenant_id", "channel_type"),
+        Index("ix_health_event_instance_created", "instance_id", "created_at"),
+    )
+
+
+class ChannelAlertConfig(Base):
+    """
+    v0.6.0 Item 38: Per-tenant alert configuration for channel health notifications.
+    Supports webhook and email alert channels with configurable cooldown.
+    """
+    __tablename__ = "channel_alert_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, unique=True, index=True)
+    webhook_url = Column(String(500), nullable=True)            # Slack/Discord/generic webhook URL
+    email_recipients = Column(JSON, default=list)               # List of email addresses
+    alert_on_open = Column(Boolean, default=True)               # Alert when CB opens
+    alert_on_recovery = Column(Boolean, default=True)           # Alert when CB closes (recovered)
+    cooldown_seconds = Column(Integer, default=300)             # Min time between alerts for same instance
+    is_enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ============================================================================
+# Agent-to-Agent Communication (v0.6.0 Item 15)
+# Enables agents within the same tenant to message each other,
+# delegate tasks, and discover capabilities.
+# ============================================================================
+
+class AgentCommunicationPermission(Base):
+    """
+    Controls which agents are allowed to communicate with which other agents.
+    Both agents must share the same tenant_id.
+    """
+    __tablename__ = "agent_communication_permission"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False)
+    source_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    target_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    is_enabled = Column(Boolean, default=True)
+    max_depth = Column(Integer, default=3)  # Max delegation depth for this pair
+    rate_limit_rpm = Column(Integer, default=30)  # Rate limit for this pair
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    source_agent = relationship("Agent", foreign_keys=[source_agent_id], backref="outgoing_comm_permissions")
+    target_agent = relationship("Agent", foreign_keys=[target_agent_id], backref="incoming_comm_permissions")
+
+    __table_args__ = (
+        UniqueConstraint("source_agent_id", "target_agent_id", name="uq_agent_comm_perm_pair"),
+        Index("ix_agent_comm_perm_tenant", "tenant_id"),
+        Index("ix_agent_comm_perm_source", "source_agent_id"),
+        Index("ix_agent_comm_perm_target", "target_agent_id"),
+    )
+
+
+class AgentCommunicationSession(Base):
+    """
+    Tracks a complete inter-agent communication exchange.
+    Supports nested delegation via parent_session_id chain.
+    """
+    __tablename__ = "agent_communication_session"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False)
+    initiator_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    target_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    original_sender_key = Column(String(255), nullable=True)  # End-user who triggered this
+    original_message_preview = Column(String(200), nullable=True)  # First 200 chars of user message
+    session_type = Column(String(20), default="sync")  # sync / async / delegation
+    status = Column(String(20), default="pending")  # pending / in_progress / completed / failed / timeout / blocked
+    depth = Column(Integer, default=0)  # Current delegation depth (0 = first call)
+    max_depth = Column(Integer, default=3)
+    timeout_seconds = Column(Integer, default=30)
+    total_messages = Column(Integer, default=0)
+    error_text = Column(Text, nullable=True)
+    parent_session_id = Column(Integer, ForeignKey("agent_communication_session.id", ondelete="SET NULL"), nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    initiator_agent = relationship("Agent", foreign_keys=[initiator_agent_id])
+    target_agent_rel = relationship("Agent", foreign_keys=[target_agent_id])
+    parent_session = relationship("AgentCommunicationSession", remote_side=[id], backref="child_sessions")
+    messages = relationship("AgentCommunicationMessage", back_populates="session", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_agent_comm_session_tenant", "tenant_id"),
+        Index("ix_agent_comm_session_tenant_status", "tenant_id", "status"),
+        Index("ix_agent_comm_session_initiator", "initiator_agent_id", "started_at"),
+        Index("ix_agent_comm_session_target", "target_agent_id"),
+    )
+
+
+class AgentCommunicationMessage(Base):
+    """
+    Individual messages within an inter-agent communication session.
+    """
+    __tablename__ = "agent_communication_message"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("agent_communication_session.id", ondelete="CASCADE"), nullable=False)
+    from_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    to_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
+    direction = Column(String(10), nullable=False)  # request / response
+    message_content = Column(Text, nullable=False)
+    message_preview = Column(String(500), nullable=True)  # First 500 chars for listings
+    context_transferred = Column(JSON, nullable=True)  # Metadata passed along
+    model_used = Column(String(100), nullable=True)
+    token_usage_json = Column(JSON, nullable=True)
+    execution_time_ms = Column(Integer, nullable=True)
+    sentinel_analyzed = Column(Boolean, default=False)
+    sentinel_result = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    session = relationship("AgentCommunicationSession", back_populates="messages")
+    from_agent = relationship("Agent", foreign_keys=[from_agent_id])
+    to_agent = relationship("Agent", foreign_keys=[to_agent_id])
+
+    __table_args__ = (
+        Index("ix_agent_comm_msg_session", "session_id", "created_at"),
+    )
+
+
+# ============================================================================
+# v0.6.0: Vector Store Instance (External Vector Database Connections)
+# ============================================================================
+
+class VectorStoreInstance(Base):
+    """
+    v0.6.0 Item 1: Pluggable vector store backend configuration.
+
+    Each tenant can configure external vector databases (MongoDB Atlas, Pinecone, Qdrant)
+    alongside the built-in ChromaDB default. Agents reference a specific instance via
+    vector_store_instance_id FK (NULL = ChromaDB default).
+
+    Vendors: chromadb, mongodb, pinecone, qdrant
+    """
+    __tablename__ = "vector_store_instance"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+
+    # Provider identity
+    vendor = Column(String(20), nullable=False)  # chromadb|mongodb|pinecone|qdrant
+    instance_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Connection
+    base_url = Column(String(500), nullable=True)  # Required for mongodb/qdrant, unused for pinecone
+    credentials_encrypted = Column(Text, nullable=True)  # Fernet-encrypted JSON blob
+    extra_config = Column(JSON, default=dict)  # Vendor-specific: index_name, collection_name, namespace, embedding_dims
+
+    # Health monitoring
+    health_status = Column(String(20), default="unknown")  # unknown|healthy|degraded|unavailable
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+
+    # Flags
+    is_default = Column(Boolean, default=False)  # Legacy — use Config.default_vector_store_instance_id
+    is_active = Column(Boolean, default=True)
+
+    # Auto-provisioning (Docker-managed containers)
+    is_auto_provisioned = Column(Boolean, default=False, nullable=False)
+    container_name = Column(String(200), nullable=True)
+    container_id = Column(String(80), nullable=True)
+    container_port = Column(Integer, nullable=True)
+    container_status = Column(String(20), default="none", nullable=False)  # none|creating|running|stopped|error
+    container_image = Column(String(200), nullable=True)
+    volume_name = Column(String(150), nullable=True)
+    mem_limit = Column(String(20), nullable=True)
+    cpu_quota = Column(Integer, nullable=True)
+
+    # Security config (Item 4: MemGuard + rate limiting per-store)
+    security_config = Column(JSON, default=dict, nullable=False)  # thresholds, rate limits, batch limits
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "instance_name", name="uq_vector_store_instance_tenant_name"),
+        Index("idx_vsi_tenant_vendor", "tenant_id", "vendor"),
+    )
+
+
+class OKGMemoryAuditLog(Base):
+    """
+    v0.6.0 Item 3: Audit trail for OKG Term Memory operations.
+
+    Tracks all store, recall, forget, and auto-capture operations
+    for compliance, debugging, and MemGuard visibility.
+    """
+    __tablename__ = "okg_memory_audit_log"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    agent_id = Column(Integer, nullable=False)
+    user_id = Column(String(200), nullable=False)
+    action = Column(String(20), nullable=False)  # store|recall|forget|auto_capture
+    doc_id = Column(String(32), nullable=True, index=True)  # sha256[:32] dedup hash
+    memory_type = Column(String(20), nullable=True)  # fact|episodic|semantic|procedural|belief
+    subject_entity = Column(String(200), nullable=True)
+    relation = Column(String(100), nullable=True)
+    confidence = Column(Float, nullable=True)
+    memguard_blocked = Column(Boolean, default=False, nullable=False)
+    memguard_reason = Column(String(500), nullable=True)
+    source = Column(String(20), nullable=True)  # tool_call|auto_capture|import
+    result_count = Column(Integer, nullable=True)  # For recall operations
+    latency_ms = Column(Integer, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_okg_audit_tenant_agent", "tenant_id", "agent_id"),
+        Index("idx_okg_audit_created", "created_at"),
+    )
+
+
+
+# BUG-311/312/313: public_key and app_id fields added to existing
+# DiscordIntegration and SlackIntegration models above.
+
+
+# ============================================================================
+# Remote Access (Cloudflare Tunnel) — v0.6.0
+# ============================================================================
+class RemoteAccessConfig(Base):
+    """System-wide Cloudflare Tunnel config (single row, id=1).
+
+    Stores the global admin's tunnel configuration. Per-tenant entitlement
+    lives on Tenant.remote_access_enabled. The tunnel_token field is
+    encrypted at rest using the remote_access_encryption_key from Config.
+    """
+    __tablename__ = "remote_access_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    enabled = Column(Boolean, default=False, nullable=False)
+    mode = Column(String(20), default="quick", nullable=False)        # quick | named
+    autostart = Column(Boolean, default=False, nullable=False)
+    protocol = Column(String(10), default="auto", nullable=False)     # auto | http2 | quic
+
+    # Named-tunnel config
+    tunnel_token_encrypted = Column(Text, nullable=True)              # Fernet via TokenEncryption
+    tunnel_hostname = Column(String(255), nullable=True)              # e.g. tsushin.archsec.io
+    tunnel_dns_target = Column(String(255), nullable=True)            # *.cfargotunnel.com (informational)
+
+    # Target for the tunnel — defaults to the stack-scoped Caddy proxy
+    target_url = Column(String(255), nullable=False, default=get_remote_access_proxy_target_url)
+
+    # Cross-restart persistence (service may crash; admin needs visibility)
+    last_started_at = Column(DateTime, nullable=True)
+    last_stopped_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+
+    updated_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 # ============================================================================

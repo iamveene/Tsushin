@@ -24,6 +24,9 @@ export const CHANNEL_COLORS: Record<string, string> = {
   whatsapp: '#25D366',
   telegram: '#0088CC',
   playground: '#8B5CF6',
+  slack: '#E01E5A',
+  discord: '#5865F2',
+  webhook: '#06B6D4',  // cyan-500 — v0.6.0
   unknown: '#6B7280',
 }
 

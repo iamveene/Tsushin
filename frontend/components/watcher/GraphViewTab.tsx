@@ -18,7 +18,6 @@ import { useGraphData } from './graph/hooks'
 import GraphLeftPanel from './graph/GraphLeftPanel'
 import type { GraphCanvasRef } from './graph/GraphCanvas'
 import { useWatcherActivity } from '@/hooks/useWatcherActivity'
-import { getToken } from '@/contexts/AuthContext'
 import './graph/graph.css'
 
 // Dynamic import to avoid SSR issues with React Flow
@@ -52,6 +51,10 @@ const EMPTY_STATE_CONFIG: Record<GraphViewType, { title: string; description: st
     title: 'No Users Found',
     description: 'Users will appear here once they interact with your agents.',
   },
+  security: {
+    title: 'No Security Data',
+    description: 'Configure Sentinel security profiles to visualize the security hierarchy.',
+  },
 }
 
 export default function GraphViewTab() {
@@ -77,19 +80,21 @@ export default function GraphViewTab() {
   // Phase 5: Filter state for users view
   const [showInactiveUsers, setShowInactiveUsers] = useState(false)
 
+  // A2A: Toggle for static A2A permission edges (agents view only, default ON)
+  const [showA2ALinks, setShowA2ALinks] = useState(true)
+
   // Phase 10: Fullscreen mode
   const [isMaximized, setIsMaximized] = useState(false)
 
   // Fetch data based on view type
-  const { nodes, edges, loading, error, refetch } = useGraphData({
+  const { nodes, edges, a2aEdges, loading, error, refetch } = useGraphData({
     viewType,
     showInactiveAgents,
     showArchivedProjects,
     showInactiveUsers,
   })
 
-  // Phase 8: Real-time activity WebSocket
-  const token = typeof window !== 'undefined' ? getToken() : null
+  // Phase 8: Real-time activity WebSocket (SEC-005: cookie auth)
   const {
     processingAgents,
     activeChannels,
@@ -97,8 +102,11 @@ export default function GraphViewTab() {
     recentKbUse,
     fadingAgents,
     fadingChannels,
-    isConnected: isActivityConnected
-  } = useWatcherActivity(token, {
+    isConnected: isActivityConnected,
+    activeA2ASessions,
+    fadingA2ASessions,
+    agentA2ADepths,
+  } = useWatcherActivity({
     enabled: viewType === 'agents' // Only connect when viewing agents
   })
 
@@ -106,8 +114,12 @@ export default function GraphViewTab() {
   // GraphCanvas merges this into React Flow's internal node state via useEffect
   const activityState = useMemo(() => {
     if (viewType !== 'agents') return undefined
-    return { processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels }
-  }, [viewType, processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels])
+    return {
+      processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels,
+      activeA2ASessions, fadingA2ASessions, agentA2ADepths,
+    }
+  }, [viewType, processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels,
+      activeA2ASessions, fadingA2ASessions, agentA2ADepths])
 
   // Global refresh integration - listen for refresh events from header button
   useEffect(() => {
@@ -171,9 +183,15 @@ export default function GraphViewTab() {
   // This is more reliable than calling through the ref
   const hasExpandableNodes = useMemo(() => {
     return nodes.some(n => {
-      if (n.data.type !== 'agent') return false
-      const agentData = n.data as { skillsCount?: number; hasKnowledgeBase?: boolean }
-      return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+      if (n.data.type === 'agent') {
+        const agentData = n.data as { skillsCount?: number; hasKnowledgeBase?: boolean }
+        return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+      }
+      if (n.data.type === 'agent-security') {
+        const agentData = n.data as { skillsCount: number }
+        return agentData.skillsCount > 0
+      }
+      return false
     })
   }, [nodes])
 
@@ -184,11 +202,17 @@ export default function GraphViewTab() {
     setIsExpandingAll(true)
     try {
       await graphCanvasRef.current.expandAll()
-      // Count how many agents we expanded
+      // Count how many agents we expanded (both agents and security agents)
       const expandableCount = nodes.filter(n => {
-        if (n.data.type !== 'agent') return false
-        const agentData = n.data as { skillsCount?: number; hasKnowledgeBase?: boolean }
-        return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+        if (n.data.type === 'agent') {
+          const agentData = n.data as { skillsCount?: number; hasKnowledgeBase?: boolean }
+          return (agentData.skillsCount && agentData.skillsCount > 0) || agentData.hasKnowledgeBase
+        }
+        if (n.data.type === 'agent-security') {
+          const agentData = n.data as { skillsCount: number }
+          return agentData.skillsCount > 0
+        }
+        return false
       }).length
       setExpandedAgentsCount(expandableCount)
     } finally {
@@ -213,8 +237,8 @@ export default function GraphViewTab() {
     setExpandedAgentsCount(0) // Reset expand state when switching views
   }
 
-  // Check if view is enabled (Phase 5: all views enabled)
-  const isViewEnabled = (type: GraphViewType) => type === 'agents' || type === 'projects' || type === 'users'
+  // Check if view is enabled (Phase F: added security view)
+  const isViewEnabled = (type: GraphViewType) => type === 'agents' || type === 'projects' || type === 'users' || type === 'security'
 
   // Loading state
   if (loading) {
@@ -262,7 +286,7 @@ export default function GraphViewTab() {
         {/* Keep view selector visible even in empty state */}
         <div className="flex justify-between items-center">
           <div className="glass-card rounded-lg p-1 inline-flex">
-            {(['agents', 'users', 'projects'] as GraphViewType[]).map((type) => (
+            {(['agents', 'users', 'projects', 'security'] as GraphViewType[]).map((type) => (
               <button
                 key={type}
                 disabled={!isViewEnabled(type)}
@@ -295,7 +319,7 @@ export default function GraphViewTab() {
       {/* View Type Selector */}
       <div className="flex justify-between items-center">
         <div className="glass-card rounded-lg p-1 inline-flex">
-          {(['agents', 'users', 'projects'] as GraphViewType[]).map((type) => (
+          {(['agents', 'users', 'projects', 'security'] as GraphViewType[]).map((type) => (
             <button
               key={type}
               disabled={!isViewEnabled(type)}
@@ -362,12 +386,16 @@ export default function GraphViewTab() {
           isExpandingAll={isExpandingAll}
           isMaximized={isMaximized}
           onToggleMaximize={() => setIsMaximized(!isMaximized)}
+          showA2ALinks={showA2ALinks}
+          onShowA2ALinksChange={setShowA2ALinks}
         />
 
         {/* Graph Canvas */}
         <GraphCanvasComponent
           initialNodes={nodes}
           initialEdges={edges}
+          a2aEdges={a2aEdges}
+          showA2ALinks={showA2ALinks}
           onNodeClick={handleNodeClick}
           autoFit={autoFit}
           layoutOptions={layoutOptions}

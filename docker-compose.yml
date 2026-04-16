@@ -5,9 +5,9 @@
 # Usage:
 #   Development:  docker compose up --build
 #   Production:   docker compose -f docker-compose.yml up -d
-#   With Tester:  docker compose --profile testing up --build
 #   With TTS:     docker compose --profile tts up --build
-#   Full Stack:   docker compose --profile tts --profile testing up --build
+#   Tester note:  Hub tester controls resolve legacy/runtime tester targets;
+#                 the current compose file does not define a `testing` profile.
 #
 # Custom Tools Toolbox (per-tenant containers):
 #   Build base image: docker build -f backend/containers/Dockerfile.toolbox -t tsushin-toolbox:base ./backend/containers
@@ -17,15 +17,85 @@
 
 services:
   # ==========================================================================
+  # PostgreSQL Database
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: ${TSN_STACK_NAME:-tsushin}-postgres
+    labels:
+      tsushin.managed: "true"
+      tsushin.lifecycle: "compose"
+      tsushin.service: "postgres"
+    environment:
+      POSTGRES_DB: tsushin
+      POSTGRES_USER: tsushin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - tsushin-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tsushin -d tsushin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - tsushin-network
+
+  # ==========================================================================
+  # Docker Socket Proxy - Restricts Docker API access (BUG-135)
+  # ==========================================================================
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: ${TSN_STACK_NAME:-tsushin}-docker-proxy
+    labels:
+      tsushin.managed: "true"
+      tsushin.lifecycle: "compose"
+      tsushin.service: "docker-proxy"
+    restart: unless-stopped
+    environment:
+      # Allow only the operations the backend needs
+      CONTAINERS: 1      # list, inspect, create, start, stop, remove
+      EXEC: 1            # exec into containers (for toolbox)
+      IMAGES: 1          # list, inspect, commit (for toolbox image management)
+      NETWORKS: 1        # network operations
+      POST: 1            # allow POST requests (create, start, exec)
+      # Deny dangerous operations
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      EVENTS: 0
+      GRPC: 0
+      INFO: 1
+      NODES: 0
+      PING: 1
+      PLUGINS: 0
+      SECRETS: 0
+      SERVICES: 0
+      SESSION: 0
+      SWARM: 0
+      SYSTEM: 0
+      TASKS: 0
+      VOLUMES: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - tsushin-network
+
+  # ==========================================================================
   # Backend Service - FastAPI Application
   # ==========================================================================
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: tsushin-backend
-    # Run as root for Docker socket access (required on macOS Docker Desktop)
-    user: root
+    container_name: ${TSN_STACK_NAME:-tsushin}-backend
+    labels:
+      tsushin.managed: "true"
+      tsushin.lifecycle: "compose"
+      tsushin.service: "backend"
+    # SECURITY: Docker socket access is now proxied via docker-socket-proxy (BUG-135).
+    # No longer needs root or direct socket mount.
     ports:
       - "${TSN_APP_PORT:-8081}:8081"
     volumes:
@@ -36,26 +106,42 @@ services:
       # Docker socket for MCP container management
       - /var/run/docker.sock:/var/run/docker.sock
       # Shared audio directory for TTS (shared with MCP containers)
-      - tsushin-audio:/tmp/tsushin_audio:z
+      - tsushin-audio:/tmp/tsushin_audio
       # Shared screenshots directory for browser automation (shared with MCP containers)
-      - tsushin-screenshots:/tmp/tsushin_screenshots:z
+      - tsushin-screenshots:/tmp/tsushin_screenshots
       # Shared images directory for ImageSkill (shared with MCP containers)
-      - tsushin-images:/tmp/tsushin_images:z
+      - tsushin-images:/tmp/tsushin_images
+      # User guide (served via /api/user-guide)
+      - ./docs/user-guide.md:/app/USER_GUIDE.md:ro
     security_opt:
       - label:disable
     environment:
       # Application
       - TSN_APP_HOST=0.0.0.0
       - TSN_APP_PORT=8081
+      - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
       - TSN_LOG_LEVEL=${TSN_LOG_LEVEL:-INFO}
+      - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-}
+      - TSN_LOG_FORMAT=${TSN_LOG_FORMAT:-text}
+      - TSN_METRICS_ENABLED=${TSN_METRICS_ENABLED:-true}
+      - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
+      - TSN_SECRET_BACKEND=${TSN_SECRET_BACKEND:-env}
+      - TSN_CONTAINER_RUNTIME=${TSN_CONTAINER_RUNTIME:-docker}
       - TSN_POLL_INTERVAL_MS=${TSN_POLL_INTERVAL_MS:-3000}
+      - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-5/minute}
+      - TSN_DISABLE_AUTH_RATE_LIMIT=${TSN_DISABLE_AUTH_RATE_LIMIT:-false}
+      - TSN_SSL_MODE=${TSN_SSL_MODE:-}
+      # Docker socket proxy (BUG-135: no direct socket mount)
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
 
       # URL Configuration (for OAuth callbacks, redirects)
       - TSN_BACKEND_URL=${TSN_BACKEND_URL:-http://localhost:8081}
       - TSN_FRONTEND_URL=${TSN_FRONTEND_URL:-http://localhost:3030}
       - TSN_GOOGLE_OAUTH_REDIRECT_URI=${TSN_GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8081/api/hub/google/oauth/callback}
 
-      # Database paths (inside container)
+      # Database
+      - DATABASE_URL=postgresql://tsushin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@${TSN_STACK_NAME:-tsushin}-postgres:5432/tsushin
+      # Legacy SQLite path (kept for MCP reader and rollback)
       - INTERNAL_DB_PATH=/app/data/agent.db
       - TSN_CHROMA_DIR=/app/data/chroma
       - TSN_WORKSPACE_DIR=/app/data/workspace
@@ -67,28 +153,22 @@ services:
       # The installer (install.py) sets this automatically
       - "HOST_BACKEND_DATA_PATH=${HOST_BACKEND_DATA_PATH:?ERROR: HOST_BACKEND_DATA_PATH must be set in .env - run python3 install.py}"
 
-      # AI Provider Keys (from host .env or environment)
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-${GEMINI_API_KEY:-}}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-
-      # Tool API Keys
-      - BRAVE_API=${BRAVE_API:-}
-      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY:-}
-      - AMADEUS_API_KEY=${AMADEUS_API_KEY:-}
-      - AMADEUS_API_SECRET=${AMADEUS_API_SECRET:-}
-
       # Security
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
+      - TSN_CORS_ORIGINS=${TSN_CORS_ORIGINS:-*}
+      # SEC-006: Master key for envelope-encrypting Fernet keys stored in DB.
+      # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      - TSN_MASTER_KEY=${TSN_MASTER_KEY:-}
 
       # Integrations
       - ASANA_ENCRYPTION_KEY=${ASANA_ENCRYPTION_KEY:-}
       - ASANA_REDIRECT_URI=${ASANA_REDIRECT_URI:-http://localhost:3030/hub/asana/callback}
 
       # External services (use host.docker.internal for host access)
-      - KOKORO_SERVICE_URL=${KOKORO_SERVICE_URL:-http://kokoro-tts:8880}
+      - KOKORO_SERVICE_URL=${KOKORO_SERVICE_URL:-http://${TSN_STACK_NAME:-tsushin}-kokoro-tts:8880}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROK_API_KEY=${GROK_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
     extra_hosts:
       # Enable host.docker.internal on Linux
       - "host.docker.internal:host-gateway"
@@ -98,6 +178,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
     restart: unless-stopped
     networks:
       - tsushin-network
@@ -111,11 +196,17 @@ services:
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8081}
-    container_name: tsushin-frontend
+        - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
+    container_name: ${TSN_STACK_NAME:-tsushin}-frontend
+    labels:
+      tsushin.managed: "true"
+      tsushin.lifecycle: "compose"
+      tsushin.service: "frontend"
     ports:
       - "${FRONTEND_PORT:-3030}:3030"
     environment:
       - NODE_ENV=production
+      - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
     depends_on:
       backend:
         condition: service_healthy
@@ -134,7 +225,7 @@ services:
   # ==========================================================================
   kokoro-tts:
     image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4
-    container_name: kokoro-tts
+    container_name: ${TSN_STACK_NAME:-tsushin}-kokoro-tts
     profiles:
       - tts
     ports:
@@ -164,26 +255,36 @@ services:
 networks:
   tsushin-network:
     name: tsushin-network
-    driver: bridge
+    external: true
+    # Network is external so docker-compose down cannot remove it.
+    # MCP containers (WhatsApp bots, tester, toolbox) share this network
+    # and would lose their WhatsApp sessions if it was torn down.
+    # Create the network once: docker network create tsushin-network
+    # The install.py script handles this automatically.
 
 # ==========================================================================
 # Volumes
 # ==========================================================================
 volumes:
+  # BUG-363: Volume names are parameterized via TSN_STACK_NAME for multi-install coexistence.
+  # Default: tsushin (unchanged for existing installs)
   # Shared audio directory for TTS between backend and MCP containers
   tsushin-audio:
-    name: tsushin-audio
+    name: ${TSN_STACK_NAME:-tsushin}-audio
   # Shared screenshots directory for browser automation between backend and MCP containers
   tsushin-screenshots:
-    name: tsushin-screenshots
+    name: ${TSN_STACK_NAME:-tsushin}-screenshots
   # Shared images directory for ImageSkill between backend and MCP containers
   tsushin-images:
-    name: tsushin-images
+    name: ${TSN_STACK_NAME:-tsushin}-images
   # Kokoro TTS volumes (used with --profile tts)
   kokoro-models:
     name: kokoro-models
   kokoro-audio:
     name: kokoro-audio
+  # PostgreSQL persistent data — CRITICAL: contains all tenant data
+  tsushin-postgres-data:
+    name: ${TSN_STACK_NAME:-tsushin}-postgres-data
 
 # ==========================================================================
 # Optional: Additional volumes if you prefer Docker-managed volumes

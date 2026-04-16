@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 import logging
 
 from agent.memory.memory_management_service import MemoryManagementService
+from agent.memory.vector_store_manager import get_vector_store
 from models import Agent, Contact
 from models_rbac import User
 from auth_dependencies import (
@@ -94,10 +95,10 @@ async def get_memory_stats(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         stats = await service.get_memory_stats()
         return stats.to_dict()
     except Exception as e:
@@ -124,10 +125,10 @@ async def list_conversations(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         conversations = await service.list_conversations()
         return [conv.to_dict() for conv in conversations]
     except Exception as e:
@@ -154,10 +155,10 @@ async def get_conversation(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         details = await service.get_conversation(sender_key)
         return details.to_dict()
     except Exception as e:
@@ -186,10 +187,10 @@ async def delete_conversation(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         success = await service.delete_conversation(sender_key)
 
         if success:
@@ -223,10 +224,10 @@ async def clean_old_messages(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx)
 
     try:
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         report = await service.clean_old_messages(
             older_than_days=request.older_than_days,
             dry_run=request.dry_run
@@ -275,7 +276,7 @@ async def reset_agent_memory(
             )
 
         # Perform reset
-        service = MemoryManagementService(db, agent_id)
+        service = MemoryManagementService(db, agent_id, agent.tenant_id)
         result = await service.reset_agent_memory()
 
         return result
@@ -284,4 +285,103 @@ async def reset_agent_memory(
         raise
     except Exception as e:
         logger.error(f"Error resetting memory for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Memory operation failed")
+
+
+class ArchiveDecayedRequest(BaseModel):
+    dry_run: bool = Field(True, description="Preview only, don't actually archive")
+
+
+@router.post("/agents/{agent_id}/memory/archive-decayed")
+async def archive_decayed_facts(
+    agent_id: int,
+    request: ArchiveDecayedRequest = ArchiveDecayedRequest(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("agents.write")),
+    ctx: TenantContext = Depends(get_tenant_context)
+):
+    """Archive (delete) facts whose decayed confidence falls below the agent's archive threshold."""
+    agent = verify_agent_access(agent_id, db, ctx)
+
+    try:
+        from agent.memory.temporal_decay import DecayConfig
+        from agent.memory.knowledge_service import KnowledgeService
+
+        decay_config = DecayConfig.from_agent(agent)
+        if not decay_config.enabled:
+            return {
+                "total_facts": 0,
+                "archived_count": 0,
+                "archived_facts": [],
+                "dry_run": request.dry_run,
+                "message": "Temporal decay is not enabled for this agent"
+            }
+
+        knowledge_service = KnowledgeService(db)
+        result = knowledge_service.archive_decayed_facts(
+            agent_id=agent_id,
+            decay_lambda=decay_config.decay_lambda,
+            archive_threshold=decay_config.archive_threshold,
+            dry_run=request.dry_run
+        )
+        return result
+
+    except Exception as e:
+        logger.error(f"Error archiving decayed facts for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Memory operation failed")
+
+
+# V060-MEM-022: Memory search endpoint (was returning 404)
+@router.get("/agents/{agent_id}/memory/search")
+async def search_memory(
+    agent_id: int,
+    query: str = Query(..., description="Search query text"),
+    sender_key: Optional[str] = Query(None, description="Optional sender key filter"),
+    limit: int = Query(10, ge=1, le=100, description="Max results to return"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("agents.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Search agent memory by semantic similarity.
+
+    Returns a list of matching memory entries ranked by similarity score.
+
+    Query Parameters:
+        - query (required): The search text to find similar memories
+        - sender_key (optional): Filter results to a specific sender
+        - limit (optional, default 10): Maximum number of results
+
+    Phase 7.9.2: Verifies user can access this agent (tenant check).
+    """
+    agent = verify_agent_access(agent_id, db, ctx)
+
+    try:
+        # Determine persist directory for this agent
+        if agent.chroma_db_path:
+            persist_dir = agent.chroma_db_path
+        else:
+            persist_dir = f"./data/chroma/agent_{agent_id}"
+
+        vector_store = get_vector_store(persist_dir, embedding_model="all-MiniLM-L6-v2")
+        raw_results = await vector_store.search_similar(
+            query_text=query,
+            sender_key=sender_key,
+            limit=limit,
+        )
+
+        # Format results with consistent field names
+        results = []
+        for r in raw_results:
+            results.append({
+                "content": r.get("text", ""),
+                "similarity": round(1.0 - r.get("distance", 1.0), 4),
+                "message_id": r.get("message_id", ""),
+                "role": r.get("role", r.get("sender_key", "")),
+            })
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Error searching memory for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any, Literal
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import List, Optional, Dict, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
 
@@ -60,7 +60,7 @@ class ConfigUpdate(BaseModel):
     context_message_count: Optional[int] = None
     context_char_limit: Optional[int] = None
     dm_auto_mode: Optional[bool] = None
-    agent_phone_number: Optional[str] = None
+    agent_phone_number: Optional[str] = Field(None, pattern=r"^\+?[1-9]\d{6,14}$")
     agent_name: Optional[str] = None
     group_keywords: Optional[List[str]] = None
     # enabled_tools removed - use AgentSkill table
@@ -74,11 +74,20 @@ class ConfigUpdate(BaseModel):
     # Phase 18: Global WhatsApp conversation delay
     whatsapp_conversation_delay_seconds: Optional[float] = None
 
+    @field_validator('ollama_base_url')
+    @classmethod
+    def validate_ollama_base_url(cls, v):
+        if v is None:
+            return None
+        from utils.ssrf_validator import validate_ollama_url
+        return validate_ollama_url(v)
+
 
 class MessageResponse(BaseModel):
     id: int
     source_id: str
     chat_name: Optional[str]
+    sender: Optional[str] = None  # BUG-127: Raw sender identifier (phone/JID)
     sender_name: Optional[str]
     body: str
     timestamp: str  # Changed from int to str (datetime string from MCP)
@@ -134,6 +143,7 @@ class ExecutionMethod(str, Enum):
     IMMEDIATE = "immediate"
     SCHEDULED = "scheduled"
     RECURRING = "recurring"
+    KEYWORD = "keyword"  # BUG-336: Fired when a message matches trigger_keywords
 
 
 class FlowType(str, Enum):
@@ -151,6 +161,7 @@ class StepType(str, Enum):
     SKILL = "skill"  # Phase 16: Agentic skill execution in flows
     SLASH_COMMAND = "slash_command"  # Phase 8: Slash command execution
     SUMMARIZATION = "summarization"  # Phase 17: AI-powered summarization
+    GATE = "gate"  # Conditional gate node (programmatic or agentic)
 
 
 class FlowStatus(str, Enum):
@@ -207,6 +218,36 @@ class FlowStepConfig(BaseModel):
     initial_prompt_template: Optional[str] = None  # Alias for initial_prompt
     context: Optional[Dict[str, Any]] = None
 
+    # Skill-specific
+    skill_type: Optional[str] = None  # e.g. "flight_search", "scheduler"
+    prompt: Optional[str] = None  # Natural language instruction for the skill
+
+    # Summarization-specific
+    source_step: Optional[str] = None  # e.g. "step_1" or step name
+    summary_prompt: Optional[str] = None  # Custom summarization instructions
+    output_format: Optional[str] = None  # e.g. "brief", "structured", "minimal"
+    prompt_mode: Optional[str] = None  # "append" or "replace"
+    model: Optional[str] = None  # AI model for summarization
+
+    # Slash command-specific
+    command: Optional[str] = None  # e.g. "/scheduler list week"
+    command_id: Optional[Union[str, int]] = None  # For tool commands
+
+    # Gate-specific (conditional flow control)
+    gate_mode: Optional[str] = Field(default=None, description="'programmatic' (zero LLM cost) or 'agentic' (AI-driven)")
+    gate_conditions: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Programmatic conditions: [{field, operator, value, type}]"
+    )
+    gate_logic: Optional[str] = Field(default="all", description="'all' (AND) or 'any' (OR)")
+    gate_prompt: Optional[str] = Field(default=None, description="Agentic mode: natural language evaluation prompt")
+    gate_source_step: Optional[str] = Field(default=None, description="Step output to evaluate (e.g. 'inbox', 'step_1')")
+    gate_on_fail: Optional[str] = Field(default="skip", description="'skip' or 'notify'")
+    gate_fail_notification: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Notification config on gate fail: {channel, recipient, message_template}"
+    )
+
     # Agent settings (can override flow-level defaults)
     agent_id: Optional[int] = None
     persona_id: Optional[int] = None
@@ -215,6 +256,29 @@ class FlowStepConfig(BaseModel):
     # Custom name for step output reference in templates
     # Example: output_alias="scan_results" allows {{scan_results.status}} in later steps
     output_alias: Optional[str] = None
+
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def normalize_recipients_field(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if isinstance(value, list):
+            return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        return value
+
+    @model_validator(mode="after")
+    def normalize_recipients(self):
+        if isinstance(self.recipient, str):
+            normalized_recipient = self.recipient.strip()
+            self.recipient = normalized_recipient or None
+
+        recipients = list(self.recipients or [])
+        if self.recipient and self.recipient not in recipients:
+            recipients.append(self.recipient)
+        self.recipients = recipients
+        return self
 
 
 class FlowStepCreate(BaseModel):
@@ -315,6 +379,9 @@ class FlowCreate(BaseModel):
     scheduled_at: Optional[datetime] = None
     recurrence_rule: Optional[RecurrenceRule] = None
 
+    # BUG-336: Keyword triggers (for execution_method='keyword')
+    trigger_keywords: Optional[List[str]] = None
+
     # Flow configuration
     flow_type: FlowType = FlowType.WORKFLOW
     default_agent_id: Optional[int] = None
@@ -332,6 +399,9 @@ class FlowUpdate(BaseModel):
     scheduled_at: Optional[datetime] = None
     recurrence_rule: Optional[RecurrenceRule] = None
 
+    # BUG-336: Keyword triggers (for execution_method='keyword')
+    trigger_keywords: Optional[List[str]] = None
+
     flow_type: Optional[FlowType] = None
     default_agent_id: Optional[int] = None
     is_active: Optional[bool] = None
@@ -347,6 +417,9 @@ class FlowResponse(BaseModel):
     execution_method: str
     scheduled_at: Optional[datetime]
     recurrence_rule: Optional[Dict[str, Any]]
+
+    # BUG-336: Keyword triggers
+    trigger_keywords: Optional[List[str]] = None
 
     flow_type: str
     default_agent_id: Optional[int]

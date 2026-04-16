@@ -3,6 +3,8 @@ User-Contact Mapping API Routes
 Manages the mapping between RBAC users and contacts for identity resolution.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
@@ -13,6 +15,7 @@ from auth_dependencies import get_current_user_required, get_tenant_context, Ten
 from models_rbac import User, UserRole
 from models import UserContactMapping, Contact
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -95,7 +98,8 @@ async def get_all_user_contact_mappings(
         return result
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch user-contact mappings: {str(e)}")
+        logger.exception(f"Failed to fetch user-contact mappings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch user-contact mappings. Check server logs for details.")
 
 
 @router.get("/api/user-contact-mapping", response_model=UserContactMappingStatusResponse)
@@ -145,7 +149,8 @@ async def get_user_contact_mapping(
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch user-contact mapping: {str(e)}")
+        logger.exception(f"Failed to fetch user-contact mapping: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch user-contact mapping. Check server logs for details.")
 
 
 @router.post("/api/user-contact-mapping", response_model=UserContactMappingResponse)
@@ -211,7 +216,8 @@ async def create_or_update_user_contact_mapping(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create/update user-contact mapping: {str(e)}")
+        logger.exception(f"Failed to create/update user-contact mapping: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create/update user-contact mapping. Check server logs for details.")
 
 
 @router.delete("/api/user-contact-mapping")
@@ -244,4 +250,5 @@ async def delete_user_contact_mapping(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete user-contact mapping: {str(e)}")
+        logger.exception(f"Failed to delete user-contact mapping: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete user-contact mapping. Check server logs for details.")

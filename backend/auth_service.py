@@ -6,19 +6,23 @@ Handles user authentication, registration, and password management.
 """
 
 from datetime import datetime, timedelta
+import re
+import secrets
 from typing import Optional, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from models_rbac import User, Tenant, Role, UserRole, PasswordResetToken, UserInvitation
+from models_rbac import User, Tenant, Role, UserRole, PasswordResetToken, UserInvitation, SubscriptionPlan
 from auth_utils import (
     hash_password,
+    hash_token,
     verify_password,
     create_access_token,
     decode_access_token,
     generate_reset_token,
     generate_invitation_token
 )
+from auth_password_policy import get_password_min_length_error
 
 
 class AuthenticationError(Exception):
@@ -31,6 +35,21 @@ class AuthService:
 
     def __init__(self, db: Session):
         self.db = db
+
+    def generate_tenant_slug(self, org_name: str) -> str:
+        """
+        Build the tenant slug exactly the same way signup will persist it.
+
+        Setup-time preflight checks call this before `signup()` so any derived
+        global-admin defaults match the eventual tenant record.
+        """
+        slug = re.sub(r'[^a-z0-9-]', '', org_name.lower().replace(' ', '-'))[:50] or "tenant"
+
+        existing_tenant = self.db.query(Tenant).filter(Tenant.slug == slug).first()
+        if existing_tenant:
+            slug = f"{slug}-{datetime.utcnow().strftime('%H%M%S')}"
+
+        return slug
 
     def login(self, email: str, password: str) -> Tuple[User, str]:
         """
@@ -46,14 +65,17 @@ class AuthService:
         Raises:
             AuthenticationError: If credentials are invalid
         """
-        # Find user by email
-        user = self.db.query(User).filter(User.email == email).first()
+        # Find user by email (BUG-072 FIX: exclude soft-deleted users)
+        user = self.db.query(User).filter(
+            User.email == email,
+            User.deleted_at.is_(None)
+        ).first()
 
         if not user:
             raise AuthenticationError("Invalid credentials")
 
-        # Verify password
-        if not verify_password(password, user.password_hash):
+        # BUG-073 FIX: Guard against SSO users with no password hash
+        if not user.password_hash or not verify_password(password, user.password_hash):
             raise AuthenticationError("Invalid credentials")
 
         # Check if user is active
@@ -72,12 +94,17 @@ class AuthService:
             role_name = role.name if role else None
 
         # Generate access token
+        # BUG-134 FIX: Include password_changed_at timestamp for JWT invalidation on password change
+        pwd_ts = None
+        if user.password_changed_at:
+            pwd_ts = int(user.password_changed_at.timestamp())
         token_data = {
             "sub": str(user.id),
             "email": user.email,
             "tenant_id": user.tenant_id,
             "is_global_admin": user.is_global_admin,
-            "role": role_name
+            "role": role_name,
+            "pwd_ts": pwd_ts,
         }
         token = create_access_token(token_data)
 
@@ -105,28 +132,35 @@ class AuthService:
         if existing_user:
             raise AuthenticationError("Email already registered")
 
-        # Validate password strength (minimum 8 characters)
-        if len(password) < 8:
-            raise AuthenticationError("Password must be at least 8 characters")
+        password_error = get_password_min_length_error(password)
+        if password_error:
+            raise AuthenticationError(password_error)
+
+        owner_role = self.db.query(Role).filter(Role.name == 'owner').first()
+        if not owner_role:
+            raise AuthenticationError("Required owner role is not available")
 
         # Generate tenant ID and slug
-        import re
-        tenant_id = f"tenant_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-        slug = re.sub(r'[^a-z0-9-]', '', org_name.lower().replace(' ', '-'))[:50]
+        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        random_suffix = secrets.token_hex(3)
+        tenant_id = f"tenant_{timestamp}_{random_suffix}"
+        slug = self.generate_tenant_slug(org_name)
 
-        # Check if slug already exists, append number if needed
-        existing_tenant = self.db.query(Tenant).filter(Tenant.slug == slug).first()
-        if existing_tenant:
-            slug = f"{slug}-{datetime.utcnow().strftime('%H%M%S')}"
+        # Resolve the 'free' plan FK — plan_seeding runs before any signup so
+        # the row should always exist; fall back gracefully if it doesn't yet.
+        free_plan = self.db.query(SubscriptionPlan).filter_by(name='free').first()
 
         # Create tenant
+        # NOTE: max_users/max_agents/max_monthly_requests must stay in sync with
+        # models_rbac.py Tenant column defaults (lines 25-27).
         tenant = Tenant(
             id=tenant_id,
             name=org_name,
             slug=slug,
-            plan='free',  # Default plan
+            plan='free',
+            plan_id=free_plan.id if free_plan else None,
             max_users=5,
-            max_agents=5,
+            max_agents=10,
             max_monthly_requests=10000,
             is_active=True,
             status='active'
@@ -151,15 +185,13 @@ class AuthService:
         self.db.flush()  # Get user ID
 
         # Assign owner role
-        owner_role = self.db.query(Role).filter(Role.name == 'owner').first()
-        if owner_role:
-            user_role = UserRole(
-                user_id=user.id,
-                role_id=owner_role.id,
-                tenant_id=tenant_id,
-                assigned_by=user.id  # Self-assigned on signup
-            )
-            self.db.add(user_role)
+        user_role = UserRole(
+            user_id=user.id,
+            role_id=owner_role.id,
+            tenant_id=tenant_id,
+            assigned_by=user.id  # Self-assigned on signup
+        )
+        self.db.add(user_role)
 
         self.db.commit()
 
@@ -169,7 +201,8 @@ class AuthService:
             "email": user.email,
             "tenant_id": user.tenant_id,
             "is_global_admin": user.is_global_admin,
-            "role": "owner"
+            "role": "owner",
+            "pwd_ts": None,
         }
         token = create_access_token(token_data)
 
@@ -195,10 +228,10 @@ class AuthService:
         token = generate_reset_token()
         expires_at = datetime.utcnow() + timedelta(hours=24)  # 24 hour expiry
 
-        # Save token
+        # BUG-071 FIX: Store SHA-256 hash of token, not plaintext
         reset_token = PasswordResetToken(
             user_id=user.id,
-            token=token,
+            token=hash_token(token),
             expires_at=expires_at
         )
         self.db.add(reset_token)
@@ -220,9 +253,9 @@ class AuthService:
         Raises:
             AuthenticationError: If token is invalid or expired
         """
-        # Find token
+        # BUG-071 FIX: Hash token for lookup (stored as SHA-256)
         reset_token = self.db.query(PasswordResetToken).filter(
-            PasswordResetToken.token == token
+            PasswordResetToken.token == hash_token(token)
         ).first()
 
         if not reset_token:
@@ -236,9 +269,9 @@ class AuthService:
         if reset_token.expires_at < datetime.utcnow():
             raise AuthenticationError("Reset token expired")
 
-        # Validate new password
-        if len(new_password) < 8:
-            raise AuthenticationError("Password must be at least 8 characters")
+        password_error = get_password_min_length_error(new_password)
+        if password_error:
+            raise AuthenticationError(password_error)
 
         # Get user
         user = self.db.query(User).filter(User.id == reset_token.user_id).first()
@@ -247,6 +280,8 @@ class AuthService:
 
         # Update password
         user.password_hash = hash_password(new_password)
+        # BUG-134 FIX: Track password change time to invalidate existing JWTs
+        user.password_changed_at = datetime.utcnow()
 
         # Mark token as used
         reset_token.used_at = datetime.utcnow()
@@ -277,7 +312,11 @@ class AuthService:
         Returns:
             User object if found, None otherwise
         """
-        return self.db.query(User).filter(User.id == user_id).first()
+        # BUG-072 FIX: exclude soft-deleted users
+        return self.db.query(User).filter(
+            User.id == user_id,
+            User.deleted_at.is_(None)
+        ).first()
 
     def get_user_permissions(self, user_id: int) -> list:
         """

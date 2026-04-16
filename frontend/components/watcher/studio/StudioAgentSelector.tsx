@@ -1,0 +1,174 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import Modal from '@/components/ui/Modal'
+import { api, VENDOR_LABELS } from '@/lib/client'
+import type { Agent, ProviderInstance } from '@/lib/client'
+import { AgentAvatarIcon } from './avatars/AgentAvatars'
+
+interface StudioAgentSelectorProps {
+  agents: Agent[]
+  selectedAgentId: number | null
+  onAgentSelect: (agentId: number) => void
+  onAgentCreated: (agentId: number) => void
+}
+
+export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSelect, onAgentCreated }: StudioAgentSelectorProps) {
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [newAgentName, setNewAgentName] = useState('')
+  const [newAgentVendor, setNewAgentVendor] = useState('')
+  const [newAgentModel, setNewAgentModel] = useState('')
+  const [newAgentInstanceId, setNewAgentInstanceId] = useState<number | null>(null)
+  const [createError, setCreateError] = useState('')
+  const [allInstances, setAllInstances] = useState<ProviderInstance[]>([])
+  const selectedAgent = agents.find(a => a.id === selectedAgentId)
+
+  // Fetch all configured provider instances once on mount
+  useEffect(() => {
+    api.getProviderInstances().then(instances => {
+      setAllInstances(instances)
+      // Default to the first configured vendor
+      if (instances.length > 0) {
+        const first = instances.find(i => i.is_default) || instances[0]
+        setNewAgentVendor(first.vendor)
+        setNewAgentModel(first.available_models[0] || '')
+        setNewAgentInstanceId(first.id)
+      }
+    }).catch(() => {})
+  }, [])
+
+  // Vendors that have at least one configured instance
+  const configuredVendors = [...new Set(allInstances.map(i => i.vendor))]
+    .map(v => ({ value: v, label: VENDOR_LABELS[v] || v }))
+
+  // Instances for the currently selected vendor
+  const vendorInstances = allInstances.filter(i => i.vendor === newAgentVendor)
+
+  const handleVendorChange = (vendor: string) => {
+    setNewAgentVendor(vendor)
+    const instances = allInstances.filter(i => i.vendor === vendor)
+    const defaultInst = instances.find(i => i.is_default) || instances[0]
+    if (defaultInst) {
+      setNewAgentModel(defaultInst.available_models[0] || '')
+      setNewAgentInstanceId(defaultInst.id)
+    } else {
+      setNewAgentModel('')
+      setNewAgentInstanceId(null)
+    }
+  }
+
+  const handleCreate = async () => {
+    if (!newAgentName.trim()) { setCreateError('Agent name is required'); return }
+    if (!newAgentVendor) { setCreateError('Select a provider — configure one in Hub > AI Providers first'); return }
+    if (!newAgentModel.trim()) { setCreateError('Model name is required'); return }
+    setCreating(true); setCreateError('')
+    try {
+      const defaultContactId = agents[0]?.contact_id || 1
+      const agent = await api.createAgent({
+        contact_id: defaultContactId,
+        system_prompt: `You are ${newAgentName.trim()}, a helpful AI assistant.`,
+        model_provider: newAgentVendor,
+        model_name: newAgentModel,
+        provider_instance_id: newAgentInstanceId ?? undefined,
+        is_active: true,
+      })
+      setShowCreateModal(false); setNewAgentName(''); onAgentCreated(agent.id)
+    } catch (err) { setCreateError(err instanceof Error ? err.message : 'Failed to create agent') }
+    finally { setCreating(false) }
+  }
+
+  return (
+    <div className="flex items-center gap-3">
+      <AgentAvatarIcon slug={selectedAgent?.avatar} size="sm" />
+      <div className="relative">
+        <select value={selectedAgentId ?? ''} onChange={(e) => e.target.value && onAgentSelect(Number(e.target.value))}
+          className="appearance-none bg-tsushin-surface border border-tsushin-border rounded-lg px-4 py-2 pr-8 text-sm text-white focus:outline-none focus:border-tsushin-indigo transition-colors min-w-[200px]">
+          <option value="">Select an agent...</option>
+          {agents.map(agent => (
+            <option key={agent.id} value={agent.id}>
+              {agent.contact_name} {!agent.is_active ? '(inactive)' : ''} — {agent.model_provider}/{agent.model_name}
+            </option>
+          ))}
+        </select>
+        <svg className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-tsushin-muted pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </div>
+      {selectedAgent && (
+        <div className="flex items-center gap-2 text-sm">
+          <span className={`w-2 h-2 rounded-full ${selectedAgent.is_active ? 'bg-green-400' : 'bg-gray-500'}`} />
+          <span className="text-tsushin-muted">{selectedAgent.skills_count || 0} skills</span>
+        </div>
+      )}
+      <button onClick={() => setShowCreateModal(true)} className="p-2 rounded-lg bg-tsushin-surface border border-tsushin-border hover:border-tsushin-indigo transition-colors" title="Create new agent">
+        <svg className="w-4 h-4 text-tsushin-slate" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.5v15m7.5-7.5h-15" /></svg>
+      </button>
+      <Modal isOpen={showCreateModal} onClose={() => setShowCreateModal(false)} title="Create New Agent" size="md"
+        footer={<div className="flex justify-end gap-3">
+          <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 text-sm text-tsushin-slate hover:text-white transition-colors">Cancel</button>
+          <button onClick={handleCreate} disabled={creating} className="px-4 py-2 text-sm bg-tsushin-indigo text-white rounded-lg hover:bg-tsushin-indigo/90 disabled:opacity-50 transition-all">{creating ? 'Creating...' : 'Create Agent'}</button>
+        </div>}>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-tsushin-slate mb-1">Agent Name</label>
+            <input type="text" value={newAgentName} onChange={(e) => setNewAgentName(e.target.value)} placeholder="e.g., Customer Support Bot"
+              className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo" autoFocus />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-tsushin-slate mb-1">Provider</label>
+            {configuredVendors.length === 0 ? (
+              <div className="px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-xs text-tsushin-slate">
+                No providers configured.{' '}
+                <a href="/hub" className="text-teal-400 hover:underline">Set one up in Hub &gt; AI Providers</a>
+              </div>
+            ) : (
+              <select value={newAgentVendor} onChange={(e) => handleVendorChange(e.target.value)}
+                className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo">
+                {configuredVendors.map(v => (
+                  <option key={v.value} value={v.value}>{v.label}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          {vendorInstances.length > 1 && (
+            <div>
+              <label className="block text-sm font-medium text-tsushin-slate mb-1">Instance</label>
+              <select value={newAgentInstanceId ?? ''} onChange={(e) => {
+                const id = e.target.value ? parseInt(e.target.value) : null
+                setNewAgentInstanceId(id)
+                if (id) {
+                  const inst = vendorInstances.find(i => i.id === id)
+                  if (inst && inst.available_models.length > 0) setNewAgentModel(inst.available_models[0])
+                }
+              }} className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo">
+                {vendorInstances.map(inst => (
+                  <option key={inst.id} value={inst.id}>{inst.instance_name}{inst.is_default ? ' (default)' : ''}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {newAgentVendor && (
+            <div>
+              <label className="block text-sm font-medium text-tsushin-slate mb-1">Model</label>
+              {(() => {
+                const inst = vendorInstances.find(i => i.id === newAgentInstanceId) || vendorInstances[0]
+                const models = inst?.available_models || []
+                return models.length > 0 ? (
+                  <select value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)}
+                    className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo">
+                    {models.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                ) : (
+                  <input type="text" value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)}
+                    placeholder="e.g., gemini-2.5-flash" className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo" />
+                )
+              })()}
+            </div>
+          )}
+          {createError && <p className="text-sm text-red-400">{createError}</p>}
+        </div>
+      </Modal>
+    </div>
+  )
+}

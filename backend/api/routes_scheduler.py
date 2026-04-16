@@ -232,7 +232,7 @@ def list_events(
     - recipient: Filter by recipient phone/contact (privacy filter)
     """
     try:
-        scheduler = SchedulerService(db)
+        scheduler = SchedulerService(db, tenant_id=tenant_context.tenant_id)  # V060-CHN-006
 
         # Build query
         query = db.query(ScheduledEvent)
@@ -281,7 +281,7 @@ def list_events(
 
     except Exception as e:
         logger.error(f"Error listing events: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 @router.post("/", response_model=EventResponseSchema, dependencies=[Depends(require_permission("scheduler.create"))])
@@ -296,7 +296,7 @@ def create_event(
     Use specialized endpoints for conversations and notifications.
     """
     try:
-        scheduler = SchedulerService(db)
+        scheduler = SchedulerService(db, tenant_id=tenant_context.tenant_id)  # V060-CHN-006
 
         recurrence_dict = event.recurrence_rule.dict() if event.recurrence_rule else None
 
@@ -338,7 +338,7 @@ def get_event(
         raise
     except Exception as e:
         logger.error(f"Error getting event: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 @router.put("/{event_id}", response_model=EventResponseSchema, dependencies=[Depends(require_permission("scheduler.edit"))])
@@ -361,7 +361,7 @@ def update_event(
         if not query.first():
             raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
 
-        scheduler = SchedulerService(db)
+        scheduler = SchedulerService(db, tenant_id=tenant_context.tenant_id)  # V060-CHN-006
 
         updates = {}
         if update.scheduled_at:
@@ -398,7 +398,7 @@ def cancel_event(
         if not query.first():
             raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
 
-        scheduler = SchedulerService(db)
+        scheduler = SchedulerService(db, tenant_id=tenant_context.tenant_id)  # V060-CHN-006
         scheduler.cancel_event(event_id)
 
         return {"message": f"Event {event_id} cancelled successfully"}
@@ -409,7 +409,7 @@ def cancel_event(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error cancelling event: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 @router.post("/cleanup", dependencies=[Depends(require_permission("scheduler.cancel"))])
@@ -427,7 +427,7 @@ def cleanup_events(
     Example: /api/scheduler/cleanup?statuses=CANCELLED&statuses=FAILED&statuses=COMPLETED
     """
     try:
-        scheduler = SchedulerService(db)
+        scheduler = SchedulerService(db, tenant_id=tenant_context.tenant_id)  # V060-CHN-006
         deleted_count = scheduler.cleanup_events(statuses)
 
         return {
@@ -438,7 +438,7 @@ def cleanup_events(
 
     except Exception as e:
         logger.error(f"Error during cleanup: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 # ============================================================================
@@ -457,7 +457,7 @@ def create_conversation(
     Conversations are autonomous multi-turn interactions with objectives.
     """
     try:
-        scheduler = SchedulerService(db)
+        scheduler = SchedulerService(db, tenant_id=tenant_context.tenant_id)  # V060-CHN-006
 
         payload = {
             'agent_id': conversation.agent_id,
@@ -508,7 +508,7 @@ def create_notification(
     - Phone number (e.g., "+5500000000001")
     """
     try:
-        scheduler = SchedulerService(db)
+        scheduler = SchedulerService(db, tenant_id=tenant_context.tenant_id)  # V060-CHN-006
 
         payload = {
             'agent_id': notification.agent_id,
@@ -566,7 +566,7 @@ def get_conversation_logs(
         raise
     except Exception as e:
         logger.error(f"Error getting conversation logs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 @router.post("/conversation/{event_id}/guidance", dependencies=[Depends(require_permission("scheduler.edit"))])
@@ -588,7 +588,7 @@ def provide_conversation_guidance(
         if not query.first():
             raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
 
-        scheduler = SchedulerService(db)
+        scheduler = SchedulerService(db, tenant_id=tenant_context.tenant_id)  # V060-CHN-006
 
         result = scheduler.provide_conversation_guidance(
             event_id=event_id,
@@ -624,7 +624,7 @@ def cancel_conversation(
         if not query.first():
             raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
 
-        scheduler = SchedulerService(db)
+        scheduler = SchedulerService(db, tenant_id=tenant_context.tenant_id)  # V060-CHN-006
         scheduler.cancel_event(event_id)
 
         return {"message": f"Conversation {event_id} cancelled successfully"}
@@ -635,7 +635,7 @@ def cancel_conversation(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error cancelling conversation: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
 # ============================================================================
@@ -695,4 +695,4 @@ def get_stats(
 
     except Exception as e:
         logger.error(f"Error getting stats: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Scheduler operation failed")

@@ -1,0 +1,10 @@
+# Kubernetes (only needed when TSN_CONTAINER_RUNTIME=kubernetes)
+kubernetes>=28.1.0
+
+# GCP Secret Manager (optional — only needed when TSN_SECRET_BACKEND=gcp)
+google-cloud-secret-manager>=2.18.0
+
+# v0.6.1: External Vector Store Providers
+qdrant-client>=1.8.0
+pinecone>=3.0.0
+pymongo[srv]>=4.6.0

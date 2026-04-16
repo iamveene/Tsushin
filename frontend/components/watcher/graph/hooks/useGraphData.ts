@@ -18,8 +18,12 @@ import {
   AgentGraphPreviewItem,
   WhatsAppChannelInfo,
   TelegramChannelInfo,
+  WebhookChannelInfo,
+  SentinelHierarchy,
+  AgentCommPermission,
 } from '@/lib/client'
-import { GraphNode, GraphEdge, ChannelStatus, GraphViewType, UserRole } from '../types'
+import { GraphNode, GraphEdge, ChannelStatus, GraphViewType, UserRole, SecurityDetectionMode, SecuritySkillData } from '../types'
+import { MarkerType } from '@xyflow/react'
 
 
 export interface UseGraphDataOptions {
@@ -32,6 +36,7 @@ export interface UseGraphDataOptions {
 export interface UseGraphDataReturn {
   nodes: GraphNode[]
   edges: GraphEdge[]
+  a2aEdges: GraphEdge[]
   loading: boolean
   error: string | null
   refetch: () => Promise<void>
@@ -73,6 +78,7 @@ function transformBatchToAgentsGraphData(
         hasSentinelProtection: agent.sentinel_enabled,
         enabledChannels: agent.enabled_channels,
         isDefault: agent.is_default,
+        avatar: agent.avatar || null,
         // Phase 6: Store knowledge counts for expand preview
         knowledgeDocCount: agent.knowledge_doc_count,
         knowledgeChunkCount: agent.knowledge_chunk_count,
@@ -83,6 +89,7 @@ function transformBatchToAgentsGraphData(
   // Track which instances are used by agents
   const usedWhatsAppInstances = new Set<number>()
   const usedTelegramInstances = new Set<number>()
+  let needsWhatsAppUnassignedNode = false
 
   // Always show Playground channel node (always available for all agents)
   // Phase 6: Changed to always show Playground
@@ -119,13 +126,28 @@ function transformBatchToAgentsGraphData(
     }
 
     // WhatsApp channel
-    if (enabledChannels.includes('whatsapp') && agent.whatsapp_integration_id) {
-      usedWhatsAppInstances.add(agent.whatsapp_integration_id)
+    const resolvedWhatsAppInstanceId = agent.resolved_whatsapp_integration_id ?? agent.whatsapp_integration_id
+    if (enabledChannels.includes('whatsapp') && resolvedWhatsAppInstanceId) {
+      usedWhatsAppInstances.add(resolvedWhatsAppInstanceId)
       edges.push({
-        id: `e-whatsapp-${agent.whatsapp_integration_id}-${agentId}`,
-        source: `channel-whatsapp-${agent.whatsapp_integration_id}`,  // Channel is source
+        id: `e-whatsapp-${resolvedWhatsAppInstanceId}-${agentId}`,
+        source: `channel-whatsapp-${resolvedWhatsAppInstanceId}`,  // Channel is source
         target: agentId,                                              // Agent is target
         animated: true,
+        style: agent.whatsapp_binding_source === 'resolved_default'
+          ? { strokeDasharray: '6,4', opacity: 0.9 }
+          : undefined,
+      })
+    } else if (
+      enabledChannels.includes('whatsapp') &&
+      ['ambiguous', 'unassigned', 'stale_explicit'].includes(agent.whatsapp_binding_status || '')
+    ) {
+      needsWhatsAppUnassignedNode = true
+      edges.push({
+        id: `e-whatsapp-unassigned-${agentId}`,
+        source: 'channel-whatsapp-unassigned',
+        target: agentId,
+        style: { strokeDasharray: '4,4', stroke: '#f59e0b', opacity: 0.9 },
       })
     }
 
@@ -136,6 +158,16 @@ function transformBatchToAgentsGraphData(
         id: `e-telegram-${agent.telegram_integration_id}-${agentId}`,
         source: `channel-telegram-${agent.telegram_integration_id}`,  // Channel is source
         target: agentId,                                               // Agent is target
+        animated: true,
+      })
+    }
+
+    // v0.6.0: Webhook channel
+    if (enabledChannels.includes('webhook') && agent.webhook_integration_id) {
+      edges.push({
+        id: `e-webhook-${agent.webhook_integration_id}-${agentId}`,
+        source: `channel-webhook-${agent.webhook_integration_id}`,
+        target: agentId,
         animated: true,
       })
     }
@@ -170,6 +202,50 @@ function transformBatchToAgentsGraphData(
         channelNodeIds.add(nodeId)
       }
     })
+
+  if (needsWhatsAppUnassignedNode && !channelNodeIds.has('channel-whatsapp-unassigned')) {
+    nodes.push({
+      id: 'channel-whatsapp-unassigned',
+      type: 'channel',
+      position: { x: 0, y: 0 },
+      data: {
+        type: 'channel',
+        channelType: 'whatsapp',
+        label: 'WhatsApp Unassigned',
+        status: 'error' as ChannelStatus,
+        healthStatus: 'warning',
+      },
+    })
+    channelNodeIds.add('channel-whatsapp-unassigned')
+  }
+
+  // v0.6.0: Create Webhook channel nodes (for all instances in tenant)
+  ;(data.channels.webhook || []).forEach((instance: WebhookChannelInfo) => {
+    const nodeId = `channel-webhook-${instance.id}`
+    if (!channelNodeIds.has(nodeId)) {
+      let status: ChannelStatus = 'inactive'
+      if (instance.status === 'active' && instance.health_status === 'healthy') status = 'active'
+      else if (instance.status === 'active') status = 'running'
+      else if (instance.status === 'error') status = 'error'
+      else if (instance.status === 'paused') status = 'stopped'
+
+      nodes.push({
+        id: nodeId,
+        type: 'channel',
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'channel',
+          channelType: 'webhook',
+          label: 'Webhook',
+          instanceId: instance.id,
+          webhookName: instance.integration_name,
+          status,
+          healthStatus: instance.health_status,
+        },
+      })
+      channelNodeIds.add(nodeId)
+    }
+  })
 
   // Create Telegram channel nodes (for all instances in tenant)
   data.channels.telegram.forEach((instance: TelegramChannelInfo) => {
@@ -397,15 +473,60 @@ async function fetchUsersViewData(showInactiveUsers: boolean): Promise<{ nodes: 
 }
 
 /**
+ * Build A2A permission edges for the agents view.
+ * Each permission produces a directed dashed amber edge from source agent to target agent.
+ * Disabled permissions are rendered semi-transparent.
+ */
+function buildA2AEdges(permissions: AgentCommPermission[]): GraphEdge[] {
+  return permissions.map(perm => ({
+    id: `a2a-${perm.id}`,
+    source: `agent-${perm.source_agent_id}`,
+    target: `agent-${perm.target_agent_id}`,
+    type: 'default',
+    animated: false,
+    data: {
+      permissionId: perm.id,
+      sourceAgentId: perm.source_agent_id,
+      targetAgentId: perm.target_agent_id,
+      isEnabled: perm.is_enabled,
+      isA2A: true,
+    },
+    className: `a2a-edge-static${!perm.is_enabled ? ' a2a-edge-disabled' : ''}`,
+    style: {
+      stroke: '#F59E0B',
+      strokeDasharray: '6,3',
+      strokeWidth: 2,
+      opacity: perm.is_enabled ? 1 : 0.4,
+    },
+    label: 'A2A',
+    labelStyle: { fill: '#F59E0B', fontSize: 10, fontWeight: 600 },
+    labelBgStyle: { fill: 'transparent' },
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#F59E0B', width: 12, height: 12 },
+  }))
+}
+
+/**
  * Fetch agents view data - Phase 6: Optimized with batch endpoint
  * Single API call instead of 3 + 2N calls
+ * A2A: Also fetches comm permissions in parallel to build static A2A edges
  */
-async function fetchAgentsViewData(showInactiveAgents: boolean): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
-  // Phase 6: Single batch API call for all data
-  const data = await api.getAgentsGraphPreview()
+async function fetchAgentsViewData(showInactiveAgents: boolean): Promise<{ nodes: GraphNode[]; edges: GraphEdge[]; a2aEdges: GraphEdge[] }> {
+  // Fetch graph preview and A2A permissions in parallel
+  const [data, permissions] = await Promise.all([
+    api.getAgentsGraphPreview(),
+    api.getAgentCommPermissions().catch(() => [] as AgentCommPermission[]),
+  ])
 
   // Transform batch data into graph format
-  return transformBatchToAgentsGraphData(data, showInactiveAgents)
+  const { nodes, edges } = transformBatchToAgentsGraphData(data, showInactiveAgents)
+
+  // Build A2A edges from permissions (only keep edges where both endpoints exist as agent nodes)
+  const agentNodeIds = new Set(nodes.map(n => n.id))
+  const a2aEdges = buildA2AEdges(permissions).filter(
+    e => agentNodeIds.has(e.source) && agentNodeIds.has(e.target)
+  )
+
+  return { nodes, edges, a2aEdges }
 }
 
 /**
@@ -456,6 +577,133 @@ async function fetchProjectsViewData(showArchivedProjects: boolean): Promise<{ n
 }
 
 /**
+ * Transform hierarchy API data into graph nodes and edges for Security view
+ * Phase F (v1.6.0): Security hierarchy visualization
+ */
+function transformToSecurityGraphData(
+  hierarchy: SentinelHierarchy,
+  showInactiveAgents: boolean
+): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  const nodes: GraphNode[] = []
+  const edges: GraphEdge[] = []
+
+  if (!hierarchy.tenant) return { nodes, edges }
+
+  const tenant = hierarchy.tenant
+
+  // Determine tenant-level effective config from the first agent's data or defaults
+  const tenantEffective = tenant.agents.length > 0
+    ? tenant.agents[0].effective_profile
+    : null
+  const tenantDetectionMode = (tenantEffective?.detection_mode || 'block') as SecurityDetectionMode
+  const tenantAggressiveness = tenantEffective?.aggressiveness_level ?? 1
+  const tenantIsEnabled = tenantEffective?.is_enabled ?? true
+
+  // 1. Tenant security node (root)
+  const tenantNodeId = `tenant-security-${tenant.id}`
+  nodes.push({
+    id: tenantNodeId,
+    type: 'tenant-security',
+    position: { x: 0, y: 0 },
+    data: {
+      type: 'tenant-security',
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      profile: tenant.profile ? { id: tenant.profile.id, name: tenant.profile.name, slug: tenant.profile.slug } : null,
+      effectiveProfile: tenantEffective ? {
+        id: tenantEffective.id,
+        name: tenantEffective.name,
+        slug: tenantEffective.slug,
+        source: (tenantEffective.source || 'system') as 'skill' | 'agent' | 'tenant' | 'system',
+      } : null,
+      detectionMode: tenantDetectionMode,
+      aggressivenessLevel: tenantAggressiveness,
+      isEnabled: tenantIsEnabled,
+    },
+  })
+
+  // Filter agents based on showInactiveAgents toggle
+  const filteredAgents = showInactiveAgents
+    ? tenant.agents
+    : tenant.agents.filter(a => a.is_active)
+
+  // 2. Agent security nodes
+  filteredAgents.forEach(agent => {
+    const agentNodeId = `agent-security-${agent.id}`
+    const agentDetectionMode = (agent.effective_profile?.detection_mode || 'block') as SecurityDetectionMode
+    const agentAggressiveness = agent.effective_profile?.aggressiveness_level ?? 1
+    const agentIsEnabled = agent.effective_profile?.is_enabled ?? true
+
+    // 3. Pre-build skill data for this agent (stored on node, not rendered initially)
+    const skillsData: SecuritySkillData[] = agent.skills.map(skill => {
+      const skillDetectionMode = (skill.effective_profile?.detection_mode || agentDetectionMode) as SecurityDetectionMode
+      return {
+        skillType: skill.skill_type,
+        skillName: skill.name,
+        isEnabled: skill.is_enabled,
+        profile: skill.profile ? { id: skill.profile.id, name: skill.profile.name, slug: skill.profile.slug } : null,
+        effectiveProfile: skill.effective_profile ? {
+          id: skill.effective_profile.id,
+          name: skill.effective_profile.name,
+          slug: skill.effective_profile.slug,
+          source: (skill.effective_profile.source || 'agent') as 'skill' | 'agent' | 'tenant' | 'system',
+        } : null,
+        detectionMode: skillDetectionMode,
+      }
+    })
+
+    nodes.push({
+      id: agentNodeId,
+      type: 'agent-security',
+      position: { x: 0, y: 0 },
+      data: {
+        type: 'agent-security',
+        id: agent.id,
+        name: agent.name,
+        isActive: agent.is_active,
+        profile: agent.profile ? { id: agent.profile.id, name: agent.profile.name, slug: agent.profile.slug } : null,
+        effectiveProfile: agent.effective_profile ? {
+          id: agent.effective_profile.id,
+          name: agent.effective_profile.name,
+          slug: agent.effective_profile.slug,
+          source: (agent.effective_profile.source || 'system') as 'skill' | 'agent' | 'tenant' | 'system',
+        } : null,
+        detectionMode: agentDetectionMode,
+        aggressivenessLevel: agentAggressiveness,
+        isEnabled: agentIsEnabled,
+        skillsCount: skillsData.length,
+        skills: skillsData,
+        isExpanded: false,
+      },
+    })
+
+    // Edge: tenant -> agent
+    const hasExplicitAgentProfile = agent.profile !== null
+    edges.push({
+      id: `e-${tenantNodeId}-${agentNodeId}`,
+      source: tenantNodeId,
+      target: agentNodeId,
+      style: hasExplicitAgentProfile
+        ? { stroke: '#3C5AFE' }  // Blue solid for explicit assignment
+        : { strokeDasharray: '5,5', opacity: 0.5 },  // Dashed for inherited
+    })
+
+    // Skills are NOT rendered initially — they expand on agent click
+  })
+
+  return { nodes, edges }
+}
+
+/**
+ * Fetch security view data — calls hierarchy endpoint
+ * Phase F (v1.6.0): Security hierarchy visualization
+ */
+async function fetchSecurityViewData(showInactiveAgents: boolean): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+  const hierarchy = await api.getSentinelHierarchy()
+  return transformToSecurityGraphData(hierarchy, showInactiveAgents)
+}
+
+/**
  * Custom hook for fetching and transforming graph data
  */
 export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataReturn {
@@ -468,6 +716,7 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
 
   const [nodes, setNodes] = useState<GraphNode[]>([])
   const [edges, setEdges] = useState<GraphEdge[]>([])
+  const [a2aEdges, setA2AEdges] = useState<GraphEdge[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -476,7 +725,7 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
     setError(null)
 
     try {
-      let result: { nodes: GraphNode[]; edges: GraphEdge[] }
+      let result: { nodes: GraphNode[]; edges: GraphEdge[]; a2aEdges?: GraphEdge[] }
 
       switch (viewType) {
         case 'projects':
@@ -484,6 +733,9 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
           break
         case 'users':
           result = await fetchUsersViewData(showInactiveUsers)
+          break
+        case 'security':
+          result = await fetchSecurityViewData(showInactiveAgents)
           break
         case 'agents':
         default:
@@ -493,6 +745,7 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
 
       setNodes(result.nodes)
       setEdges(result.edges)
+      setA2AEdges(result.a2aEdges ?? [])
     } catch (err) {
       console.error('[useGraphData] Error fetching data:', err)
       setError(err instanceof Error ? err.message : 'Failed to load graph data')
@@ -509,6 +762,7 @@ export function useGraphData(options: UseGraphDataOptions = {}): UseGraphDataRet
   return {
     nodes,
     edges,
+    a2aEdges,
     loading,
     error,
     refetch: fetchData,

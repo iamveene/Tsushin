@@ -10,6 +10,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
+import { authenticatedFetch } from '@/lib/client'
 
 interface ModelPricing {
   id?: number
@@ -32,10 +33,14 @@ interface PricingResponse {
 const PROVIDER_CONFIG: Record<string, { name: string; color: string; bgColor: string }> = {
   openai: { name: 'OpenAI', color: 'text-emerald-400', bgColor: 'bg-emerald-500/10' },
   anthropic: { name: 'Anthropic', color: 'text-orange-400', bgColor: 'bg-orange-500/10' },
+  xai: { name: 'xAI', color: 'text-red-400', bgColor: 'bg-red-500/10' },
   gemini: { name: 'Google', color: 'text-blue-400', bgColor: 'bg-blue-500/10' },
+  deepseek: { name: 'DeepSeek', color: 'text-indigo-400', bgColor: 'bg-indigo-500/10' },
+  openrouter: { name: 'OpenRouter', color: 'text-yellow-400', bgColor: 'bg-yellow-500/10' },
   kokoro: { name: 'Kokoro', color: 'text-pink-400', bgColor: 'bg-pink-500/10' },
   elevenlabs: { name: 'ElevenLabs', color: 'text-cyan-400', bgColor: 'bg-cyan-500/10' },
   ollama: { name: 'Ollama (Local)', color: 'text-purple-400', bgColor: 'bg-purple-500/10' },
+  vertex_ai: { name: 'Vertex AI (GCP)', color: 'text-cyan-400', bgColor: 'bg-cyan-500/10' },
   unknown: { name: 'Other', color: 'text-gray-400', bgColor: 'bg-gray-500/10' },
 }
 
@@ -54,20 +59,10 @@ export default function ModelPricingPage() {
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
 
-  const getAuthHeaders = useCallback(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }, [])
-
   const fetchPricing = useCallback(async () => {
     try {
       setLoading(true)
-      const response = await fetch(`${apiUrl}/api/settings/model-pricing`, {
-        headers: getAuthHeaders()
-      })
+      const response = await authenticatedFetch(`${apiUrl}/api/settings/model-pricing`)
 
       if (response.ok) {
         const data: PricingResponse = await response.json()
@@ -81,7 +76,7 @@ export default function ModelPricingPage() {
     } finally {
       setLoading(false)
     }
-  }, [apiUrl, getAuthHeaders])
+  }, [apiUrl])
 
   useEffect(() => {
     if (!authLoading && user) {
@@ -105,11 +100,10 @@ export default function ModelPricingPage() {
     setSuccess(null)
 
     try {
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${apiUrl}/api/settings/model-pricing/${model.model_provider}/${model.model_name}`,
         {
           method: 'PUT',
-          headers: getAuthHeaders(),
           body: JSON.stringify({
             model_provider: model.model_provider,
             model_name: model.model_name,
@@ -145,12 +139,9 @@ export default function ModelPricingPage() {
     setSuccess(null)
 
     try {
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${apiUrl}/api/settings/model-pricing/${model.model_provider}/${model.model_name}`,
-        {
-          method: 'DELETE',
-          headers: getAuthHeaders()
-        }
+        { method: 'DELETE' }
       )
 
       if (response.ok) {
@@ -177,9 +168,8 @@ export default function ModelPricingPage() {
     setSuccess(null)
 
     try {
-      const response = await fetch(`${apiUrl}/api/settings/model-pricing/reset`, {
-        method: 'POST',
-        headers: getAuthHeaders()
+      const response = await authenticatedFetch(`${apiUrl}/api/settings/model-pricing/reset`, {
+        method: 'POST'
       })
 
       if (response.ok) {
@@ -219,6 +209,17 @@ export default function ModelPricingPage() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-gray-600 dark:text-gray-400">Loading...</div>
+      </div>
+    )
+  }
+
+  if (!hasPermission('org.settings.read')) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="bg-red-900/20 border border-red-800 rounded-lg p-6">
+          <h3 className="text-lg font-semibold text-red-100 mb-2">Access Denied</h3>
+          <p className="text-sm text-red-200">You do not have permission to view model pricing.</p>
+        </div>
       </div>
     )
   }

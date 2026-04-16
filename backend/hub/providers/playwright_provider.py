@@ -30,12 +30,14 @@ from .browser_automation_provider import (
     BrowserConfig,
     BrowserResult,
     BrowserAutomationError,
+    BrowserErrorCode,
     BrowserInitializationError,
     NavigationError,
     ElementNotFoundError,
     TimeoutError as BrowserTimeoutError,
     ScriptExecutionError,
-    SecurityError
+    SecurityError,
+    classify_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +96,9 @@ class PlaywrightProvider(BrowserAutomationProvider):
         self._page: Optional[Page] = None
         self._lock = asyncio.Lock()
         self._initialized = False
+        # 35c: Multi-tab tracking
+        self._pages: dict[str, Page] = {}
+        self._active_tab_id: Optional[str] = None
         # Use shared Docker volume for screenshots (accessible by MCP containers)
         # Same pattern as TTS audio files in /tmp/tsushin_audio
         shared_screenshot_dir = os.path.join(tempfile.gettempdir(), "tsushin_screenshots")
@@ -152,6 +157,12 @@ class PlaywrightProvider(BrowserAutomationProvider):
                 context_options["user_agent"] = self.config.user_agent
 
             if self.config.proxy_url:
+                # Validate proxy URL against SSRF (1A-02)
+                from utils.ssrf_validator import validate_url
+                try:
+                    validate_url(self.config.proxy_url)
+                except Exception as e:
+                    raise BrowserInitializationError(f"Proxy URL failed SSRF validation: {e}")
                 context_options["proxy"] = {"server": self.config.proxy_url}
 
             self._context = await self._browser.new_context(**context_options)
@@ -159,6 +170,10 @@ class PlaywrightProvider(BrowserAutomationProvider):
 
             # Set default timeout
             self._page.set_default_timeout(self.config.timeout_seconds * 1000)
+
+            # 35c: Register initial tab
+            self._pages = {"tab_0": self._page}
+            self._active_tab_id = "tab_0"
 
             self._initialized = True
             logger.info("Playwright browser initialized successfully")
@@ -169,43 +184,17 @@ class PlaywrightProvider(BrowserAutomationProvider):
             raise BrowserInitializationError(f"Could not launch browser: {str(e)}")
 
     def _validate_url(self, url: str) -> None:
-        """
-        Validate URL for security (SSRF prevention).
-
-        Args:
-            url: URL to validate
-
-        Raises:
-            SecurityError: If URL targets blocked resources
-        """
+        """Validate URL against SSRF using shared validator with tenant allowlist/blocklist."""
+        from utils.ssrf_validator import validate_url, SSRFValidationError
         try:
-            parsed = urlparse(url)
-            hostname = parsed.hostname or ""
-
-            # Check for blocked IP ranges
-            for blocked in self.BLOCKED_IP_RANGES:
-                if hostname.lower().startswith(blocked.lower()) or hostname.lower() == blocked.lower():
-                    raise SecurityError(
-                        f"Navigation to private/local addresses is blocked: {hostname}"
-                    )
-
-            # Check blocked domains from config
-            for blocked_domain in self.config.blocked_domains:
-                if blocked_domain.lower() in hostname.lower():
-                    raise SecurityError(
-                        f"Navigation to blocked domain: {blocked_domain}"
-                    )
-
-            # Ensure valid scheme
-            if parsed.scheme not in ("http", "https"):
-                raise SecurityError(
-                    f"Only HTTP/HTTPS URLs are allowed, got: {parsed.scheme}"
-                )
-
-        except SecurityError:
-            raise
-        except Exception as e:
-            raise NavigationError(f"Invalid URL: {url} - {str(e)}")
+            validate_url(
+                url,
+                allowed_domains=self.config.allowed_domains or None,
+                blocked_domains=self.config.blocked_domains or None,
+            )
+        except SSRFValidationError as e:
+            logger.warning(f"SSRF validation blocked URL: {url} — {e}")
+            raise SecurityError(str(e))
 
     async def navigate(self, url: str, wait_until: str = "load") -> BrowserResult:
         """
@@ -255,11 +244,14 @@ class PlaywrightProvider(BrowserAutomationProvider):
                     }
                 )
 
+            except SecurityError:
+                raise
             except Exception as e:
-                error_msg = str(e)
-                if "Timeout" in error_msg or "timeout" in error_msg:
-                    raise BrowserTimeoutError(f"Navigation timeout: {url}")
-                raise NavigationError(f"Navigation failed: {error_msg}")
+                code, suggestions = classify_error(e, "navigate")
+                return BrowserResult(
+                    success=False, action="navigate", error=str(e),
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def click(self, selector: str) -> BrowserResult:
         """
@@ -296,10 +288,11 @@ class PlaywrightProvider(BrowserAutomationProvider):
                 )
 
             except Exception as e:
-                error_msg = str(e)
-                if "Timeout" in error_msg or "timeout" in error_msg:
-                    raise BrowserTimeoutError(f"Click timeout: {selector}")
-                raise ElementNotFoundError(f"Element not found or not clickable: {selector}")
+                code, suggestions = classify_error(e, "click")
+                return BrowserResult(
+                    success=False, action="click", error=f"Element not found or not clickable: {selector}",
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def fill(self, selector: str, value: str) -> BrowserResult:
         """
@@ -335,16 +328,16 @@ class PlaywrightProvider(BrowserAutomationProvider):
                     action="fill",
                     data={
                         "selector": selector,
-                        "value": value,
                         "value_length": len(value)
                     }
                 )
 
             except Exception as e:
-                error_msg = str(e)
-                if "Timeout" in error_msg or "timeout" in error_msg:
-                    raise BrowserTimeoutError(f"Fill timeout: {selector}")
-                raise ElementNotFoundError(f"Element not found or not fillable: {selector}")
+                code, suggestions = classify_error(e, "fill")
+                return BrowserResult(
+                    success=False, action="fill", error=f"Element not found or not fillable: {selector}",
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def extract(self, selector: str = "body") -> BrowserResult:
         """
@@ -389,10 +382,12 @@ class PlaywrightProvider(BrowserAutomationProvider):
                     }
                 )
 
-            except ElementNotFoundError:
-                raise
             except Exception as e:
-                raise ElementNotFoundError(f"Extraction failed: {str(e)}")
+                code, suggestions = classify_error(e, "extract")
+                return BrowserResult(
+                    success=False, action="extract", error=f"Extraction failed: {str(e)}",
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def screenshot(
         self,
@@ -455,10 +450,12 @@ class PlaywrightProvider(BrowserAutomationProvider):
                     }
                 )
 
-            except ElementNotFoundError:
-                raise
             except Exception as e:
-                raise BrowserAutomationError(f"Screenshot failed: {str(e)}")
+                code, suggestions = classify_error(e, "screenshot")
+                return BrowserResult(
+                    success=False, action="screenshot", error=f"Screenshot failed: {str(e)}",
+                    error_code=code, suggestions=suggestions,
+                )
 
     async def execute_script(self, script: str) -> BrowserResult:
         """
@@ -496,6 +493,250 @@ class PlaywrightProvider(BrowserAutomationProvider):
             except Exception as e:
                 raise ScriptExecutionError(f"Script execution failed: {str(e)}")
 
+    # -------------------------------------------------------------------
+    # 35b: Rich action set
+    # -------------------------------------------------------------------
+
+    async def scroll(self, selector: str = "body", x: int = 0, y: int = 300) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            try:
+                logger.info(f"Scrolling {selector} by ({x}, {y})")
+                await self._page.evaluate(
+                    "(args) => { const el = args.sel === 'body' ? window : document.querySelector(args.sel); "
+                    "if (el === window) { window.scrollBy(args.x, args.y); } "
+                    "else if (el) { el.scrollBy(args.x, args.y); } }",
+                    {"sel": selector, "x": x, "y": y}
+                )
+                return BrowserResult(success=True, action="scroll", data={"selector": selector, "x": x, "y": y})
+            except Exception as e:
+                code, suggestions = classify_error(e, "scroll")
+                return BrowserResult(success=False, action="scroll", error=str(e), error_code=code, suggestions=suggestions)
+
+    async def select_option(self, selector: str, value: str) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            try:
+                logger.info(f"Selecting option '{value}' in {selector}")
+                selected = await self._page.select_option(selector, value, timeout=self.config.timeout_seconds * 1000)
+                return BrowserResult(success=True, action="select_option", data={"selector": selector, "value": value, "selected": selected})
+            except Exception as e:
+                code, suggestions = classify_error(e, "select_option")
+                return BrowserResult(success=False, action="select_option", error=str(e), error_code=code, suggestions=suggestions)
+
+    async def hover(self, selector: str) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            try:
+                logger.info(f"Hovering over: {selector}")
+                await self._page.hover(selector, timeout=self.config.timeout_seconds * 1000)
+                return BrowserResult(success=True, action="hover", data={"selector": selector})
+            except Exception as e:
+                code, suggestions = classify_error(e, "hover")
+                return BrowserResult(success=False, action="hover", error=str(e), error_code=code, suggestions=suggestions)
+
+    async def wait_for(self, selector: str, state: str = "visible", timeout_ms: Optional[int] = None) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            try:
+                to = timeout_ms or (self.config.timeout_seconds * 1000)
+                logger.info(f"Waiting for {selector} to be {state}")
+                await self._page.wait_for_selector(selector, state=state, timeout=to)
+                return BrowserResult(success=True, action="wait_for", data={"selector": selector, "state": state})
+            except Exception as e:
+                code, suggestions = classify_error(e, "wait_for")
+                return BrowserResult(success=False, action="wait_for", error=str(e), error_code=code, suggestions=suggestions)
+
+    async def go_back(self) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            try:
+                logger.info("Navigating back")
+                response = await self._page.go_back(timeout=self.config.timeout_seconds * 1000, wait_until="load")
+                if response is None:
+                    return BrowserResult(
+                        success=False, action="go_back",
+                        error="No previous page in history",
+                        error_code=BrowserErrorCode.PAGE_LOAD_FAILED,
+                        suggestions=["Navigate to a page first before going back"],
+                    )
+                url = self._page.url
+                title = await self._page.title()
+                return BrowserResult(success=True, action="go_back", data={"url": url, "title": title})
+            except Exception as e:
+                code, suggestions = classify_error(e, "go_back")
+                return BrowserResult(success=False, action="go_back", error=str(e), error_code=code, suggestions=suggestions)
+
+    async def go_forward(self) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            try:
+                logger.info("Navigating forward")
+                response = await self._page.go_forward(timeout=self.config.timeout_seconds * 1000, wait_until="load")
+                if response is None:
+                    return BrowserResult(
+                        success=False, action="go_forward",
+                        error="No forward page in history",
+                        error_code=BrowserErrorCode.PAGE_LOAD_FAILED,
+                        suggestions=["Go back first before navigating forward"],
+                    )
+                url = self._page.url
+                title = await self._page.title()
+                return BrowserResult(success=True, action="go_forward", data={"url": url, "title": title})
+            except Exception as e:
+                code, suggestions = classify_error(e, "go_forward")
+                return BrowserResult(success=False, action="go_forward", error=str(e), error_code=code, suggestions=suggestions)
+
+    async def get_attribute(self, selector: str, attribute: str) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            try:
+                logger.info(f"Getting attribute '{attribute}' from {selector}")
+                value = await self._page.get_attribute(selector, attribute, timeout=self.config.timeout_seconds * 1000)
+                return BrowserResult(success=True, action="get_attribute", data={"selector": selector, "attribute": attribute, "value": value})
+            except Exception as e:
+                code, suggestions = classify_error(e, "get_attribute")
+                return BrowserResult(success=False, action="get_attribute", error=str(e), error_code=code, suggestions=suggestions)
+
+    async def get_page_url(self) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        url = self._page.url
+        return BrowserResult(success=True, action="get_page_url", data={"url": url})
+
+    async def type_text(self, selector: str, text: str, delay_ms: int = 0) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            try:
+                logger.info(f"Typing {len(text)} chars into {selector} (delay={delay_ms}ms)")
+                await self._page.type(selector, text, delay=delay_ms, timeout=self.config.timeout_seconds * 1000)
+                return BrowserResult(success=True, action="type_text", data={"selector": selector, "chars": len(text)})
+            except Exception as e:
+                code, suggestions = classify_error(e, "type_text")
+                return BrowserResult(success=False, action="type_text", error=str(e), error_code=code, suggestions=suggestions)
+
+    # -------------------------------------------------------------------
+    # 35c: Multi-tab support
+    # -------------------------------------------------------------------
+
+    async def open_tab(self, url: Optional[str] = None) -> BrowserResult:
+        if not self._initialized or not self._context:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            # 2A-02: Tab-count guard inside lock to prevent TOCTOU race
+            max_tabs = self.config.max_concurrent_sessions  # reuse as tab cap
+            if len(self._pages) >= max_tabs:
+                return BrowserResult(
+                    success=False, action="open_tab", error=f"Maximum {max_tabs} tabs reached",
+                    error_code=BrowserErrorCode.MAX_SESSIONS,
+                    suggestions=[f"Close an existing tab first (you have {len(self._pages)})"],
+                )
+            # Save previous state for rollback on failure (2A-03)
+            prev_page = self._page
+            prev_tab_id = self._active_tab_id
+            new_page = None
+            tab_id = None
+            try:
+                new_page = await self._context.new_page()
+                new_page.set_default_timeout(self.config.timeout_seconds * 1000)
+                tab_id = f"tab_{len(self._pages)}"
+                # Ensure unique tab_id
+                counter = len(self._pages)
+                while tab_id in self._pages:
+                    counter += 1
+                    tab_id = f"tab_{counter}"
+                # Navigate BEFORE registering (2A-03: avoid leak on nav failure)
+                data = {"tab_id": tab_id}
+                if url:
+                    self._validate_url(url)
+                    await new_page.goto(url, wait_until="load", timeout=self.config.timeout_seconds * 1000)
+                    data["url"] = new_page.url
+                    data["title"] = await new_page.title()
+                # All operations succeeded — register page and switch
+                self._pages[tab_id] = new_page
+                self._page = new_page
+                self._active_tab_id = tab_id
+                data["tabs"] = list(self._pages.keys())
+                logger.info(f"Opened new tab {tab_id}")
+                return BrowserResult(success=True, action="open_tab", data=data)
+            except SecurityError:
+                # Close leaked page before re-raising
+                if new_page:
+                    try:
+                        await new_page.close()
+                    except Exception:
+                        pass
+                self._page = prev_page
+                self._active_tab_id = prev_tab_id
+                raise
+            except Exception as e:
+                # 2A-03: Close leaked page and restore previous state
+                if new_page:
+                    try:
+                        await new_page.close()
+                    except Exception:
+                        pass
+                self._page = prev_page
+                self._active_tab_id = prev_tab_id
+                code, suggestions = classify_error(e, "open_tab")
+                return BrowserResult(success=False, action="open_tab", error=str(e), error_code=code, suggestions=suggestions)
+
+    async def switch_tab(self, tab_id: str) -> BrowserResult:
+        if tab_id not in self._pages:
+            return BrowserResult(
+                success=False, action="switch_tab", error=f"Tab '{tab_id}' not found",
+                error_code=BrowserErrorCode.TAB_NOT_FOUND,
+                suggestions=[f"Available tabs: {list(self._pages.keys())}"],
+            )
+        self._page = self._pages[tab_id]
+        self._active_tab_id = tab_id
+        url = self._page.url
+        logger.info(f"Switched to tab {tab_id} ({url})")
+        return BrowserResult(success=True, action="switch_tab", data={"tab_id": tab_id, "url": url})
+
+    async def close_tab(self, tab_id: str) -> BrowserResult:
+        if tab_id not in self._pages:
+            return BrowserResult(
+                success=False, action="close_tab", error=f"Tab '{tab_id}' not found",
+                error_code=BrowserErrorCode.TAB_NOT_FOUND,
+                suggestions=[f"Available tabs: {list(self._pages.keys())}"],
+            )
+        if len(self._pages) <= 1:
+            return BrowserResult(
+                success=False, action="close_tab", error="Cannot close the last tab",
+                suggestions=["Use close_browser to end the entire session instead"],
+            )
+        async with self._lock:
+            page = self._pages.pop(tab_id)
+            try:
+                await page.close()
+            except Exception:
+                pass
+            if self._active_tab_id == tab_id:
+                last_key = list(self._pages.keys())[-1]
+                self._page = self._pages[last_key]
+                self._active_tab_id = last_key
+            logger.info(f"Closed tab {tab_id}")
+            return BrowserResult(success=True, action="close_tab", data={"closed_tab": tab_id, "active_tab": self._active_tab_id, "tabs": list(self._pages.keys())})
+
+    async def list_tabs(self) -> BrowserResult:
+        tabs = []
+        for tid, page in self._pages.items():
+            tabs.append({"tab_id": tid, "url": page.url, "active": tid == self._active_tab_id})
+        return BrowserResult(success=True, action="list_tabs", data={"tabs": tabs, "count": len(tabs)})
+
+    # -------------------------------------------------------------------
+    # Lifecycle
+    # -------------------------------------------------------------------
+
     async def cleanup(self) -> None:
         """
         Close browser and cleanup all resources.
@@ -505,7 +746,17 @@ class PlaywrightProvider(BrowserAutomationProvider):
         logger.info("Cleaning up Playwright resources")
 
         try:
+            # 35c: Close all tracked tabs
+            for tid, page in list(self._pages.items()):
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            self._pages.clear()
+            self._active_tab_id = None
+
             if self._page:
+                # _page may already be closed via _pages cleanup
                 try:
                     await self._page.close()
                 except Exception:
@@ -563,13 +814,21 @@ class PlaywrightProvider(BrowserAutomationProvider):
             "type": cls.provider_type,
             "name": cls.provider_name,
             "mode": "container",
-            "actions": ["navigate", "click", "fill", "extract", "screenshot", "execute_script"],
+            "actions": [
+                "navigate", "click", "fill", "extract", "screenshot", "execute_script",
+                "scroll", "select_option", "hover", "wait_for", "go_back", "go_forward",
+                "get_attribute", "get_page_url", "type_text",
+                "open_tab", "switch_tab", "close_tab", "list_tabs",
+            ],
             "browsers": ["chromium", "firefox", "webkit"],
             "features": [
                 "headless_mode",
                 "viewport_control",
                 "user_agent_override",
                 "proxy_support",
-                "ssrf_protection"
+                "ssrf_protection",
+                "session_persistence",
+                "multi_tab",
+                "structured_errors",
             ]
         }

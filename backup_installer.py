@@ -64,6 +64,13 @@ class TsushinBackup:
             else:
                 print("⚠️  No backend/data directory found (skipping)")
 
+            # Backup caddy SSL configuration
+            caddy_dir = self.root_dir / "caddy"
+            if caddy_dir.exists():
+                caddy_backup_dir = backup_dir / "caddy"
+                shutil.copytree(caddy_dir, caddy_backup_dir)
+                print("✅ Backed up SSL/Caddy configuration")
+
             # Export docker-compose configuration
             try:
                 result = subprocess.run(
@@ -176,6 +183,15 @@ class TsushinBackup:
                 print("📦 Restoring backend/data...")
                 shutil.copytree(backup_data_dir, backend_data_dir)
                 print(f"✅ Restored backend data ({self._get_dir_size(backend_data_dir)})")
+
+            # Restore caddy SSL configuration
+            backup_caddy = backup_path / "caddy"
+            caddy_dir = self.root_dir / "caddy"
+            if backup_caddy.exists():
+                if caddy_dir.exists():
+                    shutil.rmtree(caddy_dir)
+                shutil.copytree(backup_caddy, caddy_dir)
+                print("✅ Restored SSL/Caddy configuration")
 
             # Restart containers
             print("\n🚀 Restarting containers...")

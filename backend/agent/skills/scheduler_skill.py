@@ -40,7 +40,20 @@ class SchedulerSkill(BaseSkill):
     skill_type = "scheduler"
     skill_name = "Scheduler"
     skill_description = "Schedule reminders and AI-driven conversations via natural language"
-    execution_mode = "hybrid"  # Supports both keywords and AI tool calls
+    execution_mode = "tool"
+
+    def _resolve_tenant_id(self) -> Optional[str]:
+        """Resolve tenant_id from agent context for API key lookups."""
+        agent_id = getattr(self, '_agent_id', None)
+        if agent_id and self._db_session:
+            try:
+                from models import Agent
+                agent = self._db_session.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    return agent.tenant_id
+            except Exception:
+                pass
+        return None
 
     @classmethod
     def get_mcp_tool_definition(cls) -> Dict[str, Any]:
@@ -150,21 +163,25 @@ class SchedulerSkill(BaseSkill):
         - Message is routed to Agendador agent (ID 7) - ALL messages to @agendador are scheduling requests
         - Message contains scheduling keywords (for other agents)
         """
+        config = getattr(self, '_config', {}) or {}
+        if not self.is_legacy_enabled(config):
+            return False
+
         body_lower = message.body.lower()
 
         # Phase 6.11.4: Removed special handling for Agendador agent
         # Asana operations are now handled through scheduler provider configuration
 
         # Defer to SchedulerQuerySkill if query keywords present
-        agent_id = getattr(self, '_agent_id', None)
-        if agent_id == 7:  # Agendador agent ID
+        # is_dedicated_scheduler: when True, this agent handles ALL messages as scheduling
+        if config.get('is_dedicated_scheduler', False):
             query_keywords = ['quais', 'meus lembretes', 'meus agendamentos', 'o que']
             if any(keyword in message.body.lower() for keyword in query_keywords):
                 logger.info(f"SchedulerSkill: Query keywords detected, deferring to SchedulerQuerySkill")
                 return False
 
             # Default: handle all other scheduling/reminder messages
-            logger.info(f"SchedulerSkill: Agendador agent detected, handling message as reminder/flow")
+            logger.info(f"SchedulerSkill: Dedicated scheduler agent detected, handling message as reminder/flow")
             return True
 
         # Check for scheduling keywords (for other agents)
@@ -226,9 +243,9 @@ class SchedulerSkill(BaseSkill):
         from models import Agent
         from sqlalchemy.orm import sessionmaker
         from db import get_engine
-        import os
+        import settings
 
-        engine = get_engine(os.getenv("INTERNAL_DB_PATH", "./data/agent.db"))
+        engine = get_engine(settings.DATABASE_URL)
         SessionLocal = sessionmaker(bind=engine)
         db = SessionLocal()
 
@@ -243,7 +260,7 @@ class SchedulerSkill(BaseSkill):
             db.close()
 
         # Create AI client (Phase 7.4: Pass db for API key loading)
-        ai_client = AIClient(provider=provider, model_name=model, db=self._db_session)
+        ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
         # Intent detection prompt
         prompt = f"""Analyze this user request and determine their intent.
@@ -307,14 +324,14 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
             from scheduler.scheduler_service import SchedulerService
             from sqlalchemy.orm import sessionmaker
             from db import get_engine
-            import os
+            import settings
 
-            engine = get_engine(os.getenv("INTERNAL_DB_PATH", "./data/agent.db"))
+            engine = get_engine(settings.DATABASE_URL)
             SessionLocal = sessionmaker(bind=engine)
             db = SessionLocal()
 
             try:
-                scheduler_service = SchedulerService(db)
+                scheduler_service = SchedulerService(db, token_tracker=self._token_tracker, tenant_id=config.get('tenant_id'))  # V060-CHN-006 follow-up
 
                 # Create scheduled event in scheduled_events table
                 event = scheduler_service.create_event(
@@ -359,10 +376,10 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
         from sqlalchemy.orm import sessionmaker
         from db import get_engine
         from models import ScheduledEvent
-        import os
+        import settings
         import pytz
 
-        engine = get_engine(os.getenv("INTERNAL_DB_PATH", "./data/agent.db"))
+        engine = get_engine(settings.DATABASE_URL)
         SessionLocal = sessionmaker(bind=engine)
         db = SessionLocal()
 
@@ -669,9 +686,9 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
             from models import Agent
             from sqlalchemy.orm import sessionmaker
             from db import get_engine
-            import os
+            import settings
 
-            engine = get_engine(os.getenv("INTERNAL_DB_PATH", "./data/agent.db"))
+            engine = get_engine(settings.DATABASE_URL)
             SessionLocal = sessionmaker(bind=engine)
             db = SessionLocal()
 
@@ -686,7 +703,7 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
                 db.close()
 
             # Create AI client
-            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session)
+            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             # Get current time in Brazil timezone for context
             now_brazil = datetime.now(BRAZIL_TZ)
@@ -790,9 +807,9 @@ If you cannot determine the date/time, respond with: {{"error": "cannot parse"}}
             from models import Agent
             from sqlalchemy.orm import sessionmaker
             from db import get_engine
-            import os
+            import settings
 
-            engine = get_engine(os.getenv("INTERNAL_DB_PATH", "./data/agent.db"))
+            engine = get_engine(settings.DATABASE_URL)
             SessionLocal = sessionmaker(bind=engine)
             db = SessionLocal()
 
@@ -808,7 +825,7 @@ If you cannot determine the date/time, respond with: {{"error": "cannot parse"}}
                 db.close()
 
             # Create AI client (Phase 7.4: Pass db for API key loading)
-            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session)
+            ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
             # Get current time in Brazil timezone for context
             now_brazil = datetime.now(BRAZIL_TZ)
@@ -1037,13 +1054,41 @@ Respond ONLY with valid JSON (no markdown, no explanation):
         return msg
 
     @classmethod
+    def get_sentinel_context(cls) -> Dict[str, Any]:
+        """
+        Security context for Sentinel analysis.
+
+        Provides expected intents and patterns for scheduling/reminder
+        operations so Sentinel doesn't flag legitimate usage.
+        """
+        return {
+            "expected_intents": [
+                "Schedule a reminder or notification",
+                "Set an appointment or meeting reminder",
+                "Create a scheduled event at a specific time",
+                "List or query upcoming scheduled events",
+                "Cancel or modify a scheduled reminder",
+            ],
+            "expected_patterns": [
+                "remind", "reminder", "remind me", "schedule", "appointment",
+                "meeting", "calendar", "event", "notify", "notification",
+                "don't forget", "set a reminder",
+                "lembrete", "lembrar", "lembre-me", "agendar", "agenda",
+                "reuniao", "reunião", "compromisso", "consulta", "evento",
+                "notificar", "notificação", "não esqueça",
+            ],
+            "risk_notes": None,
+        }
+
+    @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         """Default configuration"""
         return {
             'agent_id': 1,
             'default_max_turns': 20,
             'default_timeout_hours': 24,
-            'notification_template': 'Hi {name}! Reminder: {reminder_text}'
+            'notification_template': 'Hi {name}! Reminder: {reminder_text}',
+            'is_dedicated_scheduler': False
         }
 
     @classmethod
@@ -1071,6 +1116,11 @@ Respond ONLY with valid JSON (no markdown, no explanation):
                     "type": "string",
                     "description": "Default notification message template",
                     "default": "Hi {name}! Reminder: {reminder_text}"
+                },
+                "is_dedicated_scheduler": {
+                    "type": "boolean",
+                    "description": "When true, agent handles ALL messages as scheduling requests (no keyword matching needed)",
+                    "default": False
                 }
             },
             "required": []
@@ -1130,7 +1180,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             provider = SchedulerProviderFactory.get_provider_for_agent(
                 agent_id=agent_id,
                 db=self._db_session,
-                skill_type="scheduler"
+                skill_type="flows"
             )
 
             # Query events
@@ -1240,7 +1290,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             provider = SchedulerProviderFactory.get_provider_for_agent(
                 agent_id=agent_id,
                 db=self._db_session,
-                skill_type="scheduler"
+                skill_type="flows"
             )
 
             # Create event via provider's unified interface

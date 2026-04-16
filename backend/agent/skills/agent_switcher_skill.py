@@ -16,6 +16,7 @@ from .base import BaseSkill, InboundMessage, SkillResult
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 from models import Contact, Agent, ContactAgentMapping, UserAgentSession
+from agent.contact_service import ContactService
 import logging
 import re
 from datetime import datetime
@@ -39,7 +40,7 @@ class AgentSwitcherSkill(BaseSkill):
     skill_type = "agent_switcher"
     skill_name = "Agent Switcher"
     skill_description = "Allows users to switch their default agent for direct messages via natural language commands"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "hybrid"
 
     def __init__(self):
         super().__init__()
@@ -139,7 +140,8 @@ class AgentSwitcherSkill(BaseSkill):
                 entity_type="agent name",
                 available_options=agent_names,
                 model=ai_model,
-                db=self.db_session  # Phase 7.4: Pass db for API key loading
+                db=self.db_session,  # Phase 7.4: Pass db for API key loading
+                token_tracker=self._token_tracker  # Phase 0.6.0: Track entity extraction costs
             )
 
             if not agent_name:
@@ -179,8 +181,18 @@ class AgentSwitcherSkill(BaseSkill):
             logger.info(f"AgentSwitcherSkill: Resolved to Agent ID: {target_agent.id}")
 
             # Step 3: Identify the requesting user
-            sender_contact = self._identify_sender(message.sender)
-            if not sender_contact:
+            # BUG-338: Playground users don't have Contact records — detect and handle gracefully
+            is_playground = self._is_playground_context(message)
+            if is_playground:
+                logger.info(f"AgentSwitcherSkill: Playground context detected for sender '{message.sender}'; skipping contact lookup")
+                sender_contact = None
+            else:
+                sender_contact = self._identify_sender(
+                    message.sender,
+                    sender_key=message.sender_key,
+                    chat_name=message.chat_name,
+                )
+            if not sender_contact and not is_playground:
                 # Contact not found - create error message
                 return SkillResult(
                     success=False,
@@ -188,12 +200,13 @@ class AgentSwitcherSkill(BaseSkill):
                     metadata={"error": "contact_not_found", "sender": message.sender, "skip_ai": True}
                 )
 
-            logger.info(f"AgentSwitcherSkill: Identified sender: {sender_contact.friendly_name} (ID: {sender_contact.id})")
-
-            # Step 4: Update/Create ContactAgentMapping
-            self._update_agent_mapping(sender_contact.id, target_agent.id)
+            # Step 4: Update/Create ContactAgentMapping (only for non-playground users with a contact)
+            if sender_contact:
+                logger.info(f"AgentSwitcherSkill: Identified sender: {sender_contact.friendly_name} (ID: {sender_contact.id})")
+                self._update_agent_mapping(sender_contact.id, target_agent.id)
 
             # Phase 7.3: Save UserAgentSession for persistence across messages
+            # BUG-338: For playground users, sender_key is the canonical identifier
             self._save_user_agent_session(message.sender_key, target_agent.id)
 
             # Step 5: Get agent's friendly name for confirmation
@@ -208,9 +221,9 @@ class AgentSwitcherSkill(BaseSkill):
                 output=f"✅ Successfully switched to agent **{agent_display_name}**.\n\n"
                        f"All your future direct messages will be handled by {agent_display_name}.",
                 metadata={
-                    "previous_agent_id": self._get_current_agent_id(sender_contact.id),
+                    "previous_agent_id": self._get_current_agent_id(sender_contact.id) if sender_contact else None,
                     "new_agent_id": target_agent.id,
-                    "contact_id": sender_contact.id,
+                    "contact_id": sender_contact.id if sender_contact else None,
                     "agent_name": agent_display_name,
                     "skip_ai": True  # Return skill output directly without AI processing
                 }
@@ -238,12 +251,16 @@ class AgentSwitcherSkill(BaseSkill):
         Returns:
             Agent object if found, None otherwise
         """
-        # Search contacts with role="agent" (case-insensitive)
-        contact = self.db_session.query(Contact).filter(
+        # Search contacts with role="agent" (case-insensitive), scoped to tenant
+        _tenant_id = (self._config or {}).get("tenant_id")
+        q = self.db_session.query(Contact).filter(
             Contact.role == "agent",
             Contact.is_active == True,
             Contact.friendly_name.ilike(agent_name)  # Case-insensitive LIKE
-        ).first()
+        )
+        if _tenant_id:
+            q = q.filter(Contact.tenant_id == _tenant_id)
+        contact = q.first()
 
         if not contact:
             return None
@@ -262,33 +279,98 @@ class AgentSwitcherSkill(BaseSkill):
         Returns:
             List of Contact objects with role="agent" and is_active=True
         """
-        return self.db_session.query(Contact).filter(
+        _tenant_id = (self._config or {}).get("tenant_id")
+        q = self.db_session.query(Contact).filter(
             Contact.role == "agent",
             Contact.is_active == True
-        ).all()
+        )
+        if _tenant_id:
+            q = q.filter(Contact.tenant_id == _tenant_id)
+        return q.all()
 
-    def _identify_sender(self, sender: str) -> Optional[Contact]:
+    def _identify_sender(
+        self,
+        sender: str,
+        sender_key: Optional[str] = None,
+        chat_name: Optional[str] = None
+    ) -> Optional[Contact]:
         """
         Identify the sender's contact record.
 
-        Searches by phone number (with or without + prefix).
+        Resolve contact via direct identifiers, channel mappings, chat metadata,
+        and WhatsApp ID auto-discovery.
 
         Args:
-            sender: Phone number from message
+            sender: Sender identifier from the message
+            sender_key: Stable sender key/chat identifier
+            chat_name: Display name from the channel when available
 
         Returns:
             Contact object if found, None otherwise
         """
-        # Normalize sender (remove + prefix if present)
-        sender_normalized = sender.lstrip("+")
+        tenant_id = (self._config or {}).get("tenant_id")
+        contact_service = ContactService(self.db_session, tenant_id=tenant_id)
 
-        # Search by phone number
-        contact = self.db_session.query(Contact).filter(
-            Contact.is_active == True,
-            Contact.phone_number.like(f"%{sender_normalized}")
-        ).first()
+        for candidate in [sender, sender_key]:
+            candidate = (candidate or "").strip()
+            if not candidate:
+                continue
+            normalized = candidate.split("@")[0].lstrip("+")
+            for attempt in [normalized, candidate]:
+                contact = contact_service.identify_sender(attempt)
+                if contact:
+                    return contact
 
-        return contact
+        candidate_name = (chat_name or "").strip()
+        if candidate_name and not candidate_name.isdigit():
+            base_query = self.db_session.query(Contact).filter(Contact.is_active == True)
+            if tenant_id:
+                base_query = base_query.filter(Contact.tenant_id == tenant_id)
+
+            exact_matches = base_query.filter(Contact.friendly_name.ilike(candidate_name)).all()
+            if len(exact_matches) == 1:
+                return exact_matches[0]
+
+            candidate_lower = candidate_name.lower()
+            partial_matches = [
+                contact for contact in base_query.all()
+                if contact.friendly_name and contact.friendly_name.lower() in candidate_lower
+            ]
+            if len(partial_matches) == 1:
+                return partial_matches[0]
+
+        sender_normalized = (sender or "").split("@")[0].lstrip("+")
+        if sender_normalized:
+            try:
+                from services.whatsapp_id_discovery import WhatsAppIDDiscovery
+                discovery = WhatsAppIDDiscovery(time_window_minutes=60)
+                return discovery.auto_link_contact(self.db_session, sender_normalized, logger)
+            except Exception as e:
+                logger.warning(f"AgentSwitcherSkill: WhatsApp auto-discovery failed: {e}")
+
+        return None
+
+    def _is_playground_context(self, message: InboundMessage) -> bool:
+        """
+        Detect if the message originates from the Playground (not WhatsApp/real channel).
+
+        BUG-338: Playground users do not have Contact records in the DB.
+        Their sender is set to "playground_user_{user_id}" and channel to "playground".
+        We must skip the contact-required check for these sessions.
+
+        Args:
+            message: Inbound message to check
+
+        Returns:
+            True if this message came from the Playground interface
+        """
+        sender = (message.sender or "").lower()
+        channel = getattr(message, "channel", None) or ""
+        return (
+            sender.startswith("playground_user_")
+            or sender.startswith("playground_")
+            or channel.lower() == "playground"
+        )
 
     def _get_current_agent_id(self, contact_id: int) -> Optional[int]:
         """
@@ -300,9 +382,14 @@ class AgentSwitcherSkill(BaseSkill):
         Returns:
             Agent ID if mapped, None otherwise
         """
-        mapping = self.db_session.query(ContactAgentMapping).filter(
+        # BUG-LOG-012 FIX: Scope mapping lookup by tenant_id
+        _tenant_id = (self._config or {}).get("tenant_id")
+        mapping_q = self.db_session.query(ContactAgentMapping).filter(
             ContactAgentMapping.contact_id == contact_id
-        ).first()
+        )
+        if _tenant_id:
+            mapping_q = mapping_q.filter(ContactAgentMapping.tenant_id == _tenant_id)
+        mapping = mapping_q.first()
 
         return mapping.agent_id if mapping else None
 
@@ -317,10 +404,17 @@ class AgentSwitcherSkill(BaseSkill):
             contact_id: User's contact ID
             agent_id: Target agent ID
         """
-        # Check if mapping exists
-        mapping = self.db_session.query(ContactAgentMapping).filter(
+        # BUG-LOG-012 FIX: Scope mapping lookup by tenant_id to prevent cross-tenant collision
+        _tenant_id = (self._config or {}).get("tenant_id")
+        if not _tenant_id:
+            agent_obj = self.db_session.query(Agent).filter(Agent.id == agent_id).first()
+            _tenant_id = agent_obj.tenant_id if agent_obj else None
+        mapping_q = self.db_session.query(ContactAgentMapping).filter(
             ContactAgentMapping.contact_id == contact_id
-        ).first()
+        )
+        if _tenant_id:
+            mapping_q = mapping_q.filter(ContactAgentMapping.tenant_id == _tenant_id)
+        mapping = mapping_q.first()
 
         if mapping:
             # Update existing mapping
@@ -328,11 +422,12 @@ class AgentSwitcherSkill(BaseSkill):
             mapping.agent_id = agent_id
             mapping.updated_at = datetime.utcnow()
         else:
-            # Create new mapping
+            # Create new mapping (BUG-LOG-012: tenant_id already resolved above)
             logger.info(f"AgentSwitcherSkill: Creating new mapping - Contact {contact_id} → Agent {agent_id}")
             mapping = ContactAgentMapping(
                 contact_id=contact_id,
                 agent_id=agent_id,
+                tenant_id=_tenant_id,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
@@ -393,12 +488,7 @@ class AgentSwitcherSkill(BaseSkill):
         - Portuguese: invocar
         """
         return {
-            "keywords": [
-                # English
-                "invoke",   # invoke
-                # Portuguese
-                "invocar",  # invoke
-            ],
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash-lite"
         }
@@ -475,6 +565,10 @@ class AgentSwitcherSkill(BaseSkill):
             "risk_notes": None  # Agent switching is low-risk
         }
 
+    @classmethod
+    def get_sentinel_exemptions(cls) -> list:
+        return ["agent_takeover"]
+
     async def execute_tool(
         self,
         arguments: Dict[str, Any],
@@ -540,19 +634,31 @@ class AgentSwitcherSkill(BaseSkill):
                 )
 
             # Step 2: Identify the requesting user
-            sender_contact = self._identify_sender(message.sender)
-            if not sender_contact:
+            # BUG-338: Playground users don't have Contact records — detect and handle gracefully
+            is_playground = self._is_playground_context(message)
+            if is_playground:
+                logger.info(f"AgentSwitcherSkill.execute_tool: Playground context detected; skipping contact lookup")
+                sender_contact = None
+            else:
+                sender_contact = self._identify_sender(
+                    message.sender,
+                    sender_key=message.sender_key,
+                    chat_name=message.chat_name,
+                )
+            if not sender_contact and not is_playground:
                 return SkillResult(
                     success=False,
                     output="Could not identify your contact profile. Please ensure you're registered in the system.",
                     metadata={"error": "contact_not_found", "sender": message.sender, "skip_ai": True}
                 )
 
-            # Step 3: Update agent mapping
-            previous_agent_id = self._get_current_agent_id(sender_contact.id)
-            self._update_agent_mapping(sender_contact.id, target_agent.id)
+            # Step 3: Update agent mapping (only for non-playground users with a contact)
+            previous_agent_id = self._get_current_agent_id(sender_contact.id) if sender_contact else None
+            if sender_contact:
+                self._update_agent_mapping(sender_contact.id, target_agent.id)
 
             # Step 4: Save UserAgentSession for persistence
+            # BUG-338: For playground users, sender_key is the canonical identifier
             self._save_user_agent_session(message.sender_key, target_agent.id)
 
             # Step 5: Get agent's friendly name for confirmation
@@ -567,7 +673,7 @@ class AgentSwitcherSkill(BaseSkill):
                 metadata={
                     "previous_agent_id": previous_agent_id,
                     "new_agent_id": target_agent.id,
-                    "contact_id": sender_contact.id,
+                    "contact_id": sender_contact.id if sender_contact else None,
                     "agent_name": agent_display_name,
                     "skip_ai": True
                 }

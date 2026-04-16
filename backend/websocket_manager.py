@@ -1,4 +1,4 @@
-"""WebSocket Connection Manager for Real-Time Updates (Phase 6.11.2, Phase 14.9, Phase 18.4)"""
+"""WebSocket Connection Manager for Real-Time Updates (Phase 6.11.2, Phase 14.9, Phase 18.4, BUG-310)"""
 from fastapi import WebSocket, WebSocketDisconnect
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
@@ -14,6 +14,7 @@ class ConnectionManager:
     Manages WebSocket connections for real-time updates.
 
     Phase 18.4: Extended for Shell Beacon C2 connections.
+    BUG-310: Tenant-scoped connection tracking to prevent cross-tenant data leakage.
     Supports:
     - User connections (UI clients)
     - Beacon connections (Shell Skill remote hosts)
@@ -24,6 +25,12 @@ class ConnectionManager:
         self.active_connections: List[WebSocket] = []
         # Phase 14.9: User-specific connections for targeted messaging
         self.user_connections: Dict[int, List[WebSocket]] = {}
+
+        # BUG-310: Tenant-scoped general connections
+        # Maps tenant_id -> list of WebSocket connections
+        self.tenant_ws_connections: Dict[str, List[WebSocket]] = {}
+        # Reverse lookup: WebSocket -> tenant_id (for cleanup on disconnect)
+        self._ws_tenant_map: Dict[int, str] = {}  # keyed by id(websocket)
 
         # Phase 18.4: Beacon C2 connections
         # Maps integration_id -> WebSocket for instant command push
@@ -39,25 +46,33 @@ class ConnectionManager:
 
         self.logger = logging.getLogger(__name__)
 
-    async def connect(self, websocket: WebSocket, user_id: Optional[int] = None):
+    async def connect(self, websocket: WebSocket, user_id: Optional[int] = None, tenant_id: Optional[str] = None):
         """
         Accept new WebSocket connection.
 
         Args:
             websocket: WebSocket connection
             user_id: Optional user ID for targeted messaging (Phase 14.9)
+            tenant_id: Optional tenant ID for tenant-scoped broadcasting (BUG-310)
         """
         await websocket.accept()
         self.active_connections.append(websocket)
+
+        # BUG-310: Track tenant-scoped connections
+        if tenant_id is not None:
+            if tenant_id not in self.tenant_ws_connections:
+                self.tenant_ws_connections[tenant_id] = []
+            self.tenant_ws_connections[tenant_id].append(websocket)
+            self._ws_tenant_map[id(websocket)] = tenant_id
 
         # Phase 14.9: Track user-specific connections
         if user_id is not None:
             if user_id not in self.user_connections:
                 self.user_connections[user_id] = []
             self.user_connections[user_id].append(websocket)
-            self.logger.info(f"New WebSocket connection for user {user_id}. Total: {len(self.active_connections)}")
+            self.logger.info(f"New WebSocket connection for user {user_id}, tenant={tenant_id}. Total: {len(self.active_connections)}")
         else:
-            self.logger.info(f"New WebSocket connection. Total: {len(self.active_connections)}")
+            self.logger.info(f"New WebSocket connection, tenant={tenant_id}. Total: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket, user_id: Optional[int] = None):
         """
@@ -70,6 +85,15 @@ class ConnectionManager:
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
+        # BUG-310: Remove from tenant-scoped connections
+        ws_id = id(websocket)
+        tenant_id = self._ws_tenant_map.pop(ws_id, None)
+        if tenant_id and tenant_id in self.tenant_ws_connections:
+            if websocket in self.tenant_ws_connections[tenant_id]:
+                self.tenant_ws_connections[tenant_id].remove(websocket)
+            if not self.tenant_ws_connections[tenant_id]:
+                del self.tenant_ws_connections[tenant_id]
+
         # Phase 14.9: Remove from user-specific connections
         if user_id is not None and user_id in self.user_connections:
             if websocket in self.user_connections[user_id]:
@@ -81,7 +105,16 @@ class ConnectionManager:
         self.logger.info(f"WebSocket disconnected. Total: {len(self.active_connections)}")
 
     async def broadcast(self, message: Dict[str, Any]):
-        """Broadcast message to all connected clients"""
+        """
+        Broadcast message to all connected clients.
+
+        DEPRECATED (BUG-310): Use broadcast_to_tenant() for tenant-scoped delivery.
+        This method is kept for backward compatibility but logs a deprecation warning.
+        """
+        self.logger.warning(
+            "DEPRECATED: broadcast() sends to ALL tenants. "
+            "Use broadcast_to_tenant(message, tenant_id) instead."
+        )
         if not self.active_connections:
             return  # No clients connected
 
@@ -92,6 +125,34 @@ class ConnectionManager:
                 self.logger.debug(f"Broadcast sent: {message.get('type')}")
             except Exception as e:
                 self.logger.error(f"Error broadcasting to client: {e}")
+                disconnected.append(connection)
+
+        # Clean up disconnected clients
+        for conn in disconnected:
+            self.disconnect(conn)
+
+    async def broadcast_to_tenant(self, message: Dict[str, Any], tenant_id: str):
+        """
+        Broadcast message only to WebSocket connections belonging to a specific tenant.
+
+        BUG-310: Prevents cross-tenant data leakage by scoping broadcasts.
+
+        Args:
+            message: Message dict to send
+            tenant_id: Target tenant ID
+        """
+        connections = self.tenant_ws_connections.get(tenant_id, [])
+        if not connections:
+            self.logger.debug(f"No active connections for tenant {tenant_id}")
+            return
+
+        disconnected = []
+        for connection in connections:
+            try:
+                await connection.send_json(message)
+                self.logger.debug(f"Tenant broadcast sent to {tenant_id}: {message.get('type')}")
+            except Exception as e:
+                self.logger.error(f"Error broadcasting to tenant {tenant_id}: {e}")
                 disconnected.append(connection)
 
         # Clean up disconnected clients

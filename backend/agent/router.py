@@ -39,6 +39,8 @@ from services.group_sender_resolver import GroupSenderResolver
 # Phase 8: Watcher activity events
 from services.watcher_activity_service import emit_agent_processing_async
 
+# Item 38: Circuit breaker queuing — defer messages when a channel is OPEN
+
 # Shared utilities
 from agent.utils import summarize_tool_result
 from agent.memory.tool_output_buffer import get_tool_output_buffer
@@ -77,19 +79,31 @@ def _determine_agent_run_status(result: Dict) -> str:
 
 
 class AgentRouter:
-    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None):
+    def __init__(self, db_session: Session, config: Dict, mcp_reader=None, mcp_instance_id: int = None, telegram_instance_id: int = None, tenant_id: str = None, slack_integration_id: int = None, discord_integration_id: int = None, webhook_instance_id: int = None):
         self.db = db_session
         self.config = config
         self.contact_mappings = config.get("contact_mappings", {})
         self.logger = logging.getLogger(__name__)
 
+        # V060-CHN-006: Track tenant_id so CachedContactService (and any other
+        # tenant-scoped service spun up from the router) can filter by tenant.
+        # Fall back to config['tenant_id'] if caller didn't pass it explicitly,
+        # to preserve back-compat with legacy call sites during rollout.
+        self.tenant_id = tenant_id or config.get("tenant_id")
+
         # Phase 10: Track which MCP instance this router serves for channel-based filtering
         self.mcp_instance_id = mcp_instance_id
         # Phase 10.1.1: Track which Telegram instance this router serves
         self.telegram_instance_id = telegram_instance_id
+        # v0.6.0: Track which Webhook instance this router serves
+        self.webhook_instance_id = webhook_instance_id
+        # V060-CHN-031: Stash inbound Slack thread_ts so _send_message auto-threads
+        # outbound replies into the original message's thread. Set in route_message.
+        self._inbound_slack_thread_ts: Optional[str] = None
 
         # Phase 6.11.3: Initialize CachedContactService for faster lookups
-        self.contact_service = CachedContactService(db_session)
+        # V060-CHN-006: Pass tenant_id to prevent cross-tenant contact leakage.
+        self.contact_service = CachedContactService(db_session, tenant_id=self.tenant_id)
 
         # Phase 7.2: Initialize TokenTracker for usage analytics
         self.token_tracker = TokenTracker(db_session)
@@ -100,7 +114,8 @@ class AgentRouter:
         self.memory_manager = MultiAgentMemoryManager(
             db_session=db_session,
             config=config,
-            base_chroma_dir="./data/chroma"
+            base_chroma_dir="./data/chroma",
+            token_tracker=self.token_tracker
         )
         self.logger.info("Multi-Agent Memory Manager initialized")
 
@@ -113,7 +128,8 @@ class AgentRouter:
             config,
             contact_service=self.contact_service,
             db=db_session,
-            token_tracker=self.token_tracker
+            token_tracker=self.token_tracker,
+            tenant_id=self.tenant_id
         )
         self.mcp_sender = MCPSender()
         self.mcp_reader = mcp_reader  # For fetching context messages
@@ -138,6 +154,45 @@ class AgentRouter:
             except Exception as e:
                 self.logger.error(f"Failed to initialize TelegramSender: {e}", exc_info=True)
 
+        # Item 32: Channel Abstraction Layer — register adapters per channel
+        from channels.registry import ChannelRegistry
+        from channels.whatsapp.adapter import WhatsAppChannelAdapter
+        from channels.telegram.adapter import TelegramChannelAdapter
+        from channels.playground.adapter import PlaygroundChannelAdapter
+        from channels.webhook.adapter import WebhookChannelAdapter
+
+        self.channel_registry = ChannelRegistry()
+
+        if mcp_instance_id:
+            self.channel_registry.register(
+                "whatsapp",
+                WhatsAppChannelAdapter(db_session, self.mcp_sender, mcp_instance_id, self.logger)
+            )
+        if telegram_instance_id and self.telegram_sender:
+            self.channel_registry.register(
+                "telegram",
+                TelegramChannelAdapter(self.telegram_sender, self.logger)
+            )
+        if webhook_instance_id:
+            self.channel_registry.register(
+                "webhook",
+                WebhookChannelAdapter(db_session, webhook_instance_id, self.logger)
+            )
+        self.channel_registry.register(
+            "playground",
+            PlaygroundChannelAdapter(self.logger)
+        )
+
+        # V060-CHN-001: Register Slack/Discord adapters so outbound routing
+        # can actually deliver to those channels. Previously only whatsapp,
+        # telegram, and playground were registered — any agent flow targeting
+        # slack/discord failed silently. Resolution order: explicit
+        # integration_id → tenant's single active integration.
+        self._register_slack_adapter(db_session, slack_integration_id)
+        self._register_discord_adapter(db_session, discord_integration_id)
+
+        self.logger.info(f"ChannelRegistry initialized with channels: {self.channel_registry.list_channels()}")
+
         # Phase 5.0: Initialize SkillManager for audio transcription, TTS, etc.
         # Phase 7.2: Pass token_tracker for usage analytics
         self.skill_manager = get_skill_manager(token_tracker=self.token_tracker)
@@ -149,11 +204,90 @@ class AgentRouter:
 
         # Phase 6.4 Week 3: Initialize SchedulerService for conversation detection
         # Item 11.4: Pass memory_manager to SchedulerService for semantic memory in conversations
-        self.scheduler_service = SchedulerService(db_session, memory_manager=self.memory_manager)
+        self.scheduler_service = SchedulerService(db_session, memory_manager=self.memory_manager, token_tracker=self.token_tracker, tenant_id=self.tenant_id)  # V060-CHN-006 follow-up
         self.logger.info("SchedulerService initialized for conversation routing with memory integration")
 
         # Phase 4.8: Ring buffer memory loading deprecated
         # Memory persistence now handled by Multi-Agent Memory Manager (ChromaDB)
+
+    def _resolve_direct_message_contact(self, message: Dict, sender: str) -> Optional[Contact]:
+        """Resolve a DM sender using raw IDs, chat metadata, and WhatsApp auto-linking."""
+        sender_normalized = sender.split("@")[0].lstrip("+")
+
+        if self.contact_service:
+            contact = self.contact_service.identify_sender(sender)
+            if contact:
+                return contact
+
+            chat_id = message.get("chat_id", "")
+            if chat_id and chat_id != sender:
+                contact = self.contact_service.identify_sender(chat_id)
+                if contact:
+                    return contact
+
+        names_to_try = []
+        for candidate in [message.get("chat_name"), message.get("sender_name")]:
+            candidate = (candidate or "").strip()
+            if candidate and candidate not in names_to_try and not candidate.isdigit():
+                names_to_try.append(candidate)
+
+        tenant_id = self.tenant_id
+        for candidate in names_to_try:
+            base_query = self.db.query(Contact).filter(Contact.is_active == True)
+            if tenant_id:
+                base_query = base_query.filter(Contact.tenant_id == tenant_id)
+
+            exact_matches = base_query.filter(Contact.friendly_name.ilike(candidate)).all()
+            if len(exact_matches) == 1:
+                self.logger.info(
+                    f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
+                    f"to contact '{exact_matches[0].friendly_name}' via exact chat metadata '{candidate}'"
+                )
+                self._auto_link_whatsapp_lid(exact_matches[0], sender_normalized)
+                return exact_matches[0]
+
+            candidate_lower = candidate.lower()
+            partial_matches = [
+                contact for contact in base_query.all()
+                if contact.friendly_name and contact.friendly_name.lower() in candidate_lower
+            ]
+            if len(partial_matches) == 1:
+                self.logger.info(
+                    f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
+                    f"to contact '{partial_matches[0].friendly_name}' via partial chat metadata '{candidate}'"
+                )
+                self._auto_link_whatsapp_lid(partial_matches[0], sender_normalized)
+                return partial_matches[0]
+
+        try:
+            from services.whatsapp_id_discovery import WhatsAppIDDiscovery
+            discovery = WhatsAppIDDiscovery(time_window_minutes=60)
+            return discovery.auto_link_contact(self.db, sender_normalized, self.logger)
+        except Exception:
+            return None
+
+    def _auto_link_whatsapp_lid(self, contact: Contact, sender_id: str):
+        """Auto-link a WhatsApp LID to a contact when resolved via name matching.
+        WhatsApp transitioned from phone-based to LID-based sender IDs.
+        Once linked, future lookups by LID will succeed directly."""
+        if not sender_id or not contact:
+            return
+        phone_stripped = (contact.phone_number or "").lstrip("+").strip()
+        if sender_id == phone_stripped:
+            return
+        if contact.whatsapp_id and contact.whatsapp_id == sender_id:
+            return
+        if not contact.whatsapp_id:
+            contact.whatsapp_id = sender_id
+            try:
+                self.db.commit()
+                self.logger.info(
+                    f"[LID AUTO-LINK] Linked WhatsApp LID {sender_id} to contact "
+                    f"'{contact.friendly_name}' (phone: {contact.phone_number})"
+                )
+            except Exception as e:
+                self.db.rollback()
+                self.logger.warning(f"[LID AUTO-LINK] Failed to save: {e}")
 
     def get_agent_config(self, agent: Agent) -> Dict:
         """
@@ -451,13 +585,14 @@ class AgentRouter:
         media_path: str = None
     ) -> bool:
         """
-        Phase 10.1.1: Universal message sender supporting WhatsApp and Telegram.
-        Cross-channel contamination fix: Validates recipients before sending.
+        Item 32: Universal message sender via Channel Abstraction Layer.
+        Dispatches to the registered ChannelAdapter for the target channel.
+        Cross-channel contamination prevention via adapter.validate_recipient().
 
         Args:
             recipient: Chat ID (WhatsApp) or Telegram chat_id
             message_text: Message content
-            channel: "whatsapp" or "telegram"
+            channel: "whatsapp", "telegram", "slack", "discord", etc.
             agent_id: Agent ID for MCP URL resolution (WhatsApp only)
             media_path: Optional media file path (audio, image, etc.)
 
@@ -465,43 +600,38 @@ class AgentRouter:
             True if message sent successfully
         """
         try:
-            # CRITICAL: Validate recipient for channel to prevent cross-channel contamination
-            if not self._validate_recipient_for_channel(recipient, channel):
-                self.logger.error(
-                    f"❌ Message blocked: Recipient '{recipient}' is invalid for channel '{channel}'"
-                )
+            adapter = self.channel_registry.get_adapter(channel)
+            if adapter is None:
+                # Fallback: validate recipient with legacy method for unregistered channels
+                if not self._validate_recipient_for_channel(recipient, channel):
+                    self.logger.error(
+                        f"Message blocked: Recipient '{recipient}' is invalid for channel '{channel}'"
+                    )
+                    return False
+                self.logger.error(f"No adapter registered for channel: {channel}")
                 return False
 
-            if channel == "telegram":
-                if not self.telegram_sender:
-                    self.logger.error("TelegramSender not initialized")
-                    return False
+            # V060-CHN-031: Auto-inject Slack thread_ts so replies thread under
+            # the inbound message (set in route_message). The adapter accepts
+            # thread_ts via **kwargs and ignores it for non-Slack channels.
+            send_kwargs = {}
+            if channel == "slack" and self._inbound_slack_thread_ts:
+                send_kwargs["thread_ts"] = self._inbound_slack_thread_ts
 
-                return await self.telegram_sender.send_message(
-                    chat_id=int(recipient),
-                    message=message_text
+            result = await adapter.send_message(
+                to=recipient,
+                text=message_text,
+                media_path=media_path,
+                agent_id=agent_id,
+                **send_kwargs,
+            )
+
+            if not result.success:
+                self.logger.warning(
+                    f"Message send failed via {channel}: {result.error or 'unknown error'}"
                 )
 
-            elif channel == "whatsapp":
-                # Phase Security-1: Resolve MCP URL and secret for WhatsApp
-                mcp_url, api_secret = self._resolve_mcp_instance(agent_id) if agent_id else (None, None)
-
-                # Check connection before sending
-                if agent_id and not self._check_mcp_connection(agent_id, mcp_url):
-                    self.logger.warning(f"[SKIP] MCP not connected, skipping message to {recipient}")
-                    return False
-
-                return await self.mcp_sender.send_message(
-                    recipient,
-                    message_text,
-                    media_path=media_path,
-                    api_url=mcp_url,
-                    api_secret=api_secret
-                )
-
-            else:
-                self.logger.error(f"Unknown channel: {channel}")
-                return False
+            return result.success
 
         except Exception as e:
             self.logger.error(f"Error sending message via {channel}: {e}", exc_info=True)
@@ -582,7 +712,7 @@ class AgentRouter:
         # Phase 10: Helper to check if agent is valid for this MCP instance
         def is_agent_valid_for_channel(agent: Agent) -> bool:
             """Check if agent has current channel enabled and is assigned to the right integration"""
-            if not self.mcp_instance_id and not self.telegram_instance_id:
+            if not self.mcp_instance_id and not self.telegram_instance_id and not self.webhook_instance_id:
                 return True  # No filtering if no instance set (backward compat)
 
             # Parse enabled channels
@@ -610,6 +740,16 @@ class AgentRouter:
                     self.logger.debug(f"Agent {agent.id} assigned to different Telegram instance ({agent.telegram_integration_id}), skipping")
                     return False
 
+            # v0.6.0: Webhook channel check
+            if self.webhook_instance_id:
+                if "webhook" not in enabled_channels:
+                    self.logger.debug(f"Agent {agent.id} has Webhook disabled, skipping")
+                    return False
+
+                if agent.webhook_integration_id and agent.webhook_integration_id != self.webhook_instance_id:
+                    self.logger.debug(f"Agent {agent.id} assigned to different Webhook instance ({agent.webhook_integration_id}), skipping")
+                    return False
+
             return True
 
         # Step -1: Check for saved agent preference (agent switcher persistence)
@@ -620,6 +760,20 @@ class AgentRouter:
             saved_session = self.db.query(UserAgentSession).filter(
                 UserAgentSession.user_identifier == sender_key
             ).first()
+
+            # WhatsApp LID migration: if sender is a LID, also try the contact's phone
+            if not saved_session and not message.get("is_group"):
+                _contact = self._resolve_direct_message_contact(message, sender)
+                if _contact and _contact.phone_number:
+                    _phone = _contact.phone_number.lstrip("+").strip()
+                    if _phone and _phone != sender_key:
+                        saved_session = self.db.query(UserAgentSession).filter(
+                            UserAgentSession.user_identifier == _phone
+                        ).first()
+                        if saved_session:
+                            saved_session.user_identifier = sender_key
+                            self.db.commit()
+                            self.logger.info(f"[LID MIGRATION] Updated UserAgentSession from phone {_phone} to LID {sender_key}")
 
             if saved_session:
                 agent = self.db.query(Agent).filter(Agent.id == saved_session.agent_id).first()
@@ -653,7 +807,10 @@ class AgentRouter:
         # Step 1: Check for keyword-based invocation (second priority)
         # Keywords work for any user in both groups and DMs
         # Phase 10: Filter by channel assignment
-        active_agents = self.db.query(Agent).filter(Agent.is_active == True).all()
+        active_query = self.db.query(Agent).filter(Agent.is_active == True)
+        if self.tenant_id:
+            active_query = active_query.filter(Agent.tenant_id == self.tenant_id)
+        active_agents = active_query.all()
         for agent in active_agents:
             if not is_agent_valid_for_channel(agent):
                 continue
@@ -669,30 +826,26 @@ class AgentRouter:
         # NOT hardcoded in code. Use POST /api/contacts + POST /api/contact-agent-mappings
         # CRITICAL FIX 2026-01-08: Also search by WhatsApp ID for contact lookup
         if not is_group:
-            # Try to find contact by phone number OR WhatsApp ID
-            # Normalize sender to handle WhatsApp IDs (e.g., "193853382488108")
-            sender_normalized = sender.split('@')[0].lstrip('+')
+            # BUG-LOG-012 FIX: Resolve tenant_id for tenant-scoped contact lookup
+            _routing_tenant_id = None
+            if self.mcp_instance_id:
+                try:
+                    _mcp = self.db.query(WhatsAppMCPInstance).get(self.mcp_instance_id)
+                    _routing_tenant_id = _mcp.tenant_id if _mcp else None
+                except Exception:
+                    pass
 
-            # Method 1: Search by phone number (traditional)
-            contact = self.db.query(Contact).filter(
-                or_(
-                    Contact.phone_number == sender,
-                    Contact.phone_number == sender_normalized,
-                    Contact.phone_number == f"+{sender_normalized}"
-                )
-            ).first()
-
-            # Method 2: If not found, search by WhatsApp ID
-            if not contact:
-                contact = self.db.query(Contact).filter(Contact.whatsapp_id == sender_normalized).first()
-                if contact:
-                    self.logger.info(f"Contact found by WhatsApp ID: {contact.friendly_name} (ID: {sender_normalized})")
+            contact = self._resolve_direct_message_contact(message, sender)
 
             # If contact found (by either method), check for agent mapping
+            # BUG-LOG-012 FIX: Scope mapping lookup by tenant_id to prevent cross-tenant agent assignment
             if contact:
-                mapping = self.db.query(ContactAgentMapping).filter(
+                mapping_q = self.db.query(ContactAgentMapping).filter(
                     ContactAgentMapping.contact_id == contact.id
-                ).first()
+                )
+                if _routing_tenant_id:
+                    mapping_q = mapping_q.filter(ContactAgentMapping.tenant_id == _routing_tenant_id)
+                mapping = mapping_q.first()
                 if mapping:
                     agent = self.db.query(Agent).filter(Agent.id == mapping.agent_id).first()
                     if agent and agent.is_active and is_agent_valid_for_channel(agent):
@@ -710,7 +863,10 @@ class AgentRouter:
         # Step 3: Default agent (fallback for DMs only - LOWEST PRIORITY)
         # Phase 10: Also check channel validity for default agent
         # MONITORING 2026-01-08: Log default agent usage for audit
-        default_agent = self.db.query(Agent).filter(Agent.is_default == True).first()
+        default_query = self.db.query(Agent).filter(Agent.is_default == True)
+        if self.tenant_id:
+            default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
+        default_agent = default_query.first()
         if default_agent and is_agent_valid_for_channel(default_agent):
             self.logger.warning(f"⚠️ DEFAULT AGENT FALLBACK: Using agent {default_agent.id} for {sender} (no contact mapping, no mention, no keyword)")
             self.logger.warning(f"📊 AUDIT: Sender {sender} | Trigger: {trigger_type} | Default fallback used")
@@ -754,7 +910,8 @@ class AgentRouter:
             "model_name": agent.model_name,
             "system_prompt": system_prompt,
             "memory_size": self.config.get("memory_size", 10),  # Inherit from config
-            "response_template": agent.response_template if hasattr(agent, 'response_template') else "@{agent_name}: {response}"
+            "response_template": agent.response_template if hasattr(agent, 'response_template') else "@{agent_name}: {response}",
+            "provider_instance_id": getattr(agent, 'provider_instance_id', None),
         }
 
     def _build_persona_context(self, persona) -> str:
@@ -1077,6 +1234,113 @@ class AgentRouter:
             self.logger.error(f"Error finding active conversation: {e}", exc_info=True)
             return None
 
+    def _register_slack_adapter(self, db_session, slack_integration_id):
+        """V060-CHN-001: Register a SlackChannelAdapter with the registry.
+
+        Resolution order:
+        1. explicit slack_integration_id argument
+        2. tenant's single active SlackIntegration (if exactly one active)
+        """
+        try:
+            from models import SlackIntegration
+            from channels.slack.adapter import SlackChannelAdapter
+            from hub.security import TokenEncryption
+            from services.encryption_key_service import get_slack_encryption_key
+
+            integration = None
+            if slack_integration_id:
+                integration = db_session.query(SlackIntegration).filter(
+                    SlackIntegration.id == slack_integration_id,
+                    SlackIntegration.is_active == True,
+                ).first()
+            elif self.tenant_id:
+                actives = db_session.query(SlackIntegration).filter(
+                    SlackIntegration.tenant_id == self.tenant_id,
+                    SlackIntegration.is_active == True,
+                ).all()
+                if len(actives) == 1:
+                    integration = actives[0]
+                elif len(actives) > 1:
+                    self.logger.info(
+                        f"[CHN-001] Tenant {self.tenant_id} has {len(actives)} active "
+                        "Slack integrations — skipping auto-registration (pass "
+                        "slack_integration_id explicitly to select one)."
+                    )
+                    return
+
+            if not integration:
+                return
+
+            key = get_slack_encryption_key(db_session)
+            if not key:
+                self.logger.warning("[CHN-001] Slack encryption key not configured — cannot register adapter")
+                return
+            enc = TokenEncryption(key.encode())
+            try:
+                bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+            except Exception as e:
+                self.logger.error(f"[CHN-001] Slack bot_token decrypt failed for integration {integration.id}: {e}")
+                return
+
+            self.channel_registry.register("slack", SlackChannelAdapter(bot_token, self.logger))
+            self.logger.info(
+                f"[CHN-001] Registered Slack adapter (integration_id={integration.id}, workspace={integration.workspace_name})"
+            )
+        except Exception as e:
+            self.logger.warning(f"[CHN-001] Slack adapter registration skipped: {e}")
+
+    def _register_discord_adapter(self, db_session, discord_integration_id):
+        """V060-CHN-001: Register a DiscordChannelAdapter with the registry.
+
+        Resolution order identical to Slack.
+        """
+        try:
+            from models import DiscordIntegration
+            from channels.discord.adapter import DiscordChannelAdapter
+            from hub.security import TokenEncryption
+            from services.encryption_key_service import get_discord_encryption_key
+
+            integration = None
+            if discord_integration_id:
+                integration = db_session.query(DiscordIntegration).filter(
+                    DiscordIntegration.id == discord_integration_id,
+                    DiscordIntegration.is_active == True,
+                ).first()
+            elif self.tenant_id:
+                actives = db_session.query(DiscordIntegration).filter(
+                    DiscordIntegration.tenant_id == self.tenant_id,
+                    DiscordIntegration.is_active == True,
+                ).all()
+                if len(actives) == 1:
+                    integration = actives[0]
+                elif len(actives) > 1:
+                    self.logger.info(
+                        f"[CHN-001] Tenant {self.tenant_id} has {len(actives)} active "
+                        "Discord integrations — skipping auto-registration."
+                    )
+                    return
+
+            if not integration:
+                return
+
+            key = get_discord_encryption_key(db_session)
+            if not key:
+                self.logger.warning("[CHN-001] Discord encryption key not configured — cannot register adapter")
+                return
+            enc = TokenEncryption(key.encode())
+            try:
+                bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+            except Exception as e:
+                self.logger.error(f"[CHN-001] Discord bot_token decrypt failed for integration {integration.id}: {e}")
+                return
+
+            self.channel_registry.register("discord", DiscordChannelAdapter(bot_token, self.logger))
+            self.logger.info(
+                f"[CHN-001] Registered Discord adapter (integration_id={integration.id})"
+            )
+        except Exception as e:
+            self.logger.warning(f"[CHN-001] Discord adapter registration skipped: {e}")
+
     async def route_message(self, message: Dict, trigger_type: str):
         """
         Process a message through the agent and save the run.
@@ -1087,6 +1351,14 @@ class AgentRouter:
         message_timestamp = message.get("timestamp", 0)
         sender_name = message.get("sender_name", "Unknown")
 
+        # V060-CHN-031: Capture inbound Slack thread_ts so any outbound replies
+        # generated during this turn auto-thread under the original message.
+        # Falls back to message["ts"] (the user's own message id) if the user
+        # was not already in a thread — this mirrors the Slack UX where a reply
+        # opens a new thread anchored to the message that triggered the bot.
+        if message.get("channel") == "slack":
+            self._inbound_slack_thread_ts = message.get("thread_ts")
+
         # Phase 4.2: Identify sender using ContactService
         sender = message.get("sender", "")
         if self.contact_service and sender:
@@ -1095,6 +1367,125 @@ class AgentRouter:
                 sender_name = contact.friendly_name
 
         self.logger.info(f"Routing message from {sender_key} (trigger: {trigger_type})")
+
+        # Item 32/33/34: Global emergency stop — blocks ALL channels (WhatsApp, Telegram, Slack, Discord)
+        try:
+            from models import Config as ConfigModel
+            config_record = self.db.query(ConfigModel).first()
+            if config_record and getattr(config_record, 'emergency_stop', False):
+                channel = message.get("channel", "whatsapp")
+                self.logger.warning(f"[EMERGENCY STOP] Blocking {channel} message from {sender_key} — emergency stop is active")
+                return
+        except Exception:
+            pass  # If check fails, continue normal processing
+
+        # Item 38: Circuit breaker queuing — if the channel's CB is OPEN, enqueue
+        # the message instead of processing it immediately.  When the circuit
+        # recovers the queue worker will pick up the deferred messages.
+        #
+        # V060-HLT-003 FIX: DO NOT re-run the CB-enqueue guard when we're
+        # already processing a message that was drained FROM the queue
+        # (trigger_type == "queue"). Otherwise, a still-OPEN CB would cause the
+        # QueueWorker's dispatch to re-enqueue as a NEW row every 500ms, while
+        # marking the claimed item "completed" — an infinite re-queue loop with
+        # unbounded message_queue growth. The QueueWorker itself defers
+        # dispatch while CB is open (see queue_worker._poll_and_dispatch); here
+        # we just guard against self-reentry.
+        if trigger_type == "queue":
+            pass  # skip CB enqueue guard — item was already drained from queue
+        elif os.getenv("TSN_CB_QUEUE_ENABLED", "true").lower() == "true":
+            try:
+                from services.channel_health_service import ChannelHealthService
+                chs = ChannelHealthService.get_instance()
+                if chs is not None:
+                    cb_channel = message.get("channel", "whatsapp")
+                    # Determine instance_id from the router's own context
+                    cb_instance_id = None
+                    if cb_channel == "whatsapp" and self.mcp_instance_id:
+                        cb_instance_id = self.mcp_instance_id
+                    elif cb_channel == "telegram" and self.telegram_instance_id:
+                        cb_instance_id = self.telegram_instance_id
+                    elif cb_channel == "webhook" and self.webhook_instance_id:
+                        cb_instance_id = self.webhook_instance_id
+
+                    if cb_instance_id is not None and chs.is_circuit_open(cb_channel, cb_instance_id):
+                        self.logger.warning(
+                            f"[CB_QUEUE] Circuit breaker OPEN for {cb_channel}/{cb_instance_id} "
+                            f"— queuing message from {sender_key} instead of processing"
+                        )
+                        try:
+                            from services.message_queue_service import MessageQueueService
+                            # Resolve tenant_id and agent_id for the queue entry
+                            _tenant_id = message.get("tenant_id", "default")
+                            if _tenant_id == "default":
+                                if cb_channel == "whatsapp" and self.mcp_instance_id:
+                                    from models import WhatsAppMCPInstance
+                                    _inst = self.db.query(WhatsAppMCPInstance).get(self.mcp_instance_id)
+                                    if _inst:
+                                        _tenant_id = _inst.tenant_id
+                                elif cb_channel == "telegram" and self.telegram_instance_id:
+                                    from models import TelegramBotInstance
+                                    _inst = self.db.query(TelegramBotInstance).get(self.telegram_instance_id)
+                                    if _inst:
+                                        _tenant_id = _inst.tenant_id
+                                elif cb_channel == "webhook" and self.webhook_instance_id:
+                                    from models import WebhookIntegration
+                                    _inst = self.db.query(WebhookIntegration).get(self.webhook_instance_id)
+                                    if _inst:
+                                        _tenant_id = _inst.tenant_id
+
+                            _agent_id = message.get("agent_id")
+                            if not _agent_id:
+                                # Resolve agent from channel instance binding (tenant-scoped)
+                                from models import Agent
+                                _bound = None
+                                if cb_channel == "whatsapp" and self.mcp_instance_id:
+                                    _bound = self.db.query(Agent.id).filter_by(
+                                        whatsapp_integration_id=self.mcp_instance_id, tenant_id=_tenant_id
+                                    ).first()
+                                elif cb_channel == "telegram" and self.telegram_instance_id:
+                                    _bound = self.db.query(Agent.id).filter_by(
+                                        telegram_integration_id=self.telegram_instance_id, tenant_id=_tenant_id
+                                    ).first()
+                                elif cb_channel == "webhook" and self.webhook_instance_id:
+                                    _bound = self.db.query(Agent.id).filter_by(
+                                        webhook_integration_id=self.webhook_instance_id, tenant_id=_tenant_id
+                                    ).first()
+                                if _bound:
+                                    _agent_id = _bound[0]
+                                else:
+                                    self.logger.error(
+                                        f"[CB_QUEUE] No agent bound to {cb_channel}/{cb_instance_id} — cannot queue, falling through"
+                                    )
+                                    # Fall through to normal processing
+                            if _agent_id:
+                                mqs = MessageQueueService(self.db)
+                                mqs.enqueue(
+                                    channel=cb_channel,
+                                    tenant_id=_tenant_id,
+                                    agent_id=int(_agent_id),
+                                    sender_key=sender_key,
+                                    payload={
+                                        "message": message,
+                                        "trigger_type": trigger_type,
+                                        "queued_reason": "circuit_breaker_open",
+                                    },
+                                    priority=0,
+                                )
+                                return  # Do not process — message is safely queued
+                        except Exception as eq:
+                            self.logger.error(f"[CB_QUEUE] Failed to enqueue message: {eq}", exc_info=True)
+                            # Recover session so subsequent DB ops don't hit PendingRollbackError.
+                            # Safe here: no watcher writes are pending at the CB-queue code point
+                            # (only read-only message_cache checks precede this).
+                            try:
+                                self.db.rollback()
+                            except Exception:
+                                pass
+                            # Fall through to normal processing rather than losing the message
+            except Exception as ecb:
+                self.logger.debug(f"[CB_QUEUE] CB check skipped: {ecb}")
+                # Non-fatal — proceed with normal processing
 
         # SAFETY CHECK 1: Age check
         # Warn if message is older than 1 hour (3600 seconds)
@@ -1163,6 +1554,49 @@ class AgentRouter:
             if slash_result and slash_result.get("handled"):
                 self.logger.info(f"[SLASH] Command handled: {message_text[:50]}")
                 return
+
+        # Phase 21: Detect @agent /command pattern in group messages
+        # Handles: @bot /tool nmap quick_scan target=x, @bot /help, etc.
+        if not message_text.startswith('/') and '@' in message_text and '/' in message_text:
+            if hasattr(self, 'contact_service') and self.contact_service:
+                mention_result = self.contact_service.extract_mention_and_command(message_text)
+                if mention_result:
+                    agent_contact, slash_command_text = mention_result
+
+                    # Resolve the agent from the contact
+                    agent = self.db.query(Agent).filter(
+                        Agent.contact_id == agent_contact.id,
+                        Agent.is_active == True
+                    ).first()
+
+                    # Validate override agent belongs to the same tenant
+                    if agent and agent.tenant_id != self.tenant_id:
+                        self.logger.warning(
+                            f"[SLASH-MENTION] Agent {agent.id} tenant mismatch "
+                            f"(agent={agent.tenant_id}, router={self.tenant_id}). Ignoring."
+                        )
+                        agent = None
+
+                    if agent:
+                        self.logger.info(
+                            f"[SLASH-MENTION] Detected @{agent_contact.friendly_name} "
+                            f"+ slash command: {slash_command_text[:50]}"
+                        )
+
+                        # Execute slash command in the context of the mentioned agent
+                        slash_result = await self._handle_slash_command(
+                            sender_key=sender_key,
+                            message_text=slash_command_text,
+                            message=message,
+                            trigger_type=trigger_type,
+                            override_agent_id=agent.id
+                        )
+                        if slash_result and slash_result.get("handled"):
+                            self.logger.info(
+                                f"[SLASH-MENTION] Command handled for agent {agent.id}: "
+                                f"{slash_command_text[:50]}"
+                            )
+                            return
 
         # Phase 8.0: Check for active conversation thread FIRST (highest priority)
         active_thread = self._find_active_conversation_thread(sender)
@@ -1478,7 +1912,6 @@ class AgentRouter:
 
                     # Cleanup temporary file after sending (with delay for upload)
                     try:
-                        import os
                         import asyncio
                         await asyncio.sleep(3)  # Wait for upload to complete
                         if os.path.exists(media_path):
@@ -1556,16 +1989,28 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
         # Phase 21: Sentinel Security Analysis BEFORE memory storage
         # This prevents memory poisoning from blocked messages in WhatsApp/Telegram channels
         tenant_id = self._get_agent_tenant_id(agent_id)
+        sentinel = None  # Will be set by Sentinel check, reused by MemGuard
         if tenant_id:
             try:
                 from services.sentinel_service import SentinelService
-                sentinel = SentinelService(self.db, tenant_id)
+                sentinel = SentinelService(self.db, tenant_id, token_tracker=self.token_tracker)
+
+                # Load skill context so Sentinel knows what behaviors are expected
+                skill_context_str = None
+                try:
+                    from services.skill_context_service import SkillContextService
+                    skill_ctx_service = SkillContextService(self.db)
+                    skill_ctx = skill_ctx_service.get_agent_skill_context(agent_id)
+                    skill_context_str = skill_ctx.get('formatted_context')
+                except Exception as skill_e:
+                    self.logger.warning(f"Failed to load skill context for Sentinel: {skill_e}")
 
                 sentinel_result = await sentinel.analyze_prompt(
                     prompt=message_text,
                     agent_id=agent_id,
                     sender_key=sender_key,
                     source=None,  # User message - no internal source tag
+                    skill_context=skill_context_str,
                 )
 
                 if sentinel_result.is_threat_detected and sentinel_result.action == "blocked":
@@ -1573,8 +2018,21 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         f"🛡️ SENTINEL (WhatsApp/Telegram): Blocking message BEFORE memory storage - "
                         f"{sentinel_result.detection_type}: {sentinel_result.threat_reason}"
                     )
+                    # Audit log the security block
+                    try:
+                        from services.audit_service import log_tenant_event, TenantAuditActions
+                        log_tenant_event(self.db, tenant_id, None,
+                            TenantAuditActions.SECURITY_SENTINEL_BLOCK, "message", None,
+                            {"detection_type": sentinel_result.detection_type,
+                             "threat_score": sentinel_result.threat_score,
+                             "reason": sentinel_result.threat_reason,
+                             "sender": sender_key, "channel": message.get("channel", "whatsapp"),
+                             "agent_id": agent_id},
+                            severity="warning")
+                    except Exception:
+                        pass
                     # Send blocked response and return early (no memory storage = no poisoning)
-                    blocked_response = sentinel_result.response_message or "Message blocked for security reasons."
+                    blocked_response = sentinel_result.threat_reason or "Message blocked for security reasons."
                     recipient = message.get("chat_id") or message.get("sender")
                     channel = message.get("channel", "whatsapp")
                     await self._send_message(
@@ -1590,8 +2048,118 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         f"🛡️ SENTINEL (detect_only): Threat detected but allowing - "
                         f"{sentinel_result.detection_type}"
                     )
+                    # Send threat notification for detect_only/warned threats
+                    try:
+                        config = sentinel.get_effective_config(agent_id)
+                        mcp_api_url = self.config.get("mcp_api_url") if self.config else None
+                        mcp_api_secret = self.config.get("mcp_api_secret") if self.config else None
+                        await sentinel.send_threat_notification(
+                            result=sentinel_result,
+                            config=config,
+                            sender_key=sender_key,
+                            agent_id=agent_id,
+                            mcp_api_url=mcp_api_url,
+                            mcp_api_secret=mcp_api_secret,
+                        )
+                    except Exception as notif_e:
+                        self.logger.warning(f"Failed to send Sentinel notification: {notif_e}")
             except Exception as e:
-                self.logger.warning(f"Sentinel pre-check failed, allowing message: {e}")
+                # BUG-LOG-020 FIX: Configurable fail behavior instead of always fail-open
+                fail_behavior = "open"
+                try:
+                    from models import Config as ConfigModel
+                    cfg = self.db.query(ConfigModel).first()
+                    if cfg:
+                        fail_behavior = getattr(cfg, "sentinel_fail_behavior", None) or "open"
+                except Exception:
+                    pass
+
+                if fail_behavior == "closed":
+                    self.logger.error(
+                        f"🛡️ SENTINEL FAIL-CLOSED: Blocking message due to Sentinel error: {e}"
+                    )
+                    recipient = message.get("chat_id") or message.get("sender")
+                    channel = message.get("channel", "whatsapp")
+                    await self._send_message(
+                        recipient=recipient,
+                        message_text="Message blocked: security analysis unavailable. Please try again later.",
+                        channel=channel,
+                        agent_id=agent_id
+                    )
+                    return
+                else:
+                    self.logger.warning(f"Sentinel pre-check failed, allowing message (fail-open): {e}")
+
+        # MemGuard Layer A: Pre-storage memory poisoning check
+        if tenant_id:
+            try:
+                from services.memguard_service import MemGuardService
+
+                # Reuse Sentinel's effective config for detection settings
+                if not sentinel:
+                    from services.sentinel_service import SentinelService
+                    sentinel = SentinelService(self.db, tenant_id, token_tracker=self.token_tracker)
+
+                effective_config = sentinel.get_effective_config(agent_id)
+                memguard_enabled = effective_config.detection_config.get(
+                    "memory_poisoning", {}
+                ).get("enabled", True)
+
+                if memguard_enabled:
+                    memguard = MemGuardService(self.db, tenant_id)
+                    memguard_result = await memguard.analyze_for_memory_poisoning(
+                        content=message_text,
+                        agent_id=agent_id,
+                        sender_key=sender_key,
+                        config=effective_config,
+                    )
+
+                    if memguard_result.blocked:
+                        self.logger.warning(
+                            f"🛡️ MEMGUARD: Blocking message BEFORE memory storage - "
+                            f"Memory poisoning detected: {memguard_result.reason}"
+                        )
+                        # Audit log the MemGuard block
+                        try:
+                            from services.audit_service import log_tenant_event, TenantAuditActions
+                            log_tenant_event(self.db, tenant_id, None,
+                                TenantAuditActions.SECURITY_MEMGUARD_BLOCK, "message", None,
+                                {"reason": memguard_result.reason,
+                                 "threat_score": getattr(memguard_result, 'threat_score', None),
+                                 "sender": sender_key, "channel": message.get("channel", "whatsapp"),
+                                 "agent_id": agent_id},
+                                severity="warning")
+                        except Exception:
+                            pass
+                        blocked_response = "Message blocked: memory poisoning attempt detected."
+                        recipient = message.get("chat_id") or message.get("sender")
+                        channel = message.get("channel", "whatsapp")
+                        await self._send_message(
+                            recipient=recipient,
+                            message_text=blocked_response,
+                            channel=channel,
+                            agent_id=agent_id
+                        )
+                        return
+                    elif memguard_result.is_poisoning:
+                        self.logger.info(
+                            f"🛡️ MEMGUARD (detect_only): Memory poisoning detected but allowing - "
+                            f"{memguard_result.reason}"
+                        )
+                        # Audit log the MemGuard detect_only warning
+                        try:
+                            from services.audit_service import log_tenant_event, TenantAuditActions
+                            log_tenant_event(self.db, tenant_id, None,
+                                TenantAuditActions.SECURITY_MEMGUARD_BLOCK, "message", None,
+                                {"reason": memguard_result.reason,
+                                 "threat_score": getattr(memguard_result, 'threat_score', None),
+                                 "sender": sender_key, "channel": message.get("channel", "whatsapp"),
+                                 "agent_id": agent_id, "action": "detect_only"},
+                                severity="info")
+                        except Exception:
+                            pass
+            except Exception as e:
+                self.logger.warning(f"MemGuard Layer A check failed, allowing message: {e}")
 
         # Phase 4.8: Add to agent-scoped memory (with automatic fact extraction)
         # Item 10: Contact-based memory support with WhatsApp ID resolution
@@ -1879,6 +2447,9 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             recipient = message.get("chat_id", "")  # Use chat_id for reply
 
             # Phase 7.3: Check if agent has TTS skill enabled
+            # Skip TTS for agent-switch confirmations — these should always be text
+            _tool_used = result.get("tool_used") or ""
+            _skip_tts = _tool_used in ("skill:switch_agent",)
             audio_path = None
             try:
                 tts_skill_config = await self.skill_manager.get_skill_config(
@@ -1888,7 +2459,7 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                 )
 
                 # Note: Use 'is not None' because empty config {} is valid but falsy
-                if tts_skill_config is not None:
+                if tts_skill_config is not None and not _skip_tts:
                     self.logger.info("TTS skill enabled for this agent, converting response to audio")
 
                     # Get TTS skill instance
@@ -1903,7 +2474,8 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         config=tts_skill_config,
                         agent_id=agent_id,
                         sender_key=sender_key,
-                        message_id=message.get("id")
+                        message_id=message.get("id"),
+                        tenant_id=agent_tenant_id
                     )
 
                     if tts_result.success and tts_result.metadata.get("audio_path"):
@@ -1972,7 +2544,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             # WhatsApp MCP needs time to fully upload the audio file
             if audio_path:
                 try:
-                    import os
                     import asyncio
                     # VOICE-003 Fix: Configurable cleanup delay (default 5 seconds)
                     cleanup_delay = float(os.getenv("TTS_CLEANUP_DELAY_SECONDS", "5"))
@@ -2150,13 +2721,14 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             self.db.add(agent_run)
             self.db.commit()
 
-        # Phase 6.11.2: Broadcast agent run completion via WebSocket (fire-and-forget)
+        # Phase 6.11.2 + BUG-310: Broadcast agent run completion via tenant-scoped WebSocket
         try:
             import asyncio
             from app import app
             if hasattr(app.state, 'ws_manager'):
-                # Use create_task for fire-and-forget broadcast (don't block commit)
-                asyncio.create_task(app.state.ws_manager.broadcast({
+                # BUG-310: Resolve tenant_id so broadcast only reaches the owning tenant
+                run_tenant_id = self._get_agent_tenant_id(agent_id)
+                broadcast_data = {
                     "type": "agent_run_complete",
                     "data": {
                         "agent_id": agent_id,
@@ -2164,7 +2736,19 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         "status": agent_run.status,
                         "timestamp": datetime.utcnow().isoformat() + 'Z'
                     }
-                }))
+                }
+                if run_tenant_id:
+                    # Tenant-scoped delivery (secure)
+                    asyncio.create_task(
+                        app.state.ws_manager.broadcast_to_tenant(broadcast_data, run_tenant_id)
+                    )
+                else:
+                    # Fallback: agent has no tenant_id (legacy/orphan agent)
+                    # Log warning but do NOT broadcast globally to avoid cross-tenant leak
+                    self.logger.warning(
+                        f"Agent {agent_id} has no tenant_id — skipping WebSocket broadcast "
+                        f"to prevent cross-tenant data leakage (BUG-310)"
+                    )
         except Exception as e:
             self.logger.error(f"Error broadcasting agent run: {e}", exc_info=True)
 
@@ -2884,6 +3468,8 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 # Instantiate skill (with parameters if needed)
                 if skill_type == "knowledge_sharing":
                     skill_instance = skill_class(self.db, agent_id)
+                elif skill_type == "okg_term_memory":
+                    skill_instance = skill_class(db=self.db, agent_id=agent_id)
                 else:
                     skill_instance = skill_class()
 
@@ -3140,7 +3726,8 @@ Current turn: {thread.current_turn} of {thread.max_turns}
         sender_key: str,
         message_text: str,
         message: Dict,
-        trigger_type: str
+        trigger_type: str,
+        override_agent_id: Optional[int] = None
     ) -> Optional[Dict]:
         """
         Phase 16: Handle slash commands across all channels (WhatsApp, Playground, etc).
@@ -3158,6 +3745,8 @@ Current turn: {thread.current_turn} of {thread.max_turns}
             message_text: Full message text starting with /
             message: Original message dict
             trigger_type: Channel type (dm, group, etc.)
+            override_agent_id: If provided, use this agent instead of session lookup
+                              (used by @mention + /command pattern in groups)
 
         Returns:
             Dict with handled=True if command was executed, None otherwise
@@ -3175,23 +3764,29 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 channel = "playground"
 
             # Get agent for this user (for agent-specific commands)
-            # First, try to get from saved session
+            # Use override from @mention if provided (Phase 21)
             from models import UserAgentSession
             sender = message.get("sender", "")
 
-            agent_id = None
-            try:
-                saved_session = self.db.query(UserAgentSession).filter(
-                    UserAgentSession.user_identifier == sender_key
-                ).first()
-                if saved_session:
-                    agent_id = saved_session.agent_id
-            except Exception:
-                pass
+            agent_id = override_agent_id  # Use override from @mention if provided
+
+            # If no override, try to get from saved session
+            if not agent_id:
+                try:
+                    saved_session = self.db.query(UserAgentSession).filter(
+                        UserAgentSession.user_identifier == sender_key
+                    ).first()
+                    if saved_session:
+                        agent_id = saved_session.agent_id
+                except Exception:
+                    pass
 
             # If no saved session, try to get default agent
             if not agent_id:
-                default_agent = self.db.query(Agent).filter(Agent.is_default == True).first()
+                default_query = self.db.query(Agent).filter(Agent.is_default == True)
+                if self.tenant_id:
+                    default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
+                default_agent = default_query.first()
                 if default_agent:
                     agent_id = default_agent.id
 
@@ -3201,6 +3796,13 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
                 if agent and agent.tenant_id:
                     tenant_id = agent.tenant_id
+
+            # Feature #12: Check slash command permissions before processing
+            from services.slash_command_permission_service import SlashCommandPermissionService
+            perm_service = SlashCommandPermissionService(self.db)
+            if not perm_service.is_allowed(sender_key, tenant_id, channel):
+                self.logger.info(f"[SLASH] Permission denied for {sender_key} (tenant={tenant_id})")
+                return None  # Silently skip - message processed as normal text
 
             # Initialize slash command service
             slash_service = SlashCommandService(self.db)

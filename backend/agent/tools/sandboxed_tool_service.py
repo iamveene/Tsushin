@@ -242,13 +242,16 @@ class SandboxedToolService:
                 raise ValueError(f"Missing required parameter: {param.parameter_name}")
 
         # Render template (replace both <param_name> and {param_name} with values)
+        # Shell-escape parameter values to prevent command injection
+        import shlex
         rendered = command.command_template
         for param_name, param_value in param_map.items():
             # Support both <param_name> and {param_name} placeholder formats
+            safe_value = shlex.quote(str(param_value))
             angle_placeholder = f"<{param_name}>"
             curly_placeholder = f"{{{param_name}}}"
-            rendered = rendered.replace(angle_placeholder, str(param_value))
-            rendered = rendered.replace(curly_placeholder, str(param_value))
+            rendered = rendered.replace(angle_placeholder, safe_value)
+            rendered = rendered.replace(curly_placeholder, safe_value)
 
         # Check for unresolved placeholders
         has_angle = '<' in rendered and '>' in rendered

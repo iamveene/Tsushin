@@ -2,11 +2,12 @@
 Migration: Add Custom Tools Permissions
 Phase 9.3: Custom Tools Hub RBAC permissions
 
-This migration adds tools.manage and tools.execute permissions to existing databases
+This migration adds tools.read, tools.manage, and tools.execute permissions to existing databases
 and assigns them to the appropriate roles:
-- owner: tools.manage, tools.execute
-- admin: tools.manage, tools.execute
-- member: tools.execute only
+- owner: tools.read, tools.manage, tools.execute
+- admin: tools.read, tools.manage, tools.execute
+- member: tools.read, tools.execute
+- readonly: tools.read
 
 Run: python -m migrations.add_tools_permissions
 """
@@ -33,8 +34,24 @@ def migrate(db_path: str):
         print("[Migration] Adding custom tools permissions...")
 
         # Check if permissions already exist
+        existing_read = session.query(Permission).filter(Permission.name == "tools.read").first()
         existing_manage = session.query(Permission).filter(Permission.name == "tools.manage").first()
         existing_execute = session.query(Permission).filter(Permission.name == "tools.execute").first()
+
+        # Create tools.read permission if not exists
+        if not existing_read:
+            perm_read = Permission(
+                name="tools.read",
+                resource="tools",
+                action="read",
+                description="View custom tools and their configurations"
+            )
+            session.add(perm_read)
+            session.flush()
+            print("[Migration] Created tools.read permission")
+        else:
+            perm_read = existing_read
+            print("[Migration] tools.read permission already exists")
 
         # Create tools.manage permission if not exists
         if not existing_manage:
@@ -70,12 +87,14 @@ def migrate(db_path: str):
         owner_role = session.query(Role).filter(Role.name == "owner").first()
         admin_role = session.query(Role).filter(Role.name == "admin").first()
         member_role = session.query(Role).filter(Role.name == "member").first()
+        readonly_role = session.query(Role).filter(Role.name == "readonly").first()
 
         # Assign permissions to roles
         permissions_to_assign = [
-            (owner_role, [perm_manage, perm_execute]),
-            (admin_role, [perm_manage, perm_execute]),
-            (member_role, [perm_execute]),  # Members can execute but not manage
+            (owner_role, [perm_read, perm_manage, perm_execute]),
+            (admin_role, [perm_read, perm_manage, perm_execute]),
+            (member_role, [perm_read, perm_execute]),  # Members can read and execute but not manage
+            (readonly_role, [perm_read]),  # Read-only can view tools
         ]
 
         for role, perms in permissions_to_assign:

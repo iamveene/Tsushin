@@ -65,13 +65,13 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
   }
 
   if (loading && knowledge.length === 0) {
-    return <div className="p-8 text-center text-gray-600 dark:text-gray-400">Loading shared knowledge...</div>
+    return <div className="p-8 text-center text-tsushin-slate">Loading shared knowledge...</div>
   }
 
   return (
     <div className="space-y-6">
       {/* Header Info */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 border dark:border-gray-700 border-blue-200 dark:border-blue-700 rounded-lg p-4">
+      <div className="bg-blue-50 dark:bg-blue-900/20 border border-tsushin-border border-blue-200 dark:border-blue-700 rounded-lg p-4">
         <h3 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2 inline-flex items-center gap-1"><BookOpenIcon size={14} /> Shared Knowledge Pool</h3>
         <p className="text-sm text-blue-700 dark:text-blue-300">
           This is the cross-agent knowledge sharing system. Facts and information extracted from conversations
@@ -82,21 +82,21 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
       {/* Stats Summary */}
       {stats && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-4">
-            <div className="text-sm text-gray-600 dark:text-gray-400">Total Shared</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats.total_shared}</div>
+          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-4">
+            <div className="text-sm text-tsushin-slate">Total Shared</div>
+            <div className="text-2xl font-bold text-white">{stats.total_shared}</div>
           </div>
-          <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-4">
-            <div className="text-sm text-gray-600 dark:text-gray-400">Topics</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{Object.keys(stats.by_topic).length}</div>
+          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-4">
+            <div className="text-sm text-tsushin-slate">Topics</div>
+            <div className="text-2xl font-bold text-white">{Object.keys(stats.by_topic).length}</div>
           </div>
-          <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-4">
-            <div className="text-sm text-gray-600 dark:text-gray-400">Sharing Agents</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats.sharing_agents}</div>
+          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-4">
+            <div className="text-sm text-tsushin-slate">Sharing Agents</div>
+            <div className="text-2xl font-bold text-white">{stats.sharing_agents}</div>
           </div>
-          <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-4">
-            <div className="text-sm text-gray-600 dark:text-gray-400">Access Levels</div>
-            <div className="text-sm font-medium text-gray-900 dark:text-gray-100 mt-2">
+          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-4">
+            <div className="text-sm text-tsushin-slate">Access Levels</div>
+            <div className="text-sm font-medium text-white mt-2">
               {Object.entries(stats.by_access_level).map(([level, count]) => (
                 <div key={level} className="flex justify-between">
                   <span className="capitalize">{level}:</span>
@@ -109,17 +109,17 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
       )}
 
       {/* Filters and Search */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-4">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Topic Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-tsushin-fog mb-2">
               Filter by Topic
             </label>
             <select
               value={selectedTopic}
               onChange={(e) => setSelectedTopic(e.target.value)}
-              className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
             >
               <option value="">All Topics</option>
               {topics.map(topic => (
@@ -130,7 +130,7 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
 
           {/* Search */}
           <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-tsushin-fog mb-2">
               Search Knowledge
             </label>
             <div className="flex gap-2">
@@ -140,11 +140,11 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
                 placeholder="Search for facts, information, or topics..."
-                className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                className="flex-1 px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
               />
               <button
                 onClick={handleSearch}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="btn-primary px-4 py-2 rounded-md"
               >
                 Search
               </button>
@@ -153,7 +153,7 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
                   setSearchQuery('')
                   loadData()
                 }}
-                className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700"
+                className="px-4 py-2 bg-tsushin-elevated text-white rounded-md hover:bg-tsushin-surface"
               >
                 Clear
               </button>
@@ -163,28 +163,28 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
       </div>
 
       {/* Knowledge List */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg">
-        <div className="px-6 py-4 border-b dark:border-gray-700">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg">
+        <div className="px-6 py-4 border-b border-tsushin-border">
+          <h3 className="text-lg font-semibold text-white">
             Shared Knowledge ({knowledge.length})
           </h3>
         </div>
 
         {knowledge.length === 0 ? (
           <div className="p-12 text-center">
-            <p className="text-gray-500 dark:text-gray-400 mb-2">No shared knowledge found</p>
-            <p className="text-sm text-gray-400 dark:text-gray-500">
+            <p className="text-tsushin-muted mb-2">No shared knowledge found</p>
+            <p className="text-sm text-tsushin-muted">
               Enable the Knowledge Sharing skill on agents to start building the shared knowledge pool
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-gray-200 dark:divide-gray-700">
+          <div className="divide-y divide-tsushin-border">
             {knowledge.map((item) => (
-              <div key={item.id} className="px-6 py-4 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+              <div key={item.id} className="px-6 py-4 hover:bg-tsushin-surface/50">
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
                     {/* Content Preview */}
-                    <div className="text-sm text-gray-900 dark:text-gray-100 mb-2">
+                    <div className="text-sm text-white mb-2">
                       {expandedId === item.id ? (
                         <div className="whitespace-pre-wrap">{item.content}</div>
                       ) : (
@@ -193,13 +193,13 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
                     </div>
 
                     {/* Metadata */}
-                    <div className="flex flex-wrap gap-2 text-xs text-gray-600 dark:text-gray-400">
+                    <div className="flex flex-wrap gap-2 text-xs text-tsushin-slate">
                       {item.topic && (
                         <span className="px-2 py-1 bg-purple-100 dark:bg-purple-800/30 text-purple-700 dark:text-purple-300 rounded inline-flex items-center gap-1">
                           <FolderIcon size={12} /> {item.topic}
                         </span>
                       )}
-                      <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded">
+                      <span className="px-2 py-1 bg-tsushin-elevated text-tsushin-fog rounded">
                         Agent #{item.shared_by_agent}
                       </span>
                       {item.meta_data?.confidence && (
@@ -212,16 +212,16 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
                           from: {item.meta_data.source}
                         </span>
                       )}
-                      <span className="text-gray-500 dark:text-gray-500">
+                      <span className="text-tsushin-muted">
                         {formatDateTimeFull(item.created_at)}
                       </span>
                     </div>
 
                     {/* Expanded Meta Data */}
                     {expandedId === item.id && item.meta_data && Object.keys(item.meta_data).length > 0 && (
-                      <div className="mt-3 p-3 bg-gray-100 dark:bg-gray-900 rounded border dark:border-gray-700">
-                        <div className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Metadata:</div>
-                        <pre className="text-xs text-gray-600 dark:text-gray-400 overflow-auto">
+                      <div className="mt-3 p-3 bg-tsushin-ink rounded border border-tsushin-border">
+                        <div className="text-xs font-medium text-tsushin-fog mb-2">Metadata:</div>
+                        <pre className="text-xs text-tsushin-slate overflow-auto">
                           {JSON.stringify(item.meta_data, null, 2)}
                         </pre>
                       </div>
@@ -231,7 +231,7 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
                   {/* Toggle Button */}
                   <button
                     onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}
-                    className="ml-4 px-3 py-1 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
+                    className="ml-4 px-3 py-1 text-sm text-teal-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
                   >
                     {expandedId === item.id ? 'Collapse' : 'Expand'}
                   </button>
@@ -244,18 +244,18 @@ export default function SharedKnowledgeViewer({ agentId }: Props) {
 
       {/* Topic Distribution */}
       {stats && Object.keys(stats.by_topic).length > 0 && (
-        <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Knowledge by Topic</h3>
+        <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
+          <h3 className="text-lg font-semibold text-white mb-4">Knowledge by Topic</h3>
           <div className="space-y-3">
             {Object.entries(stats.by_topic)
               .sort(([, a], [, b]) => b - a)
               .map(([topic, count]) => (
                 <div key={topic}>
                   <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium text-gray-700 dark:text-gray-300">{topic}</span>
-                    <span className="text-gray-600 dark:text-gray-400">{count} items</span>
+                    <span className="font-medium text-tsushin-fog">{topic}</span>
+                    <span className="text-tsushin-slate">{count} items</span>
                   </div>
-                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                  <div className="w-full bg-tsushin-elevated rounded-full h-2">
                     <div
                       className="bg-blue-600 h-2 rounded-full"
                       style={{ width: `${(count / stats.total_shared) * 100}%` }}

@@ -1,0 +1,300 @@
+# =============================================================================
+# Tsushin — GKE Build & Deploy Pipeline
+# =============================================================================
+# Triggers: workflow_dispatch only (manual)
+# Push triggers disabled until GCP infrastructure is configured.
+# Re-enable by adding push.branches: [main, develop] to the on: block.
+# =============================================================================
+
+name: GKE Build & Deploy
+
+on:
+  # Only triggers manually or when GCP infra is ready
+  # Remove workflow_dispatch-only restriction once GCP project is configured
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - prod
+
+# Prevent concurrent deploys to the same environment
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  # Artifact Registry
+  GAR_LOCATION: ${{ vars.GAR_LOCATION || 'us-central1' }}
+  GAR_REPOSITORY: tsushin
+  BACKEND_IMAGE: backend
+  FRONTEND_IMAGE: frontend
+  HELM_CHART_PATH: k8s/tsushin
+
+jobs:
+  # ===========================================================================
+  # Job 1: Lint & Test
+  # ===========================================================================
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -- Backend tests -------------------------------------------------------
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements-base.txt -r requirements-app.txt -r requirements-optional.txt -r requirements-phase4.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run backend tests
+        run: |
+          cd backend
+          python -m pytest tests/ -v --tb=short
+        env:
+          DATABASE_URL: "sqlite:///test.db"
+          JWT_SECRET_KEY: "test-secret-key-for-ci"
+          TSN_LOG_LEVEL: "WARNING"
+
+      # -- Frontend lint -------------------------------------------------------
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Lint frontend
+        run: |
+          cd frontend
+          npm run lint
+
+  # ===========================================================================
+  # Job 2: Build & Push Docker images to Artifact Registry
+  # ===========================================================================
+  build-and-push:
+    name: Build & Push Images
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # Required for Workload Identity Federation
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: meta
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          APP_VERSION=$(grep '^appVersion' k8s/tsushin/Chart.yaml | awk '{print $2}' | tr -d '"')
+          TAG="${APP_VERSION}-${SHORT_SHA}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Image tag: ${TAG}"
+
+      # -- GCP Auth via Workload Identity Federation --------------------------
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.GAR_LOCATION }}-docker.pkg.dev --quiet
+
+      # -- Build & push backend -----------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.BACKEND_IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.BACKEND_IMAGE }}:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+          platforms: linux/amd64
+
+      # -- Build & push frontend -----------------------------------------------
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.FRONTEND_IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.FRONTEND_IMAGE }}:latest
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://${{ vars.PROD_DOMAIN || 'app.tsushin.example.com' }}
+            NEXT_PUBLIC_DEV_MODE=false
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          platforms: linux/amd64
+
+  # ===========================================================================
+  # Job 3: Deploy to Dev (auto on develop push)
+  # ===========================================================================
+  deploy-dev:
+    name: Deploy to Dev
+    needs: build-and-push
+    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'dev')
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.GKE_CLUSTER_DEV }}
+          location: ${{ secrets.GKE_ZONE_DEV }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.16.3"
+
+      - name: Deploy to dev via Helm
+        run: |
+          helm upgrade --install tsushin ${{ env.HELM_CHART_PATH }} \
+            --namespace tsushin \
+            --create-namespace \
+            -f ${{ env.HELM_CHART_PATH }}/values.yaml \
+            -f ${{ env.HELM_CHART_PATH }}/values-dev.yaml \
+            --set global.project=${{ secrets.GCP_PROJECT_ID }} \
+            --set global.region=${{ env.GAR_LOCATION }} \
+            --set backend.image.repository=${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.BACKEND_IMAGE }} \
+            --set backend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set frontend.image.repository=${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.FRONTEND_IMAGE }} \
+            --set frontend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set cloudsql.instanceConnectionName=${{ secrets.CLOUDSQL_INSTANCE_DEV }} \
+            --set ingress.host=${{ vars.DEV_DOMAIN || 'dev.tsushin.example.com' }} \
+            --atomic \
+            --wait \
+            --timeout 10m
+
+      - name: Verify deployment
+        run: |
+          kubectl -n tsushin rollout status deployment/tsushin-backend --timeout=300s
+          kubectl -n tsushin rollout status deployment/tsushin-frontend --timeout=300s
+          echo "Dev deployment successful: ${{ needs.build-and-push.outputs.image-tag }}"
+
+  # ===========================================================================
+  # Job 4: Deploy to Prod (manual approval on main push)
+  # ===========================================================================
+  deploy-prod:
+    name: Deploy to Prod
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
+    runs-on: ubuntu-latest
+    environment: prod   # Requires manual approval via GitHub Environment protection rules
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.GKE_CLUSTER_PROD }}
+          location: ${{ secrets.GKE_ZONE_PROD }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.16.3"
+
+      - name: Deploy to prod via Helm
+        run: |
+          helm upgrade --install tsushin ${{ env.HELM_CHART_PATH }} \
+            --namespace tsushin \
+            --create-namespace \
+            -f ${{ env.HELM_CHART_PATH }}/values.yaml \
+            -f ${{ env.HELM_CHART_PATH }}/values-prod.yaml \
+            --set global.project=${{ secrets.GCP_PROJECT_ID }} \
+            --set global.region=${{ env.GAR_LOCATION }} \
+            --set backend.image.repository=${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.BACKEND_IMAGE }} \
+            --set backend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set frontend.image.repository=${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.FRONTEND_IMAGE }} \
+            --set frontend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set cloudsql.instanceConnectionName=${{ secrets.CLOUDSQL_INSTANCE_PROD }} \
+            --set ingress.host=${{ vars.PROD_DOMAIN || 'app.tsushin.example.com' }} \
+            --atomic \
+            --wait \
+            --timeout 10m
+
+      - name: Verify deployment
+        run: |
+          kubectl -n tsushin rollout status deployment/tsushin-backend --timeout=300s
+          kubectl -n tsushin rollout status deployment/tsushin-frontend --timeout=300s
+          echo "Production deployment successful: ${{ needs.build-and-push.outputs.image-tag }}"
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed — rolling back..."
+          helm rollback tsushin --namespace tsushin --wait --timeout 5m
+          echo "Rollback complete."

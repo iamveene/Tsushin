@@ -13,12 +13,13 @@ The Shell Beacon connects to a Tsushin backend server and executes shell command
 
 ## Features
 
-- 🔄 **HTTP Polling** - Reliable polling-based command retrieval
+- 🔄 **HTTP Polling + WebSocket** - Polling by default, with optional real-time WebSocket mode
 - 📦 **Stacked Execution** - Execute multiple commands in sequence with `cd` tracking
 - 🔐 **Secure API Keys** - SHA-256 hashed API key authentication
 - 📁 **Configuration** - YAML config file, environment variables, or CLI arguments
 - 📝 **Logging** - File logging with rotation
 - 🔄 **Auto-Update** - Self-update capability from server
+- 🔁 **Persistence Helpers** - Install, remove, or inspect auto-start persistence per OS
 - 🛑 **Graceful Shutdown** - Proper signal handling (SIGTERM, SIGINT)
 - 🔁 **Exponential Backoff** - Smart reconnection on failures
 
@@ -28,7 +29,8 @@ The Shell Beacon connects to a Tsushin backend server and executes shell command
 
 ```bash
 # Download from Tsushin server
-curl -o tsushin_beacon.zip https://your-server.com/api/shell/beacon/download
+curl -H "X-API-Key: shb_your_key_here" -o tsushin_beacon.zip \
+  https://your-server.com/api/shell/beacon/download
 unzip tsushin_beacon.zip
 cd shell_beacon
 pip install -r requirements.txt
@@ -38,8 +40,8 @@ pip install -r requirements.txt
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/tsushin.git
-cd tsushin/backend/shell_beacon
+git clone https://github.com/iamveene/Tsushin.git
+cd Tsushin/backend/shell_beacon
 pip install -r requirements.txt
 ```
 
@@ -55,10 +57,12 @@ server:
   api_key: "shb_your_api_key_here"
 
 connection:
+  mode: "http"
   poll_interval: 5
+  heartbeat_interval: 15
   reconnect_delay: 5
   max_reconnect_delay: 300
-  request_timeout: 30
+  request_timeout: 10
 
 execution:
   shell: "/bin/bash"
@@ -111,7 +115,8 @@ python run.py \
 
 ```bash
 # Download and extract to /tmp
-curl -L "https://your-server.com/api/shell/beacon/download" -o beacon.zip
+curl -L -H "X-API-Key: shb_your_key_here" \
+  "https://your-server.com/api/shell/beacon/download" -o beacon.zip
 unzip beacon.zip
 
 # CORRECT: Run from parent directory (/tmp in this case)
@@ -174,10 +179,12 @@ python run.py
 ## CLI Options
 
 ```
-usage: tsushin-beacon [-h] [-s URL] [-k KEY] [-p SECONDS] [--shell PATH]
+usage: tsushin-beacon [-h] [-s URL] [-k KEY] [-m {http,websocket}]
+                      [-p SECONDS] [--heartbeat-interval SECONDS] [--shell PATH]
                       [--timeout SECONDS] [--working-dir PATH]
                       [--log-level {DEBUG,INFO,WARNING,ERROR}]
                       [--log-file PATH] [-c FILE] [--no-auto-update]
+                      [--persistence {install,uninstall,status}] [--system]
                       [-v] [--dump-config]
 
 Tsushin Shell Beacon - Remote Command Execution Agent
@@ -187,7 +194,9 @@ Server Options:
   -k, --api-key KEY     Beacon API key (starts with 'shb_')
 
 Connection Options:
+  -m, --mode            Connection mode: http or websocket
   -p, --poll-interval   Polling interval in seconds (default: 5)
+  --heartbeat-interval  WebSocket heartbeat interval in seconds (default: 15)
 
 Execution Options:
   --shell PATH          Shell to use (default: /bin/bash)
@@ -201,6 +210,8 @@ Logging Options:
 Other Options:
   -c, --config FILE     Configuration file path
   --no-auto-update      Disable automatic updates
+  --persistence ACTION  Manage auto-start persistence (install, uninstall, status)
+  --system              Use system-level persistence (requires admin/root privileges)
   -v, --version         Show version and exit
   --dump-config         Dump effective configuration and exit
 ```
@@ -351,11 +362,11 @@ pytest tests/test_shell_beacon.py -v
 
 ```bash
 # Start local Tsushin backend
-docker-compose up -d backend
+docker compose up -d backend
 
 # Run beacon with debug logging
 python -m shell_beacon \
-  --server http://localhost:8000/api/shell \
+  --server http://localhost:8081/api/shell \
   --api-key shb_test_key \
   --log-level DEBUG
 ```

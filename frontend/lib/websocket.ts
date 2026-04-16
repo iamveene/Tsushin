@@ -19,7 +19,6 @@ interface WebSocketMessage {
 }
 
 export class PlaygroundWebSocket {
-  private token: string
   private ws: WebSocket | null = null
   private connectionState: ConnectionState = 'disconnected'
   private handlers: Map<string, Function[]> = new Map()
@@ -31,9 +30,9 @@ export class PlaygroundWebSocket {
   private pingInterval: ReturnType<typeof setInterval> | null = null
   private pingIntervalMs: number = 30000 // 30 seconds
 
-  constructor(token: string) {
-    this.token = token
-    console.log('[WebSocket] Instance created with token:', !!token)
+  constructor() {
+    // SEC-005 Phase 3: No token needed — auth via httpOnly cookie on WS upgrade
+    console.log('[WebSocket] Instance created (cookie auth)')
   }
 
   private getWebSocketUrl(): string {
@@ -66,21 +65,10 @@ export class PlaygroundWebSocket {
       this.ws = new WebSocket(url)
 
       this.ws.onopen = () => {
-        console.log('[WebSocket] Connection established, sending auth message...')
+        // SEC-005 Phase 3: httpOnly cookie is sent automatically with WS upgrade.
+        // No first-message auth needed — backend authenticates from cookie.
+        console.log('[WebSocket] Connection established (cookie auth)')
         this.setConnectionState('authenticating')
-
-        // HIGH-001 FIX: Send token in first message after connection (secure method)
-        // This prevents token from appearing in browser history, server logs, and referrer headers
-        try {
-          this.ws?.send(JSON.stringify({
-            type: 'auth',
-            token: this.token
-          }))
-          console.log('[WebSocket] Auth message sent')
-        } catch (err) {
-          console.error('[WebSocket] Failed to send auth message:', err)
-          this.setConnectionState('error')
-        }
       }
 
       this.ws.onmessage = (event) => {

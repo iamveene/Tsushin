@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 import settings
 from models_rbac import User, Tenant, TenantSSOConfig, UserRole, Role
 from models import GoogleOAuthCredentials
-from auth_utils import create_access_token
+from auth_utils import create_access_token, hash_token
 from hub.security import TokenEncryption, OAuthStateManager
 
 logger = logging.getLogger(__name__)
@@ -394,8 +394,8 @@ class GoogleSSOService:
         Raises:
             GoogleSSOError: If user cannot be created/found
         """
-        # Try to find by Google ID first
-        user = self.db.query(User).filter(User.google_id == google_id).first()
+        # Try to find by Google ID first (exclude deleted users)
+        user = self.db.query(User).filter(User.google_id == google_id, User.deleted_at.is_(None)).first()
         if user:
             # Update profile info
             user.avatar_url = avatar_url
@@ -405,8 +405,8 @@ class GoogleSSOService:
             self.db.commit()
             return user, False
 
-        # Try to find by email
-        user = self.db.query(User).filter(User.email == email).first()
+        # Try to find by email (exclude deleted users)
+        user = self.db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
         if user:
             # Link Google account to existing user
             user.google_id = google_id
@@ -421,8 +421,9 @@ class GoogleSSOService:
         # Handle invitation
         if invitation_token:
             from models_rbac import UserInvitation
+            # BUG-071 FIX: Hash token for lookup (stored as SHA-256)
             invitation = self.db.query(UserInvitation).filter(
-                UserInvitation.invitation_token == invitation_token,
+                UserInvitation.invitation_token == hash_token(invitation_token),
                 UserInvitation.accepted_at.is_(None),
                 UserInvitation.expires_at > datetime.utcnow(),
             ).first()
@@ -584,6 +585,9 @@ class GoogleSSOService:
             role_name = role.name if role else None
 
         # Generate JWT token
+        pwd_ts = None
+        if user.password_changed_at:
+            pwd_ts = int(user.password_changed_at.timestamp())
         token_data = {
             "sub": str(user.id),
             "email": user.email,
@@ -591,6 +595,7 @@ class GoogleSSOService:
             "is_global_admin": user.is_global_admin,
             "role": role_name,
             "auth_provider": "google",
+            "pwd_ts": pwd_ts,
         }
         jwt_token = create_access_token(token_data)
 

@@ -14,7 +14,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
   Legend,
 } from 'recharts'
 import {
@@ -23,6 +22,7 @@ import {
   CHART_GRADIENTS,
   TOOLTIP_STYLE,
 } from './chartTheme'
+import ResponsiveChartFrame from './ResponsiveChartFrame'
 
 interface AreaChartSeries {
   key: string
@@ -30,8 +30,11 @@ interface AreaChartSeries {
   color: keyof typeof CHART_GRADIENTS | string
 }
 
+type AreaChartDatumValue = string | number | null | undefined
+type AreaChartDatum = Record<string, AreaChartDatumValue>
+
 interface AreaChartProps {
-  data: Record<string, any>[]
+  data: AreaChartDatum[]
   series: AreaChartSeries[]
   xAxisKey: string
   height?: number
@@ -43,14 +46,35 @@ interface AreaChartProps {
   className?: string
 }
 
+interface TooltipEntry {
+  color: string
+  name: string
+  value: number
+}
+
+interface CustomTooltipProps {
+  active?: boolean
+  label?: string
+  payload?: TooltipEntry[]
+}
+
+interface LegendEntry {
+  color: string
+  value: string
+}
+
+interface CustomLegendProps {
+  payload?: LegendEntry[]
+}
+
 // Custom tooltip
-const CustomTooltip = ({ active, payload, label }: any) => {
+const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   if (!active || !payload || !payload.length) return null
 
   return (
     <div style={TOOLTIP_STYLE}>
       <div className="text-tsushin-slate text-xs mb-2">{label}</div>
-      {payload.map((entry: any, index: number) => (
+      {payload.map((entry, index) => (
         <div key={index} className="flex items-center gap-2 text-sm">
           <div
             className="w-2.5 h-2.5 rounded-full"
@@ -67,12 +91,12 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 }
 
 // Custom legend
-const CustomLegend = ({ payload }: any) => {
+const CustomLegend = ({ payload }: CustomLegendProps) => {
   if (!payload) return null
 
   return (
     <div className="flex justify-center gap-6 mt-2">
-      {payload.map((entry: any, index: number) => (
+      {payload.map((entry, index) => (
         <div key={index} className="flex items-center gap-2 text-xs">
           <div
             className="w-2.5 h-2.5 rounded-full"
@@ -117,14 +141,16 @@ export default function AreaChart({
   }
 
   return (
-    <div className={className} style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
+    <ResponsiveChartFrame className={className} height={height}>
+      {({ height: chartHeight, width: chartWidth }) => (
         <RechartsAreaChart
           data={data}
+          width={chartWidth}
+          height={chartHeight}
           margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
         >
           <defs>
-            {series.map((s, index) => {
+            {series.map((s) => {
               const gradientKey = s.color as keyof typeof CHART_GRADIENTS
               const gradient = CHART_GRADIENTS[gradientKey] || {
                 start: `${s.color}66`,
@@ -192,7 +218,7 @@ export default function AreaChart({
             />
           ))}
         </RechartsAreaChart>
-      </ResponsiveContainer>
-    </div>
+      )}
+    </ResponsiveChartFrame>
   )
 }

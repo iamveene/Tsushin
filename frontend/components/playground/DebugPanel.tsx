@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect } from 'react'
+import { authenticatedFetch } from '@/lib/client'
 import {
   BugIcon,
   BotIcon,
@@ -75,13 +76,8 @@ export default function DebugPanel({ agentId }: DebugPanelProps) {
     setError(null)
 
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/debug/${agentId}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-          }
-        }
+      const response = await authenticatedFetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/debug/${agentId}`
       )
 
       if (response.ok) {
@@ -136,7 +132,7 @@ export default function DebugPanel({ agentId }: DebugPanelProps) {
   }
 
   return (
-    <div className="h-full flex flex-col bg-[#0d0d14]">
+    <div className="h-full flex flex-col bg-tsushin-deep">
       {/* Header */}
       <div className="px-4 py-3 border-b border-white/[0.06]">
         <div className="flex items-center justify-between">
@@ -326,7 +322,7 @@ export default function DebugPanel({ agentId }: DebugPanelProps) {
                           {Object.keys(call.parameters).length > 0 && (
                             <div>
                               <label className="text-[10px] text-white/40 uppercase tracking-wider block mb-1">Parameters</label>
-                              <pre className="text-xs text-white/70 bg-white/[0.02] rounded-lg p-2 font-mono overflow-auto">
+                              <pre className="text-xs text-white/70 bg-white/[0.02] rounded-lg p-2 font-mono overflow-x-auto break-all whitespace-pre-wrap max-w-full">
                                 {JSON.stringify(call.parameters, null, 2)}
                               </pre>
                             </div>

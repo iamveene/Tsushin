@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 
 import settings
 from db import get_db as get_session
-from auth_dependencies import TenantContext, get_tenant_context as get_current_tenant_context
+from auth_dependencies import TenantContext, get_tenant_context as get_current_tenant_context, require_permission
+from models_rbac import User
 from models import (
     GoogleOAuthCredentials,
     GmailIntegration,
@@ -52,11 +53,12 @@ class GoogleCredentialsCreate(BaseModel):
 
 class GoogleCredentialsResponse(BaseModel):
     """Response for Google OAuth credentials."""
-    id: int
-    tenant_id: str
-    client_id: str
-    redirect_uri: Optional[str]
-    created_at: datetime
+    configured: bool = True
+    id: Optional[int] = None
+    tenant_id: Optional[str] = None
+    client_id: Optional[str] = None
+    redirect_uri: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -72,6 +74,7 @@ class IntegrationResponse(BaseModel):
     is_active: bool
     authorized_at: datetime
     health_status: str
+    health_status_reason: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -118,32 +121,42 @@ def get_encryption_key(db: Session) -> str:
 @router.get("/credentials", response_model=GoogleCredentialsResponse)
 async def get_credentials(
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """
     Get Google OAuth credentials for the tenant.
 
     Returns the configured Google Cloud OAuth app credentials.
     The client_secret is not returned for security.
+
+    BUG-343 fix: Returns 200 with configured=False instead of 404 when no
+    credentials are set up. This prevents noisy 404 console errors on fresh
+    installs where Google integration has not yet been configured.
     """
     credentials = db.query(GoogleOAuthCredentials).filter(
         GoogleOAuthCredentials.tenant_id == ctx.tenant_id
     ).first()
 
     if not credentials:
-        raise HTTPException(
-            status_code=404,
-            detail="Google credentials not configured. Please configure in Hub settings."
-        )
+        return GoogleCredentialsResponse(configured=False)
 
-    return credentials
+    return GoogleCredentialsResponse(
+        configured=True,
+        id=credentials.id,
+        tenant_id=credentials.tenant_id,
+        client_id=credentials.client_id,
+        redirect_uri=credentials.redirect_uri,
+        created_at=credentials.created_at,
+    )
 
 
 @router.post("/credentials", response_model=GoogleCredentialsResponse)
 async def create_or_update_credentials(
     data: GoogleCredentialsCreate,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Create or update Google OAuth credentials for the tenant.
@@ -199,7 +212,8 @@ async def create_or_update_credentials(
 @router.delete("/credentials")
 async def delete_credentials(
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Delete Google OAuth credentials for the tenant.
@@ -228,7 +242,8 @@ async def delete_credentials(
 @router.get("/gmail/integrations", response_model=IntegrationListResponse)
 async def list_gmail_integrations(
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """
     List all Gmail integrations for the tenant.
@@ -251,7 +266,8 @@ async def list_gmail_integrations(
             email_address=integration.email_address,
             is_active=base.is_active if base else True,
             authorized_at=integration.authorized_at,
-            health_status=base.health_status if base else "unknown"
+            health_status=base.health_status if base else "unknown",
+            health_status_reason=getattr(base, 'health_status_reason', None) if base else None
         ))
 
     return IntegrationListResponse(integrations=result, count=len(result))
@@ -263,7 +279,8 @@ async def gmail_oauth_authorize(
     login_hint: Optional[str] = Query(None, description="Email hint for account selector"),
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Start Gmail OAuth flow.
@@ -290,7 +307,8 @@ async def gmail_oauth_authorize(
 async def gmail_oauth_disconnect(
     integration_id: int,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Disconnect a Gmail integration.
@@ -314,7 +332,7 @@ async def gmail_oauth_disconnect(
 
     except Exception as e:
         logger.error(f"Error disconnecting Gmail integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/gmail/{integration_id}")
@@ -322,7 +340,8 @@ async def update_gmail_integration(
     integration_id: int,
     data: IntegrationUpdateRequest,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Update Gmail integration settings.
@@ -356,7 +375,8 @@ async def update_gmail_integration(
 @router.get("/calendar/integrations", response_model=IntegrationListResponse)
 async def list_calendar_integrations(
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """
     List all Calendar integrations for the tenant.
@@ -379,7 +399,8 @@ async def list_calendar_integrations(
             email_address=integration.email_address,
             is_active=base.is_active if base else True,
             authorized_at=integration.authorized_at,
-            health_status=base.health_status if base else "unknown"
+            health_status=base.health_status if base else "unknown",
+            health_status_reason=getattr(base, 'health_status_reason', None) if base else None
         ))
 
     return IntegrationListResponse(integrations=result, count=len(result))
@@ -391,7 +412,8 @@ async def calendar_oauth_authorize(
     login_hint: Optional[str] = Query(None, description="Email hint for account selector"),
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Start Calendar OAuth flow.
@@ -418,7 +440,8 @@ async def calendar_oauth_authorize(
 async def calendar_oauth_disconnect(
     integration_id: int,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Disconnect a Calendar integration.
@@ -442,7 +465,7 @@ async def calendar_oauth_disconnect(
 
     except Exception as e:
         logger.error(f"Error disconnecting Calendar integration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/calendar/{integration_id}")
@@ -450,7 +473,8 @@ async def update_calendar_integration(
     integration_id: int,
     data: IntegrationUpdateRequest,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.write"))
 ):
     """
     Update Calendar integration settings.
@@ -575,7 +599,8 @@ async def oauth_callback(
 async def check_gmail_health(
     integration_id: int,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """Check health of a Gmail integration."""
     # Verify ownership
@@ -607,7 +632,8 @@ async def check_gmail_health(
 async def check_calendar_health(
     integration_id: int,
     ctx: TenantContext = Depends(get_current_tenant_context),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user: User = Depends(require_permission("hub.read"))
 ):
     """Check health of a Calendar integration."""
     # Verify ownership
@@ -633,3 +659,63 @@ async def check_calendar_health(
         return health
     except Exception as e:
         return {"status": "unavailable", "errors": [str(e)]}
+
+
+# ============================================
+# Re-Authorization
+# ============================================
+
+@router.post("/reauthorize/{integration_id}", response_model=OAuthAuthorizeResponse)
+async def reauthorize_integration(
+    integration_id: int,
+    redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
+    current_user: User = Depends(require_permission("hub.write")),
+    ctx: TenantContext = Depends(get_current_tenant_context),
+    db: Session = Depends(get_session)
+):
+    """
+    Generate a re-authorization URL for a disconnected/expired integration.
+
+    Used when a refresh token is revoked (e.g., Google Testing mode 7-day expiry
+    or user revocation). Returns a new OAuth URL with login_hint pre-filled.
+    """
+    integration = db.query(HubIntegration).filter(
+        HubIntegration.id == integration_id,
+        HubIntegration.tenant_id == ctx.tenant_id
+    ).first()
+
+    if not integration:
+        raise HTTPException(status_code=404, detail="Integration not found")
+
+    # Get email for login_hint
+    email = None
+    if integration.type == 'calendar':
+        cal = db.query(CalendarIntegration).filter(
+            CalendarIntegration.id == integration_id
+        ).first()
+        email = cal.email_address if cal else None
+    elif integration.type == 'gmail':
+        gmail = db.query(GmailIntegration).filter(
+            GmailIntegration.id == integration_id
+        ).first()
+        email = gmail.email_address if gmail else None
+
+    try:
+        handler = get_google_oauth_handler(db, ctx.tenant_id)
+
+        auth_url, state = await handler.generate_authorization_url(
+            integration_type=integration.type,
+            redirect_url=redirect_url or f"{settings.FRONTEND_URL}/hub",
+            display_name=integration.display_name,
+            login_hint=email
+        )
+
+        logger.info(
+            "Generated re-authorization URL for integration %s (type=%s, email=%s)",
+            integration_id, integration.type, email
+        )
+
+        return OAuthAuthorizeResponse(authorization_url=auth_url, state=state)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

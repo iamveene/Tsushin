@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Union
 from .sqlite_reader import MCPDatabaseReader
 from .api_reader import MCPAPIReader
@@ -16,7 +17,8 @@ class MCPWatcher:
         db_session = None,  # SQLAlchemy session for checking message_cache
         starting_timestamp: str = None,  # Optional: skip messages older than this (prevents replay on new instances)
         reader: Union[MCPDatabaseReader, MCPAPIReader] = None,  # Optional: pass reader directly
-        whatsapp_conversation_delay_seconds: float = 5.0
+        whatsapp_conversation_delay_seconds: float = 5.0,
+        max_catchup_seconds: int = 300  # Max backlog window on startup (default 5 min)
     ):
         # Use provided reader or create SQLite reader from db_path
         if reader is not None:
@@ -36,6 +38,7 @@ class MCPWatcher:
         self.logger = logging.getLogger(__name__)
         self.processed_message_ids = set()  # Track processed message IDs to prevent duplicates
         self.db_session = db_session  # For checking message_cache
+        self.max_catchup_seconds = max_catchup_seconds
         self.whatsapp_conversation_delay_seconds = max(0.0, whatsapp_conversation_delay_seconds or 0.0)
         self._conversation_delay_buffers = {}
         self._conversation_delay_tasks = {}
@@ -64,6 +67,21 @@ class MCPWatcher:
                 else:
                     self.last_timestamp = db_timestamp
                     self.logger.info(f"Starting MCP watcher from timestamp {self.last_timestamp}")
+
+                # Cap the catchup window to prevent replaying hours of backlog
+                # after a container rebuild. Messages older than the window are
+                # skipped — they were either already answered or are too stale.
+                if self.max_catchup_seconds > 0:
+                    catchup_floor = (datetime.now(timezone.utc) - timedelta(seconds=self.max_catchup_seconds))
+                    catchup_floor_str = catchup_floor.strftime("%Y-%m-%d %H:%M:%S") + "+00:00"
+                    if self.last_timestamp < catchup_floor_str:
+                        self.logger.warning(
+                            f"⏩ Catchup cap: last_ts={self.last_timestamp} is older than "
+                            f"{self.max_catchup_seconds}s window. Advancing to {catchup_floor_str} "
+                            f"to avoid replaying stale messages."
+                        )
+                        self.last_timestamp = catchup_floor_str
+
                 break
             except Exception as e:
                 self.logger.warning(f"Waiting for MCP database... ({e})")
@@ -128,6 +146,14 @@ class MCPWatcher:
                             continue
                     except Exception as e:
                         self.logger.error(f"Error checking message_cache for {msg['id']}: {e}", exc_info=True)
+                        # Recover session only from PendingRollbackError (poisoned by earlier failed flush)
+                        from sqlalchemy.exc import InvalidRequestError
+                        if isinstance(e, InvalidRequestError):
+                            try:
+                                self.db_session.rollback()
+                                self.logger.info(f"[SESSION RECOVERY] Rolled back poisoned session after {msg['id']}")
+                            except Exception:
+                                pass
                         self.logger.warning(f"[SAFETY SKIP] Skipping message {msg['id']} due to cache check error")
                         continue
 

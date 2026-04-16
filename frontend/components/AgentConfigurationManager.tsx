@@ -1,52 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { api, Agent, TonePreset, Persona } from '@/lib/client'
+import { useEffect, useMemo, useState } from 'react'
+import { api, Agent, TonePreset, Persona, ProviderInstance, VectorStoreInstance, VENDOR_LABELS } from '@/lib/client'
 import {
   InfoIcon, TargetIcon, TheaterIcon, BotIcon, KeyIcon, LightbulbIcon,
-  SettingsIcon, ClipboardIcon, SparklesIcon, ScaleIcon
+  SettingsIcon, ClipboardIcon, SparklesIcon, ScaleIcon, LinkIcon, DatabaseIcon
 } from '@/components/ui/icons'
 
 interface Props {
   agentId: number
 }
-
-// Legacy tools (google_search, weather, web_scraping) removed
-// Now handled by Skills system: web_search, weather, web_scraping skills
-
-const MODEL_PROVIDERS = [
-  { value: 'anthropic', label: 'Anthropic', models: ['claude-sonnet-4.5', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'] },
-  { value: 'openai', label: 'OpenAI', models: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo'] },
-  { value: 'gemini', label: 'Google Gemini', models: ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'] },
-  { value: 'ollama', label: 'Ollama (Local)', models: ['Gemma3:4b', 'llama3.1:8b', 'deepseek-r1:8b', 'MFDoom/deepseek-r1-tool-calling:8b'] },
-  {
-    value: 'openrouter',
-    label: 'OpenRouter (100+ models)',
-    models: [
-      // Top 20 most popular models on OpenRouter
-      'google/gemini-2.5-flash',
-      'google/gemini-2.5-pro',
-      'anthropic/claude-3.5-sonnet',
-      'anthropic/claude-3-opus',
-      'openai/gpt-4o',
-      'openai/gpt-4-turbo',
-      'meta-llama/llama-3.3-70b-instruct',
-      'meta-llama/llama-3.1-405b-instruct',
-      'mistralai/mistral-large',
-      'mistralai/mixtral-8x22b-instruct',
-      'deepseek/deepseek-r1',
-      'deepseek/deepseek-chat',
-      'qwen/qwen-2.5-72b-instruct',
-      'cohere/command-r-plus',
-      'perplexity/llama-3.1-sonar-huge-128k-online',
-      'x-ai/grok-2',
-      'nvidia/llama-3.1-nemotron-70b-instruct',
-      'microsoft/wizardlm-2-8x22b',
-      'databricks/dbrx-instruct',
-      'nousresearch/hermes-3-llama-3.1-405b'
-    ]
-  }
-]
 
 export default function AgentConfigurationManager({ agentId }: Props) {
   const [agent, setAgent] = useState<Agent | null>(null)
@@ -60,11 +23,20 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null)
   const [keywords, setKeywords] = useState<string[]>([])
   const [keywordInput, setKeywordInput] = useState('')
-  // enabledTools removed - use Skills system for web_search, weather, etc.
+  // enabledTools removed - use Skills system for web_search, etc.
   const [modelProvider, setModelProvider] = useState('gemini')
   const [modelName, setModelName] = useState('gemini-2.5-pro')
+  const [providerInstanceId, setProviderInstanceId] = useState<number | null>(null)
+  const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
+  const [allInstances, setAllInstances] = useState<ProviderInstance[]>([])
   const [isActive, setIsActive] = useState(true)
   const [isDefault, setIsDefault] = useState(false)
+
+  // Vector Store (per-agent override)
+  const [vectorStoreInstanceId, setVectorStoreInstanceId] = useState<number | null>(null)
+  const [vectorStoreMode, setVectorStoreMode] = useState('override')
+  const [vectorStoreInstances, setVectorStoreInstances] = useState<VectorStoreInstance[]>([])
+  const [defaultVectorStoreId, setDefaultVectorStoreId] = useState<number | null>(null)
 
   // Trigger configuration (per-agent)
   const [triggerDmEnabled, setTriggerDmEnabled] = useState<boolean | null>(null)
@@ -74,17 +46,22 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   // Input helpers for triggers
   const [groupFilterInput, setGroupFilterInput] = useState('')
   const [numberFilterInput, setNumberFilterInput] = useState('')
+  const [ollamaModels, setOllamaModels] = useState<string[]>([])
 
   useEffect(() => {
     loadData()
+    fetchOllamaModels()
   }, [agentId])
 
   const loadData = async () => {
     setLoading(true)
     try {
-      const [agentData, personasData] = await Promise.all([
+      const [agentData, personasData, allInstancesData, vectorStoresData, defaultVsData] = await Promise.all([
         api.getAgent(agentId),
         api.getPersonas(true), // Only active personas
+        api.getProviderInstances(),  // All configured provider instances (no vendor filter)
+        api.getVectorStoreInstances().catch(() => []),
+        api.getDefaultVectorStore().catch(() => ({ default_vector_store_instance_id: null, instance: null })),
       ])
 
       setAgent(agentData)
@@ -104,8 +81,19 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       // enabledTools removed - use Skills system
       setModelProvider(agentData.model_provider)
       setModelName(agentData.model_name)
+      setProviderInstanceId(agentData.provider_instance_id || null)
       setIsActive(agentData.is_active)
       setIsDefault(agentData.is_default)
+
+      // Store all instances and filter for the agent's current vendor
+      setAllInstances(allInstancesData)
+      setProviderInstances(allInstancesData.filter(i => i.vendor === agentData.model_provider))
+
+      // Vector store configuration
+      setVectorStoreInstances(vectorStoresData)
+      setDefaultVectorStoreId(defaultVsData.default_vector_store_instance_id)
+      setVectorStoreInstanceId(agentData.vector_store_instance_id || null)
+      setVectorStoreMode(agentData.vector_store_mode || 'override')
 
       // Trigger configuration
       setTriggerDmEnabled(agentData.trigger_dm_enabled ?? null)
@@ -133,11 +121,16 @@ export default function AgentConfigurationManager({ agentId }: Props) {
         system_prompt: systemPrompt,
         persona_id: personaId,
         keywords,
-        // enabled_tools removed - use Skills system for web_search, weather, etc.
+        // enabled_tools removed - use Skills system for web_search, etc.
         model_provider: modelProvider,
         model_name: modelName,
+        provider_instance_id: providerInstanceId,
         is_active: isActive,
         is_default: isDefault,
+
+        // Vector store (per-agent override)
+        vector_store_instance_id: vectorStoreInstanceId,
+        vector_store_mode: vectorStoreInstanceId ? vectorStoreMode : null,
 
         // Trigger configuration (per-agent)
         trigger_dm_enabled: triggerDmEnabled,
@@ -204,9 +197,44 @@ export default function AgentConfigurationManager({ agentId }: Props) {
     setTriggerNumberFilters(triggerNumberFilters.filter(f => f !== filter))
   }
 
+  const fetchOllamaModels = async () => {
+    try {
+      const data = await api.getOllamaHealth()
+      if (data.available && data.models) {
+        setOllamaModels(data.models.map((m) => m.name))
+      }
+    } catch {
+      // Ollama not available
+    }
+  }
+
+  // Vendors that have at least one configured instance, plus always include the current agent's vendor
+  const availableVendors = useMemo(() => {
+    const configured = [...new Set(allInstances.map(i => i.vendor))]
+    // Always include the agent's current vendor (even if it has no instances, to avoid breaking existing agents)
+    if (modelProvider && !configured.includes(modelProvider)) {
+      configured.push(modelProvider)
+    }
+    return configured.map(v => ({ value: v, label: VENDOR_LABELS[v] || v }))
+  }, [allInstances, modelProvider])
+
   const getAvailableModels = () => {
-    const provider = MODEL_PROVIDERS.find(p => p.value === modelProvider)
-    return provider?.models || []
+    // If an instance is selected and it has models, use those
+    if (providerInstanceId) {
+      const instance = providerInstances.find(i => i.id === providerInstanceId)
+      if (instance && instance.available_models.length > 0) {
+        return instance.available_models
+      }
+    }
+    // For Ollama, use dynamically fetched models
+    if (modelProvider === 'ollama') {
+      return ollamaModels
+    }
+    // Use all models from all configured instances for this vendor (deduplicated)
+    const vendorModels = [...new Set(providerInstances.flatMap(i => i.available_models))]
+    if (vendorModels.length > 0) return vendorModels
+    // Last resort: keep current model so the dropdown is never empty
+    return modelName ? [modelName] : []
   }
 
   if (loading) {
@@ -219,7 +247,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
 
   return (
     <div className="space-y-6">
-      <div className="bg-blue-50 dark:bg-blue-900/20 border dark:border-gray-700 border-blue-200 dark:border-blue-700 rounded-lg p-4">
+      <div className="bg-blue-50 dark:bg-blue-900/20 border border-tsushin-border border-blue-200 dark:border-blue-700 rounded-lg p-4">
         <h3 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2 flex items-center gap-1.5"><InfoIcon size={16} /> About Configuration</h3>
         <p className="text-sm text-blue-700 dark:text-blue-300">
           Configure all agent settings in one place: system prompt, personality tone, AI model, keywords, and built-in tools.
@@ -228,24 +256,24 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       </div>
 
       {/* System Prompt */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><TargetIcon size={20} /> System Prompt</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+        <p className="text-sm text-tsushin-slate mb-3">
           Define the agent's role, capabilities, and behavior guidelines. This is the core instruction set.
         </p>
         <textarea
           value={systemPrompt}
           onChange={(e) => setSystemPrompt(e.target.value)}
-          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 font-mono text-sm"
+          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface font-mono text-sm"
           rows={8}
           placeholder="You are a helpful AI assistant..."
         />
       </div>
 
       {/* Persona Configuration */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><TheaterIcon size={20} /> Agent Persona</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <p className="text-sm text-tsushin-slate mb-4">
           Select a persona that defines the agent's personality, communication style, role, and behavior guidelines.
           Personas are reusable templates that can be shared across multiple agents.
         </p>
@@ -259,7 +287,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
               const persona = personas.find(p => p.id === id)
               setSelectedPersona(persona || null)
             }}
-            className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+            className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
           >
             <option value="">Select a persona...</option>
             {personas.map((persona) => (
@@ -270,40 +298,40 @@ export default function AgentConfigurationManager({ agentId }: Props) {
           </select>
 
           {selectedPersona && (
-            <div className="bg-gray-50 dark:bg-gray-900/50 border dark:border-gray-700 rounded-lg p-4 space-y-3">
+            <div className="bg-tsushin-ink border border-tsushin-border rounded-lg p-4 space-y-3">
               <div>
-                <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1"><ClipboardIcon size={14} /> Description</h4>
-                <p className="text-sm text-gray-600 dark:text-gray-400">{selectedPersona.description}</p>
+                <h4 className="text-sm font-semibold text-tsushin-fog mb-1 flex items-center gap-1"><ClipboardIcon size={14} /> Description</h4>
+                <p className="text-sm text-tsushin-slate">{selectedPersona.description}</p>
               </div>
 
               {selectedPersona.role && (
                 <div>
-                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1"><TargetIcon size={14} /> Role</h4>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">{selectedPersona.role}</p>
+                  <h4 className="text-sm font-semibold text-tsushin-fog mb-1 flex items-center gap-1"><TargetIcon size={14} /> Role</h4>
+                  <p className="text-sm text-tsushin-slate">{selectedPersona.role}</p>
                   {selectedPersona.role_description && (
-                    <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">{selectedPersona.role_description}</p>
+                    <p className="text-xs text-tsushin-muted mt-1">{selectedPersona.role_description}</p>
                   )}
                 </div>
               )}
 
               {selectedPersona.personality_traits && (
                 <div>
-                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1"><SparklesIcon size={14} /> Personality Traits</h4>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">{selectedPersona.personality_traits}</p>
+                  <h4 className="text-sm font-semibold text-tsushin-fog mb-1 flex items-center gap-1"><SparklesIcon size={14} /> Personality Traits</h4>
+                  <p className="text-sm text-tsushin-slate">{selectedPersona.personality_traits}</p>
                 </div>
               )}
 
               {selectedPersona.guardrails && (
                 <div>
-                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1"><ScaleIcon size={14} /> Guardrails</h4>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">{selectedPersona.guardrails}</p>
+                  <h4 className="text-sm font-semibold text-tsushin-fog mb-1 flex items-center gap-1"><ScaleIcon size={14} /> Guardrails</h4>
+                  <p className="text-sm text-tsushin-slate">{selectedPersona.guardrails}</p>
                 </div>
               )}
 
-              <div className="pt-2 border-t dark:border-gray-700">
+              <div className="pt-2 border-t border-tsushin-border">
                 <a
                   href="/agents?tab=personas"
-                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                  className="text-sm text-teal-400 hover:underline"
                 >
                   → Manage Personas
                 </a>
@@ -314,52 +342,164 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       </div>
 
       {/* AI Model Selection */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><BotIcon size={20} /> AI Model</h3>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">Provider</label>
-            <select
-              value={modelProvider}
-              onChange={(e) => {
-                setModelProvider(e.target.value)
-                const provider = MODEL_PROVIDERS.find(p => p.value === e.target.value)
-                if (provider && provider.models.length > 0) {
-                  setModelName(provider.models[0])
-                }
-              }}
-              className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
-            >
-              {MODEL_PROVIDERS.map((provider) => (
-                <option key={provider.value} value={provider.value}>
-                  {provider.label}
-                </option>
-              ))}
-            </select>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Provider</label>
+              <select
+                value={modelProvider}
+                onChange={(e) => {
+                  const newVendor = e.target.value
+                  setModelProvider(newVendor)
+                  setProviderInstanceId(null)
+                  // Filter from already-loaded allInstances — no extra API call needed
+                  const vendorInsts = allInstances.filter(i => i.vendor === newVendor)
+                  setProviderInstances(vendorInsts)
+                  if (newVendor === 'ollama') {
+                    setModelName(ollamaModels[0] || '')
+                  } else {
+                    const defaultInst = vendorInsts.find(i => i.is_default) || vendorInsts[0]
+                    if (defaultInst && defaultInst.available_models.length > 0) {
+                      setModelName(defaultInst.available_models[0])
+                      setProviderInstanceId(defaultInst.id)
+                    }
+                  }
+                }}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+              >
+                {availableVendors.map((vendor) => (
+                  <option key={vendor.value} value={vendor.value}>
+                    {vendor.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Model</label>
+              <select
+                value={modelName}
+                onChange={(e) => setModelName(e.target.value)}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+              >
+                {getAvailableModels().map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
+          {/* Provider Instance (Optional) */}
           <div>
-            <label className="block text-sm font-medium mb-2">Model</label>
-            <select
-              value={modelName}
-              onChange={(e) => setModelName(e.target.value)}
-              className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
-            >
-              {getAvailableModels().map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
+            <label className="block text-sm font-medium mb-2 flex items-center gap-2">
+              <LinkIcon size={14} />
+              Provider Instance
+              <span className="text-xs text-tsushin-slate font-normal">(Optional)</span>
+            </label>
+            {providerInstances.length > 0 ? (
+              <select
+                value={providerInstanceId || ''}
+                onChange={(e) => {
+                  const id = e.target.value ? parseInt(e.target.value) : null
+                  setProviderInstanceId(id)
+                  // If instance has models, auto-select the first one
+                  if (id) {
+                    const inst = providerInstances.find(i => i.id === id)
+                    if (inst && inst.available_models.length > 0) {
+                      setModelName(inst.available_models[0])
+                    }
+                  }
+                }}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+              >
+                <option value="">No instance (use default)</option>
+                {providerInstances.map((inst) => (
+                  <option key={inst.id} value={inst.id}>
+                    {inst.instance_name}
+                    {inst.is_default ? ' (default)' : ''}
+                    {inst.health_status === 'healthy' ? '' : ` [${inst.health_status}]`}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-xs text-tsushin-slate">
+                No instances configured for {VENDOR_LABELS[modelProvider] || modelProvider}.
+                <a href="/hub" className="text-teal-400 hover:underline ml-1">Configure in Hub &gt; AI Providers</a>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
+      {/* Vector Store */}
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
+        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><DatabaseIcon size={20} /> Vector Store</h3>
+        <p className="text-sm text-tsushin-slate mb-4">
+          Select a vector store for long-term memory and knowledge retrieval. Leave blank to use the tenant default.
+        </p>
+
+        <div className="space-y-4">
+          <div className="text-xs text-tsushin-slate px-2 py-1.5 rounded bg-tsushin-ink/50">
+            {vectorStoreInstanceId ? (
+              <>Using: <span className="text-teal-400">{vectorStoreInstances.find(v => v.id === vectorStoreInstanceId)?.instance_name || 'Custom'}</span> (per-agent override)</>
+            ) : defaultVectorStoreId ? (
+              <>Using tenant default: <span className="text-teal-400">{vectorStoreInstances.find(v => v.id === defaultVectorStoreId)?.instance_name || 'Unknown'}</span></>
+            ) : (
+              <>Using default: <span className="text-gray-400">ChromaDB (built-in)</span></>
+            )}
+          </div>
+
+          {vectorStoreInstances.length > 0 ? (
+            <select
+              value={vectorStoreInstanceId || ''}
+              onChange={(e) => setVectorStoreInstanceId(e.target.value ? parseInt(e.target.value) : null)}
+              className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+            >
+              <option value="">Use Tenant Default</option>
+              {vectorStoreInstances.map((inst) => (
+                <option key={inst.id} value={inst.id}>
+                  {inst.instance_name} ({inst.vendor}){inst.health_status === 'healthy' ? '' : ` [${inst.health_status}]`}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-xs text-tsushin-slate">
+              No vector stores configured.
+              <a href="/hub" className="text-teal-400 hover:underline ml-1">Configure in Hub &gt; Vector Stores</a>
+            </div>
+          )}
+
+          {vectorStoreInstanceId && (
+            <div>
+              <label className="block text-sm font-medium mb-2">Vector Store Mode</label>
+              <select
+                value={vectorStoreMode}
+                onChange={(e) => setVectorStoreMode(e.target.value)}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+              >
+                <option value="override">Override (use only this store)</option>
+                <option value="complement">Complement (use this + default)</option>
+                <option value="shadow">Shadow (write to both, read from default)</option>
+              </select>
+              <p className="text-xs text-tsushin-slate mt-1">
+                {vectorStoreMode === 'override' && 'All reads and writes go to this store only.'}
+                {vectorStoreMode === 'complement' && 'Reads check both stores; writes go to both.'}
+                {vectorStoreMode === 'shadow' && 'Writes go to both stores; reads only from the default.'}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Keywords */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><KeyIcon size={20} /> Trigger Keywords</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+        <p className="text-sm text-tsushin-slate mb-3">
           Keywords that will trigger this agent in group chats (e.g., @AgentName, mentions)
         </p>
 
@@ -370,11 +510,11 @@ export default function AgentConfigurationManager({ agentId }: Props) {
             onChange={(e) => setKeywordInput(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && addKeyword()}
             placeholder="Add keyword..."
-            className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+            className="flex-1 px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
           />
           <button
             onClick={addKeyword}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+            className="btn-primary px-4 py-2 rounded-md"
           >
             Add
           </button>
@@ -399,9 +539,9 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       </div>
 
       {/* Trigger Configuration */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><TargetIcon size={20} /> Trigger Configuration</h3>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <p className="text-sm text-tsushin-slate mb-4">
           Configure when this agent should respond. Leave blank to use system defaults.
         </p>
 
@@ -416,7 +556,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
               />
               <div>
                 <div className="font-medium">Enable DM Auto-Response</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">
+                <div className="text-xs text-tsushin-muted">
                   Automatically respond to direct messages (if unchecked, uses system default)
                 </div>
               </div>
@@ -425,7 +565,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
 
           <div>
             <label className="block text-sm font-medium mb-2">Group Filters</label>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-xs text-tsushin-muted mb-2">
               Group names to monitor. If empty, uses system default groups.
             </p>
             <div className="flex gap-2 mb-3">
@@ -435,11 +575,11 @@ export default function AgentConfigurationManager({ agentId }: Props) {
                 onChange={(e) => setGroupFilterInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && addGroupFilter()}
                 placeholder="Add group name..."
-                className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                className="flex-1 px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
               />
               <button
                 onClick={addGroupFilter}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="btn-primary px-4 py-2 rounded-md"
               >
                 Add
               </button>
@@ -464,7 +604,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
 
           <div>
             <label className="block text-sm font-medium mb-2">Number Filters</label>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-xs text-tsushin-muted mb-2">
               Phone numbers to monitor. If empty, uses system default numbers.
             </p>
             <div className="flex gap-2 mb-3">
@@ -474,11 +614,11 @@ export default function AgentConfigurationManager({ agentId }: Props) {
                 onChange={(e) => setNumberFilterInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && addNumberFilter()}
                 placeholder="Add phone number..."
-                className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                className="flex-1 px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
               />
               <button
                 onClick={addNumberFilter}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="btn-primary px-4 py-2 rounded-md"
               >
                 Add
               </button>
@@ -507,19 +647,19 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
         <h3 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2 flex items-center gap-1.5"><LightbulbIcon size={16} /> Skills-Based Configuration</h3>
         <p className="text-sm text-blue-700 dark:text-blue-300">
-          Built-in tools (Web Search, Weather, Web Scraping, Flight Search) are now managed in the <strong>Skills</strong> tab.
+          Built-in tools (Web Search, Web Scraping, Flight Search) are now managed in the <strong>Skills</strong> tab.
           This provides better configuration options, per-agent customization, and unified management.
         </p>
         <a
           href={`/agents?tab=skills&agent=${agentId}`}
-          className="inline-block mt-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+          className="inline-block mt-2 text-sm text-teal-400 hover:underline"
         >
           → Go to Skills Configuration
         </a>
       </div>
 
       {/* Status Settings */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-6">
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><SettingsIcon size={20} /> Status Settings</h3>
 
         <div className="space-y-3">
@@ -532,7 +672,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
             />
             <div>
               <div className="font-medium">Active</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+              <div className="text-xs text-tsushin-muted">
                 Agent can respond to messages when active
               </div>
             </div>
@@ -547,7 +687,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
             />
             <div>
               <div className="font-medium">Default Agent</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+              <div className="text-xs text-tsushin-muted">
                 This agent will respond to contacts without specific agent assignments
               </div>
             </div>
@@ -556,18 +696,18 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       </div>
 
       {/* Save Button */}
-      <div className="flex justify-end gap-3 pt-4 border-t dark:border-gray-700">
+      <div className="flex justify-end gap-3 pt-4 border-t border-tsushin-border">
         <button
           onClick={() => loadData()}
           disabled={saving}
-          className="px-6 py-2 border dark:border-gray-700 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          className="px-6 py-2 border border-tsushin-border rounded-md hover:bg-tsushin-surface disabled:opacity-50"
         >
           Reset
         </button>
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 font-medium"
+          className="btn-primary px-6 py-2 rounded-md disabled:opacity-50 font-medium"
         >
           {saving ? 'Saving...' : 'Save Configuration'}
         </button>

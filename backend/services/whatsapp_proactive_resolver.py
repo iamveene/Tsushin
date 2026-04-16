@@ -93,11 +93,13 @@ class WhatsAppProactiveResolver:
         try:
             client = await self._get_http_client()
 
-            # Call the check-numbers endpoint
+            # Call the check-numbers endpoint with Bearer auth (Phase Security-1)
+            from services.mcp_auth_service import get_auth_headers
+            auth_headers = get_auth_headers(mcp_instance.api_secret)
             response = await client.post(
                 f"{mcp_instance.mcp_api_url}/check-numbers",
                 json={"phone_numbers": [phone_number]},
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json", **auth_headers}
             )
 
             if response.status_code != 200:
@@ -290,10 +292,12 @@ class WhatsAppProactiveResolver:
             try:
                 client = await self._get_http_client()
 
+                from services.mcp_auth_service import get_auth_headers
+                auth_headers = get_auth_headers(mcp_instance.api_secret)
                 response = await client.post(
                     f"{mcp_instance.mcp_api_url}/check-numbers",
                     json={"phone_numbers": phone_numbers},
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/json", **auth_headers}
                 )
 
                 if response.status_code != 200:

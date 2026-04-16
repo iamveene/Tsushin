@@ -6,11 +6,13 @@
  */
 
 import React, { Suspense, useState, useEffect } from 'react'
+import Image from 'next/image'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { Input } from '@/components/ui/form-input'
 import { api } from '@/lib/client'
+import { validateEmailAddress } from '@/lib/validation'
 
 // Google Icon SVG
 const GoogleIcon = () => (
@@ -37,12 +39,21 @@ const GoogleIcon = () => (
 function LoginContent() {
   const { login, loginWithGoogle } = useAuth()
   const searchParams = useSearchParams()
+  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [emailError, setEmailError] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleSSOEnabled, setGoogleSSOEnabled] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
+
+  // Redirect to /setup if system needs initial setup
+  useEffect(() => {
+    api.getSetupStatus().then(({ needs_setup }) => {
+      if (needs_setup) router.replace('/setup')
+    })
+  }, [router])
 
   // Check if Google SSO is enabled
   useEffect(() => {
@@ -68,10 +79,20 @@ function LoginContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    setEmailError('')
+
+    const normalizedEmail = email.trim()
+    const emailValidationError = validateEmailAddress(normalizedEmail)
+    if (emailValidationError) {
+      setEmailError(emailValidationError)
+      return
+    }
+
+    setEmail(normalizedEmail)
     setLoading(true)
 
     try {
-      await login(email, password)
+      await login(normalizedEmail, password)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
@@ -93,45 +114,44 @@ function LoginContent() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        {/* Header with Logo */}
-        <div className="flex flex-col items-center">
-          {/* Logo */}
-          <div className="flex items-center space-x-3">
-            <div className="relative flex items-center justify-center w-12 h-12 rounded-xl overflow-hidden shadow-lg">
-              {/* Gradient background - matches Tsushin brand blue palette */}
-              <div className="absolute inset-0 bg-gradient-to-br from-[#3C5AFE] via-[#6B7FFF] to-[#00D9FF] opacity-90"></div>
-              <span className="relative text-white font-bold text-2xl">通</span>
-            </div>
-            <div className="flex flex-col items-center">
-              <span className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-                TSUSHIN
-              </span>
-              <span className="text-xs text-gray-500 dark:text-gray-400 -mt-0.5 tracking-wide uppercase">
-                Agentic Framework
-              </span>
-            </div>
-          </div>
+    <div className="min-h-screen flex items-center justify-center bg-[#0a0d16] py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-lg w-full space-y-6">
+        {/* Banner */}
+        <div className="relative w-full overflow-hidden">
+          <Image
+            src="/images/tsushin-banner.png"
+            alt="Tsushin - Think. Secure. Build."
+            width={1280}
+            height={640}
+            priority
+            className="w-full h-auto"
+          />
         </div>
 
         {/* Login Form */}
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-8 space-y-6">
+          <div className="bg-tsushin-surface border border-tsushin-border rounded-2xl shadow-elevated p-8 space-y-6">
             {error && (
-              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-3">
-                <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+              <div className="bg-tsushin-vermilion/10 border border-tsushin-vermilion/30 rounded-md p-3">
+                <p className="text-sm text-tsushin-vermilion">{error}</p>
               </div>
             )}
 
             <Input
-              type="email"
+              type="text"
               label="Email address"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value)
+                if (emailError) setEmailError('')
+              }}
               required
               autoComplete="email"
+              inputMode="email"
+              autoCapitalize="none"
+              spellCheck={false}
               placeholder="you@example.com"
+              error={emailError}
             />
 
             <Input
@@ -150,11 +170,11 @@ function LoginContent() {
                   id="remember-me"
                   name="remember-me"
                   type="checkbox"
-                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700"
+                  className="h-4 w-4 text-teal-500 focus:ring-teal-500 border-tsushin-border rounded bg-tsushin-deep"
                 />
                 <label
                   htmlFor="remember-me"
-                  className="ml-2 block text-sm text-gray-900 dark:text-gray-100"
+                  className="ml-2 block text-sm text-tsushin-fog"
                 >
                   Remember me
                 </label>
@@ -163,7 +183,7 @@ function LoginContent() {
               <div className="text-sm">
                 <Link
                   href="/auth/forgot-password"
-                  className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+                  className="font-medium text-teal-400 hover:text-teal-300"
                 >
                   Forgot your password?
                 </Link>
@@ -173,7 +193,7 @@ function LoginContent() {
             <button
               type="submit"
               disabled={loading || googleLoading}
-              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-blue-500 dark:hover:bg-blue-600"
+              className="btn-primary w-full flex justify-center py-2.5 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? 'Signing in...' : 'Sign in'}
             </button>
@@ -183,10 +203,10 @@ function LoginContent() {
               <>
                 <div className="relative">
                   <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-gray-300 dark:border-gray-600" />
+                    <div className="w-full border-t border-tsushin-border" />
                   </div>
                   <div className="relative flex justify-center text-sm">
-                    <span className="px-2 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                    <span className="px-2 bg-tsushin-surface text-tsushin-slate">
                       Or continue with
                     </span>
                   </div>
@@ -196,10 +216,10 @@ function LoginContent() {
                   type="button"
                   onClick={handleGoogleSignIn}
                   disabled={loading || googleLoading}
-                  className="w-full flex items-center justify-center gap-3 py-2 px-4 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="btn-secondary w-full flex items-center justify-center gap-3 py-2.5 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {googleLoading ? (
-                    <svg className="animate-spin h-5 w-5 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <svg className="animate-spin h-5 w-5 text-tsushin-slate" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                     </svg>
@@ -215,8 +235,8 @@ function LoginContent() {
         </form>
 
         {/* Footer */}
-        <p className="text-center text-xs text-gray-500 dark:text-gray-400">
-          &copy; 2026 Tsushin. The Agentic Framework.
+        <p className="text-center text-xs text-tsushin-slate">
+          &copy; 2026 Tsushin. Think, Secure, Build.
         </p>
       </div>
     </div>
@@ -225,17 +245,17 @@ function LoginContent() {
 
 function LoadingFallback() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-tsushin-ink py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div className="animate-pulse">
-          <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-48 mx-auto mb-4"></div>
-          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 mx-auto"></div>
+          <div className="h-8 bg-tsushin-surface rounded w-48 mx-auto mb-4"></div>
+          <div className="h-4 bg-tsushin-surface rounded w-32 mx-auto"></div>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-8">
+        <div className="bg-tsushin-surface border border-tsushin-border rounded-2xl shadow-elevated p-8">
           <div className="space-y-4 animate-pulse">
-            <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded"></div>
-            <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded"></div>
-            <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded"></div>
+            <div className="h-10 bg-tsushin-elevated rounded"></div>
+            <div className="h-10 bg-tsushin-elevated rounded"></div>
+            <div className="h-10 bg-tsushin-elevated rounded"></div>
           </div>
         </div>
       </div>

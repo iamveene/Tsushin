@@ -7,7 +7,7 @@ Provides hybrid memory:
 """
 
 import logging
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime
 import importlib.util
 
@@ -42,7 +42,8 @@ class SemanticMemoryService:
         self,
         persist_directory: str,
         max_ring_buffer_size: int = 10,
-        enable_semantic: bool = True
+        enable_semantic: bool = True,
+        vector_store_override=None,
     ):
         """
         Initialize semantic memory service.
@@ -51,6 +52,9 @@ class SemanticMemoryService:
             persist_directory: Directory for ChromaDB persistence
             max_ring_buffer_size: Max messages in ring buffer per sender
             enable_semantic: Whether to enable semantic search
+            vector_store_override: Optional ProviderBridgeStore to use instead of ChromaDB default.
+                                  When provided, replaces the VectorStoreManager-managed store.
+                                  v0.6.0: Enables external vector store backends.
         """
         self.logger = logging.getLogger(__name__)
         self.enable_semantic = enable_semantic
@@ -61,17 +65,37 @@ class SemanticMemoryService:
 
         # Initialize semantic search components (if enabled)
         if self.enable_semantic:
-            # Use VectorStore manager to prevent ChromaDB singleton conflicts
-            self.vector_store = get_vector_store(persist_directory, embedding_model="all-MiniLM-L6-v2")
-            # Get embedding service from the vector store
-            self.embedding_service = self.vector_store.embedding_service
-            self.logger.info("Semantic search enabled (using VectorStore manager)")
+            if vector_store_override is not None:
+                # v0.6.0: Use external vector store provider via bridge
+                self.vector_store = vector_store_override
+                self.embedding_service = vector_store_override.embedding_service
+                self.logger.info("Semantic search enabled (using external vector store provider)")
+            else:
+                # Default: Use VectorStore manager (ChromaDB)
+                self.vector_store = get_vector_store(persist_directory, embedding_model="all-MiniLM-L6-v2")
+                self.embedding_service = self.vector_store.embedding_service
+                self.logger.info("Semantic search enabled (using VectorStore manager)")
         else:
             self.embedding_service = None
             self.vector_store = None
             self.logger.info("Semantic search disabled")
 
-    def add_message(
+    @staticmethod
+    def _is_transcript_only_message(message: Dict[str, Any]) -> bool:
+        """Return True when a message should stay in transcript history only."""
+        if not isinstance(message, dict):
+            return False
+
+        if message.get("playground_transcript_only"):
+            return True
+
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("playground_transcript_only"):
+            return True
+
+        return False
+
+    async def add_message(
         self,
         sender_key: str,
         role: str,
@@ -93,13 +117,13 @@ class SemanticMemoryService:
         self.ring_buffer.add_message(sender_key, role, content, metadata, message_id)
 
         # Add to vector store if semantic search is enabled and it's a user message
-        if self.enable_semantic and role == 'user' and message_id:
+        if self.enable_semantic and role == 'user' and message_id and not self._is_transcript_only_message({"metadata": metadata or {}}):
             try:
-                msg_metadata = metadata or {}
+                msg_metadata = dict(metadata or {})
                 msg_metadata['timestamp'] = datetime.utcnow().isoformat() + "Z"
                 msg_metadata['role'] = role
 
-                self.vector_store.add_message(
+                await self.vector_store.add_message(
                     message_id=message_id,
                     sender_key=sender_key,
                     text=content,
@@ -109,12 +133,13 @@ class SemanticMemoryService:
             except Exception as e:
                 self.logger.error(f"Failed to add message to vector store: {e}")
 
-    def get_context(
+    async def get_context(
         self,
         sender_key: str,
         current_message: str,
         max_semantic_results: int = 5,
-        similarity_threshold: float = 0.3
+        similarity_threshold: float = 0.3,
+        decay_config=None
     ) -> Dict:
         """
         Get hybrid context: recent messages + semantically relevant messages.
@@ -124,6 +149,7 @@ class SemanticMemoryService:
             current_message: Current message to find context for
             max_semantic_results: Max semantic search results
             similarity_threshold: Minimum similarity score (0-1, lower distance = more similar)
+            decay_config: Optional DecayConfig for temporal decay and MMR reranking
 
         Returns:
             Dictionary containing:
@@ -138,33 +164,139 @@ class SemanticMemoryService:
         }
 
         # Get recent messages from ring buffer
-        recent = self.ring_buffer.get_messages(sender_key)
+        recent = [
+            msg for msg in self.ring_buffer.get_messages(sender_key)
+            if not self._is_transcript_only_message(msg)
+        ]
         context['recent_messages'] = recent
+
+        # Determine if decay is active
+        decay_enabled = (
+            decay_config is not None
+            and getattr(decay_config, 'enabled', False)
+        )
 
         # Get semantically relevant messages (if enabled)
         if self.enable_semantic and current_message:
             try:
-                results = self.vector_store.search_similar(
-                    query_text=current_message,
-                    sender_key=sender_key,
-                    limit=max_semantic_results
-                )
+                if decay_enabled:
+                    # Over-fetch for decay filtering + MMR reranking
+                    fetch_limit = max_semantic_results * 3
+                    results, query_embedding, result_embeddings = \
+                        await self.vector_store.search_similar_with_embeddings(
+                            query_text=current_message,
+                            sender_key=sender_key,
+                            limit=fetch_limit
+                        )
+                else:
+                    results = await self.vector_store.search_similar(
+                        query_text=current_message,
+                        sender_key=sender_key,
+                        limit=max_semantic_results
+                    )
 
-                # Filter by similarity threshold
-                # ChromaDB returns distance (lower = more similar)
-                # Convert to similarity: similarity = 1 / (1 + distance)
                 semantic_messages = []
-                for result in results:
-                    distance = result['distance']
-                    similarity = 1 / (1 + distance)
+                accessed_ids = []
 
-                    if similarity >= similarity_threshold:
-                        semantic_messages.append({
+                if decay_enabled:
+                    from .temporal_decay import (
+                        apply_decay_to_score, compute_freshness_label,
+                        should_archive, mmr_rerank
+                    )
+                    now = datetime.utcnow()
+
+                    # Build candidates with decayed scores
+                    candidates = []
+                    for idx, result in enumerate(results):
+                        if self._is_transcript_only_message(result):
+                            continue
+                        distance = result['distance']
+                        raw_similarity = 1 / (1 + distance)
+
+                        if raw_similarity < similarity_threshold:
+                            continue
+
+                        # Parse last_accessed_at from metadata
+                        la_str = result.get('last_accessed_at')
+                        last_accessed = None
+                        if la_str:
+                            try:
+                                last_accessed = datetime.fromisoformat(la_str.replace('Z', ''))
+                            except (ValueError, AttributeError):
+                                pass
+
+                        decayed = apply_decay_to_score(
+                            raw_similarity, last_accessed, now, decay_config.decay_lambda
+                        )
+
+                        if should_archive(decayed, decay_config.archive_threshold):
+                            continue
+
+                        freshness = compute_freshness_label(
+                            last_accessed, now, decay_config.decay_lambda,
+                            decay_config.archive_threshold
+                        )
+
+                        emb = result_embeddings[idx] if idx < len(result_embeddings) else []
+
+                        candidates.append({
                             'role': result.get('role', 'user'),
                             'content': result['text'],
-                            'similarity': similarity,
-                            'message_id': result['message_id']
+                            'similarity': raw_similarity,
+                            'decayed_score': decayed,
+                            'message_id': result['message_id'],
+                            'embedding': emb,
+                            'freshness': freshness['freshness'],
+                            'decay_factor': freshness['decay_factor'],
+                            'days_since_access': freshness['days_since_access'],
                         })
+
+                    # Apply MMR reranking
+                    if candidates and query_embedding:
+                        reranked = mmr_rerank(
+                            candidates, query_embedding,
+                            mmr_lambda=decay_config.mmr_lambda,
+                            top_k=max_semantic_results
+                        )
+                    else:
+                        reranked = candidates[:max_semantic_results]
+
+                    for c in reranked:
+                        sem_msg = {
+                            'role': c['role'],
+                            'content': c['content'],
+                            'similarity': c['similarity'],
+                            'decayed_score': c['decayed_score'],
+                            'message_id': c['message_id'],
+                            'freshness': c['freshness'],
+                            'decay_factor': c['decay_factor'],
+                            'days_since_access': c['days_since_access'],
+                        }
+                        semantic_messages.append(sem_msg)
+                        accessed_ids.append(c['message_id'])
+
+                    # Update access times for returned results
+                    if accessed_ids:
+                        try:
+                            self.vector_store.update_access_time(accessed_ids)
+                        except Exception as e:
+                            self.logger.warning(f"Failed to update access times: {e}")
+
+                else:
+                    # Original behavior (no decay)
+                    for result in results:
+                        if self._is_transcript_only_message(result):
+                            continue
+                        distance = result['distance']
+                        similarity = 1 / (1 + distance)
+
+                        if similarity >= similarity_threshold:
+                            semantic_messages.append({
+                                'role': result.get('role', 'user'),
+                                'content': result['text'],
+                                'similarity': similarity,
+                                'message_id': result['message_id']
+                            })
 
                 context['semantic_messages'] = semantic_messages
                 self.logger.debug(f"Found {len(semantic_messages)} semantic matches above threshold")
@@ -228,7 +360,7 @@ class SemanticMemoryService:
             vector_stats = self.vector_store.get_stats()
             stats.update({
                 'vector_store_messages': vector_stats['total_messages'],
-                'vector_store_collection': vector_stats['collection_name']
+                'vector_store_collection': vector_stats.get('collection_name', 'external')
             })
 
         return stats
@@ -276,7 +408,7 @@ class SemanticMemoryService:
 
         return "\n".join(lines) if lines else "No previous context"
 
-    def add_user_aware_message(
+    async def add_user_aware_message(
         self,
         sender_key: str,
         role: str,
@@ -306,4 +438,4 @@ class SemanticMemoryService:
                 metadata['sender_id'] = contact.id
                 metadata['sender_role'] = contact.role
 
-        self.add_message(sender_key, role, content, message_id, metadata)
+        await self.add_message(sender_key, role, content, message_id, metadata)

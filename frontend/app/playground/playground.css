@@ -12,11 +12,11 @@
    =================================== */
 
 :root {
-  /* Core Palette - Electric Night */
-  --pg-void: #06070a;
-  --pg-deep: #0a0c10;
-  --pg-surface: #12151c;
-  --pg-elevated: #1a1e28;
+  /* Core Palette - aligned with tsushin design tokens */
+  --pg-void: #0B0F14;       /* matches tsushin-ink */
+  --pg-deep: #0D1117;       /* matches tsushin-deep */
+  --pg-surface: #161B22;    /* matches tsushin-surface */
+  --pg-elevated: #1C2128;   /* matches tsushin-elevated */
   --pg-border: rgba(255, 255, 255, 0.06);
   --pg-border-hover: rgba(255, 255, 255, 0.12);
 
@@ -78,24 +78,22 @@
    =================================== */
 
 .cockpit-mode {
-  background: var(--pg-void) !important;
-  display: flex !important;
-  flex-direction: column !important;
-  height: 100% !important;
-  overflow: hidden !important;
+  background: var(--pg-void);
+  /* display:flex, flex-direction:column, height:100% provided by Tailwind classes on element */
+  overflow: hidden;
 }
 
-/* Top Bar - Refined */
+/* Top Bar - Refined (overrides cockpit.css .cockpit-topbar via higher specificity) */
 .cockpit-mode .cockpit-topbar {
-  height: 52px !important;
-  background: var(--pg-deep) !important;
-  border-bottom: 1px solid var(--pg-border) !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  padding: 0 var(--pg-space-md) !important;
-  flex-shrink: 0 !important;
-  grid-column: unset !important;
+  height: 52px;
+  background: var(--pg-deep);
+  border-bottom: 1px solid var(--pg-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--pg-space-md);
+  flex-shrink: 0;
+  grid-column: unset;
 }
 
 .cockpit-logo {
@@ -147,33 +145,33 @@
   background: var(--pg-accent);
 }
 
-/* Main Layout */
+/* Main Layout (overrides cockpit.css .cockpit-layout grid via higher specificity) */
 .cockpit-mode .cockpit-layout {
-  flex: 1 !important;
-  display: flex !important;
-  overflow: hidden !important;
-  grid-template-columns: unset !important;
-  grid-template-rows: unset !important;
-  height: auto !important;
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  grid-template-columns: unset;
+  grid-template-rows: unset;
+  height: auto;
 }
 
 /* Left Panel - Navigator */
 .cockpit-mode .cockpit-nav {
-  width: 260px !important;
-  min-width: 260px !important;
-  background: var(--pg-deep) !important;
-  border-right: 1px solid var(--pg-border) !important;
-  display: flex !important;
-  flex-direction: column !important;
-  flex-shrink: 0 !important;
-  overflow-x: hidden !important;
-  overflow-y: auto !important;
-  transition: width var(--pg-transition-normal) !important;
+  width: 260px;
+  min-width: 260px;
+  background: var(--pg-deep);
+  border-right: 1px solid var(--pg-border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  transition: width var(--pg-transition-normal);
 }
 
 .cockpit-mode .cockpit-nav.collapsed {
-  width: 52px !important;
-  min-width: 52px !important;
+  width: 52px;
+  min-width: 52px;
 }
 
 .cockpit-nav-section {
@@ -344,20 +342,20 @@
 
 /* Right Panel - Inspector */
 .cockpit-mode .cockpit-inspector {
-  width: 320px !important;
-  min-width: 320px !important;
-  background: var(--pg-deep) !important;
-  border-left: 1px solid var(--pg-border) !important;
-  display: flex !important;
-  flex-direction: column !important;
-  flex-shrink: 0 !important;
-  overflow: hidden !important;
-  transition: width var(--pg-transition-normal) !important;
+  width: 320px;
+  min-width: 320px;
+  background: var(--pg-deep);
+  border-left: 1px solid var(--pg-border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: width var(--pg-transition-normal);
 }
 
 .cockpit-mode .cockpit-inspector.collapsed {
-  width: 52px !important;
-  min-width: 52px !important;
+  width: 52px;
+  min-width: 52px;
 }
 
 .cockpit-inspector-tabs {
@@ -429,6 +427,7 @@
   align-items: center;
   padding: var(--pg-space-xs) 0;
   font-size: 13px;
+  min-width: 0;
 }
 
 .inspector-stat-label {
@@ -439,6 +438,10 @@
   font-family: var(--pg-font-mono);
   font-size: 12px;
   color: var(--pg-accent);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* Quick Tools Grid */

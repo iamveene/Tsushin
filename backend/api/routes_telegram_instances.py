@@ -112,7 +112,7 @@ async def create_telegram_instance(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create Telegram instance: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/", response_model=List[TelegramInstanceResponse])
@@ -147,7 +147,7 @@ async def get_telegram_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     return TelegramInstanceResponse.model_validate(instance)
 
@@ -169,7 +169,7 @@ async def start_telegram_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     try:
         service = TelegramBotService(db)
@@ -180,7 +180,8 @@ async def start_telegram_instance(
 
         return {"success": True, "message": "Instance started"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to start Telegram instance {instance_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{instance_id}/stop")
@@ -200,7 +201,7 @@ async def stop_telegram_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     try:
         service = TelegramBotService(db)
@@ -211,7 +212,8 @@ async def stop_telegram_instance(
 
         return {"success": True, "message": "Instance stopped"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to stop Telegram instance {instance_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/{instance_id}")
@@ -231,7 +233,7 @@ async def delete_telegram_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     try:
         # Stop watcher first
@@ -243,7 +245,8 @@ async def delete_telegram_instance(
 
         return {"success": True, "message": "Instance deleted"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to delete Telegram instance {instance_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/{instance_id}/health", response_model=TelegramHealthResponse)
@@ -262,7 +265,7 @@ async def get_telegram_health(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     try:
         service = TelegramBotService(db)

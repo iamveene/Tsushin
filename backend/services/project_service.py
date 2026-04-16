@@ -15,6 +15,8 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from agent.response_helpers import extract_response_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -533,6 +535,7 @@ class ProjectService:
             self.db.refresh(knowledge)
 
             # Process document
+            processing_committed = False
             try:
                 text = await doc_service._extract_text(file_path, knowledge.document_type)
                 chunks = doc_service._chunk_text(text, chunk_size, chunk_overlap)
@@ -556,14 +559,31 @@ class ProjectService:
                 knowledge.status = "completed"
                 knowledge.processed_date = datetime.utcnow()
 
-                # Store embeddings
-                await self._store_project_embeddings(project, knowledge, chunks)
+                # BUG-389 fix: Commit the completed status BEFORE attempting embeddings.
+                # If embedding storage fails (model download, ChromaDB init, etc.),
+                # the document status is still properly marked as completed with chunks.
+                self.db.commit()
+
+                # BUG-400 fix: Skip embedding storage in the request handler entirely.
+                # The sentence-transformer model loading can crash the uvicorn worker
+                # on memory-constrained fresh installs. Embeddings will be generated
+                # lazily when the user triggers "Regenerate Embeddings" from the UI,
+                # or on the next upload after the model has been warmed up.
+                self.logger.info(f"Document processed: {len(chunks)} chunks. Embeddings deferred (use Regenerate Embeddings).")
+                processing_committed = True
 
             except Exception as e:
                 knowledge.status = "failed"
                 knowledge.error_message = str(e)
+                self.logger.error(f"Document processing failed: {e}", exc_info=True)
 
-            self.db.commit()
+            if not processing_committed:
+                try:
+                    self.db.commit()
+                except Exception as commit_error:
+                    self.db.rollback()
+                    self.logger.error(f"Failed to persist project knowledge status: {commit_error}", exc_info=True)
+                    return {"status": "error", "error": str(commit_error)}
 
             return {
                 "status": "success",
@@ -856,13 +876,18 @@ class ProjectService:
             response = await playground_service.send_message(
                 user_id=user_id or 0,
                 agent_id=agent_id,
-                message_text=enhanced_message
+                message_text=enhanced_message,
+                project_id=project_id,  # BUG-446: Pass project context for CombinedKnowledgeService
             )
 
-            if response.get("status") == "success" and response.get("message"):
+            # BUG-511: Fall back to tool output when the primary message is empty,
+            # mirroring the API v1 chat response handling from BUG-504.
+            assistant_text = extract_response_text(response) if isinstance(response, dict) else None
+
+            if response.get("status") == "success" and assistant_text:
                 messages.append({
                     "role": "assistant",
-                    "content": response["message"],
+                    "content": assistant_text,
                     "timestamp": response.get("timestamp", datetime.utcnow().isoformat() + "Z")
                 })
 
@@ -878,7 +903,7 @@ class ProjectService:
 
             return {
                 "status": response.get("status", "success"),
-                "message": response.get("message"),
+                "message": assistant_text,
                 "conversation": self._conversation_to_dict(conversation)
             }
 
@@ -1086,9 +1111,9 @@ class ProjectService:
                 metadata={"hnsw:space": "cosine"}
             )
 
-            # BUG-001 Fix: Use shared service with batched processing
+            # BUG-001 Fix: Use shared service with batched processing (async)
             embedding_service = get_shared_embedding_service("all-MiniLM-L6-v2")
-            embeddings = embedding_service.embed_batch_chunked(chunks, batch_size=50)
+            embeddings = await embedding_service.embed_batch_chunked_async(chunks, batch_size=50)
 
             # Validate we got embeddings for all chunks
             if len(embeddings) != len(chunks):
@@ -1168,7 +1193,7 @@ class ProjectService:
         """Search project knowledge base."""
         try:
             import chromadb
-            from sentence_transformers import SentenceTransformer
+            from agent.memory.embedding_service import get_shared_embedding_service
             import settings
 
             persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
@@ -1180,8 +1205,8 @@ class ProjectService:
             except Exception:
                 return []
 
-            model = SentenceTransformer("all-MiniLM-L6-v2")
-            query_embedding = model.encode([query], convert_to_numpy=True).tolist()[0]
+            embedding_service = get_shared_embedding_service("all-MiniLM-L6-v2")
+            query_embedding = await embedding_service.embed_text_async(query)
 
             results = collection.query(
                 query_embeddings=[query_embedding],

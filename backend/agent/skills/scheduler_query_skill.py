@@ -77,9 +77,9 @@ class SchedulerQuerySkill(BaseSkill):
             from models import ScheduledEvent
             from sqlalchemy.orm import sessionmaker
             from db import get_engine
-            import os
+            import settings
 
-            engine = get_engine(os.getenv("INTERNAL_DB_PATH", "./data/agent.db"))
+            engine = get_engine(settings.DATABASE_URL)
             SessionLocal = sessionmaker(bind=engine)
             db = SessionLocal()
 
@@ -257,6 +257,29 @@ class SchedulerQuerySkill(BaseSkill):
             lines.append(f"   Scheduled: {scheduled_time}")
 
         return "\n".join(lines)
+
+    @classmethod
+    def get_sentinel_context(cls) -> Dict[str, Any]:
+        """
+        Security context for Sentinel analysis.
+
+        Query operations are read-only and safe.
+        """
+        return {
+            "expected_intents": [
+                "List upcoming scheduled events",
+                "Query reminders and appointments",
+                "Show scheduled notifications",
+                "Check what events are coming up",
+            ],
+            "expected_patterns": [
+                "list", "show", "upcoming", "scheduled", "events",
+                "reminders", "what's scheduled", "my events",
+                "listar", "mostrar", "agendados", "próximos",
+                "meus eventos", "meus lembretes",
+            ],
+            "risk_notes": None,
+        }
 
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:

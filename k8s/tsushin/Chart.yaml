@@ -1,0 +1,14 @@
+apiVersion: v2
+name: tsushin
+description: Tsushin — Multi-tenant AI Agent Platform for GKE
+type: application
+version: 0.1.0
+appVersion: "0.6.0"
+keywords:
+  - ai
+  - agents
+  - multi-tenant
+  - fastapi
+  - nextjs
+maintainers:
+  - name: iamveene

@@ -6,6 +6,7 @@ merging results intelligently without overriding either source.
 """
 
 import os
+import re
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 from sqlalchemy.orm import Session
@@ -29,7 +30,6 @@ class CombinedKnowledgeService:
         self.db = db
         self.logger = logging.getLogger(__name__)
         self._chroma_client = None
-        self._embedding_model = None
 
     def _get_chroma_client(self):
         """Lazy-load ChromaDB client."""
@@ -48,16 +48,95 @@ class CombinedKnowledgeService:
                 raise
         return self._chroma_client
 
-    def _get_embedding_model(self, model_name: str = "all-MiniLM-L6-v2"):
-        """Get embedding model for semantic search."""
-        if self._embedding_model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                self._embedding_model = SentenceTransformer(model_name)
-            except Exception as e:
-                self.logger.error(f"Failed to load embedding model: {e}")
-                raise
-        return self._embedding_model
+    def _fallback_search_project_chunks(
+        self,
+        project_id: int,
+        project_name: str,
+        query: str,
+        max_results: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fresh installs can have project chunks persisted before embeddings are generated.
+
+        When the Chroma collection is missing, fall back to a lightweight lexical
+        search over stored project chunks so project-grounded answers still work.
+        """
+        from models import ProjectKnowledge, ProjectKnowledgeChunk
+
+        tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]+", (query or "").lower())
+            if len(token) >= 3
+        ]
+        if not tokens:
+            return []
+
+        rows = (
+            self.db.query(ProjectKnowledgeChunk, ProjectKnowledge)
+            .join(
+                ProjectKnowledge,
+                ProjectKnowledgeChunk.knowledge_id == ProjectKnowledge.id,
+            )
+            .filter(
+                ProjectKnowledge.project_id == project_id,
+                ProjectKnowledge.status == "completed",
+            )
+            .all()
+        )
+
+        scored_results: List[Dict[str, Any]] = []
+        unique_token_count = max(len(set(tokens)), 1)
+        normalized_query = " ".join(tokens)
+
+        for chunk, knowledge in rows:
+            content = chunk.content or ""
+            lowered_content = content.lower()
+
+            matched_tokens = [token for token in tokens if token in lowered_content]
+            if not matched_tokens:
+                continue
+
+            unique_matches = len(set(matched_tokens))
+            density = len(matched_tokens) / max(len(tokens), 1)
+            phrase_bonus = 0.2 if normalized_query and normalized_query in lowered_content else 0.0
+            similarity = min(
+                0.95,
+                0.35 + (unique_matches / unique_token_count) * 0.4 + density * 0.2 + phrase_bonus,
+            )
+
+            metadata = dict(chunk.metadata_json or {})
+            metadata.setdefault("document_name", knowledge.document_name)
+            metadata.setdefault("chunk_index", chunk.chunk_index)
+
+            scored_results.append(
+                {
+                    "content": content,
+                    "metadata": metadata,
+                    "similarity": similarity,
+                    "document_name": knowledge.document_name,
+                    "chunk_index": chunk.chunk_index,
+                    "project_name": project_name,
+                }
+            )
+
+        scored_results.sort(
+            key=lambda item: (
+                item.get("similarity", 0),
+                -(item.get("chunk_index", 0) or 0),
+            ),
+            reverse=True,
+        )
+
+        if scored_results:
+            self.logger.info(
+                f"[KB BADGE] Fallback chunk search returned {len(scored_results)} candidate(s) for project {project_id}"
+            )
+        else:
+            self.logger.warning(
+                f"[KB BADGE] Fallback chunk search found no lexical matches for project {project_id}"
+            )
+
+        return scored_results[:max_results]
 
     async def search_combined_knowledge(
         self,
@@ -190,8 +269,9 @@ class CombinedKnowledgeService:
                 self.logger.warning(f"[KB BADGE] Agent KB collection '{collection_name}' not found in {knowledge_dir}: {e}")
                 return []  # Collection doesn't exist
 
-            model = self._get_embedding_model()
-            query_embedding = model.encode(query).tolist()
+            from agent.memory.embedding_service import get_shared_embedding_service
+            embedding_service = get_shared_embedding_service()
+            query_embedding = await embedding_service.embed_text_async(query)
 
             results = collection.query(
                 query_embeddings=[query_embedding],
@@ -257,13 +337,19 @@ class CombinedKnowledgeService:
                         self.logger.info(f"[KB BADGE] Found project collection with tenant_id: {collection_name}")
                     except Exception as e3:
                         self.logger.error(f"[KB BADGE] No project collection found for project {project_id}")
-                        return []  # Collection doesn't exist
+                        return self._fallback_search_project_chunks(
+                            project_id=project_id,
+                            project_name=project.name,
+                            query=query,
+                            max_results=max_results,
+                        )
 
             # Use project-specific embedding model
             model_name = project.kb_embedding_model or "all-MiniLM-L6-v2"
             self.logger.info(f"[KB BADGE] Loading embedding model: {model_name}")
-            model = self._get_embedding_model(model_name)
-            query_embedding = model.encode(query).tolist()
+            from agent.memory.embedding_service import get_shared_embedding_service
+            embedding_service = get_shared_embedding_service(model_name)
+            query_embedding = await embedding_service.embed_text_async(query)
             self.logger.info(f"[KB BADGE] Query embedding generated, dimension: {len(query_embedding)}")
 
             results = collection.query(
@@ -275,7 +361,12 @@ class CombinedKnowledgeService:
 
             if not results or not results.get('documents') or not results['documents'][0]:
                 self.logger.warning(f"[KB BADGE] No documents returned from ChromaDB query!")
-                return []
+                return self._fallback_search_project_chunks(
+                    project_id=project_id,
+                    project_name=project.name,
+                    query=query,
+                    max_results=max_results,
+                )
 
             documents = results.get('documents', [[]])[0]
             metadatas = results.get('metadatas', [[]])[0]
@@ -297,7 +388,20 @@ class CombinedKnowledgeService:
             return formatted_results
         except Exception as e:
             self.logger.error(f"Failed to search project KB: {e}")
-            return []
+            try:
+                from models import Project
+
+                project = self.db.query(Project).filter(Project.id == project_id).first()
+                project_name = project.name if project else f"Project {project_id}"
+                return self._fallback_search_project_chunks(
+                    project_id=project_id,
+                    project_name=project_name,
+                    query=query,
+                    max_results=max_results,
+                )
+            except Exception as fallback_error:
+                self.logger.error(f"Project KB fallback search failed: {fallback_error}")
+                return []
 
     def _deduplicate_results(
         self,

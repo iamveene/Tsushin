@@ -5,25 +5,15 @@
  * Agent list with sub-navigation to Contacts and Personas
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { api, Agent, TonePreset, Contact, Persona, SkillIntegration } from '@/lib/client'
+import StudioTabs from '@/components/studio/StudioTabs'
+import { api, Agent, TonePreset, Contact, Persona, ProviderInstance, VENDOR_LABELS } from '@/lib/client'
+import { useToast } from '@/contexts/ToastContext'
+import InfoTooltip from '@/components/ui/InfoTooltip'
+import EmptyState from '@/components/EmptyState'
 import {
-  IconProps,
-  CalendarIcon,
-  MailIcon,
-  RefreshIcon,
-  ClipboardIcon,
-  MicrophoneIcon,
-  VolumeIcon,
-  SearchIcon,
-  CloudSunIcon,
-  GlobeIcon,
-  ShuffleIcon,
-  BrainIcon,
-  TheaterIcon,
-  PlaneIcon,
   SettingsIcon,
   StarIcon,
   CheckCircleIcon,
@@ -49,101 +39,23 @@ interface AgentFormData {
 }
 
 // AVAILABLE_TOOLS removed - legacy tools migrated to Skills system
-// Use AgentSkill table for web_search, weather, web_scraping skills
-const MODEL_PROVIDERS = [
-  { value: 'anthropic', label: 'Anthropic', models: ['claude-sonnet-4.5', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'] },
-  { value: 'openai', label: 'OpenAI', models: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo'] },
-  { value: 'gemini', label: 'Google Gemini', models: ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'] },
-  { value: 'ollama', label: 'Ollama (Local)', models: ['Gemma3:4b', 'llama3.1:8b', 'deepseek-r1:8b', 'MFDoom/deepseek-r1-tool-calling:8b'] },
-  {
-    value: 'openrouter',
-    label: 'OpenRouter (100+ models)',
-    models: [
-      // Popular models on OpenRouter
-      'google/gemini-2.5-flash',
-      'google/gemini-2.5-pro',
-      'google/gemini-2.0-flash-thinking-exp',
-      'anthropic/claude-sonnet-4-5',
-      'anthropic/claude-3.5-sonnet',
-      'anthropic/claude-3-opus',
-      'openai/gpt-4o',
-      'openai/gpt-4-turbo',
-      'meta-llama/llama-3.3-70b-instruct',
-      'meta-llama/llama-3.1-405b-instruct',
-      'mistralai/mistral-large',
-      'mistralai/mixtral-8x22b-instruct',
-      'deepseek/deepseek-r1',
-      'deepseek/deepseek-r1:free',
-      'deepseek/deepseek-chat',
-      'qwen/qwen-2.5-72b-instruct',
-      'cohere/command-r-plus',
-      'perplexity/llama-3.1-sonar-huge-128k-online',
-      'x-ai/grok-2',
-      'nvidia/llama-3.1-nemotron-70b-instruct',
-      'microsoft/wizardlm-2-8x22b',
-      'databricks/dbrx-instruct',
-      'nousresearch/hermes-3-llama-3.1-405b'
-    ]
-  }
-]
-
-const SKILL_ICONS: Record<string, { Icon: React.FC<IconProps>; label: string }> = {
-  // Merged skills (provider-based)
-  'scheduler': { Icon: CalendarIcon, label: 'Scheduler' },
-  'email': { Icon: MailIcon, label: 'Email' },
-  // Provider skill types (hidden when merged)
-  'flows': { Icon: RefreshIcon, label: 'Flows' },
-  'gmail': { Icon: MailIcon, label: 'Gmail' },
-  'asana': { Icon: ClipboardIcon, label: 'Asana' },
-  // Audio skills
-  'audio_transcript': { Icon: MicrophoneIcon, label: 'Transcript' },
-  'audio_tts': { Icon: VolumeIcon, label: 'TTS' },
-  // Web skills (migrated from legacy tools)
-  'web_search': { Icon: SearchIcon, label: 'Web Search' },
-  'weather': { Icon: CloudSunIcon, label: 'Weather' },
-  'web_scraping': { Icon: GlobeIcon, label: 'Web Scraping' },
-  // Other skills
-  'agent_switcher': { Icon: ShuffleIcon, label: 'Agent Switcher' },
-  'scheduler_query': { Icon: ClipboardIcon, label: 'Schedule List' },
-  'knowledge_sharing': { Icon: BrainIcon, label: 'Knowledge Sharing' },
-  'adaptive_personality': { Icon: TheaterIcon, label: 'Adaptive Personality' },
-  'flight_search': { Icon: PlaneIcon, label: 'Flight Search' },
-  'semantic_search': { Icon: SearchIcon, label: 'Semantic Search' }
-}
-
-// Helper to get provider display name
-const getProviderDisplayName = (provider: string): string => {
-  const providers: Record<string, string> = {
-    // TTS providers
-    'kokoro': 'Kokoro',
-    'openai': 'OpenAI',
-    'elevenlabs': 'ElevenLabs',
-    'whisper': 'Whisper',
-    // Scheduler providers
-    'flows': 'Flows',
-    'google_calendar': 'Google Calendar',
-    'asana': 'Asana',
-    // Email providers
-    'gmail': 'Gmail'
-  }
-  return providers[provider?.toLowerCase()] || provider || ''
-}
+// Use AgentSkill table for web_search, web_scraping skills
 
 export default function AgentsPage() {
-  const pathname = usePathname()
+  const toast = useToast()
   const [agents, setAgents] = useState<Agent[]>([])
   const [tones, setTones] = useState<TonePreset[]>([])
   const [personas, setPersonas] = useState<Persona[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
   const [agentSkillsCounts, setAgentSkillsCounts] = useState<Record<number, number>>({})
-  const [agentSkills, setAgentSkills] = useState<Record<number, string[]>>({})
-  const [agentSkillConfigs, setAgentSkillConfigs] = useState<Record<number, Record<string, any>>>({})
-  const [agentSkillIntegrations, setAgentSkillIntegrations] = useState<Record<number, SkillIntegration[]>>({})
+  const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean>(false)
+  const [ollamaModels, setOllamaModels] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [expandedAgent, setExpandedAgent] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [createError, setCreateError] = useState<string>('')
   const [editingAgentId, setEditingAgentId] = useState<number | null>(null)
   const [editingAgentName, setEditingAgentName] = useState('')
 
@@ -157,8 +69,9 @@ export default function AgentsPage() {
     custom_tone: '',
     keywords: [],
     // enabled_tools removed - use Skills system
-    model_provider: 'anthropic',
-    model_name: 'claude-sonnet-4.5',
+    // BUG-346: These are overridden by getSmartDefaults() in resetForm() and useEffect
+    model_provider: '',
+    model_name: '',
     is_active: true,
     is_default: false
   })
@@ -166,6 +79,27 @@ export default function AgentsPage() {
   const [useCustomTone, setUseCustomTone] = useState(false)
   const [useCustomModel, setUseCustomModel] = useState(false)
   const [customModelName, setCustomModelName] = useState('')
+
+  // Load configured provider instances for smart defaults
+  useEffect(() => {
+    api.getProviderInstances().then(instances => {
+      setProviderInstances(instances)
+    }).catch(() => {})
+  }, [])
+
+  // BUG-346: Apply smart defaults once provider instances are loaded (useRef avoids stale closure)
+  const defaultsAppliedRef = useRef(false)
+  useEffect(() => {
+    if (providerInstances.length > 0 && !defaultsAppliedRef.current) {
+      defaultsAppliedRef.current = true
+      const defaultInstance = providerInstances.find(p => p.is_default) || providerInstances[0]
+      const vendor = defaultInstance.vendor?.toLowerCase() || ''
+      const model = defaultInstance.available_models?.[0] || ''
+      if (vendor) {
+        setFormData(prev => ({ ...prev, model_provider: vendor, model_name: model }))
+      }
+    }
+  }, [providerInstances])
 
   useEffect(() => {
     loadData()
@@ -178,16 +112,30 @@ export default function AgentsPage() {
     }
   }, [formData.model_provider])
 
-  useEffect(() => {
-    const handleRefresh = () => {
-      loadData()
-      checkOllamaHealth()
+  useGlobalRefresh(() => { loadData(); checkOllamaHealth() })
+
+  // Vendors list derived live from configured hub instances — automatically includes any new provider
+  const availableVendors = [...new Set(providerInstances.map(i => i.vendor))]
+    .map(v => ({ value: v, label: VENDOR_LABELS[v] || v }))
+
+  // BUG-346: Use the tenant's default provider instance (is_default=true) instead of [0]
+  const getSmartDefaults = () => {
+    if (providerInstances.length > 0) {
+      const defaultInstance = providerInstances.find(p => p.is_default) || providerInstances[0]
+      const vendor = defaultInstance.vendor?.toLowerCase() || ''
+      if (vendor === 'ollama') {
+        return { model_provider: 'ollama', model_name: ollamaModels[0] || '' }
+      }
+      const instanceModel = defaultInstance.available_models?.[0]
+      if (instanceModel) {
+        return { model_provider: vendor, model_name: instanceModel }
+      }
     }
-    window.addEventListener('tsushin:refresh', handleRefresh)
-    return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [])
+    return { model_provider: '', model_name: '' }
+  }
 
   const resetForm = () => {
+    const defaults = getSmartDefaults()
     setFormData({
       contact_id: 0,
       agent_name: '',
@@ -198,8 +146,8 @@ export default function AgentsPage() {
       custom_tone: '',
       keywords: [],
       // enabled_tools removed - use Skills system
-      model_provider: 'anthropic',
-      model_name: 'claude-sonnet-4.5',
+      model_provider: defaults.model_provider,
+      model_name: defaults.model_name,
       is_active: true,
       is_default: false
     })
@@ -207,11 +155,23 @@ export default function AgentsPage() {
     setUseCustomTone(false)
     setUseCustomModel(false)
     setCustomModelName('')
+    setCreateError('')
   }
 
   const getAvailableModels = () => {
-    const provider = MODEL_PROVIDERS.find(p => p.value === formData.model_provider)
-    return provider?.models || []
+    if (formData.model_provider === 'ollama') {
+      return ollamaModels
+    }
+    // Get all models from all instances of the selected vendor (deduplicated)
+    const vendorModels = [
+      ...new Set(
+        providerInstances
+          .filter(i => i.vendor === formData.model_provider)
+          .flatMap(i => i.available_models)
+      )
+    ]
+    if (vendorModels.length > 0) return vendorModels
+    return formData.model_name ? [formData.model_name] : []
   }
 
   const loadData = async () => {
@@ -232,35 +192,6 @@ export default function AgentsPage() {
         skillsCounts[agent.id] = agent.skills_count || 0
       })
       setAgentSkillsCounts(skillsCounts)
-
-      const skillsMap: Record<number, string[]> = {}
-      const configsMap: Record<number, Record<string, any>> = {}
-      const integrationsMap: Record<number, SkillIntegration[]> = {}
-      await Promise.all(
-        agentsData.map(async (agent) => {
-          try {
-            const [skills, integrations] = await Promise.all([
-              api.getAgentSkills(agent.id),
-              api.getAgentSkillIntegrations(agent.id)
-            ])
-            skillsMap[agent.id] = skills.filter(s => s.is_enabled).map(s => s.skill_type)
-            configsMap[agent.id] = {}
-            skills.forEach(skill => {
-              if (skill.is_enabled) {
-                configsMap[agent.id][skill.skill_type] = skill.config || {}
-              }
-            })
-            integrationsMap[agent.id] = integrations
-          } catch (err) {
-            skillsMap[agent.id] = []
-            configsMap[agent.id] = {}
-            integrationsMap[agent.id] = []
-          }
-        })
-      )
-      setAgentSkills(skillsMap)
-      setAgentSkillConfigs(configsMap)
-      setAgentSkillIntegrations(integrationsMap)
     } catch (err) {
       console.error('Failed to load data:', err)
     } finally {
@@ -274,7 +205,7 @@ export default function AgentsPage() {
       await api.deleteAgent(id)
       await loadData()
     } catch (err: any) {
-      alert(err.message || 'Failed to delete agent')
+      toast.error('Delete Failed', err.message || 'Failed to delete agent')
     }
   }
 
@@ -283,7 +214,7 @@ export default function AgentsPage() {
       await api.updateAgent(agent.id, { is_active: !agent.is_active })
       await loadData()
     } catch (err: any) {
-      alert(err.message || 'Failed to update agent')
+      toast.error('Update Failed', err.message || 'Failed to update agent')
     }
   }
 
@@ -293,7 +224,7 @@ export default function AgentsPage() {
       await api.updateAgent(agent.id, { is_default: true })
       await loadData()
     } catch (err: any) {
-      alert(err.message || 'Failed to set default agent')
+      toast.error('Update Failed', err.message || 'Failed to set default agent')
     }
   }
 
@@ -309,7 +240,7 @@ export default function AgentsPage() {
 
   const handleSaveRename = async (agent: Agent) => {
     if (!editingAgentName.trim()) {
-      alert('Agent name cannot be empty')
+      toast.warning('Validation', 'Agent name cannot be empty')
       return
     }
     try {
@@ -321,7 +252,7 @@ export default function AgentsPage() {
       setEditingAgentName('')
       await loadData()
     } catch (err: any) {
-      alert(err.message || 'Failed to rename agent')
+      toast.error('Rename Failed', err.message || 'Failed to rename agent')
     }
   }
 
@@ -340,16 +271,17 @@ export default function AgentsPage() {
 
   const checkOllamaHealth = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'
-      const response = await fetch(`${apiUrl}/api/ollama/health`)
-      if (response.ok) {
-        const data = await response.json()
-        setOllamaAvailable(data.available === true)
+      const data = await api.getOllamaHealth()
+      setOllamaAvailable(data.available === true)
+      if (data.available && data.models) {
+        const modelNames = data.models.map((m) => m.name)
+        setOllamaModels(modelNames)
       } else {
-        setOllamaAvailable(false)
+        setOllamaModels([])
       }
     } catch (error) {
       setOllamaAvailable(false)
+      setOllamaModels([])
     }
   }
 
@@ -357,24 +289,25 @@ export default function AgentsPage() {
     e.preventDefault()
 
     if (!formData.agent_name) {
-      alert('Please provide agent name')
+      toast.warning('Validation', 'Please provide agent name')
       return
     }
 
     if (formData.model_provider === 'ollama' && !ollamaAvailable) {
-      alert('Ollama service is not running. Please start Ollama or choose a different provider.')
+      toast.warning('Ollama Unavailable', 'Ollama service is not running. Please start Ollama or choose a different provider.')
       return
     }
 
     if (formData.agent_phone && formData.agent_phone.trim()) {
       const phoneRegex = /^\+?\d{10,15}$/
       if (!phoneRegex.test(formData.agent_phone.replace(/\s/g, ''))) {
-        alert('Invalid phone number format. Please use 10-15 digits.')
+        toast.warning('Validation', 'Invalid phone number format. Please use 10-15 digits.')
         return
       }
     }
 
     setSaving(true)
+    setCreateError('')
     try {
       let contactId = formData.contact_id
       const existingContact = contacts.find(c => c.friendly_name.toLowerCase() === formData.agent_name.toLowerCase())
@@ -397,7 +330,7 @@ export default function AgentsPage() {
         system_prompt: formData.system_prompt,
         persona_id: formData.persona_id,
         keywords: formData.keywords,
-        // enabled_tools removed - use Skills system for web_search, weather, etc.
+        // enabled_tools removed - use Skills system for web_search, etc.
         model_provider: formData.model_provider,
         model_name: formData.model_name,
         is_active: formData.is_active,
@@ -414,10 +347,13 @@ export default function AgentsPage() {
 
       await api.createAgent(payload)
       setShowCreateModal(false)
+      setCreateError('')
       resetForm()
       await loadData()
     } catch (err: any) {
-      alert(err.message || 'Failed to create agent')
+      const errMsg = err.message || 'Failed to create agent'
+      setCreateError(errMsg)
+      toast.error('Creation Failed', errMsg)
     } finally {
       setSaving(false)
     }
@@ -463,90 +399,7 @@ export default function AgentsPage() {
 
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-0 space-y-6">
         {/* Sub Navigation */}
-        <div className="glass-card rounded-xl overflow-hidden">
-          <div className="border-b border-tsushin-border/50">
-            <nav className="flex">
-              <Link
-                href="/agents"
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  pathname === '/agents'
-                    ? 'text-white'
-                    : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10">
-                  Agents
-                </span>
-                {pathname === '/agents' && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
-                )}
-              </Link>
-              <Link
-                href="/agents/contacts"
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  pathname === '/agents/contacts'
-                    ? 'text-white'
-                    : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10">
-                  Contacts
-                </span>
-                {pathname === '/agents/contacts' && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
-                )}
-              </Link>
-              <Link
-                href="/agents/personas"
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  pathname === '/agents/personas'
-                    ? 'text-white'
-                    : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10">
-                  Personas
-                </span>
-                {pathname === '/agents/personas' && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
-                )}
-              </Link>
-              <Link
-                href="/agents/projects"
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  pathname?.startsWith('/agents/projects')
-                    ? 'text-white'
-                    : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10">
-                  Projects
-                </span>
-                {pathname?.startsWith('/agents/projects') && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
-                )}
-              </Link>
-              <Link
-                href="/agents/security"
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  pathname?.startsWith('/agents/security')
-                    ? 'text-white'
-                    : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10 flex items-center gap-1.5">
-                  <svg className="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                  </svg>
-                  Security
-                </span>
-                {pathname?.startsWith('/agents/security') && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-red-500 to-orange-400" />
-                )}
-              </Link>
-            </nav>
-          </div>
-        </div>
+        <StudioTabs />
 
         {/* Stats with enhanced cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 animate-stagger">
@@ -614,21 +467,7 @@ export default function AgentsPage() {
           </div>
 
           {agents.length === 0 ? (
-            <div className="empty-state py-16">
-              <div className="empty-state-icon">
-                <svg className="w-full h-full text-tsushin-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-semibold text-white mb-2">No agents configured yet</h3>
-              <p className="text-tsushin-slate mb-6 max-w-md">Create your first AI agent to start automating conversations and workflows.</p>
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="btn-primary"
-              >
-                Create Your First Agent
-              </button>
-            </div>
+            <EmptyState variant="no-agents" actionLabel="Create Your First Agent" onAction={() => setShowCreateModal(true)} />
           ) : (
             <div className="divide-y divide-tsushin-border/30">
               {agents.map((agent, index) => (
@@ -708,97 +547,11 @@ export default function AgentsPage() {
                                 ○ Inactive
                               </span>
                             )}
-                            {(() => {
-                              const skills = agentSkills[agent.id] || []
-                              const configs = agentSkillConfigs[agent.id] || {}
-                              const integrations = agentSkillIntegrations[agent.id] || []
-                              const badges: JSX.Element[] = []
-
-                              // Helper to get integration for a skill type
-                              const getIntegration = (skillType: string) =>
-                                integrations.find(i => i.skill_type === skillType)
-
-                              // Track which provider skills are part of merged skills
-                              // so we can skip them if they appear separately
-                              const hasScheduler = skills.includes('flows') || skills.includes('scheduler')
-                              const hasEmail = skills.includes('gmail') || skills.includes('email')
-
-                              skills.forEach((skillType) => {
-                                const skillInfo = SKILL_ICONS[skillType] || { Icon: LightningIcon, label: skillType }
-                                const config = configs[skillType] || {}
-                                const SkillIconComponent = skillInfo.Icon
-
-                                // Skip provider skill types that are part of merged skills
-                                // (flows and asana are providers for scheduler, gmail is provider for email)
-                                if (skillType === 'asana') return // Always skip asana, it's a scheduler provider
-
-                                // Special handling for audio skills to show provider
-                                if (skillType === 'audio_tts') {
-                                  const provider = getProviderDisplayName(config.provider)
-                                  badges.push(
-                                    <span
-                                      key={skillType}
-                                      className="badge badge-indigo flex items-center gap-1"
-                                      title={`Text-to-Speech${provider ? ` via ${provider}` : ''}`}
-                                    >
-                                      <SkillIconComponent size={12} /> {skillInfo.label}{provider ? ` (${provider})` : ''}
-                                    </span>
-                                  )
-                                } else if (skillType === 'audio_transcript') {
-                                  const mode = config.response_mode || 'conversational'
-                                  const modeLabel = mode === 'transcript_only' ? 'Raw' : 'Conversational'
-                                  badges.push(
-                                    <span
-                                      key={skillType}
-                                      className="badge badge-indigo flex items-center gap-1"
-                                      title={`Speech-to-Text - ${modeLabel} mode`}
-                                    >
-                                      <SkillIconComponent size={12} /> {skillInfo.label} ({modeLabel})
-                                    </span>
-                                  )
-                                } else if (skillType === 'flows') {
-                                  // Scheduler skill (flows is the underlying skill type)
-                                  const integration = getIntegration('flows')
-                                  const provider = integration?.scheduler_provider || 'flows'
-                                  const providerName = getProviderDisplayName(provider)
-                                  badges.push(
-                                    <span
-                                      key="scheduler"
-                                      className="badge badge-teal flex items-center gap-1"
-                                      title={`Scheduler via ${providerName}`}
-                                    >
-                                      <CalendarIcon size={12} /> Scheduler{providerName ? ` (${providerName})` : ''}
-                                    </span>
-                                  )
-                                } else if (skillType === 'gmail') {
-                                  // Email skill (gmail is the underlying skill type)
-                                  const integration = getIntegration('gmail')
-                                  const email = integration?.integration_email
-                                  badges.push(
-                                    <span
-                                      key="email"
-                                      className="badge badge-amber flex items-center gap-1"
-                                      title={`Email${email ? ` - ${email}` : ''}`}
-                                    >
-                                      <MailIcon size={12} /> Email{email ? ` (${email.split('@')[0]})` : ''}
-                                    </span>
-                                  )
-                                } else {
-                                  // Regular skill badge
-                                  badges.push(
-                                    <span
-                                      key={skillType}
-                                      className="badge badge-indigo flex items-center gap-1"
-                                      title={skillInfo.label}
-                                    >
-                                      <SkillIconComponent size={12} /> {skillInfo.label}
-                                    </span>
-                                  )
-                                }
-                              })
-
-                              return badges
-                            })()}
+                            {(agentSkillsCounts[agent.id] || 0) > 0 && (
+                              <span className="badge badge-indigo flex items-center gap-1">
+                                <LightningIcon size={12} /> {agentSkillsCounts[agent.id]} skills
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -816,24 +569,17 @@ export default function AgentsPage() {
                         <span className="flex items-center gap-1.5">
                           {agent.keywords.length || 0} keywords
                         </span>
-                        {(() => {
-                          const skills = agentSkills[agent.id] || []
-                          if (skills.includes('audio_tts')) {
-                            return <span className="flex items-center gap-1.5 text-tsushin-warning">Audio</span>
-                          } else {
-                            return <span className="flex items-center gap-1.5">Text</span>
-                          }
-                        })()}
+                        <span className="flex items-center gap-1.5">Text</span>
                       </div>
                     </div>
 
                     <div className="flex gap-2 ml-4 flex-shrink-0">
-                      <button
-                        onClick={() => window.location.href = `/agents/${agent.id}`}
+                      <Link
+                        href={`/agents/${agent.id}`}
                         className="btn-primary py-1.5 px-3 text-sm flex items-center gap-1.5"
                       >
                         <SettingsIcon size={14} /> Manage
-                      </button>
+                      </Link>
                       <button
                         onClick={() => setExpandedAgent(expandedAgent === agent.id ? null : agent.id)}
                         className="btn-ghost py-1.5 px-3 text-sm"
@@ -1012,6 +758,23 @@ export default function AgentsPage() {
 
               <div>
                 <label className="block text-sm font-medium text-white mb-2">System Prompt *</label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {[
+                    { label: 'General Assistant', prompt: 'You are a helpful, friendly AI assistant. You provide clear, concise answers and help users with their questions.' },
+                    { label: 'Customer Support', prompt: 'You are a customer support agent. You help users resolve issues, answer questions about products and services, and escalate complex problems when needed. Always be empathetic and solution-oriented.' },
+                    { label: 'Sales Outreach', prompt: 'You are a sales assistant. You engage potential customers, answer product questions, highlight key features, and guide them toward making informed decisions. Be friendly and professional.' },
+                    { label: 'Technical Support', prompt: 'You are a technical support specialist. You troubleshoot issues, provide step-by-step solutions, and explain technical concepts in simple terms. Ask clarifying questions when needed.' },
+                  ].map((tpl) => (
+                    <button
+                      key={tpl.label}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, system_prompt: tpl.prompt })}
+                      className="bg-tsushin-deep border border-tsushin-border text-xs px-3 py-1 rounded-full text-tsushin-slate hover:text-white hover:border-teal-500/50 transition-colors"
+                    >
+                      {tpl.label}
+                    </button>
+                  ))}
+                </div>
                 <textarea
                   value={formData.system_prompt}
                   onChange={(e) => setFormData({ ...formData, system_prompt: e.target.value })}
@@ -1118,7 +881,7 @@ export default function AgentsPage() {
                   <LightbulbIcon size={16} className="text-teal-400 flex-shrink-0 mt-0.5" />
                   <span>
                     <span className="text-teal-400 font-medium">Skills Note:</span>{' '}
-                    Configure Web Search, Weather, and other capabilities as Skills after creating the agent.
+                    Configure Web Search and other capabilities as Skills after creating the agent.
                     Visit the agent&apos;s Manage page → Skills tab.
                   </span>
                 </p>
@@ -1126,24 +889,35 @@ export default function AgentsPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-white mb-2">Model Provider *</label>
+                  <label className="block text-sm font-medium text-white mb-2 flex items-center gap-2">
+                    Model Provider *
+                    <InfoTooltip text="Choose a provider for which you have an API key configured in the Hub. If unsure, the default model works for most use cases." />
+                  </label>
                   <select
                     value={formData.model_provider}
                     onChange={(e) => {
                       const newProvider = e.target.value
-                      const provider = MODEL_PROVIDERS.find(p => p.value === newProvider)
+                      const vendorInsts = providerInstances.filter(i => i.vendor === newProvider)
+                      const defaultInst = vendorInsts.find(i => i.is_default) || vendorInsts[0]
+                      const defaultModel = newProvider === 'ollama'
+                        ? (ollamaModels[0] || '')
+                        : (defaultInst?.available_models[0] || '')
                       setFormData({
                         ...formData,
                         model_provider: newProvider,
-                        model_name: provider?.models[0] || ''
+                        model_name: defaultModel
                       })
                     }}
                     className="select"
                     required
                   >
-                    {MODEL_PROVIDERS.map(p => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
+                    {availableVendors.length === 0 ? (
+                      <option value="" disabled>No providers configured — set one up in Hub &gt; AI Providers</option>
+                    ) : (
+                      availableVendors.map(p => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))
+                    )}
                   </select>
                   {formData.model_provider === 'ollama' && !ollamaAvailable && (
                     <div className="mt-2 p-3 bg-tsushin-vermilion/10 border border-tsushin-vermilion/30 rounded-lg text-xs text-tsushin-vermilion">
@@ -1162,8 +936,8 @@ export default function AgentsPage() {
                             checked={!useCustomModel}
                             onChange={() => {
                               setUseCustomModel(false)
-                              const provider = MODEL_PROVIDERS.find(p => p.value === formData.model_provider)
-                              setFormData({ ...formData, model_name: provider?.models[0] || '' })
+                              const firstModel = getAvailableModels()[0] || ''
+                              setFormData({ ...formData, model_name: firstModel })
                             }}
                             className="mr-2 accent-tsushin-indigo"
                           />
@@ -1205,7 +979,7 @@ export default function AgentsPage() {
                               setFormData({ ...formData, model_name: e.target.value })
                             }}
                             className="input font-mono"
-                            placeholder="e.g., anthropic/claude-sonnet-4-5"
+                            placeholder="e.g., anthropic/claude-sonnet-4-6"
                             required
                           />
                           <p className="text-xs text-tsushin-slate">
@@ -1221,6 +995,9 @@ export default function AgentsPage() {
                       className="select font-mono"
                       required
                     >
+                      {getAvailableModels().length === 0 && formData.model_provider === 'ollama' && (
+                        <option value="" disabled>No models found — is Ollama running?</option>
+                      )}
                       {getAvailableModels().map((model) => (
                         <option key={model} value={model}>
                           {model}
@@ -1252,10 +1029,19 @@ export default function AgentsPage() {
                 </label>
               </div>
 
+              {createError && (
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+                  <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                  </svg>
+                  <span>{createError}</span>
+                </div>
+              )}
+
               <div className="flex justify-end gap-3 pt-6 border-t border-tsushin-border/30">
                 <button
                   type="button"
-                  onClick={() => { setShowCreateModal(false); resetForm() }}
+                  onClick={() => { setShowCreateModal(false); setCreateError(''); resetForm() }}
                   className="btn-ghost"
                   disabled={saving}
                 >

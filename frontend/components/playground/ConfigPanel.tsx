@@ -15,7 +15,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { api, Agent, PlaygroundSettings } from '@/lib/client'
+import { api, Agent, PlaygroundSettings, ProviderInstance } from '@/lib/client'
 import {
   SettingsIcon,
   BotIcon,
@@ -35,22 +35,19 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'o1': { prompt: 15.0, completion: 60.0 },
   'o1-mini': { prompt: 3.0, completion: 12.0 },
   // Anthropic
+  'claude-opus-4-6': { prompt: 15.0, completion: 75.0 },
+  'claude-sonnet-4-6': { prompt: 3.0, completion: 15.0 },
+  'claude-haiku-4-5': { prompt: 0.80, completion: 4.0 },
   'claude-sonnet-4-20250514': { prompt: 3.0, completion: 15.0 },
   'claude-3-5-sonnet-20241022': { prompt: 3.0, completion: 15.0 },
   'claude-3-opus-20240229': { prompt: 15.0, completion: 75.0 },
-  'claude-3-haiku-20240307': { prompt: 0.25, completion: 1.25 },
   // Google Gemini
   'gemini-2.5-pro': { prompt: 1.25, completion: 5.0 },
   'gemini-2.5-flash': { prompt: 0.075, completion: 0.3 },
   'gemini-2.0-flash': { prompt: 0.10, completion: 0.40 },
   'gemini-1.5-pro': { prompt: 1.25, completion: 5.0 },
   'gemini-1.5-flash': { prompt: 0.075, completion: 0.3 },
-  // Ollama (local, free)
-  'llama3.2': { prompt: 0.0, completion: 0.0 },
-  'llama3.1': { prompt: 0.0, completion: 0.0 },
-  'deepseek-r1': { prompt: 0.0, completion: 0.0 },
-  'mistral': { prompt: 0.0, completion: 0.0 },
-  'codellama': { prompt: 0.0, completion: 0.0 },
+  // Ollama models are always free — handled dynamically via getModelCostInfo fallback
   // OpenRouter (unified API gateway - prices vary by model)
   'google/gemini-2.5-flash': { prompt: 0.075, completion: 0.3 },
   'google/gemini-2.5-pro': { prompt: 1.25, completion: 5.0 },
@@ -78,8 +75,12 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
 }
 
 // Get cost tier label and color for a model
-const getModelCostInfo = (modelName: string): { tier: string; color: string; bgColor: string } => {
+const getModelCostInfo = (modelName: string, provider?: string): { tier: string; color: string; bgColor: string } => {
   const pricing = MODEL_PRICING[modelName]
+  // Ollama models are always free (local inference)
+  if (!pricing && provider?.toLowerCase() === 'ollama') {
+    return { tier: 'Free', color: 'text-emerald-400', bgColor: 'bg-emerald-500/10' }
+  }
   if (!pricing) return { tier: '?', color: 'text-white/40', bgColor: 'bg-white/5' }
 
   const avgCost = (pricing.prompt + pricing.completion) / 2
@@ -117,18 +118,14 @@ const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
     { value: 'o1-mini', label: 'o1-mini' },
   ],
   anthropic: [
-    { value: 'claude-sonnet-4-20250514', label: 'Claude 4 Sonnet' },
+    { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
     { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
     { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
-    { value: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku' },
   ],
-  ollama: [
-    { value: 'llama3.2', label: 'Llama 3.2' },
-    { value: 'llama3.1', label: 'Llama 3.1' },
-    { value: 'deepseek-r1', label: 'DeepSeek R1' },
-    { value: 'mistral', label: 'Mistral' },
-    { value: 'codellama', label: 'Code Llama' },
-  ],
+  ollama: [],  // Populated dynamically from running Ollama instance
   openrouter: [
     { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
     { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
@@ -154,6 +151,13 @@ const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
     { value: 'databricks/dbrx-instruct', label: 'DBRX Instruct' },
     { value: 'nousresearch/hermes-3-llama-3.1-405b', label: 'Hermes 3 Llama 3.1 405B' },
   ],
+  vertex_ai: [
+    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Vertex)' },
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Vertex)' },
+    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (Vertex)' },
+    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Vertex)' },
+    { value: 'claude-haiku-4-5-latest', label: 'Claude Haiku 4.5 (Vertex)' },
+  ],
 }
 
 interface ConfigPanelProps {
@@ -177,6 +181,8 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
   const [showCustomModelInput, setShowCustomModelInput] = useState(false)
   const [customModelInput, setCustomModelInput] = useState('')
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const [ollamaModels, setOllamaModels] = useState<{ value: string; label: string }[]>([])
+  const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
 
   // Load settings from parent props or fetch from API
   useEffect(() => {
@@ -195,7 +201,21 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
     if (agentId) {
       loadAgentConfig()
     }
+    fetchOllamaModels()
   }, [agentId])
+
+  const fetchOllamaModels = async () => {
+    try {
+      const data = await api.getOllamaHealth()
+      if (data.available && data.models) {
+        setOllamaModels(
+          data.models.map((m) => ({ value: m.name, label: m.name }))
+        )
+      }
+    } catch {
+      // Ollama not available
+    }
+  }
 
   const loadAgentConfig = async () => {
     if (!agentId) return
@@ -205,6 +225,13 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
       const foundAgent = agents.find(a => a.id === agentId)
       if (foundAgent) {
         setAgent(foundAgent)
+        // Load provider instances for this agent's vendor to populate the model override selector
+        try {
+          const instances = await api.getProviderInstances(foundAgent.model_provider)
+          setProviderInstances(instances)
+        } catch {
+          setProviderInstances([])
+        }
       }
     } catch (error) {
       console.error('Failed to load agent config:', error)
@@ -248,7 +275,7 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
   }
 
   return (
-    <div className="h-full flex flex-col bg-[#0d0d14]">
+    <div className="h-full flex flex-col bg-tsushin-deep">
       {/* Header */}
       <div className="px-4 py-3 border-b border-white/[0.06]">
         <div className="flex items-center gap-2">
@@ -288,8 +315,10 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                 {/* Current Model Cost Indicator */}
                 {(() => {
                   const currentModel = localSettings.modelOverride || agent.model_name
-                  const pricing = MODEL_PRICING[currentModel]
-                  const costInfo = getModelCostInfo(currentModel)
+                  const pricing = agent.model_provider?.toLowerCase() === 'ollama'
+                    ? { prompt: 0.0, completion: 0.0 }
+                    : MODEL_PRICING[currentModel]
+                  const costInfo = getModelCostInfo(currentModel, agent.model_provider)
 
                   return (
                     <div className="flex items-center justify-between text-xs">
@@ -329,7 +358,7 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                     <div className="bg-black/40 rounded-lg border border-white/[0.06] p-2 space-y-1 max-h-[280px] overflow-y-auto">
                       {/* Use default */}
                       {(() => {
-                        const defaultCostInfo = getModelCostInfo(agent.model_name)
+                        const defaultCostInfo = getModelCostInfo(agent.model_name, agent.model_provider)
                         return (
                           <button
                             onClick={() => {
@@ -355,10 +384,22 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                         )
                       })()}
 
-                      {/* Provider models with pricing */}
-                      {MODEL_OPTIONS[agent.model_provider?.toLowerCase()]?.map(model => {
-                        const costInfo = getModelCostInfo(model.value)
-                        const pricing = MODEL_PRICING[model.value]
+                      {/* Provider models with pricing — sourced from configured instances */}
+                      {(() => {
+                        const isOllama = agent.model_provider?.toLowerCase() === 'ollama'
+                        // Build model list from configured instances; fall back to static MODEL_OPTIONS if none
+                        const instanceModels = [...new Set(providerInstances.flatMap(i => i.available_models))]
+                        const dynamicModels: { value: string; label: string }[] = isOllama
+                          ? ollamaModels
+                          : instanceModels.length > 0
+                            ? instanceModels.map(m => ({ value: m, label: m }))
+                            : (MODEL_OPTIONS[agent.model_provider?.toLowerCase()] || [])
+                        return dynamicModels
+                      })().map(model => {
+                        const costInfo = getModelCostInfo(model.value, agent.model_provider)
+                        const pricing = agent.model_provider?.toLowerCase() === 'ollama'
+                          ? { prompt: 0.0, completion: 0.0 }
+                          : MODEL_PRICING[model.value]
 
                         return (
                           <button

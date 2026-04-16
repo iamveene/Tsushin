@@ -48,42 +48,51 @@ async def authenticate_watcher_client(
     timeout: float = AUTH_TIMEOUT
 ) -> Optional[AuthResult]:
     """
-    Wait for authentication message and validate JWT token.
+    Authenticate WebSocket client via httpOnly cookie (primary) or first-message token (fallback).
 
-    Protocol:
-        Client sends: {"type": "auth", "token": "jwt_token"}
-        Server responds: {"type": "authenticated", ...} or {"type": "error", ...}
+    Priority:
+        1. httpOnly cookie (tsushin_session) — sent automatically with WS upgrade
+        2. First-message auth: {"type": "auth", "token": "jwt_token"}
 
     Args:
         websocket: WebSocket connection
-        timeout: Max time to wait for auth message
+        timeout: Max time to wait for auth message (only used for fallback)
 
     Returns:
         AuthResult if authenticated, None otherwise
     """
     try:
-        # Wait for auth message with timeout
-        raw_message = await asyncio.wait_for(
-            websocket.receive_text(),
-            timeout=timeout
-        )
+        token = None
 
-        message = json.loads(raw_message)
+        # Priority 1: httpOnly cookie (sent automatically with WS upgrade)
+        cookie_token = websocket.cookies.get("tsushin_session")
+        if cookie_token:
+            token = cookie_token
+            logger.info("Watcher WebSocket auth via httpOnly cookie")
 
-        if message.get("type") != "auth":
-            await websocket.send_json({
-                "type": "error",
-                "message": "Expected auth message as first message"
-            })
-            return None
-
-        token = message.get("token")
+        # Priority 2: First-message auth (fallback)
         if not token:
-            await websocket.send_json({
-                "type": "error",
-                "message": "Missing token"
-            })
-            return None
+            raw_message = await asyncio.wait_for(
+                websocket.receive_text(),
+                timeout=timeout
+            )
+
+            message = json.loads(raw_message)
+
+            if message.get("type") != "auth":
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Expected auth message as first message"
+                })
+                return None
+
+            token = message.get("token")
+            if not token:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Missing token"
+                })
+                return None
 
         # Validate JWT token
         payload = decode_access_token(token)

@@ -89,16 +89,19 @@ class CleanReport:
 class MemoryManagementService:
     """Service for managing agent memory"""
 
-    def __init__(self, db: Session, agent_id: int):
+    def __init__(self, db: Session, agent_id: int, tenant_id: str):
         """
         Initialize memory management service for specific agent.
 
         Args:
             db: Database session
             agent_id: ID of the agent to manage memory for
+            tenant_id: Tenant owning the agent (BUG-LOG-015: required for
+                belt-and-suspenders tenant scoping of Memory queries).
         """
         self.db = db
         self.agent_id = agent_id
+        self.tenant_id = tenant_id
 
         # Initialize contact service for resolving friendly names
         self.contact_service = ContactService(db)
@@ -221,8 +224,12 @@ class MemoryManagementService:
         """
         try:
             # Count conversations (unique sender_keys for this agent)
+            # BUG-LOG-015: tenant_id enforces cross-tenant isolation.
             conversations = self.db.query(Memory)\
-                .filter(Memory.agent_id == self.agent_id)\
+                .filter(
+                    Memory.agent_id == self.agent_id,
+                    Memory.tenant_id == self.tenant_id,
+                )\
                 .all()
 
             total_conversations = len(conversations)
@@ -276,8 +283,12 @@ class MemoryManagementService:
             List of ConversationSummary objects
         """
         try:
+            # BUG-LOG-015: tenant_id enforces cross-tenant isolation.
             conversations = self.db.query(Memory)\
-                .filter(Memory.agent_id == self.agent_id)\
+                .filter(
+                    Memory.agent_id == self.agent_id,
+                    Memory.tenant_id == self.tenant_id,
+                )\
                 .order_by(Memory.updated_at.desc())\
                 .all()
 
@@ -328,9 +339,11 @@ class MemoryManagementService:
         """
         try:
             # 1. Get working memory (ring buffer) from Memory table
+            # BUG-LOG-015: tenant_id enforces cross-tenant isolation.
             memory_record = self.db.query(Memory)\
                 .filter(and_(
                     Memory.agent_id == self.agent_id,
+                    Memory.tenant_id == self.tenant_id,
                     Memory.sender_key == sender_key
                 ))\
                 .first()
@@ -419,9 +432,11 @@ class MemoryManagementService:
         """
         try:
             # 1. Delete from Memory table (ring buffer)
+            # BUG-LOG-015: tenant_id enforces cross-tenant isolation.
             deleted_rows = self.db.query(Memory)\
                 .filter(and_(
                     Memory.agent_id == self.agent_id,
+                    Memory.tenant_id == self.tenant_id,
                     Memory.sender_key == sender_key
                 ))\
                 .delete()
@@ -473,9 +488,11 @@ class MemoryManagementService:
             cutoff_date = datetime.utcnow() - timedelta(days=older_than_days)
 
             # Find old conversations
+            # BUG-LOG-015: tenant_id enforces cross-tenant isolation.
             old_conversations = self.db.query(Memory)\
                 .filter(and_(
                     Memory.agent_id == self.agent_id,
+                    Memory.tenant_id == self.tenant_id,
                     Memory.updated_at < cutoff_date
                 ))\
                 .all()
@@ -516,17 +533,24 @@ class MemoryManagementService:
         """
         try:
             # 1. Count before deletion
+            # BUG-LOG-015: tenant_id enforces cross-tenant isolation.
             conversations_count = self.db.query(Memory)\
-                .filter(Memory.agent_id == self.agent_id)\
+                .filter(
+                    Memory.agent_id == self.agent_id,
+                    Memory.tenant_id == self.tenant_id,
+                )\
                 .count()
 
             facts_count = self.db.query(SemanticKnowledge)\
                 .filter(SemanticKnowledge.agent_id == self.agent_id)\
                 .count()
 
-            # 2. Delete from Memory table
+            # 2. Delete from Memory table (tenant-scoped)
             self.db.query(Memory)\
-                .filter(Memory.agent_id == self.agent_id)\
+                .filter(
+                    Memory.agent_id == self.agent_id,
+                    Memory.tenant_id == self.tenant_id,
+                )\
                 .delete()
 
             # 3. Delete from SemanticKnowledge table

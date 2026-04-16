@@ -5,7 +5,9 @@
 venv/
 .venv/
 __pycache__/
+**/__pycache__/
 *.py[cod]
+**/*.py[cod]
 *$py.class
 *.so
 
@@ -49,8 +51,8 @@ nul
 dist/
 build/
 
-# Ops scripts (not needed in container)
-ops/
+# BUG-349 FIX: ops/ is now included so test-user helpers are available
+# inside the container (e.g. docker exec tsushin-backend python3 /app/ops/create_test_users.py)
 # Note: tests/ included in image for integration testing
 # test_*.py and *_test.py patterns removed to allow tests
 

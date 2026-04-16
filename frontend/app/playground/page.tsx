@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, PlaygroundAgentInfo, PlaygroundMessage, AudioCapabilities, PlaygroundDocument, PlaygroundSettings, ProjectSession, Project, SlashCommand, PlaygroundThread } from '@/lib/client'
+import { api, authenticatedFetch, PlaygroundAgentInfo, PlaygroundMessage, AudioCapabilities, PlaygroundDocument, PlaygroundSettings, ProjectSession, Project, SlashCommand, PlaygroundThread } from '@/lib/client'
 import { formatTime } from '@/lib/dateUtils'
 import DocumentPanel from '@/components/playground/DocumentPanel'
 import PlaygroundSettingsModal from '@/components/playground/PlaygroundSettings'
@@ -23,6 +23,8 @@ import { getCachedProjectSession, setCachedProjectSession, clearCachedProjectSes
 import { getCachedProjects, setCachedProjects } from '@/lib/projectsCache'
 import { getCachedAgents, setCachedAgents } from '@/lib/agentsCache'
 import StreamingMessage from '@/components/playground/StreamingMessage'
+import { useDraftSave } from '@/hooks/useDraftSave'
+import { formatPastedContent } from '@/lib/smartPaste'
 import './cockpit.css'
 import './playground.css'
 
@@ -115,18 +117,31 @@ export default function PlaygroundPage() {
     activeThreadIdRef.current = activeThreadId
   }, [activeThreadId])
 
-  // Phase 14.9: WebSocket Hook for streaming - FORCE REBUILD v2
-  const wsToken = typeof window !== 'undefined' ? localStorage.getItem('tsushin_auth_token') : null
-  console.log('[Playground] Initializing WebSocket hook - token:', !!wsToken, 'user:', !!user, 'enabled:', useWebSocket && !!user)
+  // Smart UX: Draft auto-save hook
+  const { saveDraft, saveDraftImmediate, restoreDraft, clearDraft } = useDraftSave(activeThreadId, inputRef)
+
+  // Smart UX: Restore draft when switching threads
+  useEffect(() => {
+    restoreDraft()
+  }, [activeThreadId, restoreDraft])
+
+  // Phase 14.9: WebSocket Hook for streaming (SEC-005: cookie auth, no localStorage token)
+  if (process.env.NODE_ENV === 'development') console.log('[Playground] Initializing WebSocket hook - user:', !!user, 'enabled:', useWebSocket && !!user)
 
   const websocketConnection = usePlaygroundWebSocket(
-    wsToken,
     {
       enabled: useWebSocket && !!user,
       onStreamingMessage: (message) => {
         setStreamingMessage(message)
       },
       onMessageComplete: (message) => {
+        // BUG-398 fix: Guard against cross-thread message delivery
+        // If the incoming message belongs to a different thread, ignore it
+        const msgThreadId = message.metadata?.thread_id
+        if (msgThreadId && activeThreadIdRef.current && msgThreadId !== activeThreadIdRef.current) {
+          console.log(`[BUG-398] Ignoring message for thread ${msgThreadId} (active: ${activeThreadIdRef.current})`)
+          return
+        }
         // Add completed message to messages list
         setMessages((prev) => [...prev, message])
         setStreamingMessage(null)
@@ -145,15 +160,25 @@ export default function PlaygroundPage() {
         }
 
         // Refresh thread if active (to get proper message IDs from backend)
-        if (activeThreadId) {
-          api.getThread(activeThreadId).then(threadData => {
-            // Only update if messages have changed
-            if (JSON.stringify(threadData.messages) !== JSON.stringify(messages)) {
-              setMessages(threadData.messages || [])
-            }
-          }).catch(err => {
-            console.error('Failed to refresh thread after streaming:', err)
-          })
+        // Use ref to avoid stale closure over activeThreadId
+        const currentThreadId = activeThreadIdRef.current
+        if (currentThreadId) {
+          // Small delay to allow backend to commit the message before refreshing
+          setTimeout(() => {
+            api.getThread(currentThreadId).then(threadData => {
+              // Defense-in-depth: only update if backend has at least as many messages as local state
+              // This prevents replacing fresh conversation with stale/cross-thread data
+              setMessages(prev => {
+                if (!threadData.messages || threadData.messages.length < prev.length) {
+                  console.log('[Playground] Skipping thread refresh: backend has fewer messages than local state')
+                  return prev
+                }
+                return JSON.stringify(threadData.messages) !== JSON.stringify(prev) ? threadData.messages : prev
+              })
+            }).catch(err => {
+              console.error('Failed to refresh thread after streaming:', err)
+            })
+          }, 500)
         }
       },
       onThreadCreated: (threadId, title) => {
@@ -165,6 +190,58 @@ export default function PlaygroundPage() {
       onError: (error) => {
         setError(error)
         setStreamingMessage(null)
+      },
+      // Message Queue handlers
+      onQueueProcessingStarted: (queueId) => {
+        console.log('[Playground] Queue processing started for:', queueId)
+        // Update the placeholder message to show "Processing..."
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.message_id === `queue_${queueId}`
+              ? { ...msg, content: 'Processing your message...' }
+              : msg
+          )
+        )
+      },
+      onQueueMessageCompleted: (queueId, result) => {
+        console.log('[Playground] Queue message completed:', queueId, result)
+        if (result?.status === 'success' && result?.message) {
+          // Replace the placeholder queue message with the actual response
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.message_id === `queue_${queueId}`
+                ? {
+                    ...msg,
+                    content: result.message,
+                    timestamp: result.timestamp || msg.timestamp,
+                    message_id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  }
+                : msg
+            )
+          )
+          // Refresh thread to get proper message IDs from backend
+          if (activeThreadId) {
+            api.getThread(activeThreadId).then(threadData => {
+              setMessages(threadData.messages || [])
+            }).catch(err => {
+              console.error('Failed to refresh thread after queue completion:', err)
+            })
+          }
+          // Check for thread rename
+          if (result.thread_renamed && result.new_thread_title) {
+            setActiveThread(prev => prev ? { ...prev, title: result.new_thread_title } : null)
+            if (selectedAgentId) {
+              loadThreads(selectedAgentId)
+            }
+          }
+        } else {
+          // Remove the placeholder on error
+          setMessages((prev) => prev.filter((msg) => msg.message_id !== `queue_${queueId}`))
+          if (result?.error) {
+            setError(result.error)
+          }
+        }
+        setIsSending(false)
       },
     }
   )
@@ -336,10 +413,12 @@ export default function PlaygroundPage() {
 
   // Track banner render timing
   useEffect(() => {
-    if (projectSession?.is_in_project) {
-      console.log(`[TIMING] ✅ Banner RENDERED for project: ${projectSession.project_name} at ${performance.now()}ms`)
-    } else {
-      console.log(`[TIMING] Banner cleared/hidden at ${performance.now()}ms`)
+    if (process.env.NODE_ENV === 'development') {
+      if (projectSession?.is_in_project) {
+        console.log(`[TIMING] Banner RENDERED for project: ${projectSession.project_name} at ${performance.now()}ms`)
+      } else {
+        console.log(`[TIMING] Banner cleared/hidden at ${performance.now()}ms`)
+      }
     }
   }, [projectSession?.is_in_project, projectSession?.project_name])
 
@@ -618,9 +697,9 @@ export default function PlaygroundPage() {
       const cachedAgents = getCachedAgents(user.id)
       if (cachedAgents) {
         setAgents(cachedAgents)
-        // Auto-select first agent if available and none selected
+        // Auto-select default agent (or first) if available and none selected
         if (cachedAgents.length > 0) {
-          setSelectedAgentId(currentId => currentId === null ? cachedAgents[0].id : currentId)
+          setSelectedAgentId(currentId => currentId === null ? (cachedAgents.find(a => a.is_default) || cachedAgents[0]).id : currentId)
         }
       }
 
@@ -631,9 +710,9 @@ export default function PlaygroundPage() {
       // Update cache with fresh data
       setCachedAgents(user.id, data)
 
-      // Auto-select first agent if available and none selected
+      // Auto-select default agent (or first) if available and none selected
       if (data.length > 0) {
-        setSelectedAgentId(currentId => currentId === null ? data[0].id : currentId)
+        setSelectedAgentId(currentId => currentId === null ? (data.find(a => a.is_default) || data[0]).id : currentId)
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load agents')
@@ -677,10 +756,15 @@ export default function PlaygroundPage() {
         title: `New Conversation${agentNameSuffix}`
       })
 
+      // BUG-398 fix: Update ref immediately (before React batches the state update)
+      // to prevent stale closure in WebSocket callbacks from leaking old thread data
+      activeThreadIdRef.current = newThread.id
+
       // Navigate to the new thread immediately
       setActiveThreadId(newThread.id)
       setActiveThread(newThread)
       setMessages([])  // New thread has no messages yet
+      setStreamingMessage(null)  // Clear any in-flight streaming from old thread
 
       // Refresh thread list in background
       await loadThreads()
@@ -690,6 +774,9 @@ export default function PlaygroundPage() {
   }
 
   const handleThreadSelect = async (threadId: number) => {
+    // Smart UX: Save current draft before switching threads
+    saveDraftImmediate(activeThreadId)
+
     // Cancel previous request if still pending
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
@@ -713,9 +800,17 @@ export default function PlaygroundPage() {
       // Check if request was aborted
       if (signal.aborted) return
 
-      // Check for error code from backend
+      // Check for warning from backend (empty thread with no message history)
+      if ((threadData as any).warning) {
+        setThreadLoadError(null)
+        setMessages([])
+        setIsLoadingThread(false)
+        return
+      }
+
+      // Legacy: check for error code from backend
       if ((threadData as any).error_code === 'NO_MESSAGES_FOUND') {
-        setThreadLoadError((threadData as any).error_message || 'Failed to load conversation history')
+        setThreadLoadError(null)
         setMessages([])
         setIsLoadingThread(false)
         return
@@ -802,49 +897,38 @@ export default function PlaygroundPage() {
       }
 
       try {
-        console.log('[Phase 14.1] Loading threads for agent', selectedAgentId)
+        if (process.env.NODE_ENV === 'development') console.log('[Phase 14.1] Loading threads for agent', selectedAgentId)
         const result = await api.listThreads(selectedAgentId)
         const agentThreads = result.threads
-        console.log('[Phase 14.1] Loaded threads:', agentThreads.length)
+        if (process.env.NODE_ENV === 'development') console.log('[Phase 14.1] Loaded threads:', agentThreads.length)
 
         setThreads(agentThreads)
 
-        // Check if the most recent thread is empty (message_count === 0)
-        // Sort threads by updated_at to find the most recent one
-        const sortedThreads = [...agentThreads].sort((a, b) => {
-          const dateA = a.updated_at ? new Date(a.updated_at).getTime() : 0
-          const dateB = b.updated_at ? new Date(b.updated_at).getTime() : 0
+        // BUG-335 Fix: Look for ANY empty thread (message_count === 0 or undefined),
+        // not just the most recent one. This prevents creating a new orphan thread on
+        // every page load when the most recent thread already has messages.
+        // Sort all threads by created_at desc to find the most recently created empty one.
+        const sortedByCreated = [...agentThreads].sort((a, b) => {
+          const dateA = a.created_at ? new Date(a.created_at).getTime() : 0
+          const dateB = b.created_at ? new Date(b.created_at).getTime() : 0
           return dateB - dateA
         })
 
-        const mostRecentThread = sortedThreads[0]
+        // Find the most recently created thread with 0 messages
+        const emptyThread = sortedByCreated.find(t =>
+          t.message_count === 0 || t.message_count === undefined
+        )
 
-        if (mostRecentThread && mostRecentThread.message_count === 0) {
-          // Reuse the empty thread but update its title to default
-          console.log('[Phase 14.1] Reusing empty thread:', mostRecentThread.id)
+        if (emptyThread) {
+          // Reuse the empty thread — no need to create another orphan
+          console.log('[Phase 14.1] Reusing empty thread:', emptyThread.id, '(BUG-335 fix)')
 
-          // Get agent name for thread title
-          const agent = agents.find(a => a.id === selectedAgentId)
-          const agentNameSuffix = agent ? ` (${agent.name})` : ''
-          const defaultTitle = `General Conversation${agentNameSuffix}`
-
-          // Update thread title to default if it's different
-          if (mostRecentThread.title !== defaultTitle) {
-            try {
-              await api.updateThread(mostRecentThread.id, { title: defaultTitle })
-              // Update local thread object with new title
-              mostRecentThread.title = defaultTitle
-            } catch (err) {
-              console.warn('Failed to update thread title:', err)
-            }
-          }
-
-          setActiveThreadId(mostRecentThread.id)
-          setActiveThread(mostRecentThread)
+          setActiveThreadId(emptyThread.id)
+          setActiveThread(emptyThread)
           setMessages([])
         } else {
-          // Create a new thread if no empty thread exists
-          console.log('[Phase 14.1] Creating new thread for fresh conversation')
+          // Only create a new thread when ALL existing threads have messages
+          console.log('[Phase 14.1] All threads have messages — creating new thread for fresh conversation')
 
           // Get agent name for thread title
           const agent = agents.find(a => a.id === selectedAgentId)
@@ -890,6 +974,9 @@ export default function PlaygroundPage() {
       inputRef.current.value = ''
       inputRef.current.style.height = '52px'
     }
+
+    // Smart UX: Clear saved draft after sending
+    clearDraft()
 
     // Close inline commands if open
     setInlineCommandsOpen(false)
@@ -973,7 +1060,7 @@ export default function PlaygroundPage() {
         let sentViaWebSocket = false
 
         if (useWebSocket && websocketConnection.isConnected) {
-          console.log('[Playground] Sending via WebSocket')
+          if (process.env.NODE_ENV === 'development') console.log('[Playground] Sending via WebSocket')
           sentViaWebSocket = websocketConnection.sendMessage(
             selectedAgentId,
             userMessage,
@@ -982,21 +1069,45 @@ export default function PlaygroundPage() {
         }
 
         if (!sentViaWebSocket) {
-          console.log('[Playground] Sending via HTTP (fallback)')
+          const wsAvailable = useWebSocket && websocketConnection.isConnected
+          if (process.env.NODE_ENV === 'development') console.log('[Playground] Sending via HTTP (fallback), sync:', !wsAvailable)
 
-          // Send as regular message to agent with thread isolation (HTTP fallback)
+          // When WebSocket is unavailable, use sync mode so the response
+          // comes back inline — no WebSocket needed for delivery.
           const response = await api.sendPlaygroundMessage(
             selectedAgentId,
             userMessage,
-            activeThreadId || undefined  // Phase 14.1: Thread-specific messaging
+            activeThreadId || undefined,
+            !wsAvailable
           )
 
-          if (response.status === 'success' && response.message) {
+          if (response.status === 'queued' && response.queue_id) {
+            console.log('[Playground] Message queued:', response.queue_id, 'position:', response.position)
+            const queueMsgId = `queue_${response.queue_id}`
+            const queueMsg: PlaygroundMessage = {
+              role: 'assistant',
+              content: response.position && response.position > 0
+                ? `Queued (position ${response.position + 1})... Processing will begin shortly.`
+                : 'Processing your message...',
+              timestamp: response.timestamp,
+              message_id: queueMsgId,
+            }
+            setMessages((prev) => [...prev, queueMsg])
+          } else if (response.status === 'success' && response.message) {
           // Phase 14.2 FIX: Refresh messages from backend to get correct message_ids
           // This ensures edit/regenerate operations use the IDs stored in the database
           if (activeThreadId) {
             const threadData = await api.getThread(activeThreadId)
-            setMessages(threadData.messages || [])
+            const threadMessages = threadData.messages || []
+            // Phase 6: Inject image_url/image_urls into the last assistant message if present
+            if ((response.image_url || response.image_urls) && threadMessages.length > 0) {
+              const lastMsg = threadMessages[threadMessages.length - 1]
+              if (lastMsg.role === 'assistant') {
+                lastMsg.image_url = response.image_url
+                lastMsg.image_urls = response.image_urls
+              }
+            }
+            setMessages(threadMessages)
 
             // Check if thread was auto-renamed
             if (response.thread_renamed && response.new_thread_title) {
@@ -1013,7 +1124,9 @@ export default function PlaygroundPage() {
               role: 'assistant',
               content: response.message,
               timestamp: response.timestamp,
-              message_id: agentMsgId
+              message_id: agentMsgId,
+              image_url: response.image_url || undefined,  // Phase 6: Image generation
+              image_urls: response.image_urls || undefined,  // Phase 6: All generated images
             }
             setMessages((prev) => [...prev, agentMsg])
           }
@@ -1042,7 +1155,7 @@ export default function PlaygroundPage() {
     }
 
     try {
-      await api.clearPlaygroundHistory(selectedAgentId)
+      await api.clearPlaygroundHistory(selectedAgentId, activeThreadId || undefined)
       setMessages([])
       setError(null)
     } catch (err: any) {
@@ -1272,16 +1385,37 @@ export default function PlaygroundPage() {
       setInlineCommandsOpen(false)
       setInlineQuery('')
     }
+
+    // Smart UX: Auto-save draft on input change
+    saveDraft()
   }
+
+  // Smart UX: Handle paste with auto-formatting for JSON and code
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const text = e.clipboardData.getData('text/plain')
+    const formatted = formatPastedContent(text)
+    if (formatted !== null) {
+      e.preventDefault()
+      const textarea = e.currentTarget
+      const start = textarea.selectionStart
+      const end = textarea.selectionEnd
+      const before = textarea.value.substring(0, start)
+      const after = textarea.value.substring(end)
+      textarea.value = before + formatted + after
+      const newPos = start + formatted.length
+      textarea.selectionStart = newPos
+      textarea.selectionEnd = newPos
+      textarea.style.height = 'auto'
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px'
+      saveDraft()
+    }
+  }, [saveDraft])
 
   // Fetch available tools for the current agent
   const fetchAvailableTools = async (agentId: number) => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/tools/${agentId}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-        }
-      })
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'
+      const response = await authenticatedFetch(`${apiBase}/api/playground/tools/${agentId}`)
 
       if (response.ok) {
         const tools = await response.json()
@@ -1296,17 +1430,9 @@ export default function PlaygroundPage() {
   // Fetch available agents for invoke/switch commands
   const fetchAvailableAgents = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8081'}/api/playground/agents`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('tsushin_auth_token')}`
-        }
-      })
-
-      if (response.ok) {
-        const agentsData = await response.json()
-        const agentNames = agentsData.map((agent: any) => agent.name)
-        setAvailableAgents(agentNames)
-      }
+      const agentsData = await api.getPlaygroundAgents()
+      const agentNames = agentsData.map((agent) => agent.name)
+      setAvailableAgents(agentNames)
     } catch (error) {
       console.error('Failed to fetch available agents:', error)
     }
@@ -1666,6 +1792,8 @@ export default function PlaygroundPage() {
         // Phase 14.5 & 14.6: Search and Knowledge props
         onOpenSearch={() => setIsSearchOpen(true)}
         onExtractKnowledge={() => setIsKnowledgePanelOpen(true)}
+        // Smart UX: paste handler
+        onPaste={handlePaste}
       />
 
       {/* Modals */}

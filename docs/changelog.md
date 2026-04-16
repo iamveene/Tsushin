@@ -1,0 +1,1674 @@
+# Changelog
+
+All notable changes to the Tsushin project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Unreleased
+
+## v0.6.0-patch.4 (2026-04-16)
+
+Promotion of `develop` → `main`. Consolidates all post-patch.3 work (channels, installer SSL, memory scoping, sentinel parser, skill fixes, UX wizards, regression results) into the v0.6.0 release line. README refreshed with v0.6.0 highlights.
+
+### Slack & Discord setup wizards (`develop`, 2026-04-16)
+
+Replaces the bare `SlackSetupModal` / `DiscordSetupModal` (5 fields and a Save button with no context) with guided multi-step wizards modeled on `WhatsAppSetupWizard`. Surfaced because multiple QA testers got stuck on "where do I find a bot token?" / "what scopes do I need?" / "where does the webhook URL go?" — the bare modals demanded values without telling users where they live on Slack/Discord.
+
+**SlackSetupWizard** (`frontend/components/SlackSetupWizard.tsx`, 5 steps):
+1. **Welcome** — pick mode (Socket Mode recommended vs HTTP Events) with the trade-offs explained side-by-side. Yellow warning if HTTP mode is chosen while `tenant.public_base_url` is unset, with the `cloudflared` command inline.
+2. **Create App** — exact `api.slack.com/apps` clicks, plus the full Slack manifest JSON pre-filled with every required scope and bot event (with a Copy button). One paste covers OAuth scopes (`chat:write`, `channels:read/history`, `groups:history`, `im:read/write/history`, `mpim:history`, `files:write`, `users:read`, `app_mentions:read`), bot events, and the Socket Mode toggle.
+3. **Get Tokens** — branches on mode: Socket path walks through generating an App-Level Token with `connections:write`; HTTP path lists App ID + Signing Secret on Basic Information. Each step references the exact Slack menu location.
+4. **Paste & Save** — credentials form + DM policy + format validation (xoxb- / xapp- / hex), with HTTP-mode URL preview before saving.
+5. **Done** — for HTTP mode shows the exact Events Request URL (`{public_base_url}/api/channels/slack/{id}/events`) with a Copy button to paste back into Slack's Event Subscriptions; explains how to `/invite @bot` and assign an agent.
+
+**DiscordSetupWizard** (`frontend/components/DiscordSetupWizard.tsx`, 6 steps):
+1. **Welcome** — explains the HTTP Interactions architecture (vs Gateway), with a green ✓ if `public_base_url` is detected or amber warning + `cloudflared tunnel --url http://localhost:8081` inline if missing.
+2. **Create App** — Discord Dev Portal walkthrough including the captcha note.
+3. **Get Credentials** — three values (Application ID, Public Key, Bot Token) with where to find each, the Bot-page Privileged Intents toggle, AND the Installation-page scope/permissions config (`bot` + `applications.commands` scopes, with all 8 bot permissions enumerated and explained: View Channels, Send Messages, Send Messages in Threads, Read Message History, Embed Links, Attach Files, Add Reactions, Use Slash Commands).
+4. **Paste & Save** — credentials form with Ed25519 hex format validation (64 chars).
+5. **Set Webhook URL** — surfaces the exact `{public_base_url}/api/channels/discord/{id}/interactions` URL with a Copy button and the three Discord-portal clicks to paste it back. Explains the PING-PONG verification (only succeeds if Tsushin's per-tenant Ed25519 signature handler returns Type 1 to Discord's verification PING).
+6. **Invite Bot** — surfaces **both** install paths: Server Install (recommended, requires Manage Server) AND User Install fallback (no server permission needed — for personal Discord accounts that can't add bots to any guild). The User Install fallback was added because real-world testing on `iamveene` confirmed the dropdown shows "No items to show" when the user lacks Manage Server in any guild — historically a hard wall, now a one-click alternate path.
+
+**Hub crash fix:**
+- `frontend/app/hub/page.tsx` lines 3162 and 3243 were reading `integration.allowed_channels.length` and `integration.allowed_guilds.length` directly. Both fields became optional in `client.ts` after the first wave of channel work (matches what backend returns when no allowlist is configured), so the unguarded `.length` access crashed the entire Hub page with "Cannot read properties of undefined (reading 'length')" — manifesting as Chrome's "This page couldn't load" the moment any Slack or Discord integration existed without an allowlist. Fixed both with `?.length ?? 0`.
+
+**Files changed:**
+- `frontend/components/SlackSetupWizard.tsx` (new, 470 lines)
+- `frontend/components/DiscordSetupWizard.tsx` (new, 360 lines)
+- `frontend/components/SlackSetupModal.tsx` (deleted, superseded)
+- `frontend/components/DiscordSetupModal.tsx` (deleted, superseded)
+- `frontend/app/hub/page.tsx` (imports renamed + `.length` safety)
+
+### Slack & Discord channels — first complete E2E (`develop`, 2026-04-16)
+
+First-ever end-to-end test of the Slack and Discord channels surfaced multiple regressions and design gaps that blocked production use. Closes V060-CHN-001/002/031, BUG-313 frontend half, plus a previously hidden token-encryption defect that affected both channels.
+
+**Slack — Socket Mode worker (V060-CHN-002)**
+- New `backend/channels/slack/socket_worker.py` and `backend/services/slack_socket_mode_manager.py`. Spins up one `slack_sdk.socket_mode.aiohttp.SocketModeClient` per active `SlackIntegration` with `mode='socket'`. Wired into `app.py` lifespan (mirrors `TelegramWatcherManager`) and into `routes_slack.py` create/update/delete so workers start/stop on integration CRUD without a backend restart.
+- Listener signature fix: slack-sdk passes `(client, request)` to `socket_mode_request_listeners`, not `(request,)` — a one-arg callback raised `TypeError` on every event.
+- Filter: ignore non-message events, bot-authored messages (prevents reply loops), and events without `user`/`text`.
+
+**Slack — HTTP Events routing (V060-CHN-002 partial → fully wired)**
+- `routes_channel_webhooks.py` `slack_events()` now enqueues `event_callback` payloads to `message_queue` with `channel='slack'` (was a no-op TODO). Added the same bot/empty-message filter as Socket Mode.
+
+**Slack — `thread_ts` preservation (V060-CHN-031)**
+- `AgentRouter.route_message()` now stashes the inbound message's `thread_ts` (or `ts` if not already in a thread) on the router instance. `_send_message()` auto-injects `thread_ts` for outbound Slack adapter calls so replies thread under the original message instead of starting a new one. Verified visually in #new-channel ("Test 4 → Hello from Slack!" delivered as a threaded reply).
+
+**Discord — Interactions endpoint routing (was a stub)**
+- `routes_channel_webhooks.py` `discord_interactions()` was returning a Type 5 deferred ack and dropping the message. Now resolves the bound agent (via `Agent.discord_integration_id`), enqueues to `message_queue` with `channel='discord'`, then ACKs Discord within the 3-second window. The QueueWorker `_process_discord_message` dispatcher routes to AgentRouter via the existing DiscordChannelAdapter.
+
+**Token encryption symmetry (silent multi-tenant decrypt failure)**
+- `routes_slack.py` and `routes_discord.py` had been encrypting tokens with raw `Fernet(master_key)` while `AgentRouter._register_slack_adapter` / `_register_discord_adapter` and the new Slack Socket Mode worker decrypt via `TokenEncryption(master_key).decrypt(token, tenant_id)` (which derives a per-tenant Fernet key via PBKDF2). Net result: every saved Slack/Discord token failed to decrypt at use time with `Token decryption failed (invalid key or corrupted data)`. This was hidden until something actually tried to *use* the tokens. All four call sites (Slack create, Slack update, Discord create, Discord update) and the Slack signing-secret decryption in `routes_channel_webhooks.py` now use `TokenEncryption` consistently.
+
+**Queue worker message envelope (Slack/Discord dead-lettered with KeyError 'id')**
+- `_process_slack_message` and `_process_discord_message` now inject `id`, `chat_id`, and `timestamp` into the router message envelope. The router uses `message["id"]` as `MessageCache.source_id` (raised `KeyError: 'id'`) and `chat_id`-with-fallback-to-`sender` to pick the outbound recipient (was sending replies to the user-key namespace, not the Slack channel/Discord channel).
+
+**Tenant `public_base_url` (no in-app tunnel; clear UX guidance)**
+- New `tenant.public_base_url` column (nullable, alembic migration `0034_add_tenant_public_base_url.py`). New `/api/tenant/me/settings` endpoints (`GET` + `PATCH`) for tenant-self-service config, gated by `org.settings.write` for writes.
+- New `frontend/components/PublicBaseUrlCard.tsx` rendered in Hub → Communication. Tells the user: HTTPS URL where Slack HTTP Events / Discord Interactions can reach the backend; explicitly notes Socket Mode does not need this; suggests `cloudflared tunnel --url http://localhost:8081` for local dev.
+- The Slack and Discord setup modals query `/api/tenant/me/settings` on open and render the exact webhook URL (`{public_base_url}/api/channels/slack/<id>/events` and `…/discord/<id>/interactions`) the user must paste back into the third-party portal. Modals show a yellow inline warning when `public_base_url` is unset and HTTP/Interactions mode is selected.
+
+**Discord modal — missing `public_key` field (BUG-313 frontend gap)**
+- The Discord setup modal didn't collect `public_key`. Backend `DiscordIntegrationCreate` requires it (64 hex chars, Ed25519). Form submissions silently failed. Field added with format validation; instructions updated to point users to Discord Dev Portal → General Information → Public Key. `DiscordIntegrationCreate` TS type updated.
+
+**Slack modal — wrong field name `app_token` vs `app_level_token`**
+- Frontend was sending `app_token` but backend Pydantic field is `app_level_token`, so Socket Mode setup silently dropped the token. Fixed in `client.ts` interface and in the modal form payload.
+
+**Agent assignment UI — Slack & Discord were missing**
+- `frontend/components/AgentChannelsManager.tsx` only knew about playground/whatsapp/telegram/webhook in `AVAILABLE_CHANNELS`. Slack and Discord cards were never rendered, so users could not bind an agent to a Slack workspace or Discord bot via the UI even though the backend FKs (`Agent.slack_integration_id`, `Agent.discord_integration_id`) had existed since v0.6.0. Both channels now appear with the same instance-selector pattern as Telegram (loads `getSlackIntegrations()` / `getDiscordIntegrations()`, renders a radio list, persists via `api.updateAgent()`). `Agent` interface in `client.ts` gained `slack_integration_id` and `discord_integration_id`.
+
+**Branch hygiene + Next.js 16 config delta cherry-pick**
+- Cherry-picked the missing 5-file Next.js 16 config delta from the abandoned `codex-next16-upgrade` branch onto `develop` (commit 6888a2f): `next.config.mjs` adds `outputFileTracingRoot` and `turbopack.root` to silence workspace-detection warnings; `next-env.d.ts` adds the typed-routes reference. Build script and TS config were already on develop.
+- Deleted three stale local branches that had diverged from old `main`: `feature/remote-access-auth-hardening` (already an ancestor of develop), `pr-4` (image analysis skill — already in develop as commit 9d3a8ef), `codex-next16-upgrade` (config delta cherry-picked above).
+
+**Verification**
+- Slack Socket Mode end-to-end round-trip in #new-channel of the Archsec workspace, four sequential messages — final reply correctly threaded. `slack_socket_mode_manager` started a `SocketModeClient` for integration id=3 immediately on POST; backend log: `[STARTUP] Slack Socket Mode Manager initialized` then per-event ACK + enqueue.
+- Discord app `1494431647062298664` created with Public Key captured (Ed25519, 64 hex chars) and Message Content Intent enabled. Bot token reset and integration setup (E2E) require Discord MFA password reauth — left to the operator since the safety policy forbids auto-typing passwords.
+
+**Files changed (backend):** `backend/api/routes_channel_webhooks.py`, `backend/api/routes_slack.py`, `backend/api/routes_discord.py`, `backend/api/routes_tenant_settings.py` (new), `backend/agent/router.py`, `backend/services/queue_worker.py`, `backend/services/slack_socket_mode_manager.py` (new), `backend/channels/slack/socket_worker.py` (new), `backend/app.py`, `backend/models_rbac.py`, `backend/alembic/versions/0034_add_tenant_public_base_url.py` (new).
+
+**Files changed (frontend):** `frontend/lib/client.ts`, `frontend/components/SlackSetupModal.tsx`, `frontend/components/DiscordSetupModal.tsx`, `frontend/components/AgentChannelsManager.tsx`, `frontend/components/PublicBaseUrlCard.tsx` (new), `frontend/app/hub/page.tsx`, `frontend/next-env.d.ts`, `frontend/next.config.mjs`.
+
+### Installer SSL/TLS hardening (`feature/installer-ssl-validation`, 2026-04-16)
+
+Addresses concrete gaps in `install.py`'s HTTP, self-signed, Let's Encrypt, and manual-CA SSL modes. Reverse proxy remains Caddy — no certbot introduced (Caddy's built-in ACME client continues to handle Let's Encrypt issuance and renewal).
+
+- **Fixed self-signed SAN for IP-address installs:** When the configured domain is an IP literal (e.g., `10.211.55.5` — the Parallels VM case), the `-addext subjectAltName=` argument previously emitted `DNS:10.211.55.5`, which is invalid per RFC 5280 and is rejected by browsers/curl with strict verification. The SAN list now branches on `_is_ip(domain)` and emits `IP:10.211.55.5,DNS:localhost,IP:127.0.0.1,IP:::1` for IPs and `DNS:<host>,DNS:localhost,IP:127.0.0.1,IP:::1` for hostnames. Caddyfile generation was also updated — `default_sni` now falls back to `localhost` when the domain is an IP (Caddy rejects IP literals in `default_sni`), while the site-block label is still the IP.
+- **Manual-cert pre-flight validation:** `_prompt_manual_certs` now runs a new `_validate_cert_pair` helper (using the already-imported `cryptography` library) before copying files into `caddy/<stack>/certs/`. Checks: key/cert public-key match, not expired (warn if <30 days to expiry), SAN/CN covers the configured domain (prompts for confirmation if not), optional chain file parses and chains correctly. Hard errors now fail fast with actionable messages instead of deploying a broken cert and waiting for Caddy to crash with cryptic logs.
+- **Manual-cert chain/intermediate support:** New optional prompt `Path to certificate chain/intermediate bundle (optional, Enter to skip)`. When provided, the chain is appended to the leaf cert in `caddy/<stack>/certs/cert.pem` (Caddy reads a single bundled PEM). Resolves deployment failures with CAs that require an intermediate bundle (Sectigo, GoDaddy, etc.).
+- **Let's Encrypt pre-flight reachability:** `_validate_domain_dns` now additionally compares the server's public IP (fetched via ipify) against the domain's A/AAAA records and runs a plain HTTP HEAD against port 80 (the ACME HTTP-01 challenge path). Mismatches and unreachable hosts surface as warnings with a confirm prompt rather than blocking — CDN/Cloudflare/NAT setups remain valid.
+- **Let's Encrypt staging environment (`--le-staging` / interactive prompt):** Injects `acme_ca https://acme-staging-v02.api.letsencrypt.org/directory` into the Caddy global block. Lets operators test the full LE flow without consuming production rate-limit budget (5 failed validations per hostname per hour). Staging certificates are untrusted by browsers — the installer warns accordingly.
+- **Frontend rebuild on API URL change:** `NEXT_PUBLIC_API_URL` is baked into the Next.js image at build time. When re-running the installer with a changed SSL mode or domain, the installer now detects the change by diffing the previous `.env` and runs `docker compose build --no-cache frontend` before `up -d`. Without this, a cached image silently shipped the old URL and manifested as CORS errors or 404s at runtime.
+- **`_sync_cert_files` helper:** Collapses the three inline duplications that mirrored cert assets from `caddy/<stack>/certs/` to the legacy `caddy/certs/` path. Reduces the drift risk introduced by the IP-SAN and manual-cert changes.
+- **New unit tests:** `backend/tests/test_installer_ssl.py` (22 cases). Covers IP vs DNS SAN branching, Caddyfile generation for all four modes including staging, `_validate_cert_pair` against match / mismatch / expired / near-expiry / domain-mismatch / valid-chain / bad-chain fixtures, and the stale-IP-SAN detection + auto-regeneration migration path. All green locally.
+- **New CLI flag:** `--le-staging` (requires `--domain`).
+- **New `.env` keys:** `SSL_LE_STAGING`, `SSL_CERT_PATH`, `SSL_KEY_PATH`, `SSL_CERT_CHAIN_PATH` — all persisted so non-interactive re-runs (where the installer reads config from `.env` rather than prompting) retain the operator's SSL choices. Without this, re-runs silently flipped LE staging back to production and KeyError'd when `SSL_MODE=manual`.
+- **Stale IP-SAN auto-migration:** existing installs affected by the pre-fix DNS-for-IP SAN bug are detected on installer re-run — the old cert is deleted and regenerated with the correct `IP:<addr>` SAN. Without this, users upgrading over a broken cert would continue to hit `NET::ERR_CERT_COMMON_NAME_INVALID` until they manually removed the stale files.
+- **Files changed:** `install.py`, `backend/tests/test_installer_ssl.py` (new), `docs/changelog.md`, `docs/documentation.md`, `README.md`.
+
+### Bug Sprint: Logout Spinner + Memory Tenant Scoping + Sentinel Parser (`develop`, 2026-04-16)
+
+Closes the last three open items in `BUGS.md` (BUG-544, BUG-LOG-015, V060-SEC-001).
+
+- **BUG-544 fix (logout from `/` stuck on "Loading Tsushin…" spinner):** The `logout()` handler in `AuthContext.tsx` called `router.push('/auth/login')` after `setUser(null)`. While the async Next.js router transition was in flight, the current `/` route re-rendered with `user=null`, hitting `LayoutContent.tsx:188` (`if (loading || !user)`) and showing the loading spinner. Any delay or failure in the router transition left the user stuck on that spinner indefinitely. Replaced with a hard navigation (`window.location.href = '/auth/login'`) guarded by `typeof window !== 'undefined'` (SSR-safe), with a `router.push` fallback retained for the server-render branch. Hard-navigating kills all stale React state and forces a clean bootstrap at `/auth/login`.
+- **BUG-LOG-015 fix (Memory tenant-scoping on read paths):** The `Memory` model already had a non-null `tenant_id` column (alembic 0024) populated on every write path, but several read/delete query sites were still filtering by `agent_id` alone. Each was valid in practice (routes pre-validate the agent's tenant), but DB-level defense-in-depth was missing. Added `Memory.tenant_id == <tenant>` filters to every remaining read/delete site:
+  - `agent_memory_system.py` — load-all, get-by-sender, delete-by-sender.
+  - `memory_management_service.py` — `__init__` now accepts a required `tenant_id`; every internal Memory query filters by it (list / stats / get / delete / clean-old / reset-all).
+  - `routes_memory.py` — all 6 callers updated to pass `agent.tenant_id` (now captured from `verify_agent_access`'s return value).
+  - `playground_message_service.py` + `playground_thread_service.py` — memory lookups now filter by `thread.tenant_id`.
+  - `routes_playground.py:get_memory_layers` — filters by `current_user.tenant_id`.
+- **V060-SEC-001 fix (stale sentinel parser docstring + missing regression test):** The fix to derive `valid_types` dynamically from `DETECTION_REGISTRY.keys()` was already in `sentinel_service.py:1464` (from an earlier commit) but the docstring still advertised only 5 of the 9 valid threat types, and there was no unit test asserting that every registered detection type round-trips through `_parse_unified_response`. Rewrote the docstring to reference `DETECTION_REGISTRY` as the source of truth and added `backend/tests/test_sentinel_unified_parse.py` with 10 cases (8 parametrized dynamically over the registry + `none` + bogus) that will fail if any future refactor re-introduces a hard-coded allowlist.
+- **New tests:** `backend/tests/test_sentinel_unified_parse.py` (10 cases) and `backend/tests/test_memory_tenant_scoping.py` (7 cases). Added to the `.gitignore` allowlist so they ship in the repo. Both suites green (17/17 pass) against the rebuilt backend image.
+- **Files changed:** `frontend/contexts/AuthContext.tsx`, `backend/agent/memory/agent_memory_system.py`, `backend/agent/memory/memory_management_service.py`, `backend/api/routes_memory.py`, `backend/api/routes_playground.py`, `backend/services/playground_message_service.py`, `backend/services/playground_thread_service.py`, `backend/services/sentinel_service.py`, `.gitignore`, `backend/tests/test_sentinel_unified_parse.py`, `backend/tests/test_memory_tenant_scoping.py`.
+
+### Skills Ship with Empty Default Keywords (`develop`, 2026-04-16)
+
+- **Cleared default keyword arrays** in `get_default_config()` across 6 skills: `flows_skill`, `gmail_skill`, `agent_switcher_skill`, `browser_automation_skill`, `flight_search_skill`, `search_skill`. Keywords are now a legacy mechanism — with tool-based execution (LLM decides), they caused false-positive skill activations. Users can still configure their own keywords if needed.
+- **Web search provider switching tested E2E:** Brave Search (5 results from usatoday.com, nextspaceflight.com) then switched to Google/SerpAPI (5 results from wikipedia.org, reuters.com, uefa.com). Provider config correctly persisted and both providers returned different result sets.
+- **Flight search tested E2E:** Google Flights provider via SerpAPI returned 23 real flight options for JFK→LHR on 2026-05-15 with pricing (BRL 2000-2071), durations (6h 55m direct), and recommendations.
+
+### Email/Calendar & Hub Integration Fixes (`develop`, 2026-04-16)
+
+- **BUG-558 fix (Hub integrations endpoint 500):** `/api/hub/integrations` crashed with 500 when a `shell` type integration existed (leftover from BUG-510 probe). The `IntegrationResponse` model only handles asana/calendar/gmail. Now skips unknown types.
+- **BUG-559 fix (Google Calendar provider ignored):** Two issues: (1) `SchedulerSkill` passed `skill_type="scheduler"` to the factory but DB stores `"flows"`. (2) `FlowsSkill._get_provider()` checked `config.get('scheduler_provider')` before DB lookup, but `get_default_config()` hardcodes `scheduler_provider="flows"`, so the DB record (with `google_calendar`) was never reached. Fixed by always querying `AgentSkillIntegration` first. Now Google Calendar events return correctly (5 real events verified).
+- **Gmail Email skill tested E2E:** Gemini1 agent with Gmail (mv@archsec.io) successfully listed real emails via Playground UI.
+- **Google Calendar tested E2E:** Gemini1 agent with Calendar (movl2007@gmail.com) listed 5 real events (Visit Mother's Day, Lavar carro, Sync Kees, Consulta Dr Eliud, Consulta Dr Giovanni Grossi).
+- **Files changed:** `backend/api/routes_hub.py`, `backend/agent/skills/scheduler_skill.py`, `backend/agent/skills/flows_skill.py`
+
+### Automation Skill Quote-Stripping Fix (`develop`, 2026-04-16)
+
+- **BUG-557 fix (Automation flow_identifier with embedded quotes):** LLMs frequently send `flow_identifier` as `"\"3\""` instead of `"3"`, causing "Flow not found" errors. Added quote-stripping before flow lookup.
+- **Files changed:** `backend/agent/skills/automation_skill.py`
+
+### Knowledge Sharing Post-Response Hook Fix (`develop`, 2026-04-16)
+
+- **BUG-556 fix (Knowledge sharing not firing from Playground UI):** The WebSocket streaming service (`playground_websocket_service.py`) never invoked `_invoke_post_response_hooks()`, so knowledge sharing fact extraction and OKG auto-capture never ran when chatting via the Playground. Only the HTTP sync fallback had the hook. Added hook invocation after streaming completes.
+- **Files changed:** `backend/services/playground_websocket_service.py`
+
+### A2A Graph View Target Node Glow (`develop`, 2026-04-16)
+
+- **BUG-555 fix (A2A target node not glowing):** During inter-agent communication, the target agent's node in Graph View did not glow — only the A2A edge glowed amber. Now the target agent node pulses (`animate-pulse`) for the duration of the A2A session, with proper min-glow duration and coordinated fade-out.
+- **Files changed:** `frontend/hooks/useWatcherActivity.ts`
+
+### Agent Switching & WhatsApp LID Migration Fix (`develop`, 2026-04-16)
+
+- **BUG-559 fix (Kira can't switch agents):** Agent switcher's `execution_mode` was set to `"tool"` (LLM-only), disabling the keyword trigger path. When AI fallback classification failed (e.g., missing API key), the switch silently dropped. Changed default to `"hybrid"` so both keyword and LLM tool paths work. Also improved `_identify_sender` to normalize `@s.whatsapp.net` suffixes before contact lookup.
+- **BUG-560 fix (agent switch responses sent as audio):** In tool mode, the switch_agent result goes through the LLM response pipeline, which applies TTS if the agent has audio_tts enabled. Added `_skip_tts` check in the router's TTS section: when `tool_used` is `"skill:switch_agent"`, TTS is bypassed and the confirmation is sent as text.
+- **BUG-561 fix (UI agent assignment not taking effect):** `UserAgentSession` (from previous agent-switcher invocations) has absolute routing priority over `ContactAgentMapping` (set by UI). Changing the assigned agent in the UI updated the mapping but not the session, so messages kept going to the old agent. Added `_sync_user_agent_session()` helper that updates/creates/deletes the session whenever the ContactAgentMapping API is called.
+- **BUG-562 fix (WhatsApp LID sender format breaking contact identification):** WhatsApp transitioned from phone-based sender IDs (e.g., `5527999616279`) to Linked IDs (e.g., `259029628641423`). This broke contact lookup, UserAgentSession matching, and agent switching. Fixed with three changes: (1) auto-link LID as `whatsapp_id` on Contact when resolved via name matching, (2) UserAgentSession lookup falls back to contact's phone number and migrates the session identifier to the current LID, (3) `_sync_user_agent_session` searches by both phone and LID.
+- **Files changed:** `agent_switcher_skill.py`, `router.py`, `routes_agents.py`
+
+### Graph View Glowing & A2A Edge Regression Fix (`develop`, 2026-04-16)
+
+- **BUG-555 fix (WebSocket TLS + reconnection):** Graph View glow animations stopped working because Chrome's self-signed TLS cert trust didn't extend to WebSocket `wss://` connections (close code 1006). Fixed by importing Caddy root CA into macOS system Keychain. Also removed WebSocket reconnection limit — now retries indefinitely with 10s backoff cap. Added `visibilitychange` listener to auto-reconnect when user switches back to the tab.
+- **BUG-556 fix (streaming event cleanup):** Playground streaming path emitted an orphaned `agent_processing: start` event before delegating to `send_message()`, which emitted its own start/end pair. Removed the duplicate; `send_message()` now solely manages AI-path events. Added explicit start for skill-only streaming path.
+- **BUG-559 fix (stale A2A edges):** Removing the `agent_communication` skill from an agent left orphan A2A permission records, causing the Graph View to show stale amber edges to the old agent. Added auto-cleanup: disabling the A2A skill now deletes all related permissions.
+- **BUG-558 fix (tester delete button):** Added Delete button to QA Tester card in Hub for both runtime instances and compose-managed orphans.
+- **BUG-557 fix (glow brightness):** Increased all glow animation brightness 33% (opacity 0.6→0.8 close, 0.3→0.4 far). Added `inset` inner glow and `border-width: 2px` during active state for better visibility on dark backgrounds.
+- **BUG-558 fix (tester delete button):** Added Delete button to QA Tester card in Hub. Handles runtime tester instances (API delete) and compose-managed orphans (dismiss card). Resolves catch-22 where container was gone but config card remained without any way to remove it.
+
+### OKG & MCP Skill Regression Fixes (`develop`, 2026-04-16)
+
+- **BUG-551 fix (OKG multi-tool registration):** The deprecated `get_skill_tool_definitions()` method (used by the main agent pipeline) only registered `okg_store` via the single-tool `get_mcp_tool_definition()` call, leaving `okg_recall` and `okg_forget` invisible to the LLM. Added multi-tool branch that checks `get_all_mcp_tool_definitions()` and registers all tools when count > 1.
+- **BUG-552 fix (string-to-array coercion):** LLMs frequently send `tags` fields as comma-separated strings instead of JSON arrays, causing `"Field 'tags' must be an array"` validation errors. Added automatic string-to-array coercion in `_validate_arguments()`.
+- **BUG-553 fix (string-to-boolean coercion):** LLMs send boolean fields like `include_symbols` as string `"true"`/`"false"` instead of native booleans, causing validation errors. Added string-to-boolean coercion.
+- **BUG-554 fix (MCP SSRF blocking Docker containers):** The MCP connection manager's SSRF validator blocked private IPs (Docker network addresses) during `get_or_connect()`, even though the creation route already allowed them via `allow_private=True`. Added `allow_private=True` to the connection manager's SSRF check for consistency.
+- **Files changed:** `skill_manager.py`, `connection_manager.py`
+
+### TTS Audio Response Regression Fix (`develop`, 2026-04-16)
+
+- **BUG-548 fix (Kokoro TTS):** Kokoro TTS container was not running — it requires `docker-compose --profile tts` to start. Started the container; verified synthesis and WhatsApp audio delivery working.
+- **BUG-549 fix (OpenAI TTS / tenant_id not propagated):** The TTS pipeline never passed `tenant_id` from the router through the TTS skill to the TTS provider's `get_api_key()` call. Only system-wide keys (tenant_id=NULL) were searched, making tenant-specific keys invisible. Fixed by adding `tenant_id` parameter across the full chain: `TTSProvider` base class → `TTSProviderRegistry.get_provider()` → `AudioTTSSkill.process_response()` → `router.py`.
+- **BUG-550 fix (Provider instance key not used for TTS):** `get_api_key()` only checked the `api_key` table (Service API Keys), but users configure OpenAI keys as Provider Instances in Hub → AI Providers. Added Step 3 fallback to `get_api_key()`: when no service API key exists, resolves the default `provider_instance` for the matching vendor. This allows TTS to reuse the same OpenAI key configured for LLM chat without requiring a separate Service API Key entry.
+- **Files changed:** `tts_provider.py`, `tts_registry.py`, `audio_tts_skill.py`, `router.py`, `openai_tts_provider.py`, `elevenlabs_tts_provider.py`, `kokoro_tts_provider.py`, `api_key_service.py`
+
+### Fact Extraction Visibility Fix (`develop`, 2026-04-16)
+
+- **BUG-546 fix:** Knowledge list endpoint (`GET /api/agents/{id}/knowledge`) now returns all facts across all users when no `user_id` filter is provided. Previously returned empty due to unimplemented stub.
+- **BUG-547 fix:** Playground Memory Inspector now correctly displays extracted facts. The inspector queried facts using the bare sender key (`playground_u1_a17_t44`) while facts were stored with a `sender_` prefix (`sender_playground_u1_a17_t44`). Added fallback prefix resolution to match both formats.
+- **New method:** `KnowledgeService.get_all_agent_facts()` for bulk fact retrieval across all users.
+
+### UX Wizards & Skill Error Handling (`develop`, 2026-04-15)
+
+- **Per-Agent Vector Store Selector:** Added a "Vector Store" section to the Agent Configuration page (Studio > Agent > Configuration) with a dropdown to select a specific vector store instance for the agent, overriding the tenant default. Includes a mode selector (Override/Complement/Shadow) and a status indicator showing whether the agent uses a per-agent override, tenant default, or built-in ChromaDB.
+- **Vector Store Creation Wizard — Attach to Agents:** After creating a new vector store in Hub > Vector Stores, a wizard step appears to optionally assign the new store to one or more existing agents directly from the modal. Eliminates the need to navigate to each agent's configuration page separately.
+- **MCP Server Creation Wizard:** After creating a new MCP server in Hub > MCP Servers, a 3-step wizard guides users through: (1) reviewing discovered tools, (2) creating a custom skill linked to an MCP tool, and (3) assigning the skill to agents. Each step is skippable.
+- **Improved Skill Error Handling:** Backend skill operations now return specific error messages (ValueError for validation issues) instead of a generic "Skill operation failed" message. Frontend displays the actual error detail to users.
+
+### Comprehensive Regression Results (`develop`, 2026-04-15)
+
+Full platform regression covering infrastructure, auth, Studio, Hub, Flows, Playground, Settings, API v1, and WhatsApp.
+
+| Phase | Scope | Result |
+|-------|-------|--------|
+| A | Infrastructure (health, readiness, metrics) | PASS |
+| A | Auth — tenant owner, global admin, member RBAC | PASS |
+| A | Navigation — all 6 nav links | PASS |
+| B | Studio — agent list, configuration (inc. new Vector Store section), all 7 tabs | PASS |
+| B | Studio — add every built-in skill to agent | PASS |
+| B | Studio — agent creation, sub-pages (contacts, personas, projects, security, builder, custom skills) | PASS |
+| C | Hub — all tabs (AI Providers, WhatsApp, Telegram, Slack, Discord, Webhooks, MCP, Vector Stores) | PASS |
+| C | Flows — list, detail/editor | PASS |
+| C | Playground — agent chat (sync HTTP) | PASS |
+| C | Settings — all sub-pages (org, team, integrations, system-ai, sentinel, vector-stores, slash-commands, api-clients, billing, advanced) | PASS |
+| API | v1 — OAuth2 token, agents, chat, skills, personas, tone-presets, security-profiles, tools | 8/8 PASS |
+| WhatsApp | Session active, messages processing | PASS |
+
+**Issues found:** BUG-543 (Hub integrations 500, pre-existing), BUG-544 (logout redirect, pre-existing, low).
+
+### Playground & AI Client Fixes (`develop`, 2026-04-15)
+
+- **Playground stuck at "Processing your message..." when WebSocket unavailable (CRITICAL):** The HTTP fallback path used async queue mode, which depends on WebSocket for result delivery. When `wss://` fails (e.g. self-signed cert not trusted for programmatic WebSocket connections), the queue result notification never reaches the frontend. Fixed: HTTP fallback now uses `?sync=true` when WebSocket is disconnected, so the LLM response returns inline in the HTTP response. No WebSocket dependency for basic chat functionality.
+- **Gemini 2.5 "thinking" models return empty responses:** Multi-part response extraction failed for Gemini 2.5 thinking models that return `thought` parts alongside text parts. The `response.text` quick accessor raises `ValueError`, and the fallback extraction used `hasattr(part, 'text')` which doesn't handle all SDK variations. Fixed: robust extraction that skips `thought` parts and uses `getattr()` safely with inner exception handling.
+
+### Seed & Init Fixes (`develop`, 2026-04-15)
+
+- **Subscription plans not seeded on PostgreSQL fresh installs (CRITICAL):** Plans were only inserted via the SQLite-only migration (`migrations/add_plans_and_sso.py`), leaving the `subscription_plan` table empty on every Postgres-backed deployment. Added `backend/services/plan_seeding.py` with the canonical plan definitions and wired it into `db.init_database()` so plans are seeded idempotently on every startup for both backends. Migration `0033` backfills `tenant.plan_id` for tenants created before this fix.
+- **`tenant.plan_id` FK not set on signup:** `auth_service.signup()` set the legacy `plan` string but left `plan_id` NULL. Updated to resolve the `free` plan row and populate `plan_id` on tenant creation.
+- **Default agent limit raised to 10:** Existing tenants capped at 5 agents (old model default) are bumped to 10 via migration `0032`. `auth_service.py` and `models_rbac.py` defaults already reflect 10 for new installs.
+- **Dynamic provider/model dropdowns:** Provider and model selectors in all agent creation UIs (`/agents` Create modal, Studio `+` button, `AgentConfigurationManager`, Playground config panel) now fetch from configured Hub instances at runtime. No more hardcoded vendor lists — adding a new provider in Hub > AI Providers automatically makes it available everywhere. Shared `VENDOR_LABELS` map exported from `client.ts`.
+
+### Ubuntu VM v0.6.0 Full E2E Audit (`develop`, 2026-04-15)
+
+Comprehensive fresh-install end-to-end QA on Ubuntu 24.04 aarch64 (VM `10.211.55.5`, HTTP mode). All AI providers configured: Gemini (default), OpenAI, Anthropic, Vertex AI (us-east5), Brave Search, Tavily.
+
+**Test Coverage (all TCs completed):**
+
+| TC | Feature | Result |
+|----|---------|--------|
+| TC-1 | Health/readiness/metrics | PASS |
+| TC-2/3 | Auth — tenant admin + global admin | PASS |
+| TC-4–11 | Core UI pages (Dashboard, Agents, Playground, Flows, Hub, Settings, System) | PASS |
+| TC-14/21 | LLM provider matrix (Gemini, OpenAI, Anthropic, Vertex AI, Brave, Tavily) | PASS |
+| TC-15 | Web Search (Brave Search — 5 results) | PASS |
+| TC-16 | Image Generation | PASS |
+| TC-17 | ACME Sales KB — CSV upload + price recall | PASS |
+| TC-18/19 | A2A delegation (Tsushin → ACME Sales) | PASS |
+| TC-25 | Sentinel — injection + poisoning detected | PASS |
+| TC-26 | Custom Skills — instruction, script, MCP-backed | PASS |
+| TC-27 | Shell beacon + slash commands (/shell, /inject, /tool, /status, /clear) | PASS |
+| TC-28 | API v1 — OAuth2, sync/async chat, thread retrieval | PASS |
+| TC-29 | Flows — notification + agentic | PASS |
+| TC-30 | Projects KB — upload + semantic recall (similarity=0.85) | PASS |
+| TC-23 | Memory isolation — isolated PASS; shared PARTIAL (OKG vector store gap) | PARTIAL |
+| TC-24 | Vector Stores — auto-provisioned Qdrant healthy, manual instance created | PASS |
+| TC-31 | A2A Graph View — 9 nodes, 14 connections | PASS |
+
+**New bugs filed:** BUG-538 (toolbox not built by installer), BUG-539 (Sentinel DetachedInstanceError in shell), BUG-540 (OKG no vector store provider on fresh install).
+**Previously fixed confirmed:** BUG-531, BUG-532, BUG-534 — all PASS.
+
+---
+
+### Docs Structure Reorganization (`develop`, 2026-04-15)
+
+Moved the canonical markdown documentation set into `docs/` to keep the repository root focused on runtime and project-entry files. Added `docs/README.md` as the docs index, standardized canonical markdown filenames under `docs/` to lowercase kebab-case, updated repository and tooling references to point at the canonical `docs/` paths, kept root compatibility stubs for older links, and repointed the backend help-panel mount so `/app/USER_GUIDE.md` still resolves inside containers.
+
+### Bug Fixes — BUG-531 through BUG-537 (`develop`, 2026-04-15)
+
+Resolved all 7 open bugs surfaced by the fresh-install v0.6.0 regression audit.
+
+**Backend fixes:**
+- **BUG-531** — `GET /api/personas` (no trailing slash) was issuing a 307 redirect that dropped the `Authorization` header. Fixed by stacking a second `@router.get("", include_in_schema=False)` decorator on the list endpoint in `routes_personas.py` and setting `redirect_slashes=False` on the router. Both `/api/personas` and `/api/personas/` now return 200 directly.
+- **BUG-532** — `GET /api/personas/` and `GET /api/tones` returned empty lists because the `filter_by_tenant` call was missing `include_shared=True`, excluding system presets with `tenant_id = NULL`. Added `include_shared=True` to `routes_personas.py:184` and `routes_agents.py:286`.
+- **BUG-534** — `GET /api/tenants/` and `GET /api/admin/users/` returned entity-keyed pagination objects (`tenants`, `users`) instead of the standard `items` key. Renamed fields in `TenantListResponse` and `GlobalUserListResponse` and updated all callers in the frontend (`client.ts`, `system/tenants/page.tsx`, `system/users/page.tsx`).
+
+**Frontend fixes:**
+- **BUG-536** — The onboarding tour re-appeared on every page reload because `tourStartedRef` (an in-memory ref) was reset on each mount. Fixed by persisting a `tsushin_onboarding_started:{userId}` key to localStorage when the tour first auto-starts, reading it back on mount to restore `tourStartedRef`, and clearing it on dismiss/skip/complete. Fix in `frontend/contexts/OnboardingContext.tsx`.
+
+**Documentation fixes:**
+- **BUG-533** — Added a path-correction table to `docs/documentation.md` §25.4 mapping each legacy 404 path to its actual working equivalent.
+- **BUG-535** — Added explicit `-H "Content-Type: application/x-www-form-urlencoded"` to the OAuth2 curl examples in both `CLAUDE.md` and `docs/documentation.md` §25.1. Omitting this header causes FastAPI to return a misleading 422.
+- **BUG-537** — Added a "Fresh-install note" to `docs/documentation.md` §27 explaining that the tester MCP is not bundled by default and documenting the manual provisioning steps via Hub → Communication → WhatsApp.
+
+### Documentation Alignment Pass (`develop`, 2026-04-15)
+
+Aligned the repository docs with the current `develop` runtime and setup flow. Updated the README, comprehensive docs, user guide, Docker deployment guide, and backend service docs to reflect Next.js 16, the current `/setup` behavior, Docker Compose v2 rebuild syntax, the absence of a root `testing` profile, current provider/tester surfaces, and the external `tsushin-network` rebuild caveats.
+
+### Fresh Install v0.6.0 E2E Validation — LAN/HTTP Mode (`develop`, 2026-04-15)
+
+Full fresh-install QA on macOS (LAN IP `192.168.15.2`, HTTP mode, stack name `tsushin-fi`). Install via `python install.py --defaults --http`. All AI providers configured via API (Anthropic, OpenAI, Gemini, Brave Search, Tavily).
+
+**API Test Results (43 tests via dedicated tester agent):**
+- Infrastructure, auth (tenant + admin + wrong-password rejection), agent CRUD, OAuth2 v1, sync/async chat with queue polling, flows, vector stores, and admin authorization: all PASS
+- Bugs found: BUG-531 (personas redirect drops auth header), BUG-532 (system personas/tones return empty for tenant), BUG-533 (6 documented API paths return 404), BUG-534 (admin pagination uses entity keys not `items`), BUG-535 (OAuth2 token requires explicit Content-Type)
+
+**Browser Test Results (Playwright):**
+- Login, Dashboard/Watcher, Agent Studio (all tabs: Agents, Contacts, Personas, Projects, Security/Sentinel, Builder, Custom Skills): PASS
+- Playground AI chat (`FRESH_INSTALL_OK` confirmed): PASS
+- Flows page, Integration Hub (all tabs incl. Vector Stores with Qdrant auto-provisioned): PASS
+- Settings, Shell Command Center (`/hub/shell`), Remote Access (`/system/remote-access`, cloudflared binary confirmed): PASS
+- New bugs found: BUG-536 (User Guide tour re-appears on every page navigation per new user), BUG-537 (tester MCP not in fresh install compose)
+
+**WhatsApp:** Skipped — tester MCP container not included in fresh install stack; WhatsApp instance provisioning UI confirmed functional (dialog loads, communication tab renders). Documented as BUG-537.
+
+**Verdict:** Fresh install is **PASSING** for all automated test categories. 7 new bugs logged (BUG-531 to BUG-537), all LOW/MEDIUM severity. Core functionality fully operational on fresh HTTP install.
+
+---
+
+### Build Performance Quick-Wins (`develop`, 2026-04-15)
+
+Five Dockerfile optimizations to reduce cold-build times and BuildKit cache churn:
+
+- **Item 1 — Toolbox pip cache mount:** Added `--mount=type=cache,target=/root/.cache/pip` to `Dockerfile.toolbox` pip install (previously used `--no-cache-dir`, defeating BuildKit layer caching).
+- **Item 2 — Split requirements (already done):** `requirements-base.txt`, `requirements-app.txt`, `requirements-optional.txt`, `requirements-phase4.txt` already in place; verified all user-listed optional packages (`kubernetes`, `google-cloud-secret-manager`, `qdrant-client`, `pinecone`, `pymongo`) are controlled by the existing `INSTALL_OPTIONAL_DEPS` ARG.
+- **Item 3 — Playwright base image:** Runtime stage switched from `python:3.11-slim` to `mcr.microsoft.com/playwright/python:v1.48.0-jammy`. Removes the 14-package Playwright system-dep `apt-get` block and the `playwright install chromium` step (~1.1 GB browser download) — Chromium + all deps are pre-installed in the base layer. `PLAYWRIGHT_BROWSERS_PATH` updated from `/opt/playwright-browsers` to `/ms-playwright` (base-image path).
+- **Item 4 — Optional deps behind build args (already done):** `INSTALL_OPTIONAL_DEPS=true` ARG confirmed to cover all five optional packages; no change needed.
+- **Item 5 — Nuclei (and all PD tools) download cache mount:** `Dockerfile.toolbox` now caches all four ProjectDiscovery binary downloads (nuclei, katana, httpx, subfinder) via `--mount=type=cache,target=/tmp/pd-cache` with a file-existence check. Subsequent builds reuse cached zips instead of re-downloading from GitHub Releases.
+
+Also added `# syntax=docker/dockerfile:1.4` header to `Dockerfile.toolbox` to enable BuildKit cache-mount syntax.
+
+### Bug Sprint — `BUG-514` to `BUG-525` resolved (`develop`, 2026-04-11)
+
+Closed the 12 open bugs from `BUGS.md` in four coordinated clusters covering frontend auth/onboarding UX, Remote Access, backend app logic, and MCP runtime/tester/toolbox behavior.
+
+- **Cluster 1 — Frontend UX/Auth (`BUG-514`, `BUG-515`, `BUG-516`):** Replaced browser-native email gating with app-managed validation that still preserves autofill/mobile keyboard behavior; made onboarding persistence user-scoped and resilient to auth-context reloads; replaced the affected Memory Inspector and Hub confirmation/alert flows with app toasts and modals.
+- **Cluster 2 — Remote Access (`BUG-517`, `BUG-519`):** Made the fallback migration Postgres-safe, changed defaults/backfills to the stack proxy target (`http://tsushin-proxy:80` / stack-aware equivalent), aligned the System UI copy, and fail-closed tunnel startup when the proxy/Caddy layer is unavailable.
+- **Cluster 3 — Backend app logic (`BUG-518`, `BUG-520`, `BUG-521`, `BUG-522`):** Added exact-match-first plus suffix-stripping fallback for A2A agent names; made blank-stdout script tests fail closed; preserved transcript integrity for Sentinel `detect_only` flows while still filtering transcript-only turns from reusable memory; added curated Vertex AI discovery fallbacks.
+- **Cluster 4 — MCP runtime / tester / toolbox (`BUG-523`, `BUG-524`, `BUG-525`):** Added short DNS-safe aliases for runtime WhatsApp containers, switched tester fallback to real runtime instance fields with `source=runtime` preservation, made the Hub tester card source-aware, and aligned the stdio launcher story around the shipped toolbox `uvx` runtime.
+
+**Validation:** Preflight disk/docker checks, safe no-cache rebuild of `backend` and `frontend`, health/readiness verification, focused backend suites plus an integrated 41-test regression slice, toolbox `uvx` verification inside `tsushin-toolbox:base`, browser automation for `.local` login/error handling, onboarding persistence across users/routes/refresh, Memory Inspector toast/modal flows, and Hub API-key confirmation modal behavior.
+
+### Fresh Install v0.6.0 Audit (`develop`, 2026-04-11)
+
+Recorded the disposable fresh-install audit run from `.private/installations/fresh-install-v060-20260411-081937/tsushin`, including restore-manifest handling, API plus Playwright coverage, Quick Tunnel validation, provider/vector-store setup, and the user-directed skip of the final WhatsApp message exchange after QR blockers were reproduced.
+
+- **New bugs logged:** `BUG-519` through `BUG-524` in `BUGS.md`
+- **Revalidated open:** `BUG-515` (Welcome Tour persistence) and `BUG-516` (User Guide dialog interference)
+- **Highest-impact findings:** Quick Tunnel still defaults to `http://frontend:3030` and leaves public `/api/*` routes unreachable; script custom-skill tests can return `success=true` with blank output; Playground thread detail/memory inspector can lose the user turn; Vertex AI discovery returns zero models on a healthy provider instance; runtime WhatsApp QR/health resolution breaks on long stack-prefixed MCP names; dedicated tester QR controls still target missing compose `tester-mcp` instead of the active runtime tester instance.
+
+### Ubuntu VM v0.6.0 Fresh-Install Regression Audit (`develop`, 2026-04-11)
+
+Full interactive fresh-install QA on Ubuntu 24.04 aarch64 (`10.211.55.5`). All 31 TCs executed via API (curl) and browser automation (Playwright). Install path: `/home/parallels/code2/tsushin-v060-20260411-084511/`. All integrations configured: Gemini (default/gemini-2.5-flash), OpenAI, Anthropic, Ollama (reconfigured to `0.0.0.0:11434` for Docker bridge access), Brave Search, Tavily.
+
+**Pass summary (evidence screenshots in `output/playwright/`):**
+- TC-0: Setup wizard — org `Tsushin QA`, tenant admin `test@example.com`, providers auto-configured, global admin credentials displayed
+- TC-1/2/3: Health/readiness, tenant login (no System section), global admin verified via API (browser blocked by BUG-514)
+- TC-4–TC-10: Dashboard/Watcher tabs, Studio (7 agents including ACME Sales), Playground chat, Memory Inspector, Flows page, Hub page, all 15 Core sub-pages
+- TC-11: System admin endpoints via API (`/api/tenants/`, `/api/system/status`, `/api/admin/remote-access/tenants`) — all 200
+- TC-14/TC-21: AI providers (Gemini/OpenAI/Anthropic/Ollama) + Tool APIs (Brave Search/Tavily saved via API workaround due to BUG-516)
+- TC-15: Brave web search — live results from Reuters, TIME, ScienceDaily returned in Playground
+- TC-16: Image generation — "Image generated successfully!" confirmed in Playground
+- TC-17: ACME Sales agent + KB (`acme_products.csv`) — "The Laptop Pro X (SKU: LPX-001) is priced at $1299." with "1 doc used (Agent)" tag
+- TC-18/TC-19: A2A permission (Tsushin→ACME Sales, depth=2, 10RPM) + delegation — "The ErgoMouse has a price of $55 and an SKU of EMX-002."
+- TC-25: Sentinel config enabled with all detection types active; 0 events in log (no attacks in session)
+- TC-27: Sandboxed tools via API — `/tool dig lookup domain=example.com` returns DNS IPs; `/status` returns agent/session state
+- TC-28: API v1 — OAuth2 token exchange, X-API-Key auth, all `/api/v1/*` endpoints 200, sync chat responding
+- TC-29: Flows page rendered; 2 flows created (notification + agentic/workflow)
+- TC-30: Project "ACME QA Project" created + conversation started
+- TC-31: A2A sessions API confirms 1 completed session, 100% success rate, 2091ms avg response time
+- TC-13: 0 ERROR/CRITICAL backend log lines across the full test run
+
+**Findings: 6 new bugs (BUG-514 through BUG-518, BUG-525):**
+- `BUG-514` — `.local` TLD silently rejected by frontend email validator (blocks global admin browser login)
+- `BUG-515` — Welcome Tour modal reappears on every page navigation (state not persisted)
+- `BUG-516` — `window.alert()` suppressed by native `<dialog>` User Guide (blocks fact creation and API key save UI)
+- `BUG-517` — `add_remote_access` migration startup WARN: `enabled` boolean/integer mismatch (non-blocking)
+- `BUG-518` — A2A skill agent lookup fails when user appends " agent" suffix in natural language query
+- `BUG-525` — `uvx` binary absent from backend Docker image; stdio MCP servers non-functional on fresh installs without manual ad-hoc install
+
+**Supplemental coverage (continued session):**
+- TC-23: Memory isolation verified — isolated memory blocks cross-user access (user_B cannot see user_A facts on isolated agent), shared memory pool functional (23 tenant-wide facts visible)
+- TC-26: MCP server (stdio `uvx mcp-server-fetch`) registered and connected, `fetch` tool discovered, Sentinel scan clean; all 3 custom skill types created (instruction/script/mcp_server), instruction skill invocation confirmed ("Hello from custom skill!" prefix); `uvx` required manual container install (BUG-525)
+- TC-31: Graph View browser-verified — 12 nodes / 20 connections, live green indicator; A2A Comms tab shows `Tsushin → ACME Sales` session as completed (depth 1/2, 2 msgs). Screenshots: `output/playwright/tc31-graph-view.png`, `output/playwright/tc31-a2a-comms.png`
+
+### Bug Sprint — 8 bugs resolved (`develop`, 2026-04-10 evening)
+
+Closeout of the remaining open bugs from the 2026-04-10 Ubuntu VM fresh-install QA.
+
+- **BUG-506 — API v1 `model_provider` now accepts `vertex_ai`:** Added `vertex_ai` to the pattern on both `AgentCreateRequest` (`backend/api/v1/routes_agents.py:100`) and `AgentUpdateRequest` (line 163), matching the internal/tenant API. Regenerated `docs/openapi.json` from the live backend so generated SDKs stop rejecting Vertex AI as an invalid provider.
+- **BUG-507 — Ollama health fallback:** Wrapped `getOllamaHealth()` in `frontend/lib/client.ts` in a try/catch that returns `{available: false, models: []}` on any fetch/HTTP error. Optional Ollama checks on `/agents`, `/hub`, and Playground config panels no longer surface red console errors on healthy installs.
+- **BUG-508 — `/agents/communication` no longer crashes:** Guarded the dynamic `frontend/app/agents/[id]/page.tsx` route with a `Number.isFinite` check on the parsed id. Non-numeric segments (like `communication`) now `router.replace('/agents')` immediately instead of firing `/api/agents/NaN`, raising an alert, and redirecting.
+- **BUG-509 — Instruction custom skills execute properly at runtime:** `CustomSkillAdapter.execute_tool` now routes instruction-variant skills through `execute_instruction_with_llm`, matching the `/api/custom-skills/{id}/test` behavior. Raw-prompt injection of `instructions_md` via `SkillManager.get_custom_skill_instructions` is now limited to `execution_mode == 'passive'` skills, so tool/hybrid instruction skills run through the LLM adapter instead of leaking their template. `SkillManager.execute_tool_call` now writes `CustomSkillExecution` history for every runtime custom-skill invocation, mirroring the `/test` endpoint pattern.
+- **BUG-510 — `/shell` output now reaches `/inject`:** `ToolExecution` gained optional `pending`/`source`/`source_ref` fields; `ToolOutputBuffer` gained `list_pending_executions` and `update_execution_output` helpers. `_handle_shell` buffers completed stdout/stderr immediately for `wait_for_result=True` and writes a pending stub tagged `source='shell_command'` (keyed by the beacon command id) for fire-and-forget. A new `SlashCommandService._resolve_pending_shell_executions` runs at the top of `_handle_inject` and lazily pulls updated `ShellCommand` results via `ShellCommandService.get_command_result`, capping at 10 pending entries per call.
+- **BUG-511 — Project chat propagates tool-only responses:** Promoted the BUG-504 helper into a shared module `backend/agent/response_helpers.py::extract_response_text`. `backend/api/v1/routes_chat.py` now imports it, and `ProjectService.send_message` uses the same helper to populate both the appended assistant message and the final response envelope. Project conversations no longer return `{"message":null}` when the agent answered with tool output only.
+- **BUG-512 — Stdio MCP test auto-starts toolbox:** `MCPConnectionManager.get_or_connect` now calls `ToolboxContainerService.ensure_container_running(tenant_id, db)` for `transport_type == 'stdio'` before constructing the transport. First-time `/test` calls and first-time runtime stdio invocations create/start the tenant toolbox container on demand instead of erroring with `Container not found for tenant ... Please start it first.`
+- **BUG-513 — Hub Vertex AI Test button blocks unsaved drafts:** Added a `vertexDirty` state flag in `frontend/app/hub/page.tsx` that flips on any form edit and resets on successful save. `Test Connection` is disabled while dirty and renders helper text `"Save configuration before testing — the Test Connection button validates the currently saved credentials, not the fields above."` Prevents the misleading "test passes but my new values are ignored" trap during first-time setup.
+
+**Validation:** Safe rebuild (`docker-compose build --no-cache backend frontend` → `docker-compose up -d backend frontend` — compose stack stayed up, WhatsApp/MCP sessions preserved). Per-bug source-level probes (adapter behavior, buffer state transitions, OpenAPI schema inspection, shared helper imports), Playwright verification of the 3 frontend fixes using real per-character keystrokes, and a platform-wide regression via `/fire_regression`.
+
+### Remote Access Auth Hardening Follow-up (`feature/remote-access-auth-hardening`, 2026-04-10)
+
+- Hardened `POST /api/provider-instances/discover-models-raw` so it stays anonymous only while `/api/auth/setup-status` reports `needs_setup=true`; once the first user exists it now requires a fully validated session with `org.settings.write`. The shared strict optional-auth helper now enforces the same disabled-user and password-invalidated-token checks as required auth, closing the old ad hoc token-decoding path.
+- Hardened `GET /api/skills/available` behind `agents.read`, removing an unauthenticated inventory endpoint that exposed installed skill types and schemas over public Remote Access deployments.
+- Hardened shell-beacon distribution endpoints: `GET /api/shell/beacon/version` now requires a valid `X-API-Key` for an active `ShellIntegration`, while `GET /api/shell/beacon/download` now accepts either that API key or a signed-in session with `shell.read` so the browser download button still works.
+- Hardened `GET /api/ollama/health` behind authenticated-session access and updated the Hub, Agents, and Playground callers to use the shared authenticated client path so same-origin tunneled requests keep sending the session cookie.
+- Updated the shell install snippets and beacon README to include `X-API-Key` on curl-based download flows, and documented the intentional public-vs-gated remote-access-adjacent endpoint allowlist plus the accepted UUID capability URLs for Playground audio/image assets.
+
+### Remote Access (Cloudflare Tunnel) — v0.6.0 feature (`develop`, 2026-04-10)
+
+- Added a new enterprise-grade Remote Access feature that exposes Tsushin through a Cloudflare Tunnel (quick or named mode), managed entirely from the Global Admin UI and persisted in the database (no `.env` knobs). The tunnel runs as a supervised subprocess inside the backend container with a bounded restart policy (3 attempts, 5s/15s/30s backoff) and a real readiness probe via `cloudflared`'s Prometheus metrics endpoint (no more `sleep 1`).
+- New single-row DB table `remote_access_config` (Alembic `0031_add_remote_access.py` + SQLite fallback `backend/migrations/add_remote_access.py`) stores tunnel mode, hostname, protocol, encrypted token, autostart, and cross-restart metadata (`last_started_at`, `last_stopped_at`, `last_error`). The tunnel token is encrypted at rest via `TokenEncryption` using a new dedicated `remote_access_encryption_key` on the `config` table (MED-001 envelope pattern, `TSN_MASTER_KEY`-wrapped).
+- New per-tenant entitlement: `Tenant.remote_access_enabled` (indexed boolean, defaults `false`). The global admin grants access per tenant either from the new `/system/remote-access` page or from the tenant detail page. Both streams (`GlobalAdminAuditLog` and tenant-scoped `AuditEvent`) are recorded on every toggle.
+- **Login gate:** `backend/auth_routes.py::_enforce_remote_access_gate` is called from both `login()` and `exchange_sso_code()`. When a login request arrives on the configured tunnel hostname and the user's tenant is not enabled, the backend returns `403` with a structured `detail = {error_code: "REMOTE_ACCESS_TENANT_DISABLED", message, tenant_id}` and writes `auth.remote_access.denied` with `severity=warning`. Already-issued JWTs continue to work until expiry.
+- **New admin REST API** (all `require_global_admin`): `GET/PUT /api/admin/remote-access/config`, `POST /api/admin/remote-access/start|stop`, `GET /api/admin/remote-access/status`, `GET /api/admin/remote-access/tenants`, `PUT /api/admin/remote-access/tenants/{tenant_id}`, `GET /api/admin/remote-access/callbacks`. Config PUTs use optimistic concurrency via `expected_updated_at` (409 on conflict, second-precision tz-stripped comparison). The token is write-only in the API — responses only surface `tunnel_token_configured: bool`.
+- **New Global Admin UI page** `frontend/app/system/remote-access/page.tsx` with four cards: live Tunnel Status (5s polling gated by `document.visibilityState`), Tunnel Configuration form (mode radio, FQDN-validated hostname, password-masked token with clear-on-save flow, autostart + protocol + target URL advanced options), Google OAuth Callbacks (copyable URIs for GCP whitelisting with amber warning banner), and per-Tenant entitlement toggle table. Tenant detail page gains a `RemoteAccessTenantCard`. The System Administration overview gains a Remote Access card with a globe icon.
+- **Docker:** `backend/Dockerfile` now installs the arch-aware `cloudflared` binary before the non-root user switch; the tunnel subprocess runs under UID 1000 with outbound-only connectivity (no privileged ports).
+- **Caddy:** `install.py::generate_caddyfile` now emits a reusable `(tsushin_routes)` snippet plus an additional `:80` site block imported by the same snippet. The `:80` block is the upstream for cloudflared (Cloudflare terminates TLS at the edge, then forwards plain HTTP to `tsushin-proxy:80`). `caddy/Caddyfile.template` documents the new structure. Without this, tunnel requests would bypass Caddy's `/api/*` routing and the frontend's API calls would 502.
+- **Frontend API resolver:** `frontend/lib/client.ts::resolveApiUrl` now returns `window.location.origin` when the page is loaded over HTTPS, so both `https://localhost` and the Cloudflare tunnel hostname use same-origin API calls that flow through Caddy.
+- **CORS:** backend startup now dynamically appends `https://{tunnel_hostname}` to the allow list when an explicit list is configured (best-effort, gracefully skips if the `remote_access_config` table does not exist yet on fresh install).
+- **Validation:** full E2E via Claude-in-Chrome against the live public URL `https://tsushin.archsec.io` (cloudflared named tunnel bound to the `tsushin` tunnel in the `archsec.io` Cloudflare zone, routed to `http://tsushin-proxy:80`). Verified: quick-tunnel subprocess lifecycle (start → running → stop), named-tunnel readiness via metrics probe, per-tenant gate (blocked tenant → `REMOTE_ACCESS_TENANT_DISABLED` 403 with friendly error + audit event), enabled tenant login succeeds, CORS origins reflect both `https://localhost` and `https://tsushin.archsec.io`, optimistic concurrency returns 409 on stale `expected_updated_at`.
+
+### Bug Sprint — 12 bugs resolved (`develop`, 2026-04-10)
+
+- Fixed Playground memory normalization for `isolated`, `channel_isolated`, and `shared` modes by centralizing sender-key/chat-id resolution across sync chat, queue/streaming, history, memory inspector, thread detail, and websocket auto-rename. Playground history and memory reads now accept optional `thread_id` and return the same canonical thread-scoped data used on writes.
+- Fixed `/tool` buffering so sandboxed-tool results are added exactly once in the shared slash-command execution path and are immediately visible to `/inject`.
+- Fixed agentic chat regressions by promoting A2A `list_agents` delegate intents into real communication sessions and by returning tool/custom-skill output from `/api/v1/agents/{id}/chat` when the assistant body would otherwise be empty.
+- Fixed Sentinel audit semantics to use the real `sentinel_analysis_log` write path, always log threat analyses, and only log benign analyses when `log_all_analyses=true`.
+- Fixed setup/runtime regressions by auto-creating `Qdrant (Default)` during setup through the shared vector-store provisioning helper, surfacing fail-open setup warnings with a manual recovery path, and resolving Kokoro through stack-scoped `KOKORO_SERVICE_URL` defaults derived from `TSN_STACK_NAME`.
+- Fixed flow and Playground UX regressions by normalizing `recipient`/`recipients` in message steps, rejecting image uploads in the Playground document flow with explicit supported-type copy, and keeping the `/flows` creation wizard open when a step type is selected even with onboarding/user-guide overlays present.
+- Validation: rebuilt `backend` and `frontend` without cache, verified health/readiness plus authenticated API smoke, ran the combined focused regression slice (`16 passed`), and used Playwright to validate Playground document rejection, threaded Playground history/memory, and flow-wizard step selection stability.
+
+### macOS v0.6.0 Targeted Regression (`develop`, 2026-04-10)
+
+- Executed a full v0.6.0 targeted regression test on the production macOS dev stack (`develop` branch, `https://localhost`) covering all 22 TCs from the v0.6.0 test matrix. Both API (`X-API-Key` / OAuth2) and browser automation (Playwright) paths tested. LLM providers configured before test: Anthropic (`claude-sonnet-4-6`, id=2), OpenAI (`gpt-4o-mini`, id=3), Gemini (pre-configured, id=4).
+- **Smoke Tests (PASS):** Backend health (`/api/health` → 200), frontend loads, login (`test@example.com`/`test123`), dashboard.
+- **TC-1 — Vector Stores (FAIL):** `vector_store_instance` table empty; no ChromaDB containers running. BUG-499 revalidated open.
+- **TC-2/3 — Memory Isolation/Shared (PASS):** `isolated` mode stored/retrieved correctly per-thread; `shared` mode accessible across agents in same tenant.
+- **TC-5 — Sentinel (PARTIAL):** Sentinel runs (`operation=sentinel_analysis` in logs), intercepts messages. `sentinel_audit_log` never written — **BUG-505 new**.
+- **TC-6 — MemGuard (PASS):** Prompt injection detected and sanitized (MemGuard integrated in sentinel profile).
+- **TC-7 — Playground Chat (PASS):** Text message → agent responds with memory context via API v1.
+- **TC-11 — MCP Server Create (PASS):** Created `regression-mcp-server` (SSE transport) via `POST /api/mcp-servers`; appears in list.
+- **TC-13 — Custom Skill Create (PASS):** Created `test-regression-skill` (instruction type) via `POST /api/custom-skills`; verified in list.
+- **TC-14 — Custom Skill Use (FAIL):** Skill assigned correctly; `/skill test-regression-skill` via chat returns `{message:null, response:null}` despite consuming 5,791 tokens — **BUG-504 new**.
+- **TC-16 — Sandboxed Tools (PASS):** `/tool dig lookup domain=example.com` returns DNS results via API chat.
+- **TC-17 — Slash Commands (PASS):** 28 commands listed; `/status` executed, confirmed agent name/model returned.
+- **TC-18 — /inject (PASS):** `POST /api/playground/inject` injects context; verified in next chat response.
+- **TC-19/20 — API Clients (PASS):** Client created via `POST /api/clients`; OAuth2 token exchange succeeds; `POST /api/v1/agents/{id}/chat` with generated key returns valid response.
+- **TC-21 — Flows Programmatic (PARTIAL):** Flow 3 (`QA Gate Flow`) executes; gate condition false (expected). `SummarizationStepHandler` BUG-496 previously fixed and holds.
+- **TC-22 — Flows Agentic (FAIL):** Flow 4 (`QA Notification Flow`) step 3 (message/notification) fails. BUG-422 revalidated open.
+- **API v1 E2E pytest:** 24/29 pass; 5 failures in `TestAgentDescription` due to tenant `max_agents=5` constraint (pre-existing; agent limit hit).
+- **Browser tests:** Deferred — Chrome required restart for newly-installed Caddy `tls internal` CA cert to take effect (cert added to macOS system keychain).
+- **New Bugs:** BUG-504 (custom skill null response), BUG-505 (sentinel audit log never written).
+- **Revalidated Open:** BUG-499, BUG-422, BUG-495 (prior session).
+
+### Ubuntu VM Fresh-Install QA (`develop`, 2026-04-10)
+
+- Executed the final real-user Ubuntu 24.04 VM audit on `10.211.55.5` from a fresh clone at `/home/parallels/code/tsushin-v060-audit-20260410-164252`, using the interactive installer (`python3 install.py`), `/setup` via Playwright, and dual-surface API + browser validation with evidence captured under `.private/qa/ubuntu-vm-20260410/reports/` and `output/playwright/`.
+- **Install + setup (PASS):** Interactive install completed on ports `8081` / `3030` in HTTP-only remote mode, `/setup` finished successfully for tenant `Tsushin QA`, and the generated global-admin credentials were captured privately.
+- **Provider + runtime matrix (PASS):** Gemini, OpenAI, Anthropic, Brave Search, Tavily, Vertex AI (`us-east5`), and Ollama were configured and exercised successfully; the VM Ollama service was exposed on `0.0.0.0:11434`, reachable from the backend via Docker host networking, and served `llama3.2`.
+- **Memory + vector stores (PASS):** The setup-time default Qdrant vector store was auto-provisioned and healthy before any manual vector-store creation, and API/UI checks confirmed `isolated`, `shared`, and `channel_isolated` memory behavior on the audited tenant.
+- **A2A + Graph View (PASS):** Backend A2A sessions completed successfully and Graph View rendered the corresponding live edge/activity, so the earlier `BUG-503` backend/session regression remained fixed on the final Ubuntu pass.
+- **Shell + API v1 (PASS):** A real Ubuntu beacon registered and completed an approved shell command, auth burst sanity hit the expected `30/minute` throttle threshold, `/api/v1/openapi.json` generated a working SDK, and live generated-client calls succeeded while `/openapi.json` was checked for drift.
+- **New bugs found (8):** `BUG-506` (public API v1 schema still omits `vertex_ai`), `BUG-507` (agents UI probes nonexistent frontend-local Ollama health route), `BUG-508` (`/agents/communication` falls through to `/api/agents/NaN`), `BUG-509` (assigned instruction custom skills leak raw instructions in Playground chat), `BUG-510` (completed `/shell` executions still do not surface to `/inject`), `BUG-511` (project chat returns success without an assistant reply even with saved fact/knowledge), `BUG-512` (stdio MCP testing still requires undiscoverable toolbox bootstrap), and `BUG-513` (Vertex AI modal tests only saved config, not current unsaved form values).
+- **Not reproduced / corrected:** `BUG-388`, `BUG-419`, `BUG-499`, and `BUG-500` remained fixed on the final audit pass. Tenant-admin `403` on `/system/tenants` stayed an expected RBAC boundary, and the public API thread retrieval contract remains `GET /api/v1/agents/{agent_id}/threads/{thread_id}/messages`.
+
+### Bug Fix Sprint — BUG-495 to BUG-498 (`develop`, 2026-04-09)
+
+- **BUG-495 (Medium):** Fixed flow execution engine rejecting `"AgentNode"` step type. Added `"AgentNode"` as an alias for `ConversationStepHandler` in `flow_engine.py`. Users can now create and run flows with `AgentNode` step types without a "No handler" runtime failure.
+- **BUG-496 (Low):** Fixed `SummarizationStepHandler` silently ignoring `text`/`content` keys in `config_json`. Added inline text extraction before falling back to `source_step`/`previous_step`. Updated fallback error message to mention `text`/`content` as valid config keys. Users can now summarize arbitrary inline text without requiring a preceding conversation step.
+- **BUG-497 (Medium):** Fixed NumPy boolean array ambiguity error in `vector_store.py` `search_similar_with_embeddings`. Replaced bare ndarray boolean check with explicit `is not None and len(...) > 0` guard. Also wrapped `np.linalg.norm()` results with `float()` in `embedding_service.py` and `temporal_decay.py`. Semantic memory recall no longer emits the non-fatal "truth value of an array is ambiguous" error.
+- **BUG-498 (Low):** Fixed `script_entrypoint` validation in `routes_custom_skills.py` rejecting bare function names. Both CREATE and UPDATE now accept function names (e.g., `"run"`) and auto-append the extension based on `script_language` (python→`.py`, bash→`.sh`, nodejs→`.js`).
+
+### macOS v0.6.0 Full Feature Regression (`develop`, 2026-04-09)
+
+- Executed comprehensive v0.6.0 full feature regression on macOS (fresh install of `develop` branch), covering all 23 test cases (TC-01 to TC-23) via API and Playwright browser automation.
+- **Install & Setup:** `TSN_STACK_NAME=tsushin-fresh python3 install.py --defaults --http`; stack healthy; 6 LLM providers configured (Gemini 2.5-flash, Anthropic, OpenAI, Vertex AI, Brave, Tavily).
+- **Infrastructure (PASS):** Health/readiness/metrics 200. Toolbox auto-provisioned (`tsushin-fresh-toolbox-*`).
+- **Auth & RBAC (PASS):** Tenant owner login, OAuth2 client_credentials, X-API-Key auth, logout, global admin panel.
+- **Playground & Memory (PASS):** Chat, memory recall across sessions ("QATestUser" recalled correctly), /status + /inject + /clear slash commands, browser automation skill (navigated example.com).
+- **A2A Communications (PASS):** Permission created, playground A2A delegation from Tsushin → Kira confirmed with response "Hello! How can I help you?".
+- **Sandboxed Tools (PASS):** `/tool dig lookup domain=google.com` and `/tool nmap quick_scan target=scanme.nmap.org` both returned results.
+- **API v1 (PASS):** OAuth2 token exchange, sync/async chat, X-API-Key header auth, agents/skills/personas/tone-presets listing (returns `data` key, not `items`).
+- **Sentinel (PASS):** 5 profiles (Off/Permissive/Moderate/Aggressive/Custom); profile assignment and effective config verified; injection attempt detected by LLM (detection_mode=detect_only).
+- **Custom Skills (PARTIAL):** Instruction-type skill created successfully; script-type blocked by confusing `script_entrypoint` field validation (BUG-498).
+- **Flows (PARTIAL):** 7 templates listed; flow create/node-add/run works; `AgentNode` type causes executor failure (BUG-495); Summarization step ignores inline text (BUG-496).
+- **Vector Stores, Webhook, KB, Channel Health (PASS):** Qdrant VS instance created; webhook integration created with inbound URL; agent KB facts stored/retrieved (26 facts); channel health summary endpoint responds.
+- **Memory (PARTIAL):** Semantic search emits NumPy array ambiguity error in vector_store (BUG-497, non-fatal but degrades recall).
+- **New Bugs Found (4):** BUG-495, BUG-496, BUG-497, BUG-498.
+
+### Ubuntu VM Fresh Install Full QA — v0.6.0 (`develop`, 2026-04-09)
+
+- Executed full automated fresh-install QA on Ubuntu 24.04 VM (10.211.55.5) — fresh clone of `develop` branch, interactive installer, full 31-case test suite via Playwright browser automation and API curl.
+- **Install & Setup:** Installer completed, Docker Compose stack healthy. Setup wizard created tenant org "Tsushin QA". All 6 LLM providers configured (Gemini, Anthropic, OpenAI, Brave Search, Tavily, Vertex AI).
+- **Infrastructure (PASS):** Health/readiness/metrics all 200. Auth throttle: 12 rapid logins, no 429.
+- **Auth & RBAC (PASS):** Tenant + global admin login, sidebar isolation, member user created — System nav hidden, `/system/tenants` redirect enforced.
+- **Core UI (PASS):** All Watcher tabs, Studio, Playground chat, Memory Inspector (facts CRUD), Flows, Hub, all 13 Settings pages, System Admin.
+- **Advanced Features (PASS):** Web Search (Brave), Image Generation, Knowledge Base (CSV → 2 chunks, semantic recall correct), Custom Skills ("QA Greeting Skill" created + tested), Sentinel (injections blocked), API v1 (OAuth2, X-API-Key, sync/async), Graph View (8 nodes, 12 connections), A2A Comms (Tsushin→Kokoro permission + delegation session logged as "completed").
+- **Partial/Fail:** TC-22 — PNG upload silently accepted but LLM cannot process (BUG-465). TC-29 — Flow message step fails with `'NoneType' object is not iterable` (BUG-466). Flow creation wizard Step 2 closes prematurely (BUG-467).
+- **Log check:** 0 ERROR/CRITICAL in backend.
+- **New Bugs Found (3):** BUG-465, BUG-466, BUG-467.
+
+### Bug Sprint — BUG-459 to BUG-464 resolved (`develop`, 2026-04-09)
+
+- **BUG-459 (Medium):** Fixed Docker Compose project name collision between parallel installs. The installer now writes `COMPOSE_PROJECT_NAME` to `.env` derived from `TSN_STACK_NAME`, so each install gets a unique project name and won't recreate stopped containers from another install.
+- **BUG-460 (Medium):** Fixed 401 cascade when accessing HTTP-only installs via `localhost` instead of LAN IP. Frontend `client.ts` now dynamically resolves `API_URL` to match `window.location.hostname` on HTTP installs, ensuring the httpOnly session cookie scope always matches the API endpoint origin.
+- **BUG-461 (Low):** Fixed `kokoro-tts` container name to follow the `${TSN_STACK_NAME:-tsushin}-kokoro-tts` naming convention used by all other services in `docker-compose.yml`.
+- **BUG-462 (Medium):** Fixed `/inject` slash command not being recognized via Playground API chat. Added `SlashCommandService` interception in both sync (`routes_playground.py`) and async (`queue_worker.py`) Playground chat paths before `PlaygroundService.send_message()`, mirroring the existing WhatsApp/Telegram router pattern.
+- **BUG-463 (Medium):** Fixed `/status` slash command treated as regular text in Playground chat. Same root cause and fix as BUG-462 — all slash commands are now intercepted in the Playground path.
+- **BUG-464 (Low):** Fixed facts text overflow in Playground Memory Inspector. Added `break-words min-w-0` Tailwind classes to the fact value span in `MemoryInspector.tsx`. The `min-w-0` overrides the flex child `min-width: auto` default, allowing `overflow-wrap: break-word` to constrain long unbreakable strings.
+
+### macOS Fresh Install Automated QA (`develop`, 2026-04-09)
+
+- Executed full automated fresh-install QA on macOS with `TSN_STACK_NAME=fresh-v060-tsushin` and `--defaults --http` mode. Covered 32+ test cases across API and Playwright browser automation.
+- **All core features validated:** Setup wizard, auth (tenant + global admin), Watcher dashboard (8 tabs + Graph View), Studio (6 agents), Playground (chat, memory inspector, facts CRUD), Hub (AI Providers, Tool APIs, MCP Servers), all 15 Settings pages, 4 System Admin pages, Sentinel security, vector stores (Qdrant auto-provision), custom skills, sandboxed tools (dig), API v1 (agents, sync chat, OAuth), flows, projects.
+- **New Bugs Found (6):** `BUG-459` (Docker Compose project name collision removes stopped original containers), `BUG-460` (localhost access causes 401 cascade due to cross-origin httpOnly cookie), `BUG-461` (kokoro-tts naming inconsistency), `BUG-462` (`/inject` slash command not recognized via Playground sync API), `BUG-463` (`/status` slash command treated as regular text), `BUG-464` (facts text overflow in Memory Inspector panel).
+- Environment restored to pre-test state after cleanup.
+
+### Bug Fix — BUG-453 (`develop`, 2026-04-09)
+
+- **BUG-453 (Low):** Completed the `BUG-443` auth-throttling fix for fresh installs by wiring runtime env propagation all the way into the backend container. `docker-compose.yml` now passes `TSN_STACK_NAME`, `TSN_AUTH_RATE_LIMIT`, `TSN_DISABLE_AUTH_RATE_LIMIT`, and `TSN_SSL_MODE` into `tsushin-backend`; `auth_routes.py` now resolves login/signup/setup/reset/SSO limits from env; and `install.py` persists/backfills the new auth-throttle settings in `.env`.
+- **Live VM verification:** On the Ubuntu audit stack (`TSN_STACK_NAME=tsushin-fresh-20260408`), the backend received the expected env overrides, 12 rapid login attempts completed without `429` when `TSN_DISABLE_AUTH_RATE_LIMIT=true`, and an auto-provisioned Qdrant instance used the correct `tsushin-fresh-20260408-vs-*` runtime naming prefix.
+
+### Ubuntu VM Fresh-Install Follow-up Audit (`develop`, 2026-04-09)
+
+- Re-ran the real-user Ubuntu VM audit on `10.211.55.5` against the disposable `tsushin-fresh-20260408` stack, preserving the interactive installer flow and validating the live runtime with both API checks and browser automation.
+- Reconfirmed the provider/tool matrix after setup: Gemini, OpenAI, Anthropic, Vertex AI (`us-east5`), Brave Search, and Ollama (`host.docker.internal:11434`) were all exercised successfully on the fresh VM.
+- **New Bugs Found (4):** `BUG-454` (backend no-cache rebuild fails hard when Hugging Face model prewarm is unavailable), `BUG-455` (Tavily still absent from Hub Tool APIs despite backend service plumbing), `BUG-456` (live `/openapi.json` remains awkward for generated client round-trips), and `BUG-457` (setup accepts sub-8-character admin passwords that later auth flows reject).
+- **Still Unproven / Follow-up:** Tavily still lacks a stable tenant-facing validation path in the Hub, and release-quality generated-client validation remains dependent on manual cleanup around the exported OpenAPI surface.
+
+### Bug Fix — BUG-454 to BUG-458 follow-up (`develop`, 2026-04-09)
+
+- **BUG-454 (High):** Hardened the backend Docker image prewarm so transient Hugging Face failures no longer abort `docker-compose build --no-cache backend`. The build now retries and degrades to a warning with runtime lazy-download fallback.
+- **BUG-455 (Medium):** Restored Tavily to the Hub `Tool APIs` UI, including the built-in tools copy and Tavily-specific configure modal path, so the frontend matches the backend-supported provider list.
+- **BUG-456 (Medium):** Added typed health/readiness schemas, introduced dedicated public API v1 response models to avoid schema collisions, and exposed `/api/v1/openapi.json` plus `/api/v1/docs` for reliable SDK generation.
+- **BUG-457 (Medium):** Re-validated unified 8-character password enforcement across setup, signup, reset-password, and change-password flows with browser and API coverage on the rebuilt local stack.
+- **BUG-458 (Medium):** Fixed fresh-install setup wizard error handling so a short tenant-admin password now returns a validation `400` instead of a generic `500`, and added a focused regression test for that path.
+
+### Bug Fix — BUG-452 (`develop`, 2026-04-08)
+
+- **BUG-452 (Medium):** Fixed MCP Server creation via Hub UI returning 400 Bad Request for localhost/private URLs. The SSRF validator was blocking private/loopback IPs where MCP servers typically run. Applied `allow_private=True` (matching Ollama pattern) and relaxed HTTPS+auth requirement for local URLs while preserving it for public URLs. Cloud metadata endpoints remain blocked.
+
+### Bug Sprint — BUG-444 to BUG-450 resolved (`develop`, 2026-04-08)
+
+- **BUG-444 (Medium):** Fixed HTTP-only fresh installs redirecting `localhost` to `https://localhost/setup`. Removed stale `NEXT_PUBLIC_API_URL` build-time check from middleware SSL condition; SSL redirect now depends solely on runtime `TSN_SSL_MODE`.
+- **BUG-445 (Medium):** Fixed installer CORS generation to always include loopback origins (`localhost`, `127.0.0.1`) for both frontend and backend ports on HTTP installs, preventing CORS failures when accessing via `127.0.0.1`.
+- **BUG-446 (High):** Fixed project knowledge-base lookups falling back to web search. `ProjectService.send_message()` now passes `project_id` through `PlaygroundService` to `AgentService`, ensuring `CombinedKnowledgeService` is initialized with project context.
+- **BUG-447 (Medium):** Restricted MCP stdio allowed binaries to `[“uvx”]` only, matching what ships in the toolbox container. `npx`/`node` were removed from the allowlist since they aren't installed. Improved error message with clear guidance.
+- **BUG-448 (Medium):** Runtime-created containers (MCP, vector store, toolbox) now use `TSN_STACK_NAME` in their naming prefix instead of hardcoded values, enabling full isolation for side-by-side installs.
+- **BUG-449 (Medium):** Instruction custom-skill test endpoint now executes through the tenant's LLM instead of returning raw instruction text. Added `execute_instruction_with_llm()` to `CustomSkillAdapter`.
+- **BUG-450 (Low):** Watcher dashboard vector store card now shows external store health (Qdrant, MongoDB) instead of “Not configured”. Backend `/api/stats/memory` queries `VectorStoreInstance` table unconditionally.
+
+### E2E Fresh Install Testing & QA Audit (`develop`, 2026-04-08)
+
+- Conducted a comprehensive fresh install audit on Ubuntu VM (10.211.55.5) using `--defaults --http`.
+- Completed setup wizard and initialization successfully via Playwright browser automation.
+- Validated Vector Store provisioning, Flows (Workflow) creation, and Shared Knowledge (A2A) integration natively via Playwright UI automation.
+- Discovered **BUG-450**: `/api/clients` returning 500 Internal Server Error when creating a new API client, causing the backend worker connection to drop.
+- Discovered **BUG-451**: Sentinel config endpoint `/api/config` returning 404 Not Found, breaking API access to Sentinel settings.
+- Discovered **BUG-452**: MCP Server creation via UI returning 400 Bad Request, blocking UI-based SSE server registration.
+
+### Ubuntu VM Interactive Fresh-Install Audit (`develop`, 2026-04-08)
+
+- Completed a real-user interactive installer audit on Ubuntu VM `10.211.55.5` using `python3 install.py` with backend `8081`, frontend `3030`, remote access, HTTP-only mode, and disposable stack `TSN_STACK_NAME=tsushin-fresh-20260408`.
+- **Setup + Auth:** Finished `/setup` through browser automation, captured the generated global-admin credentials privately, and re-verified tenant-admin vs global-admin login/RBAC separation on the fresh tenant.
+- **Provider Matrix:** Validated Gemini, OpenAI, Anthropic, Vertex AI (`us-east5`), and Ollama (`llama3.2`) end to end, along with Brave Search key usage. Tavily is accepted by the backend service list but remains absent from the Hub Tool APIs surface.
+- **Feature Coverage:** Re-validated Qdrant auto-provisioning, long-term memory recall, isolated/shared memory behavior, ACME Sales knowledge-base upload + retrieval, A2A permissions and watcher Graph View, MCP server registration, instruction/script/MCP custom skills, Shell Command Center, sandboxed tools, slash commands including `/inject`, project chat, Public API v1 (API key + OAuth), async queue polling, and generated Python SDK calls against the live `/openapi.json`.
+- **New Bugs Found (10):** `BUG-476` through `BUG-485` covering Tavily Hub visibility, User Guide overlay persistence, shared-memory cross-thread recall, A2A auto-skill wiring, MCP toolbox bootstrap, conversation search drift, `/shell` vs `/inject` inconsistency, KB search UX, project-scoped memory loss, and UI execution of input-dependent flows.
+- **Still Unproven / Follow-up:** Tavily still lacks a first-class Hub validation path, external public-site fetch via the MCP `fetch` server was not proven beyond internal URLs, and the one-click UI Run path for input-dependent flows remains unsuitable for release-quality validation until it can collect trigger context.
+
+### macOS Loopback & Runtime Isolation Audit (`develop`, 2026-04-08)
+
+- Ran a second macOS fresh-install audit from a disposable clone using `TSN_STACK_NAME=freshinstall-tsushin` and `python3 install.py --defaults --http`, after stopping the original runtime to avoid container/name collisions.
+- Re-validated the release 0.6.0 surface with mixed API and browser coverage across provider setup (Gemini/OpenAI/Anthropic/Ollama/Vertex), auto-provisioned Qdrant vector stores, sandboxed tools, shell beacons, slash commands, API v1 sync/async chat, isolated/shared memory, playground chat + image upload, A2A flows, and MCP-backed custom skills.
+- Logged 7 new fresh-install regressions in the local bug tracker for follow-up: `BUG-444` (HTTP install still redirects `localhost` to HTTPS), `BUG-445` (generated `.env` breaks `127.0.0.1` via LAN-only API/CORS settings), `BUG-446` (project KB falls back to web search instead of uploaded project docs), `BUG-447` (toolbox image lacks `npx`/`node` even though MCP stdio accepts them), `BUG-448` (runtime containers ignore `TSN_STACK_NAME`), `BUG-449` (instruction custom-skill test echoes instructions), and `BUG-450` (Watcher reports vector store “Not configured” despite healthy default Qdrant).
+- Confirmed fresh-install runtime naming remains inconsistent beyond the compose stack: the disposable run created `freshinstall-tsushin-*` core services alongside global `tsushin-*` vector/toolbox resources and `mcp-*` WhatsApp resources, which is why the original install still had to be brought down before realistic side-by-side validation.
+
+### macOS Fresh Install QA (`develop`, 2026-04-08)
+
+- Completed a 33+ test-case fresh-install QA on macOS (Darwin) using `TSN_STACK_NAME=tsushin-fresh` with `install.py --defaults --http` on `develop` HEAD, with isolated containers/volumes while original install was stopped.
+- **Installation:** Installer ran fully unattended with `--defaults --http`, built all images (backend, frontend, WhatsApp MCP, Toolbox), passed health checks. `TSN_STACK_NAME=tsushin-fresh` correctly prefixed all containers and volumes.
+- **Setup Wizard:** Completed via Playwright browser automation with 3 LLM providers (Gemini, OpenAI, Anthropic), global admin credentials captured. 6 default agents seeded.
+- **Provider Matrix:** All 3 SaaS providers connected successfully. Ollama auto-detected with 9 local models. Brave/Tavily not configured during this run (reserved for post-setup).
+- **Core Features Validated:** Playground chat (Gemini 2.5 Flash — correct response), Memory Inspector (fact CRUD — create/verify/delete), Knowledge Base (ACME Sales CSV upload + price retrieval with SKU), Sentinel/MemGuard (injection 90%, poisoning 90%, benign 0%), A2A communication permission (Tsushin→ACME Sales), slash commands (/status, /memory status), vector store config (ChromaDB default), flow creation (notification type), project creation, API v1 (client creation, API-key auth, OAuth token exchange, sync chat "2+2"→"4", async chat + queue poll → completed), 22 UI pages (all passed), RBAC (tenant admin 403 on /system/*, global admin 200), WhatsApp instances (bot authenticated, tester QR not visible in UI), log review (0 backend errors).
+- **New Bugs Found (7):** BUG-437 (CORS mismatch localhost — Medium), BUG-438 (HTTP redirect on localhost — Medium), BUG-439 (tester not visible in Hub UI — Medium), BUG-440 (API v1 agents empty — Low), BUG-441 (Sentinel enabled=None — Low), BUG-442 (POST /api/flows 307 — Low), BUG-443 (login rate limit 5/min — Low).
+- **Environment Revert:** Fresh install cleaned up (containers, volumes, images, .fresh-install/ folder removed), original containers restored and verified healthy.
+
+### Ubuntu VM Fresh Install Full QA (`develop`, 2026-04-08)
+
+- Completed a 45-test-case fresh-install QA on Ubuntu VM (10.211.55.5) using `install.py --defaults --http` on `develop` HEAD, covering all v0.6.0 features via both browser automation and API curl.
+- **Installation:** Installer ran fully unattended, built all images (backend, frontend, WhatsApp MCP, Toolbox) on ARM64 Ubuntu 24.04, passed health checks. Ollama installed with llama3.2.
+- **Setup Wizard:** Completed via browser with 3 LLM providers (Gemini, OpenAI, Anthropic), global admin credentials captured. 6 default agents seeded.
+- **Provider Matrix:** All 4 SaaS providers (Gemini, OpenAI, Anthropic) connected successfully. Ollama local model discovered. Brave Search and Tavily API keys configured.
+- **Core Features Validated:** Playground chat (Gemini 2.5 Flash, correct responses), Memory Inspector (working memory populated), Knowledge Base (ACME Sales CSV upload + price retrieval with SKU), Sandboxed Tools (dig 107ms, nmap 2.6s), MCP Server registration (stdio), Custom Skills (instruction type), API v1 (client creation, API-key auth, OAuth token exchange, sync chat, async chat + queue polling), Vector Store auto-provisioning (Qdrant healthy + container running), Project creation, Flow creation, 28 slash commands seeded, A2A permission creation, all 15 settings pages 200, all 4 system admin pages 200.
+- **New Bugs Found (3):** BUG-434 (setup wizard global admin missing tenant_id/role — Critical), BUG-435 (setup completion button no-op — Low), BUG-436 (A2A delegation not triggered via API chat — Medium).
+
+### Bug Sprint — BUG-434 to BUG-443 resolved (`develop`, 2026-04-08)
+
+- **BUG-434 (Critical):** Fixed setup/auth tenant bootstrap so initial admin creation no longer leaves the account without tenant context/owner role, and tenant-scoped auth-side logging now fails safely instead of cascading into login 500s.
+- **BUG-435 (Low):** Fixed the setup completion CTA so the "Continue to Login" action now performs an explicit redirect to `/auth/login`.
+- **BUG-436 (Medium):** Fixed API v1 A2A delegation by auto-managing the `agent_communication` skill when permissions are created/updated, allowing sync chat to trigger inter-agent tool usage.
+- **BUG-437 (Medium):** Fixed installer-generated CORS defaults for local installs by including localhost/127.0.0.1 origins for HTTP setups and `https://localhost` for SSL setups.
+- **BUG-438 (Medium):** Fixed localhost redirect handling by keeping HTTP-only installs on the non-redirect path while preserving HTTPS redirects only for SSL-enabled deployments.
+- **BUG-439 (Medium):** Fixed Hub Communication so runtime tester instances are visible in the WhatsApp list while compose tester controls remain available for QA.
+- **BUG-440 (Low):** Revalidated the repaired install path so `/api/v1/agents` once again returns the tenant's seeded agents instead of the empty payload seen in the failing fresh-install QA run; no API v1 route contract change was required.
+- **BUG-441 (Low):** Fixed Sentinel config aliasing so the legacy `enabled` field resolves to the effective boolean state alongside `is_enabled`.
+- **BUG-442 (Low):** Fixed flows routing so both `/api/flows` and `/api/flows/` work without 307 redirect surprises, and verified UI flow CRUD against the restored instance.
+- **BUG-443 (Low):** Fixed development auth throttling defaults so `disabled`/`selfsigned` installs use `30/minute` unless an explicit override is provided.
+- Added stack-scoped Caddy upstream generation (`{stack}-frontend` / `{stack}-backend`) plus a live proxy hardening update for the restored HTTPS install, preventing `https://localhost` from drifting onto another running Tsushin stack on the shared Docker network.
+- Preserved-instance revalidation passed after restoring the original stack data: login succeeded for the known accounts, `GET /api/flows` and Sentinel/A2A/API v1 checks passed, Playwright covered Watcher, Hub Communication, Flows CRUD, Sentinel settings, and API Clients, and the restored data baseline remained `users=3`, `agents=22`, `flows=59`, `api_clients=39`.
+
+### Bug Sprint — 6 bugs resolved (`develop`, 2026-04-08)
+
+- **BUG-433 (High):** Fixed queue item poll (`GET /api/queue/item/{id}`) returning completed status without the agent's response text. Added `result` field extraction from `item.payload` to the response dict.
+- **BUG-428 (High):** Fixed intermittent HTTP 500 on API client creation (`POST /api/clients`). Made `created_at`/`updated_at` Optional in the `ApiClientResponse` Pydantic model to prevent validation failure when datetime is None before DB refresh.
+- **BUG-431 (Medium):** Fixed project creation (`POST /api/projects`) returning empty response. Added defensive error handling around `ProjectResponse` serialization in both create and update endpoints with explicit error messages.
+- **BUG-430 (Medium):** Fixed setup wizard accordion not scrollable. Changed outer container from `flex items-center justify-center` to `flex flex-col items-center` with `my-auto` on inner container for natural browser scrolling.
+- **BUG-429 (Medium):** Fixed Ollama systemd override instructions using non-portable `echo -e`. Replaced with POSIX-compliant `printf` in installer post-install output.
+- **BUG-432 (Low):** Fixed vector store instances endpoint returning empty response on fresh install. Added null guard `(instances or [])` to ensure valid JSON array is always returned.
+
+### v0.6.0 Comprehensive E2E Audit (`develop`, 2026-04-08)
+
+- Completed a full fresh-install E2E audit on Ubuntu VM (10.211.55.5) using `install.py --defaults --http` on `develop` HEAD, covering 37 test cases via both browser automation and API curl.
+- **Installation:** Installer ran unattended, built all 5 Docker images (backend, frontend, WhatsApp MCP, Toolbox) on ARM64, passed health checks within 20 minutes.
+- **Setup Wizard:** Completed via browser with 3 LLM providers (Gemini, OpenAI, Anthropic), captured global admin credentials, created 6 default agents.
+- **Provider Matrix:** Gemini, OpenAI, Anthropic, and local Ollama (llama3.2) all tested and connected successfully. Vertex AI instance created.
+- **Core Features Validated:** Playground chat (text + response streaming), Memory Inspector (fact CRUD), Sentinel/MemGuard (injection detected at 0.9, poisoning at 0.9, benign at 0.0), A2A permissions, 28 slash commands, custom instruction skill creation, flow creation, 28 page routes all returning 200.
+- **New Bugs Found (6):** BUG-428 (API client creation 500), BUG-429 (Ollama systemd override malformed), BUG-430 (setup accordion not scrollable), BUG-431 (project API empty response), BUG-432 (vector store empty response), BUG-433 (queue poll missing response text).
+
+### Fresh Install Stabilization Closeout (`develop`, 2026-04-08)
+
+- Hardened fresh-install memory extraction so manual fact extraction can recover conversation history from canonical aliases (`playground`, API user, and API client sender-key variants) while still using the configured provider instance for inference.
+- Added a lexical fallback for project knowledge retrieval when Chroma collections are absent or empty on fresh installs, and seeded built-in English/Portuguese project command patterns so project entry/exit/list/upload/help flows are available without manual setup.
+- Improved stdio MCP resilience by adding a retry path for transient `No JSON-RPC response received` failures and extending the short-lived tool-call keepalive window used by toolbox-hosted servers.
+- Fixed fresh-install frontend/runtime regressions by waiting for a resolved pathname before public auth bootstrap, standardizing Playground tool and custom-tool calls on the backend base URL, and preserving `TSN_STACK_NAME` when the installer writes a new `.env`.
+- Fixed Playground conversation search on Postgres by skipping SQLite-only FTS probes on non-SQLite dialects and rolling back failed probes/searches before falling back to LIKE mode.
+- Added WhatsApp QA guardrails: tester and tenant agent status now warn when they share the same phone number, and MCP instance creation rejects duplicate numbers already owned by another agent instance or by the authenticated tester session.
+- Final audit note: the disposable fresh install completed end-to-end, but a true tester-to-agent WhatsApp round-trip could not be proven in this run because the user authenticated both tester and agent against the same WhatsApp number. The product now warns and blocks that configuration for future validations.
+
+### QA Audit — Ubuntu VM Fresh Install (`develop`, 2026-04-07)
+
+- Completed a real-user fresh-install audit on `root@10.211.55.5` using the interactive installer (`python3 install.py`) on `develop` HEAD with backend `8081`, frontend `3030`, remote access, and HTTP-only setup.
+- Completed `/setup` through browser automation at `http://10.211.55.5:3030/setup`, created the tenant admin, captured the auto-generated global-admin credentials, and validated both tenant and global admin login paths.
+- Re-validated the major release-0.6.0 surfaces that now work on a fresh VM: hosted provider setup (Gemini/OpenAI/Anthropic), local Ollama connectivity, A2A delegation + Graph View visibility, Qdrant auto-provisioning as tenant default, Sentinel/MemGuard detections, shell beacon + sandbox tooling, direct project chat, API v1 direct-key and OAuth auth, sync/async chat, and generated-client communication against the live `/openapi.json`.
+- Expanded `deployment-test-playbook.md` with the Ubuntu VM audit profile plus new cases for setup/onboarding, provider matrix, memory-mode validation, vector-store coverage, Sentinel/MemGuard, MCP/custom skills, shell/sandbox/slash commands, API v1/generated clients, flows, projects, and A2A graph monitoring.
+- Logged newly confirmed fresh-install regressions in the bug tracker for follow-up:
+  - Setup and onboarding: `BUG-402`, `BUG-403`, `BUG-404`, `BUG-405`, `BUG-406`
+  - Agent/chat/memory: `BUG-407`, `BUG-408`, `BUG-409`, `BUG-417`, `BUG-418`, `BUG-419`
+  - Skills, search, vector-store, and tooling: `BUG-410`, `BUG-411`, `BUG-412`, `BUG-413`, `BUG-414`, `BUG-415`, `BUG-416`, `BUG-420`
+  - Projects and flows: `BUG-421`, `BUG-422`
+
+### Bug Fixes — Setup / Dashboard / Auth (`develop`, 2026-04-07)
+
+- **BUG-402 / BUG-403 — Public auth/setup pages were noisy before login:** Public setup/login surfaces now suppress unauthenticated bootstrap polling and ship a real favicon, eliminating pre-login `401`/`404` console noise on fresh installs.
+- **BUG-404 — Setup only provisioned the first provider key:** The setup wizard now creates provider instances for every supported provider configured during onboarding instead of silently downgrading secondary providers to service-key-only state.
+- **BUG-405 / BUG-406 — First-login onboarding panel and charts were unstable:** The User Guide panel now dismisses reliably in the default viewport, and dashboard charts mount only after valid dimensions exist, removing the negative-dimension warnings on first login.
+
+### Bug Fixes — Agents / Memory / API Threads (`develop`, 2026-04-07)
+
+- **BUG-407 — Agent contact reassignment could 500:** The protected agent update path now validates tenant ownership and contact uniqueness cleanly instead of crashing during contact swaps.
+- **BUG-408 / BUG-409 — Real Playground traffic could destabilize health and log sender fallback warnings:** Playground/API chat identity is now built from canonical thread/channel keys, which keeps health checks stable under real threaded traffic and removes `Contact not found` fallback noise for normal Playground usage.
+- **BUG-417 / BUG-418 / BUG-419 — Thread retrieval and memory isolation semantics drifted from the product contract:** API v1 now persists canonical thread recipients for message lookup, `isolated` mode is truly per-thread for threaded API chats, and `channel_isolated` Playground memory now carries across threads inside the same channel while preserving per-thread history.
+
+### Bug Fixes — API Clients / MCP / Slash Commands / Search (`develop`, 2026-04-07)
+
+- **BUG-410 — API client create-then-list drift:** Newly created API clients now appear immediately in the list endpoint instead of only through direct lookup.
+- **BUG-411 / BUG-412 / BUG-413 — MCP-backed custom skills were inconsistent across authoring, listing, and discovery:** MCP custom skills now execute correctly, round-trip through the agent assignment APIs, and appear in `/tools` output alongside built-in capabilities.
+- **BUG-414 — `/shell` dispatch mismatched seeded metadata:** Shell slash commands now execute through the seeded `system` category path instead of returning an empty error payload.
+- **BUG-415 / BUG-416 — Tooling metrics and MCP stdio discovery were misleading:** Empty Qdrant stats normalize to `0`, and stdio MCP discovery/test/list/call now works reliably against toolbox-hosted `uvx` servers.
+- **BUG-420 — Legacy `google_search` ignored tenant Brave credentials:** The built-in flow search tool now resolves tenant-scoped Brave keys through the same key service as the newer web-search path.
+
+### Bug Fixes — Projects / Flows / Vertex (`develop`, 2026-04-07)
+
+- **BUG-421 — Small project KB uploads could hang/crash the backend:** Fixed the shared document chunker so trailing chunks always advance even when the remaining text is shorter than the configured overlap. Project KB uploads now reuse the safe chunking path and only do the final status commit when the processing path has not already committed it.
+- **BUG-422 — API v1 notification steps accepted invalid configs that failed at runtime:** Added create/update validation for notification steps so they fail fast unless they include a recipient and message content. Legacy `message` input is normalized to `message_template`, and the local public API regression script now uses a valid notification example.
+- **BUG-423 — Saved Vertex AI provider-instance tests diverged from runtime and crashed on response parsing:** Saved provider-instance connection tests now execute through `provider_instance_id`, matching the real runtime credential/config resolution path. OpenAI-compatible response parsing was hardened so Vertex Gemini responses with non-string or empty `message.content` no longer raise `AttributeError`.
+
+## v0.6.0-patch.3 (2026-04-07)
+
+### Bug Fixes — Fresh Install QA Sprint (15 open → 0 open)
+
+**Critical**
+- BUG-391: Custom skill registry no longer poisons unrelated agent chats — all `get_mcp_tool_definition()` call sites now use skill instances instead of classes
+
+**High — Playground & Memory**
+- BUG-387: Playground chat now passes `provider_instance_id` so instance-scoped credentials work
+- BUG-388: Shared-memory agents use stable `"shared"` sender_key for cross-thread recall
+- BUG-392: `/inject` now applies to next message (fixed sender_key mismatch between commands API and playground)
+- BUG-398: New thread creation no longer leaks prior thread data (immediate ref update + cross-thread guard)
+
+**High — Flows**
+- BUG-393: Flow skill nodes respect explicit `use_tool_mode: true` even when agent config says legacy
+- BUG-394: Keyword-triggered flows no longer get stuck in "running" (robust commit/retry on finalization)
+
+**High — Platform**
+- BUG-389: KB document uploads properly reach "completed" status (commit before embeddings)
+- BUG-390: Toolbox Dockerfile now includes `uv` package for `uvx` MCP server support
+- BUG-395: Hub Communication tab surfaces runtime tester instances with source badge
+- BUG-396: Project detail page no longer crashes (replaced undefined `PROJECT_ICONS` with `PROJECT_ICON_MAP`)
+
+**Medium**
+- BUG-385: Installer frontend recovery uses `TSN_STACK_NAME` for custom stack names
+- BUG-386: Setup wizard persists selected model on provider instance (`available_models` no longer empty)
+- BUG-397: Memory Inspector senderKey stripped of thread suffix to match memory storage key
+- BUG-399: Shared Knowledge stat cards show correct counts (query accessible-to, not shared-by)
+- BUG-400: Fresh install KB document upload no longer OOM-crashes — sentence-transformer model pre-downloaded in Docker image + graceful fallback if model unavailable
+
+### QA Validation
+- Fresh install end-to-end: setup wizard, provider config, playground chat, memory recall, sandboxed tools, custom skills, knowledge base, flows — all passing
+- Dual-surface coverage: API tests + browser automation
+
+## v0.6.0-patch.2 (2026-04-07)
+
+### Bug Fixes — VM Fresh Install Retest
+
+- BUG-382: detect_only Sentinel mode no longer stores prompt injections in working memory (prevents memory poisoning persistence)
+- BUG-383: Setup wizard now links all seeded agents to the primary provider instance (provider_instance_id was null)
+- BUG-384: Web search skill correctly resolves tenant-scoped Brave Search API keys (fixed null tenant_id injection check)
+
+## v0.6.0-patch.1 (2026-04-07)
+
+### Bug Fixes — Full Sprint (41 open → 0 open)
+
+**Critical Memory Pipeline**
+- V060-MEM-021: WhatsApp/Telegram/Slack/Discord messages now properly indexed in ChromaDB
+
+**Playground Core UX**
+- BUG-376: WebSocket streaming replies now appear without page refresh (stale closure fix)
+- BUG-378: Playground chats now create agent_run records for Watcher dashboard
+- BUG-372/377: Memory Inspector correctly queries shared memory for shared-mode agents
+- BUG-381: Uploaded documents/images now injected into chat context via document search
+
+**API v1 Isolation**
+- BUG-366: Isolated-mode agents no longer leak memory across API clients
+- BUG-367: API v1 threads scoped per API client (api_client_id column)
+
+**Backend Logic & Tenant Context**
+- BUG-370: Flow skill steps now inject tenant_id for provider resolution
+- BUG-371: /shell slash command seeded on fresh installs (idempotent seeding)
+- BUG-379: A2A communication inherits target agent's full memory recall stack
+
+**MCP & Infrastructure**
+- BUG-374/368: Invalid stdio MCP servers properly fail connection/health checks
+- BUG-369: Vector store container names capped at 63 chars (DNS label fix)
+- BUG-373: Provider instance defaults atomically cleared on create/update
+
+**Memory/OKG Subsystem**
+- V060-MEM-022: Added GET /agents/{id}/memory/search endpoint
+- V060-MEM-023: Port allocator checks running Docker containers
+- V060-MEM-024: OKG decay uses agent-configured lambda
+- V060-MEM-025: OKG MemGuard defaults to block mode (okg_detection_mode)
+
+**Install/Setup/Config**
+- BUG-365: Setup wizard reveals global admin credentials on completion
+- BUG-362: Docker compose services labeled (tsushin.managed, lifecycle, service)
+- BUG-363: Container/volume names parameterized via TSN_STACK_NAME
+- BUG-380: QA Tester shortcuts resolve runtime instances as fallback
+
+**Documentation**
+- BUG-375: Tavily documented as unsupported in v0.6.0
+
+### Database Migrations
+- 0029: Add api_client_id column to conversation_thread
+- 0030: Add okg_detection_mode column to sentinel_profile
+
+## [0.6.0] - 2026-04-07
+
+### Bug Fixes
+
+#### Fresh-Install Dual-Surface Audit Summary — 2026-04-07
+
+- **Disposable fresh-install validation completed:** Ran a real installer + real `/setup` audit in an isolated git-excluded clone of `develop` at `bef22daa0b475c374eb7baa21c8496a7294edfc1`, using browser automation and direct API checks together where they exercised different paths.
+- **Validated working fresh-install surfaces:** Confirmed installer/setup, provider onboarding (Gemini, OpenAI, Anthropic, Ollama, Brave Search), knowledge base upload/use, custom skills create/test, sandboxed tools, slash commands including `/inject`, shell command center, Sentinel baseline protections, programmatic flows, project conversations, and Playground document/image upload-list behavior.
+- **Fresh-install regressions documented in tracker:** Logged/confirmed fresh-install issues around Docker naming and install isolation (`BUG-362`, `BUG-363`), hidden global-admin creation (`BUG-365`), missing `/shell` on fresh PostgreSQL installs (`BUG-371`), Memory Inspector / Watcher mismatches (`BUG-372`, `BUG-377`, `BUG-378`), provider-default drift (`BUG-373`), false-positive stdio MCP health (`BUG-374`), Tavily absence (`BUG-375`), A2A memory loss (`BUG-379`), QA tester shortcut hard-coding (`BUG-380`), and detached Playground file/image context (`BUG-381`).
+- **Environment restore completed:** Removed the disposable fresh-install containers, fresh volumes, fresh images, and the temporary clone folder, then restored the original local Tsushin runtime and its previously running runtime-managed containers. WhatsApp QR/E2E messaging was skipped for this closeout at user request.
+
+#### Installer & QA Hardening — 2026-04-07
+
+- **Installer remote HTTP health checks:** `install.py` now probes backend/frontend health on `127.0.0.1` instead of `localhost`, which avoids false frontend failures when localhost-only redirect logic is active. For HTTP remote installs, the success output now prints the configured public host/IP instead of `localhost`.
+
+#### VM Retest Bug Sprint (BUG-348, BUG-349, BUG-350, BUG-352, BUG-353, BUG-356, BUG-360, BUG-361) — 2026-04-07
+
+- **BUG-348 — HTTP redirect breaks remote installs (CRITICAL):** Middleware now only redirects `localhost` HTTP to HTTPS, preserving remote HTTP access for IP-based installs.
+- **BUG-349 — ops/ excluded from Docker image (MEDIUM):** Removed `ops/` exclusion from `.dockerignore` so test-user helpers are available inside the container.
+- **BUG-350 — create_test_users.py stale against RBAC schema (MEDIUM):** Added required `tenant_id` and `assigned_by` to `UserRole` creation.
+- **BUG-352 — Memory Inspector still failed without manual key (HIGH):** Moved `playground_u{uid}_a{aid}` to FIRST position in memory inspector `possible_keys` list.
+- **BUG-353 — Custom skills still failed with Tool not found (HIGH):** Root cause was `register_custom_skills()` was never called. Added call in `agent_service.py` before custom tool def collection.
+- **BUG-356 — Flows reminders failed with invalid recipient (HIGH):** Added playground recipient detection in scheduler — `playground_u*_a*` recipients are treated as delivered without WhatsApp routing.
+- **BUG-360 — Thread list showed message_count=0 (MEDIUM):** Fixed sender_key lookup in `list_threads` to strip thread suffix before querying Memory table.
+- **BUG-361 — Image uploads could abort connection (HIGH):** Image processing now inlines text generation, uses `try/finally` for `db.commit()`, prevents documents stuck in "processing".
+
+#### Fresh-Install QA Bug Sprint (BUG-351 through BUG-359) — 2026-04-07
+
+- **BUG-351 — `PUT /api/agents/{id}` silently dropped `provider_instance_id` (HIGH):** Added `provider_instance_id` to `UPDATABLE_AGENT_FIELDS` allowlist, `AgentUpdate`/`AgentResponse` Pydantic schemas, and both GET/list response dicts so the field persists and is returned in API responses.
+- **BUG-352 — Playground History/Memory Inspector returned empty results (HIGH):** `get_conversation_history()` used `playground_user_{id}` while messages were stored under `playground_u{uid}_a{aid}`. Aligned history and memory inspector to use the same sender_key format as `send_message()`.
+- **BUG-353 — Instruction-style custom skills failed with `Tool not found` (HIGH):** Custom skill tool names (`custom_{slug}`) weren't resolved through the skill manager because dynamically created subclasses lack the `_record` for `get_mcp_tool_definition()`. Added fallback in `_find_skill_by_tool_name()` to resolve `custom_` prefixed names via registry key.
+- **BUG-354 — Browser automation blocked benign URLs on Sentinel LLM failure (HIGH):** When Sentinel's LLM is unavailable, it returned fail-closed blocks for all URLs. Browser automation now fails-open when Sentinel returns "Security analysis unavailable", relying on pattern-based SSRF validator as fallback.
+- **BUG-355 — Shell beacon check-ins stalled backend health checks (CRITICAL):** `wait_for_completion_async()` created a new `sessionmaker` on every poll iteration (up to 120x), exhausting the connection pool. Moved `sessionmaker` creation outside the loop and simplified beacon check-in to reuse the injected session with `expire_all()`.
+- **BUG-356 — Flows reminder creation resolved to failed notifications (HIGH):** The flows provider built NOTIFICATION payloads without `sender_key`, so the scheduler couldn't resolve the recipient. Passed `sender_key=message.sender_key` through both `create_event()` call sites and added it to the notification payload.
+- **BUG-357 — Audio transcription ignored tenant-scoped OpenAI keys (HIGH):** `AudioTranscriptSkill` created its own DB session and called `get_api_key("openai", db)` without `tenant_id`. Now uses the caller-provided session and passes `tenant_id` from config.
+- **BUG-358 — Audio errors wrapped in Pydantic validation instead of real cause (MEDIUM):** Error return paths in `process_audio()` were missing `timestamp` field, causing `PlaygroundAudioResponse(**result)` to raise a Pydantic validation error. Added timestamp to all 5 error return paths.
+- **BUG-359 — Playground had no image upload path (MEDIUM):** Added image extensions (.jpg/.jpeg/.png/.webp/.gif) to `SUPPORTED_EXTENSIONS` in document service, added image-specific processing that skips heavy embedding, and updated frontend file input accept list.
+
+#### Release Re-Validation Fixes (BUG-345, BUG-346, BUG-347) — 2026-04-07
+
+- **BUG-345 — API v1 agent creation bypassed tenant `max_agents` cap (HIGH):** The `POST /api/v1/agents` endpoint did not enforce the tenant agent cap, allowing unlimited agent creation through the public API while the standard route correctly returned 409. Added the same `Tenant.max_agents` enforcement from the standard route to the v1 route before contact/agent creation.
+- **BUG-346 — Create Agent modal defaulted to Anthropic instead of tenant's default provider (MEDIUM):** The `getSmartDefaults()` function used `providerInstances[0]` (first in list) instead of the instance marked `is_default=true`. Updated to find the default provider instance and use its `available_models[0]` for the model name, with a useEffect to apply defaults when instances load.
+- **BUG-347 — Hub API v1 tooling surface non-functional for Gmail/Calendar/Flights (HIGH):** Added `INTEGRATION_CAPABILITIES` matrix to define per-type support for health_check, tools, and tool_execution. Integration summaries and provider listings now include a `capabilities` dict. Health, tool listing, and execution endpoints check capabilities upfront with clear error messages. Added `google_flights` to the providers list. The service factory now handles `google_flights` with an informative error instead of a generic "unsupported type".
+
+#### Post-Sprint Regression Fixes — 2026-04-07
+
+- **BUG-334 follow-up — `skipTour` used `window.confirm()` blocking browser events:** The "Skip Tour" button called `window.confirm()` which blocks all browser events, preventing programmatic dismissal and breaking automated tests. Replaced with direct localStorage persist matching the same pattern used by `dismissTour()` and the Escape key handler. Tour is now immediately dismissed without a confirmation dialog.
+- **Perfection audit fixes:** (1) `client.ts` 409 error guard changed from message-string comparison (`!== 'Unexpected end of JSON input'`) to `!(jsonErr instanceof SyntaxError)` — prevents HTML error bodies from surfacing raw SyntaxError text to users; (2) `agent_switcher_skill.py` `_find_agent_by_name()` and `_get_available_agents()` now apply `tenant_id` filter to prevent cross-tenant agent resolution in multi-tenant deployments; (3) `routes_flows.py` `create_flow_v2` endpoint now re-raises `HTTPException` before the generic `except Exception` catch (matching `create_flow` pattern); (4) `GoogleCredentials` TypeScript interface in `settings/integrations/page.tsx` and `settings/security/page.tsx` now includes `configured?: boolean` for type safety.
+
+#### Playground & Flows Bug Fixes (BUG-331, BUG-335, BUG-336, BUG-344) — 2026-04-07
+
+- **BUG-344 — `/api/health` reported stale version v0.5.0 while frontend showed v0.6.0 (LOW):** Changed `SERVICE_VERSION = "0.5.0"` to `SERVICE_VERSION = "0.6.0"` in `backend/settings.py`. The health and readiness endpoints now correctly return `"version": "0.6.0"`, matching the frontend footer.
+
+- **BUG-335 — Playground created a new empty thread on every page load (LOW):** `initializeThreads()` in `frontend/app/playground/page.tsx` only checked if the most-recent thread was empty. If the most-recent thread had messages (normal after any use), a new thread was created on every subsequent page load, accumulating orphan threads. Fixed by searching ALL threads for any with `message_count === 0` (or undefined). A new thread is now only created when every existing thread already has messages. Verified: navigating to Playground 3 times kept the thread count stable.
+
+- **BUG-336 — Flow keyword triggers did not intercept messages in the Playground channel (MEDIUM):** Flows with `execution_method='keyword'` only fired on external channel messages (WhatsApp, Telegram); Playground messages were routed directly to the AI instead. Implemented full end-to-end keyword-trigger support: (1) Added `KEYWORD = "keyword"` to `ExecutionMethod` enum in `schemas.py`; (2) Added `trigger_keywords` JSON column to `FlowDefinition` model with Alembic migration `0028`; (3) Updated `routes_flows.py` to accept/store/return `trigger_keywords` in all create, patch, and response paths; (4) Added `_check_keyword_flow_triggers()` method in `PlaygroundService` — queries active keyword flows for the tenant, matches message text against configured keywords (slash-command prefix match or substring match), and fires matching flows via `FlowEngine.run_flow()`; (5) Injected keyword-trigger check at "STEP 2.5" in both `send_message()` (sync) and `process_message_streaming()` (streaming) paths, returning/yielding a flow acknowledgement before any AI processing; (6) Added keyword UI in Flows page — list badge with hash icon, and keyword textarea in create/edit modals.
+
+- **BUG-331 — Ollama unreachable from Docker backend (binds to 127.0.0.1 by default) (MEDIUM):** Users connecting Ollama to Tsushin got "Cannot connect to Ollama" because the Ollama service binds to `127.0.0.1:11434` by default, which is unreachable from the Docker container. Added a persistent "Docker Networking Note" guidance block in `frontend/app/hub/page.tsx` in the Ollama section, showing the correct Docker gateway URL (`http://172.18.0.1:11434`) and the `OLLAMA_HOST=0.0.0.0:11434` systemd override command. Also added an "Local Ollama (optional)" section to the installer success output in `install.py` with the same step-by-step instructions.
+
+#### Onboarding UX Overhaul — Fragmented Experiences Unified (BUG-318, 319, 320, 321, 322, 323, 325, 334) — 2026-04-07
+
+Eight overlapping onboarding UX bugs resolved in a coordinated fix across `OnboardingContext.tsx`, `OnboardingWizard.tsx`, `WhatsAppWizardContext.tsx`, `GettingStartedChecklist.tsx`, and `LayoutContent.tsx`:
+
+- **BUG-318 — Three sequential onboarding experiences on fresh install (MEDIUM):** Removed the `tsushin:onboarding-complete` event dispatch from `completeTour()` and the auto-launch listener from `WhatsAppWizardContext`. The WhatsApp wizard now only opens when explicitly triggered: via the Getting Started Checklist "Connect a Channel" button (`forceOpenWizard`) or tour step 5 action button (`openWizard`).
+
+- **BUG-319 — Tour step 9 duplicated Getting Started Checklist (LOW):** Removed tour step 9 ("Setup Checklist") entirely. `TOTAL_STEPS` reduced from 9 to 8. New step 8 ("You're All Set!") is a brief completion message pointing users to the Getting Started Checklist on the dashboard. Tour now shows "Step 1 of 8".
+
+- **BUG-320 — Getting Started Checklist visible beneath tour modal (LOW):** `GettingStartedChecklist.tsx` now imports `useOnboarding` and returns `null` immediately when `onboardingState.isActive` is true. Checklist is completely hidden while the tour is running.
+
+- **BUG-321 — Tour step 5 and WhatsApp Wizard covered the same task (MEDIUM):** Tour step 5 action button now calls `openChannelsWizard()` which launches the WhatsApp Setup Wizard directly. When the wizard closes, `tsushin:whatsapp-wizard-closed` event fires and the tour auto-advances to step 6 (Flows).
+
+- **BUG-322 — "Connect a Channel" link couldn't relaunch dismissed wizard (LOW):** Added `forceOpenWizard()` to `WhatsAppWizardContext` that clears `tsushin_whatsapp_wizard_dismissed` before opening. Getting Started Checklist "Connect a Channel" item is now a button calling `forceOpenWizard()` instead of a Link to `/hub?tab=communication`. Hub page also updated to use `forceOpenWizard`.
+
+- **BUG-323 — Tour steps 4 and 5 both navigated to /hub with no context (LOW):** Step 5 now launches the WhatsApp wizard directly via `openChannelsWizard()`. This provides clear channel-specific UX instead of re-showing the generic Hub page.
+
+- **BUG-325 — Tour auto-started on top of open User Guide panel (MEDIUM):** `OnboardingContext` tracks `isUserGuideOpen` via event listeners for `tsushin:open-user-guide` / `tsushin:close-user-guide`. Auto-start skips if User Guide is open (using ref to avoid stale closure race). `LayoutContent.tsx` dispatches `tsushin:close-user-guide` when the panel closes. Tour step 1 "Open User Guide" button is disabled with updated label when the guide is already open.
+
+- **BUG-334 — Tour overlay reappeared on every page navigation (MEDIUM):** Added dedicated `dismissTour()` function that calls `localStorage.setItem('tsushin_onboarding_completed', 'true')` SYNCHRONOUSLY before any React state update. Modal's `onClose` prop and Escape key handler both call `dismissTour()`. A `tourDismissedRef` prevents deferred auto-start from restarting the tour after dismissal. Verified: programmatic Escape key immediately sets localStorage; navigation to `/agents` does not reshow the tour.
+
+#### Settings & Admin Navigation UX (BUG-326, BUG-327, BUG-330) — 2026-04-07
+
+- **BUG-326 — `/settings/filtering` orphaned from Settings hub (MEDIUM):** Added a "Message Filtering" card to the advanced settings section of `frontend/app/settings/page.tsx`. The card includes a filter funnel icon, links to `/settings/filtering`, and requires `org.settings.write` permission. The page (group filters, DM allowlists, keywords, auto-response rules) was previously only discoverable by direct URL.
+
+- **BUG-327 — Global-admin landing page was a placeholder (MEDIUM):** Replaced the placeholder content in `frontend/app/system/integrations/page.tsx` with a proper "System Administration" overview dashboard featuring four navigation cards: Tenant Management, User Management, Plans & Limits, and Platform Integrations. Removed all "This page will contain" placeholder text. Cards use consistent glass-card styling with purple theme.
+
+- **BUG-330 — No admin UI for `max_agents` / tenant plan limits (LOW):** Added an "Edit" modal to `frontend/app/system/tenants/page.tsx`. The modal exposes editable fields for `max_agents`, `max_users`, `max_monthly_requests`, `plan`, and `status`, with current usage stats shown inline. The "View" button in the tenant table is replaced with "Edit". Uses existing backend `PUT /api/tenants/{id}` endpoint which already supports global-admin updates to all plan limit fields.
+
+#### Skills, Memory & Sentinel Bug Fixes (BUG-328, BUG-329, BUG-332, BUG-333, BUG-341) — 2026-04-07
+
+- **BUG-341 — Web search `serpapi` provider key rejected at runtime (MEDIUM):** The skill registry registers SerpAPI under the key `"google"`, but users who configured the skill with `"serpapi"` got a silent failure. Added `PROVIDER_ALIASES = {"serpapi": "google"}` normalization at the start of both `process()` and `execute_tool()` in `search_skill.py` so both provider names work identically at runtime.
+
+- **BUG-333 — Web search skill silently fails with no user guidance when unconfigured (LOW):** When `web_search` skill was enabled but no search API key was configured, the LLM fabricated a misleading "I can't directly search" response. Added three detection points in `search_skill.py` (both `process()` and `execute_tool()`): no available providers, provider not found, or API key not configured — all now return: "Web search is not configured for this agent. Please set up a search provider in the Hub (Settings > Hub > Web Search) and link it to this agent's skill integrations."
+
+- **BUG-329 — Cross-thread memory recall fails in Playground — new thread sees empty memory (MEDIUM):** Each playground thread used a thread-specific sender key (`playground_u{uid}_a{aid}_t{tid}`), so new threads started with empty memory and couldn't recall facts from previous threads. Changed `playground_service.py` to use a stable per-user-per-agent sender key (`playground_u{user_id}_a{agent_id}`) for all threads. Verified: told agent "my favorite number is 42" in thread 26, then started thread 27 and confirmed agent recalled "Yes, I remember! Your favorite number is 42."
+
+- **BUG-328 — Sentinel falsely flags "remember this" as memory poisoning (MEDIUM):** Benign user preference requests ("please remember I prefer dark mode") triggered `memory_poisoning` detection, flooding logs with false-positive warnings. Rewrote all three aggressiveness-level `memory_poisoning` prompts in `sentinel_detections.py` to explicitly distinguish adversarial attacks (credential injection, AI identity override, jailbreak persistence, security bypass) from legitimate user preference storage. Updated unified classification prompts at all levels. Changed detect-only mode threat log from `WARNING` to `DEBUG` in `agent_service.py` to reduce noise.
+
+- **BUG-332 — `CombinedKnowledgeService NOT initialized` WARN fires on every message (LOW):** The `[KB FIX] ❌ CombinedKnowledgeService NOT initialized` log was emitted at `WARN` level on every single agent message for agents without a linked project (the default). Changed `agent_service.py` to log at `DEBUG` when `project_id=None` (expected case) and only log at `WARN` when `project_id` is set but initialization fails.
+
+#### A2A Playground Agent Switching & Flow Type Assignment (BUG-338, BUG-342) — 2026-04-07
+
+- **BUG-338 — A2A agent switching fails in Playground with contact profile error (HIGH):** `AgentSwitcherSkill` required a Contact DB record to complete agent switching but Playground users have no such record (their sender is `playground_user_{id}`). Added `_is_playground_context(message)` helper that detects playground sessions via sender prefix or channel field. Both `process()` and `execute_tool()` now bypass the contact-required check for playground sessions and persist the switch via `UserAgentSession` using the sender_key directly (same approach as slash command service). `ContactAgentMapping` is only updated when a real Contact exists. Verified: `execute_tool()` returns `success=True, "Successfully switched to agent Kokoro"` for playground users.
+
+- **BUG-342 — `POST /api/flows/` ignores `flow_type` parameter (MEDIUM):** The internal `POST /api/flows/` endpoint used `FlowDefinitionCreate` which lacked `flow_type` and `execution_method` fields, causing both to be hardcoded as `"workflow"` and `"immediate"`. Added `flow_type` and `execution_method` optional fields to `FlowDefinitionCreate`. Added `VALID_FLOW_TYPES` and `VALID_EXECUTION_METHODS` constant sets with input validation that returns HTTP 422 for unknown values. Re-raised `HTTPException` before the generic `except Exception` catch so validation errors are no longer silently swallowed as 500s. Verified: `POST /api/flows/` with `"flow_type": "notification"` now returns `"flow_type": "notification"`; unknown types return `422 {"detail": "Invalid flow_type ..."}`.
+
+- **BUG-339 — Create Agent UI form hangs on 409 plan-limit error (HIGH):** When the Create Agent modal received a 409 "Agent limit reached" response, the button remained stuck in "Creating..." indefinitely with no error shown. Added `createError` state to the form — errors are now displayed inline inside the modal. Updated `client.ts` to extract the specific `detail` string from 409 JSON responses before falling back to the generic conflict message, giving users a meaningful error like "Agent limit reached. Your plan allows a maximum of X agents."
+
+- **BUG-340 — Seeded agents (6) exceed free-plan default limit (5) on fresh install (HIGH):** Fresh-install tenants were created with `max_agents=5` but the seed script creates 6 default agents, immediately blocking the user from creating their first custom agent. Increased `max_agents` default to 10 in `models_rbac.py`, `auth_service.py`, and `routes_tenants.py`. Also corrected `max_users` (1→5) and `max_monthly_requests` (1000→10000) model defaults to match realistic free-plan values.
+
+#### Direct Port HTTP Redirect & Hub Fresh-Install 404s (BUG-324, BUG-343) — 2026-04-07
+
+- **BUG-324 — HTTP direct port redirects to HTTPS (HIGH):** Added Next.js middleware (`frontend/middleware.ts`) that issues a 301 redirect from any HTTP direct-port access (`http://<host>:3030`) to `https://localhost`. When `NEXT_PUBLIC_API_URL=https://localhost`, visiting the app over HTTP caused CORS failures and mixed-content blocks because the browser page (HTTP) was calling an API on a different HTTPS origin. The middleware skips the redirect for Docker internal health checks (`127.0.0.1` host) so the container health check remains green. All other HTTP-to-direct-port requests are redirected to the canonical HTTPS URL.
+- **BUG-343 — Hub 404 console errors on fresh install (MEDIUM):** Two-part fix. (1) Slack/Discord 404s (`GET /api/integrations/slack/`, `GET /api/integrations/discord/`) were already resolved in commit `2ad1c1f` by updating route paths to match the Phase 23 backend structure. (2) Google credentials 404 on fresh install fixed by changing `GET /api/hub/google/credentials` to return `200 {"configured": false}` instead of HTTP 404 when no Google OAuth credentials are configured for the tenant. The `GoogleCredentialsResponse` Pydantic model now includes a `configured` boolean field. All three frontend consumers (`hub/page.tsx`, `settings/integrations/page.tsx`, `settings/security/page.tsx`) updated to check `data.configured === false` and treat it as null (unconfigured). Verified: Hub page loads with 0 console errors and all integration API calls return 200.
+
+#### Onboarding Tour Navigation Takeover (BUG-337) — 2026-04-07
+
+- **BUG-337 — Onboarding tour redirects Watcher/Flows/Settings on fresh install (CRITICAL):** The onboarding `navigateToStep()` function in `OnboardingContext.tsx` called `router.push()` automatically whenever the user clicked Next/Previous in the wizard, forcibly navigating away from pages the user had intentionally opened. This made `/` (Watcher/Dashboard), `/flows`, and `/settings/integrations` inaccessible on fresh installs where the tour was active. Removed the entire `navigateToStep()` function and all `router.push()` calls from `nextStep()`, `previousStep()`, and `goToStep()`. Wizard step advancement now only increments the step counter. Action buttons within individual steps (e.g., "Set Up Channels in Hub") remain as opt-in navigation, giving users full control. Also removed the now-unused `useRouter` import.
+
+### Bug Fixes (BUG-309 through BUG-317 — Ship-Gate + Security Audit Sprint)
+
+- **BUG-309:** Added RBAC permission checks (`hub.read`/`hub.write`) to all 14 Google integration routes, preventing privilege escalation from member to integration admin.
+- **BUG-310:** Secured legacy `/ws` WebSocket endpoint with JWT authentication and tenant-scoped connection tracking. Replaced global `broadcast()` with `broadcast_to_tenant()` to eliminate cross-tenant information disclosure.
+- **BUG-311:** Discord interaction signature verification now uses per-integration `public_key` stored in the database instead of a global environment variable, ensuring multi-tenant isolation.
+- **BUG-312:** Slack HTTP Events `url_verification` handshake now works correctly — `app_id` stored per-integration for reliable resolution, `signing_secret` required when `mode="http"`. New CRUD API at `/api/slack/integrations/`.
+- **BUG-313:** Discord inbound interactions are now fully configurable via the integration API — `public_key` is a required field on create. New CRUD API at `/api/discord/integrations/` and inbound webhook at `/api/channels/discord/{id}/interactions`.
+- **BUG-314:** Tenant `max_agents` plan limits are now enforced on agent creation in both standard and v2 API routes, returning HTTP 409 when the limit is reached.
+- **BUG-315:** Fixed Playwright browser path in Docker container — set `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers` so the non-root `tsushin` user can find Chromium at runtime.
+- **BUG-316:** Normalized Google Flights date parameters with 3-layer defense (dataclass stripping, provider regex+validation, format fallback parsing) to prevent SerpApi 400 errors from quoted date strings.
+- **BUG-317:** Fixed skill test endpoint to apply persisted config, database session, and agent context to skill instances before calling `can_handle()`, eliminating false-negatives for config-driven skills like `web_search`.
+
+### Security
+
+- **Next.js 16 upgrade (PR [#5](https://github.com/iamveene/Tsushin/pull/5) revival, originally by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Upgraded frontend from Next.js 14.2.33 to 16.2.2, React 18.2.0 to 19.2.0, ESLint 8 to 9 (flat config). Resolves CVE-2025-29927, CVE-2024-34351, CVE-2024-46982, CVE-2024-51479. Applied fixes for Google Fonts Docker build failure (--webpack flag), removed unnecessary monorepo boilerplate from next.config.mjs, migrated ESLint to flat config (eslint.config.mjs), updated TypeScript JSX mode to react-jsx. Removed stale pnpm-lock.yaml and added it to .dockerignore.
+
+### Community Contributions
+
+- **WhatsApp contact name enrichment (PR [#6](https://github.com/iamveene/Tsushin/pull/6) by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Improved WhatsApp DM contact name resolution across all layers. The Go MCP bridge now uses a richer fallback chain (FullName → PushName → FirstName → BusinessName → message PushName → sender) and detects raw numeric identifiers to force re-resolution. The API reader reuses human-readable `chat_name` as `sender_name` for DMs when contact mappings miss. The messages API endpoint enriches responses via `CachedContactService`, replacing raw @lid identifiers with friendly names in both `sender_name` and `chat_name` columns.
+- **WhatsApp LID contact agent routing (PR [#8](https://github.com/iamveene/Tsushin/pull/8) by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Fixed DM routing for contacts using WhatsApp LID identifiers. Extracted contact resolution into `_resolve_direct_message_contact()` with a richer fallback chain: `CachedContactService` → chat_id metadata → fuzzy name matching → WhatsApp auto-discovery. The auto-discovery service now records newly observed LID aliases as `ContactChannelMapping` entries instead of discarding them, ensuring contact-agent mappings are preserved across identifier changes.
+- **Sanitize leaked tool-call markup (PR [#9](https://github.com/iamveene/Tsushin/pull/9) by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** Local/Ollama models sometimes emit pseudo `[TOOL_CALL]` markup instead of plain replies. Added `_sanitize_unexecuted_tool_output()` to `AgentService` that extracts the user-facing message from `action: respond` blocks and strips unresolved fenced tool blocks before delivery.
+- **AgentSwitcher contact resolution for WhatsApp aliases (PR [#10](https://github.com/iamveene/Tsushin/pull/10) by [offsecop](https://github.com/offsecop) — Thiago Oliveira):** `AgentSwitcherSkill._identify_sender()` now uses `ContactService` with `sender_key` and `chat_name` parameters for consistent contact resolution. Falls back through channel mappings, fuzzy name matching, and WhatsApp auto-discovery — matching the main router's resolution strategy.
+
+### Improvements
+
+#### Setup Wizard & Onboarding Tour Enhancements (2026-04-06)
+
+- **System AI auto-assigned during initial setup:** The setup wizard now creates a ProviderInstance for the primary AI provider and automatically assigns it as the System AI. Previously, System AI had to be manually configured in the Hub after setup, leaving system operations (intent classification, skill routing, flow processing) without a provider until manually configured.
+- **Onboarding tour updated with mandatory configuration guidance:** Revised all 9 tour steps to cover mandatory setup requirements. The tour now points users to the User Guide (accessible via ? button), explains that System AI is auto-configured, highlights communication channel setup as a required step with actionable buttons, and ends with a setup checklist summarizing completed and pending configuration items.
+- **Communication Channels step made actionable:** The tour's Channels step now navigates to the Hub and includes a "Set Up Channels in Hub" action button, making it clear that connecting WhatsApp/Telegram is required for agents to communicate outside the Playground.
+
+#### Dynamic Ollama Model Discovery (2026-04-06)
+
+- **Ollama models now fetched dynamically from running instance:** Replaced all hardcoded Ollama model lists across 6 files (3 backend, 3 frontend) with dynamic discovery from the configured Ollama instance via `/api/tags`. Agent creation, agent configuration manager, playground config panel, Sentinel LLM providers, token tracker, and model pricing routes now all reflect the actual models available on the user's Ollama instance. Hub already showed dynamic models — now the agent creation and configuration selectors are consistent with it. Ollama models are automatically treated as free ($0) in pricing/cost tracking without needing to be individually listed.
+- **SSRF validation now sends vendor context for Ollama URL validation:** The provider instance creation modal was blocking `host.docker.internal` URLs for Ollama because the frontend URL validation didn't pass the `vendor` parameter to the backend. Fixed `validateProviderUrl()` to pass the current vendor so Ollama/custom providers correctly allow Docker internal hostnames.
+- **Ollama "Manage Instance" button on Hub Local Services card:** Added a "Manage Instance" link to the Ollama card in the Hub's Local Services section, allowing users to open the full provider instance edit modal to modify URL, API key, models, and other settings directly from the card.
+
+### Bug fixes
+
+#### Provider Instance Test Connection — Deprecated Model Fix (2026-04-06)
+
+- **BUG-308 — Test connection uses deprecated/wrong model (HIGH):** The "Test Connection" button on provider instances ignored the user-selected model and fell back to hardcoded model IDs. For Anthropic, the fallback was `claude-3-5-haiku-20241022` (deprecated), causing a 404 error. Fixed by: passing the user's selected model from the frontend to both test connection endpoints (raw and saved), adding model priority chain (request > saved > fallback), and updating all hardcoded fallbacks to current models. Also updated all model selector lists, pricing tables, and discovery fallbacks across the platform to include Claude 4.6 series (Opus, Sonnet, Haiku) and removed deprecated Claude 3 Haiku / 3.5 Haiku entries.
+
+#### Provider Instance Validation (2026-04-06)
+
+- **BUG-305 — Provider instance model required validation:** Provider instances could be created without any models, making them unusable. Added frontend validation (disabled save button, red required asterisk, auto-add of typed model text on save) and backend validation (HTTP 400 if `available_models` is empty).
+
+#### Data Loss Prevention & Custom Skills UX (2026-04-06)
+
+- **BUG-302 — Database volume protection (CRITICAL):** PostgreSQL named volume `tsushin-postgres-data` was destroyed and recreated, wiping all tenant-created custom skills and MCP server configurations. Added explicit "Database Volume Protection" section to `CLAUDE.md` listing forbidden commands (`docker-compose down -v`, `docker volume rm`, `docker system prune --volumes`) with safe alternatives. Created `backend/scripts/backup_db.sh` for periodic pg_dump backups with automatic retention of the last 10 backups.
+- **BUG-303 — Agent custom skills inline management:** The "Manage Custom Skills" button in the agent config Custom Skills tab redirected to the studio page instead of providing inline management. Replaced with an inline "Create Custom Skill" form for instruction-based skills (creates + auto-assigns to agent), a secondary "Custom Skills Studio" link for advanced types, and a persistent "New Skill" button in the header.
+
+#### Bug Fixes (E2E validated 2026-04-06)
+
+- **Summarization source_step field mapping:** `SummarizationStepHandler` now resolves `output` and `message` fields from slash_command/skill steps (previously only checked `raw_output`)
+- **Summarization tenant_id:** Both summarization paths (conversation + raw text) now pass `tenant_id` to `AIClient` for proper API key resolution
+- **Gate tenant_id:** Agentic gate handler passes `tenant_id` to `AIClient` for API key resolution
+- **WhatsApp MCP registration:** Flow notification steps now resolve MCP URL from registered `WhatsAppMCPInstance` records
+- **WhatsApp reliability hardening:** Added instance metadata reconciliation for stale `container_id` / path / URL state, health-check fallback from `container_id` to `container_name`, startup watcher preference for API-reader bootstrap, tenant-safe auto-binding metadata for Graph/Studio, Hub QR degraded-state recovery actions, and a dedicated QA Tester status surface. The tester Docker health probe now targets `GET /api/health`, and both WhatsApp bridges use supervised reconnect loops plus logout-triggered QR regeneration instead of one-shot reconnect attempts.
+- **Systemic tenant_id audit (11 instances across 6 files):** Fixed remaining `tenant_id` resolution gaps found via full-codebase audit. **AIClient instantiation** (8 fixes): `SchedulerService` (5 methods: `_analyze_conversation`, `_generate_agent_reply`, `_generate_opening_message`, `_generate_closing_message`, `provide_conversation_guidance`), `ConversationKnowledgeService._call_agent_llm`, `AISummaryService.__init__`, `FactExtractor._get_ai_client` — all now pass `tenant_id` for proper per-tenant API key resolution. **Router cross-tenant agent queries** (3 fixes): `_select_agent` keyword match, default agent fallback, and slash-command default agent now filter by `Agent.tenant_id` to prevent cross-tenant routing. Updated all callers (6 files) to thread `tenant_id` through constructor chains.
+
+### Implementations
+
+#### System AI Configuration Simplification
+
+- **Provider-instance-based System AI config:** The AI Configuration settings page (`/settings/ai-configuration`) now points to an existing Provider Instance from the Hub instead of maintaining its own duplicated provider/model lists. Added `system_ai_provider_instance_id` FK column to Config table (migration 0027). The backend resolves vendor, API key, and base URL from the linked ProviderInstance at runtime, with legacy fallback to the old `system_ai_provider`/`system_ai_model` columns. The frontend was rewritten to show a card selector of active Provider Instances with model picker from the instance's `available_models`, eliminating the hardcoded model catalog that went stale. Manual model entry is supported for instances with no discovered models.
+
+#### Flow Execution UX
+
+- **Async flow execution with live progress modal:** The `POST /api/flows/{flow_id}/execute` endpoint now returns immediately (HTTP 202) with a pending FlowRun, executing steps in a background task. The frontend ViewRunModal opens instantly on click and polls every 2s for live updates — showing a progress bar, per-step status with execution times, a pulsing "Live" header indicator, and a remaining-steps counter. Previously the modal only appeared after the entire flow finished executing, leaving users with no feedback.
+
+#### UX Friction Reduction
+
+- **WhatsApp Instance Creation Mode Selector:** Clicking "+ Create WhatsApp Instance" now opens a selection modal with two options: Guided Setup (8-step wizard, recommended) and Advanced Setup (manual form). Removes the previously hard-to-notice standalone "Setup Wizard" button. Empty state consolidated to a single button that also opens the selector.
+- **WhatsApp Wizard Welcome Auto-Fit:** Moved "Let's Get Started" button to a pinned modal footer so it's always visible. Added `autoHeight` prop to Modal component for flexible sizing (`max-h-[calc(100vh-2rem)]`).
+- **WhatsApp Setup Wizard (7→8 steps):** Added "About You" step (Step 3) that collects the user's name and phone number, auto-creates a contact with DM Trigger enabled, and links it to the bound agent. Step 2 now includes an optional "Instance Name" field that auto-creates a bot contact. Steps 4-5 (DM/Group settings) have Simple/Advanced mode toggle for progressive disclosure. Step 8 (Confirmation) shows enhanced summary with green/amber indicators for completed/skipped items.
+- **Image Analysis skill:** Added a dedicated multimodal image-analysis skill for inbound media. It uses Gemini vision models to describe screenshots/photos, answer captioned image questions, and hand off edit-style captions back to the image editing skill instead of double-handling them.
+- **Getting Started Checklist:** New dashboard widget on the Watcher page showing 5 setup milestones (Configure Agent, Connect Channel, Add Contacts, Test in Playground, Create Flow) with progress bar, action links, and dismiss button. Auto-hides when all items are complete.
+- **Hub Integration Summary Banner:** Compact status strip above the Hub tab bar showing connection counts for AI Providers, WhatsApp, Telegram, Slack, Discord, and Webhooks with colored dots. Clickable to switch tabs.
+- **WhatsApp Instance Display Name:** New `display_name` column on WhatsApp instances. Shown as primary title on Hub cards with phone number as subtitle. Passed via wizard's Instance Name field.
+- **Settings Progressive Disclosure:** Settings page now groups cards into "Essential" (Organization, Team Members, System AI, Integrations) always visible, and "Advanced" (8 more) collapsed by default with persistent preference.
+- **Agent Creation Smart Defaults:** 4 system prompt template buttons (General Assistant, Customer Support, Sales Outreach, Technical Support) above the textarea. Model provider auto-populates from first configured provider instance. InfoTooltip on model provider field.
+- **Playground Default Agent:** Auto-selects the agent marked `is_default` instead of always picking the first in the list.
+- **Empty States Standardization:** New `no-contacts` EmptyState variant with address-book SVG. Applied to Agents and Contacts pages, replacing ad-hoc inline empty markup.
+- **Backend:** Added `is_default` to PlaygroundAgentInfo API response. Fixed `dm_auto_mode` default from `False` to `True` in MCPInstanceResponse schema.
+
+#### Documentation
+
+- **DOC-001:** Comprehensive documentation overhaul of `DOCUMENTATION.md` — full accuracy audit against codebase
+- **DOC-002:** Document 11 missing slash commands: email (6), search, shell, thread (3) — total now 37 commands
+- **DOC-003:** Add §26.1 usage examples for all 37 slash commands organized by category
+- **DOC-004:** Add channel configuration reference tables — WhatsApp (`group_keywords`, `is_group_handler`, `api_secret`), Slack (`dm_policy`, `allowed_channels`), Discord (`dm_policy`, `allowed_guilds`, `guild_channel_config`)
+- **DOC-005:** Add E2E setup guides for all 5 external channels (WhatsApp, Telegram, Slack, Discord, Webhook)
+- **DOC-006:** Document per-agent trigger/context override fields (`trigger_dm_enabled`, `trigger_group_filters`, `trigger_number_filters`, `context_message_count`, `context_char_limit`) in §7.3
+- **DOC-007:** Expand §9.3 custom skills with subsections for Instruction, Script, and MCP Server variants including creation examples and resource quotas
+- **DOC-008:** Expand §9.4 sandboxed tools with full command/parameter tables from all 9 YAML manifests
+- **DOC-009:** Formalize FlowRun and FlowNodeRun status lifecycle enums in §13.5
+- **DOC-010:** Add OKG merge mode reference table (`replace`, `prepend`, `merge`) in §10.3
+- **DOC-011:** Add §16.4 contact usage examples (multi-channel mapping, system user linking, per-contact agent assignment)
+- **DOC-012:** Update README.md feature highlights and documentation map to reflect new content
+- **DOC-013:** Rename `documentation.md` → `DOCUMENTATION.md` (uppercase convention for all root MD files)
+- **DOC-014:** Create `USER_GUIDE.md` — practical user-facing guide covering getting started, channels setup, agents, skills, flows, scheduler, contacts, playground, security, settings, slash commands, API, and audit
+
+### Implementations
+
+#### Added
+
+- **Gate Node Step Type** — New conditional flow control node with two modes:
+  - *Programmatic* (zero LLM cost): 15+ operators for numeric, string, regex, existence, and count conditions with AND/OR logic
+  - *Agentic* (AI-driven): LLM evaluates pass/fail using natural language criteria
+  - Configurable on-fail actions: silent skip or send notification
+  - Full UI in flow builder: mode toggle, dynamic condition builder, operator dropdowns
+  - Step output variables: `gate_result`, `gate_mode`, `conditions_evaluated`, `reasoning`
+- **Zero-Cost Inbox Monitor Template** — Fully programmatic email monitoring (Gmail poll → gate → WhatsApp delivery) with zero AI token cost. "Zero AI Cost" badge in template wizard
+- **Smart Email Filter Template** — AI-powered email filtering (Gmail poll → agentic gate → summarization → delivery). Gate criteria configurable (financial, project-specific, etc.)
+
+### Bug fixes
+
+#### Security
+
+- **BUG-SEC-008 (CRITICAL):** Block privilege escalation in `update_client` — non-`api_owner` callers can no longer elevate to `api_owner` role
+- **BUG-LOG-020 (CRITICAL):** Sentinel fail-closed on exceptions — security analysis now blocks content when Sentinel crashes instead of silently bypassing
+- **BUG-SEC-010:** Revoke existing JWT tokens on API client secret rotation
+- **BUG-SEC-016:** Pass `tenant_id` to `check_commands` in shell skill — per-tenant command policies now enforced
+- **BUG-SEC-019:** Add magic bytes file type validation for uploads (PDF, DOCX, XLSX, images) — no longer extension-only
+- **BUG-278:** Bump Next.js 14.1.0 → 14.2.33 — patches CVE-2025-29927, CVE-2024-34351, CVE-2024-46982, CVE-2024-51479
+
+#### Fixed
+
+- **BUG-299:** Fix agent detail 500 — add missing `parse_enabled_channels` import in `routes_agents.py`
+- **BUG-300:** Fix agent list returning null for `enabled_channels` and all integration IDs — add channel/vector-store fields to list endpoint dict builder
+- **BUG-301:** Remove duplicate `apply_agent_whatsapp_binding_policy` import in `routes_studio.py`
+- **BUG-298:** Pass `tenant_id` to `AgentService` in `AgentRouter.__init__`
+- **BUG-293:** Circuit breaker state now persisted to DB on transitions — survives backend restarts
+- **BUG-LOG-004:** Tenant-scoped project knowledge chunk queries (defense-in-depth)
+- **BUG-LOG-006:** A2A `comm_depth` now injected into skill config — depth limit functional
+- **BUG-LOG-007:** Stale flow runs cleaned up on engine startup — no more stuck "running" state
+- **BUG-LOG-010:** DB-level unique constraint on `flow_node_run.idempotency_key` (migration 0026)
+- **BUG-LOG-011:** `cancel_run` now interrupts in-flight steps via 5s polling loop
+- **BUG-LOG-012:** `ContactAgentMapping` now has `tenant_id` column (migration 0025) — prevents cross-tenant agent assignment
+- **BUG-LOG-018:** Anonymous contact creation uses SHA-256 instead of Python `hash()` — deterministic IDs across restarts
+
+#### v0.6.0 Comprehensive Audit Remediation (2026-04-06)
+99-finding security and quality audit across 11 teams, 51 fixes applied in 41 files.
+
+**Security & Auth (Group A):**
+- Add authentication to 3 public Sentinel endpoints (LLM providers, models, detection-types)
+- Add RBAC guards to Sentinel exception, prompts, and channel health endpoints
+- Seed 6 missing RBAC permissions (channel_health, agent_communication, vector_stores)
+- SSRF-validate browser proxy URL and alert webhook URL
+- Fix X-Forwarded-For header bypass on webhook IP allowlist
+- Validate global admin password minimum length in setup wizard
+
+**Tenant Isolation (Group B):**
+- SharedMemoryPool update/delete/share now enforce tenant_id filters
+- VectorStoreRegistry cache keyed by (instance_id, tenant_id) — prevents cross-tenant access
+- SkillContextService cache keyed by tenant_id:agent_id — prevents cross-tenant pollution
+- SentinelEffectiveConfig returns deep copy from cache — prevents exemption bleed
+
+**Sentinel & Detection (Group C):**
+- Replace stale hardcoded valid_types with dynamic DETECTION_REGISTRY derivation — restores vector_store_poisoning, agent_escalation, browser_ssrf detection
+- Fix BUG-279: cleanup_poisoned_memory now logs error (Memory model has no message_id column)
+
+**Channels & Circuit Breaker (Group D):**
+- Circuit breaker: implement half_open_max_failures, extract try_recover() from should_probe()
+- Prevent duplicate Slack/Discord workspace registration (HTTP 409)
+- SSRF-validate channel alert dispatcher webhook URLs
+- Fix Slack adapter deprecated asyncio.get_event_loop() → get_running_loop()
+- Bump aiohttp floor to >=3.10.11 (CVE-2024-52304, CVE-2024-23334)
+- Fix pinecone-client → pinecone package name
+
+**Memory, OKG & A2A (Group E):**
+- Clamp decay_lambda, apply_decay_to_score, and mmr_lambda to valid ranges
+- Add user_id check to OKG forget ownership validation
+- Fix missing await on A2A vector store search
+- Align OKG _compute_decay unknown-timestamp fallback with temporal_decay.py
+
+**Browser Automation (Group F):**
+- Per-tenant browser session cap (prevents cross-tenant DoS)
+- Thread-safe singleton creation with double-checked locking
+- Fix open_tab TOCTOU race and page leak on navigation failure
+- extract()/screenshot() return BrowserResult instead of raising exceptions
+- go_back()/go_forward() handle None response (no history)
+- Cleanup loop releases lock before provider.cleanup()
+
+**Skills, Flows & Build (Group G):**
+- Fix critical NameError: router.py tenant_id → self.tenant_id on DM messages
+- Scope flow stale cleanup to flow_definition_id (prevents cross-tenant damage)
+- Remove nuclei from Dockerfile (BUG-278 — runs in toolbox container)
+- Replace hardcoded agent ID 7 with config flag in scheduler_skill
+- Fix VectorStoreInstance nullable mismatches vs migration definitions
+
+### Implementations
+
+#### WhatsApp Post-Install Setup Wizard + Inline Helpers (2026-04-05)
+Guided 7-step wizard that walks non-technical users through the full WhatsApp onboarding flow end-to-end, replacing the previous "figure it out across 3 pages" experience.
+
+- **Setup Wizard** (`frontend/components/whatsapp-wizard/`): Step 1 Welcome → Step 2 Create instance + inline QR scan with live polling → Step 3 DM Auto Mode + number allowlist → Step 4 Group filters + trigger keywords → Step 5 Contact creation with DM Trigger toggle → Step 6 Agent-to-channel binding → Step 7 Summary with next-steps guidance.
+- **Auto-launch**: Fires after the main onboarding tour completes if no WhatsApp instances exist. Uses `tsushin:onboarding-complete` CustomEvent from `OnboardingContext` — no coupling between contexts.
+- **Manual triggers**: "Setup Wizard" button in Hub WhatsApp section header (always visible), plus "Guided Setup" / "Manual Setup" split CTA in the empty state.
+- **Reusable `InfoTooltip` component** (`frontend/components/ui/InfoTooltip.tsx`): Click-to-toggle popover with title + body text, click-outside/Escape dismiss, dark-mode aware.
+- **6 inline helpers placed**: Hub filters modal (Group Filters, Number Filters, Group Keywords, DM Auto Mode), Contacts page (DM Trigger checkbox), Agent Channels (WhatsApp Integration heading).
+- **Self-contained state**: `WhatsAppWizardContext` manages wizard lifecycle and accumulated data independently from `OnboardingContext`. Each step calls real APIs immediately — partial setup is usable if the user exits mid-flow.
+
+#### Flow Creation Wizard — Pre-built Hybrid Automations (2026-04-05)
+New "From Template" button on `/flows` opens a 3-step wizard (pick → configure → preview) for instantiating common hybrid (programmatic + agentic) flows in one click. Showcases the platform's hybrid value prop: deterministic/cheap programmatic fetch steps gate into agentic summarization steps, avoiding LLM spend when there's no data.
+
+- **5 templates shipped**: Daily Email Digest, Weekly Calendar Summary, Summarize on Demand, Proactive Watcher, New-Contact Welcome.
+- **Architecture**: `backend/services/flow_template_seeding.py` defines templates as code (pure `build(params, tenant_id) → FlowCreate` functions); `GET /api/flows/templates` and `POST /api/flows/templates/{id}/instantiate` endpoints in `routes_flows.py`. No new DB primitives — reuses existing FlowDefinition/FlowNode step types and `on_failure="skip"` as the conditional-gate mechanism.
+- **Security hardening**: `_validate_template_params` enforces required/options/min/max from each template's declarative schema, with numeric clamping (e.g. `max_emails` clamped to 1–100 server-side regardless of client input). `_validate_tenant_refs` verifies every `agent_id`, `persona_id`, and sandboxed `tool_name` referenced in the generated flow belongs to the caller's tenant — blocks cross-tenant resource leaks at instantiate time (422 response). Option whitelists enforced on select/channel params.
+- **Scheduling correctness**: `_first_scheduled_at` uses pytz to compute UTC-naive `scheduled_at` from the user's wall-clock HH:MM in their chosen timezone (verified: 08:00 São Paulo → 11:00 UTC).
+- **Frontend**: `CreateFromTemplateModal.tsx` dynamically renders parameter forms from each template's `params_schema`. Matches existing design system (slate-800 shell, teal/cyan accents, rounded-2xl, backdrop-blur).
+
+#### Changed
+
+##### WhatsApp filter typeahead + Studio Contacts UX overhaul (2026-04-05, branch `wpp`)
+Replaced free-text entry in Hub > Communications > WhatsApp "Message Filters" (Group Filters + DM Allowlist) with live-autocomplete dropdowns, and streamlined the Studio > Contacts add/edit workflow so users no longer have to manage WhatsApp IDs or click resolve buttons.
+
+**Hub filter typeahead**
+- New `TypeaheadChipInput` component (`frontend/components/hub/TypeaheadChipInput.tsx`) with 250 ms debounce, arrow-key nav, free-text fallback, chip × removal.
+- New WhatsApp MCP endpoints (`backend/whatsapp-mcp/main.go`): `GET /api/groups` lists joined groups from the local chats store; `GET /api/contacts` merges the whatsmeow address book with DM chats, with `?q=` substring/phone-prefix filter.
+- New backend proxy routes (`backend/api/routes_mcp_instances.py`): `GET /api/mcp/instances/{id}/wa/groups` and `…/wa/contacts`, tenant-scoped via `context.can_access_resource`, using `MCPAuthService` Bearer auth.
+- Frontend: `api.searchWhatsAppGroups()` / `searchWhatsAppContacts()` and the typeahead wired into both Group Filters and DM Allowlist fields in `hub/page.tsx`.
+
+**Studio > Contacts**
+- Removed "Resolve All WhatsApp" header button and per-row "Resolve WA" button — resolution is now silent/automatic.
+- Removed manual "WhatsApp ID" text field from the add/edit form (users no longer need to know this value).
+- Added "Default Agent" dropdown to the contact add/edit form (only for `role=user`); creates/updates/deletes a `ContactAgentMapping` on save.
+- Helper text under Phone Number: *"WhatsApp ID will be auto-detected from the phone number after saving."*
+- Contacts page schedules a `loadData()` refresh 2.5 s after create/update to surface server-side resolution without manual reload.
+
+### Bug fixes
+
+#### WhatsApp proactive resolver missing Bearer auth (2026-04-05, branch `wpp`)
+`services/whatsapp_proactive_resolver.py` was calling the MCP `/check-numbers` endpoint without an `Authorization` header, causing auto-resolution to fail with **HTTP 401** after Phase Security-1 enabled `MCP_API_SECRET` enforcement. Both single-number and batch resolution paths now pull the instance's `api_secret` via `get_auth_headers()` and include the Bearer token. Verified end-to-end: creating a contact with phone `+5527998701042` auto-populates `whatsapp_id=5527998701042` within ~2 s.
+
+### Implementations
+
+#### Performance
+##### Backend image optimization — dependency hygiene + opt-out flags (2026-04-05)
+Follow-up to commit `c2402bd` (CPU-only torch). Removed declared-but-unused dependencies, deduped conflicting pytest declarations, split test deps into a dev-only tier, removed system packages that belong in the `toolbox` sandbox container, and added opt-out ARG flags for heavy optional assets. Default image preserves every existing feature; new lean build variant drops ~2.05 GB.
+
+**Dependency removals & reshuffling:**
+- **Removed `slack-bolt>=1.20.0`** from `backend/requirements-app.txt` — declared but zero imports. Slack adapter uses `slack-sdk` exclusively (verified in `backend/channels/slack/adapter.py` and `backend/api/routes_slack.py`).
+- **Removed duplicate pytest stack** from production tiers: `pytest`, `pytest-asyncio` deleted from `requirements-base.txt`; `pytest`, `pytest-asyncio`, `pytest-cov` deleted from `requirements-phase4.txt`. Conflicting version floors (`>=7.4.4` vs `>=7.4.0`) resolved.
+- **New `backend/requirements-dev.txt`** — unified dev/CI testing deps (pytest, pytest-asyncio, pytest-cov), NOT installed in the production Docker image. Run locally: `pip install -r backend/requirements-dev.txt`.
+- **Moved `docker>=7.0.0`** from `requirements-base.txt` → `requirements-app.txt` with accurate usage comment (Phase 8 MCP container lifecycle via `services/container_runtime.py`).
+- **Bumped `google-generativeai>=0.4.0` → `>=0.8.0`** — ancient floor (Jan 2024) replaced with current floor.
+
+**System packages:**
+- **Removed `nmap` and `whois`** from `backend/Dockerfile` apt install — sandboxed tools run in the per-tenant `toolbox` container (`backend/containers/Dockerfile.toolbox`), not in the backend image. Backend Python code references them only as string tokens for routing.
+
+**New Docker build flags (both default=true, zero behavior change by default):**
+- **`INSTALL_PLAYWRIGHT=true`** — gates `playwright install chromium` (~1.1 GB Chromium binary) and Chromium system libs (libnss3, libatk, libcups2, etc.). Set `false` if the deployment does not use browser automation skills.
+- **`INSTALL_FFMPEG=true`** — gates ffmpeg (~250 MB). Required by Kokoro TTS for WAV→Opus conversion (`backend/hub/providers/kokoro_tts_provider.py:457`). Set `false` if TTS is not used.
+
+**Example lean build:**
+```bash
+docker build --build-arg INSTALL_PLAYWRIGHT=false --build-arg INSTALL_FFMPEG=false \
+  -t tsushin-backend:lean backend/
+```
+
+**Measured results (multi-arch arm64 image):**
+
+| Variant | Image Size | vs Baseline | Notes |
+|---------|-----------|-------------|-------|
+| Baseline (pre-c2402bd) | 4.89 GB | — | Before CPU-only torch fix landed |
+| Default (after this change) | 4.84 GB | −50 MB | Playwright + ffmpeg still installed |
+| Lean (both flags false) | 2.79 GB | **−2.10 GB (−43%)** | No Chromium, no ffmpeg |
+
+Build time (no-cache, BuildKit pip mounts intact): ~3m 23s for default rebuild.
+
+**Verified end-to-end:** backend health + readiness endpoints return 200; API v1 `/agents` sweep returns 200; `slack_sdk`/`docker`/`google.generativeai`/`playwright`/`ffmpeg`/`sentence-transformers` all importable; `import pytest` + `import slack_bolt` correctly raise `ModuleNotFoundError` in production image; torch remains `2.11.0+cpu` (no CUDA regression); Kokoro TTS provider imports; Slack adapter imports; per-tenant toolbox container still reachable with nmap + dig available.
+
+### Bug fixes
+#### BUG-275 — Global refresh button did not reliably update lists across pages (2026-04-05)
+The header global refresh button dispatches a `tsushin:refresh` CustomEvent that pages subscribe to in `useEffect`. Audit found 9 pages registered the listener with empty deps `[]`, capturing the FIRST render's `loadData` closure — the listener kept calling that stale closure forever, so loaders executed with initial state values instead of current state.
+
+- **New hook** `frontend/hooks/useGlobalRefresh.ts` uses a ref-of-callback pattern so the listener ALWAYS invokes the latest callback. Eliminates stale-closure bugs once and for all.
+- **Migrated 9 pages/components**: `flows`, `hub`, `agents`, `agents/contacts`, `agents/personas`, `hub/sandboxed-tools`, `settings/organization`, `watcher/ConversationsTab`, `watcher/DashboardTab`, `watcher/FlowsTab`.
+- **Pagination snapback** on Flows: when a delete drops the total below the current page's offset, the page auto-corrects to the last non-empty page without clobbering the list in between.
+- **Validated** via Playwright: clicking refresh on flows/agents/contacts/settings/hub fires a fresh `GET` on every click, zero stale data.
+
+#### BUG-LOG-015 — Memory table now has tenant_id for DB-level isolation (2026-04-05)
+Previously the `Memory` table enforced tenant isolation only via `agent_id` — every query site had to remember to scope by `agent_ids ∈ tenant's agents`. A missed site would be a cross-tenant leak. This change enforces isolation at the row level.
+
+- **Alembic migration 0024** adds `tenant_id VARCHAR(50) NOT NULL` with backfill from `Agent.tenant_id`, deletes orphan rows (28 in dev DB), and adds composite index `(tenant_id, agent_id, sender_key)`.
+- **Write paths** populate tenant_id on every INSERT: `agent_memory_system.save_to_db` (via lazy-caching `_get_tenant_id` helper — deduplicated with the pre-existing MemGuard helper), `playground_message_service.branch_conversation`.
+- **Read paths simplified**: `conversation_knowledge_service._get_thread_messages`, `conversation_search_service._search_like`, and `routes.py` stats now filter Memory directly on `tenant_id`, replacing the Agent-JOIN and tenant-agent-id-IN-list patterns.
+- **Validated**: 422 rows backfilled with correct tenant_id, 0 NULLs; live chat test creates Memory rows with tenant_id populated; backend starts clean with `alembic upgrade head 0023 → 0024`.
+
+#### /flows double-fire on global refresh (BUG-275 follow-up, 2026-04-05)
+Perfection QA caught that `frontend/app/flows/page.tsx` still used the raw `addEventListener('tsushin:refresh')` pattern INSIDE the `useEffect([currentPage, pageSize])` that loaded data. Every pagination change re-attached the listener, and on refresh click the page's three loader GETs (`flows/`, `flows/runs`, `conversations/active`) fired twice. Migrated flows/page.tsx to the `useGlobalRefresh` hook with an empty-deps mount registration — single subscription per mount.
+
+#### BUG-276 — Force-delete of flows with completed runs blocked by conversation_thread FK (2026-04-05)
+Three stress-test flows (IDs 140/139/123) could not be force-deleted. Root cause: conversation_thread rows 596/597/598 had `status='timeout'` referencing FlowNodeRun IDs — the force-delete path only nullified `flow_step_run_id` for threads with `status='active'`, so non-active threads kept the FK reference and blocked the FlowNodeRun cascade, rolling the transaction back under a generic 500.
+
+- **Fix** in `backend/api/routes_flows.py` delete_flow: after the state transition on `status='active'` threads, widen the nullification to `flow_step_run_id = NULL` for ALL statuses referencing the flow's step runs. History preserved on threads, FK cleared, cascade proceeds.
+- **Observability**: included `{e}` in the `logger.exception` format string so future delete failures surface the DB constraint name.
+- **Validated**: all three stuck flows deleted successfully (HTTP 204); threads retained `status='timeout'` with `flow_step_run_id=NULL`; zero dangling FKs. UI round-trip confirmed.
+
+#### BUG-277 — WhatsApp agent silent-drop regression (2026-04-05)
+Two compounding regressions silently broke the WhatsApp agent: the bot would receive DMs into its MCP container but never route them through the agent or respond. Watcher logs showed neither `Found N new messages` nor any Gemini call, leaving the user to believe the bot had hung.
+
+- **`backend/app.py` — `CachedContactService` missing `tenant_id`**: after V060-CHN-006 made the service fail-closed when `tenant_id` is unset, every `identify_sender()` lookup returned `None`. The MessageFilter relies on `contact.is_dm_trigger` to decide whether to wake the agent on DMs; with every contact lookup returning `None`, DMs fell through to `dm_auto_mode` (`False`) and the watcher silently advanced `last_timestamp` without routing. Fixed by creating a per-tenant `CachedContactService` scoped to `instance.tenant_id`, cached in `app.state.contact_services` (dict keyed by tenant). Same fix applied to the Telegram callback path, which now passes `bot_instance.tenant_id`.
+- **`backend/agent/router.py` — `UnboundLocalError: cannot access local variable 'os'`**: two redundant `import os` statements inside `route_message()` made `os` a function-local name across the entire 1200-line function, shadowing the module-level import. The CB-queue check at line 1297 (`elif os.getenv("TSN_CB_QUEUE_ENABLED", ...)`) runs before those inner imports and crashed with `UnboundLocalError` on every message. Fixed by deleting the two redundant inner imports; the module-level `import os` at the top of `router.py` is used everywhere.
+
+Validated with a tester → bot → Gemini → tester WhatsApp round-trip: bot responded with `"Olá, Vini! Tudo bem por aqui também. CUSTOM_SKILL_ACTIVE. Como posso te ajudar com este teste pós correção?"` and the tester instance received the response.
+
+#### v0.6.0 Critical Remediation — 11 Audit Findings (2026-04-05)
+Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, grouped into 5 remediation domains. Each fix programmatically verified; full regression (infrastructure + auth + API v1 sweep + tenant endpoint sweep + agent chat + 6-screen browser QA) passed zero new errors.
+
+**Group A — Auth & Security Hardening** (commits 2327bb6 + 829877b)
+- `V060-API-004`: `/api/v1/*` UI-JWT path now enforces password-reset invalidation (`password_changed_at` vs `token.iat`), parity with SEC-001/BUG-134 UI path. Missing `iat` claim rejected with 401, closing a JWT-stripping bypass. Same hardening backported to `auth_dependencies.py`.
+- `V060-HLT-005`: `PUT /api/channel-health/alerts/config` now SSRF-validates the webhook URL via `utils.ssrf_validator.validate_url()`. Blocks `file://`, cloud metadata IPs (`169.254.169.254`, etc.), localhost, private ranges, and non-http(s) schemes. `HTTPException` re-raise prevents 400→500 downgrade.
+- `V060-SKL-002`: MCP server create/update now require HTTPS whenever `auth_type != 'none'` (bearer/header/api_key). Prevents plaintext transmission of credentials over HTTP; rejects downgrade attempts on existing HTTPS+auth configs.
+
+**Group B — Tenant Isolation + Queue Safety** (commits 7971b4e + 1e5e241)
+- `V060-CHN-006`: `CachedContactService` and base `ContactService` now accept `tenant_id` and filter `Contact`/`ContactChannelMapping` queries by tenant. Cache keys prefixed per tenant. Fail-closed on missing tenant_id. `AgentRouter` threads tenant_id to CachedContactService from all 6 call sites (queue_worker, watcher_manager, routes.py, app.py). Follow-up extends to `SchedulerService` (12 sites) and `FlowEngine._resolve_contact_to_phone` — closes cross-tenant leaks in scheduled messages and flow recipient resolution.
+- `V060-HLT-003`: `QueueWorker._poll_and_dispatch` now consults `ChannelHealthService.is_circuit_open()` for whatsapp/telegram channels before dispatching. When CB is OPEN, dispatch is deferred (item remains pending, no retry burn, no 500ms re-enqueue spiral). Router's CB-enqueue guard skipped when `trigger_type=='queue'`. Instance-id resolution now uses agent's explicit `whatsapp_integration_id`/`telegram_integration_id` FK instead of tenant-wide `.first()`.
+
+**Group C — Slack/Discord Channel Integration** (commit e1c1949)
+- `V060-CHN-001`: `AgentRouter` now registers `SlackChannelAdapter` and `DiscordChannelAdapter` with the channel registry when a tenant has exactly one active integration (or when explicit integration_id is passed). Bot tokens decrypted via `TokenEncryption` + per-channel encryption key, matching existing routes_slack/routes_discord patterns.
+- `V060-CHN-002`: New public router `backend/api/routes_channel_webhooks.py` exposes two unauthenticated endpoints gated by cryptographic signature verification:
+  - `POST /api/slack/events` — HMAC-SHA256 verification against `signing_secret_encrypted`, 5-minute timestamp skew for replay protection, `url_verification` challenge handled.
+  - `POST /api/discord/interactions` — Ed25519 verification via PyNaCl, type-1 PING handshake, type-5 deferred response.
+  - Verified events enqueue to `message_queue` with channel='slack'/'discord'; QueueWorker's new `_process_slack_message`/`_process_discord_message` handlers instantiate AgentRouter with tenant_id + integration_id threaded through.
+- **Dep added:** `PyNaCl>=1.5.0` for Ed25519 signature verification.
+
+**Group D — Memory (OKG) + Provider Wiring** (commit 36d694c)
+- `V060-MEM-001`: `ProviderBridgeStore._records_to_dicts` now preserves the full metadata dict under a nested `'metadata'` key. OKG recall post-filter reads `record.get('metadata',{}).get('is_okg')` and was seeing `{}` for every record — so every OKG record was skipped, making OKG recall return zero results with any external vector store. Flat spread retained for backwards compat.
+- `V060-PRV-001`: `AIClient.__init__` now accepts an optional `api_key` kwarg that bypasses DB/env lookup. Raw test-connection in first-time-setup wizard (tenant with no provider key) previously failed at AIClient construction with "No API key found" before the route handler could apply the user's credential. Now the raw key is passed directly.
+- `V060-PRV-002`: Saved-instance test-connection now passes the instance's own decrypted api_key to AIClient (falling back to tenant key only when instance has none). Previously the resolved api_key was never applied, so a valid tenant key masked a broken instance key and produced a false success.
+
+**Group E — Custom Skill Security** (commit cc0de12)
+- `V060-SKL-001`: New `_scan_skill_content()` helper concatenates `instructions_md` + `script_content` into a single analyzable blob and submits to `SentinelService.analyze_skill_instructions`. Both `create_custom_skill` and `update_custom_skill` now invoke this helper whenever either field is present/changed. Previously script-type skills with empty instructions landed as `scan_status='clean'` without Sentinel ever seeing the code — an attacker could upload a script that reads `OPENAI_API_KEY` + `/etc/passwd` and exfiltrates via HTTP and it would auto-enable in the agent sandbox. The network-import advisory is retained as an augmenting signal, no longer the primary defense.
+
+### Implementations
+
+#### Added
+
+#### Webhook-as-a-Channel (v0.6.0)
+- **New first-class channel type** alongside WhatsApp/Telegram/Slack/Discord/Playground. Bidirectional HTTP integration for CRMs, Zapier, custom apps, ticketing systems.
+- **Inbound endpoint**: `POST /api/webhooks/{id}/inbound` (public, HMAC-gated). Accepts `X-Tsushin-Signature: sha256=<hex>` (HMAC-SHA256 over `timestamp + "." + body`) and `X-Tsushin-Timestamp` (±5 min replay window). Cryptographically authenticated, no bearer token.
+- **Outbound callbacks**: agent replies POSTed back to customer-provided callback URL (optional, enabled per integration). SSRF-validated on create via existing `utils.ssrf_validator`. HMAC-signed. 10s timeout, no redirects, 64 KB response cap.
+- **Defense-in-depth**: per-webhook rate limit (default 30 rpm), optional CIDR IP allowlist, configurable payload size cap (default 1 MB), generic 403 on auth failures (no detail leak).
+- **Management API** (`/api/webhook-integrations`, tenant-scoped via `filter_by_tenant`): POST create (returns plaintext secret ONCE), GET list/detail (masked `whsec_XXXX…` preview only), PATCH update, POST rotate-secret (returns new plaintext once, invalidates old), DELETE.
+- **Encryption at rest**: `webhook_encryption_key` in Config + Fernet per-tenant workspace key derivation via `TokenEncryption`. New `get_webhook_encryption_key()` helper in `encryption_key_service`.
+- **Agent binding**: `Agent.webhook_integration_id` FK (one webhook → one agent). `enabled_channels` accepts `"webhook"`. `AgentRouter` registers `WebhookChannelAdapter` per instance; `_is_agent_valid_for_channel` enforces binding.
+- **Queue dispatch**: `QueueWorker._process_webhook_message` normalizes payload into channel-agnostic message dict, routes through AgentRouter with `webhook_instance_id`, persists LLM result for `GET /api/v1/queue/{id}` polling.
+- **Security tested**: 13-point adversarial suite verifies HMAC verify, missing/wrong signature, replay, nonexistent webhook, oversized payload, rate limit, SSRF, unauthenticated access, secret rotation. All passing.
+- **UI integration**: Hub → Communication section ("Webhook Integrations" cards with Rotate Secret + Delete), `WebhookSetupModal` two-phase flow (form → secret reveal with copy-to-clipboard + signing instructions), Agent Channels tab toggle + radio selector, Studio/Graph channel nodes (cyan palette, reuses existing `isGlowing`/`isFading` animations identical to WhatsApp/Telegram), Flows step targeting, ChannelHealthTab, dashboard distribution chart color.
+- **Alembic 0023**: `webhook_integration` table + `agent.webhook_integration_id` FK + `config.webhook_encryption_key`.
+- **Graph View integration**: webhook channels now render as first-class nodes alongside WhatsApp/Telegram/Playground (cyan palette, integration name as subtitle). `/api/v2/agents/graph-preview` exposes `channels.webhook[]` with `WebhookChannelInfo` schema + `agent.webhook_integration_id`; `useGraphData.ts` creates webhook→agent edges; `GraphCanvas.getChannelType()` recognizes `channel-webhook-*` so the existing edge-glow/fade activity pipeline fires identically to other channels on inbound message activity.
+- **RBAC**: `integrations.webhook.{read,write}` permission scopes (owner/admin/member get write, readonly gets read). All 6 webhook CRUD routes gated by `require_permission()` matching the Slack/Discord pattern.
+- **Tenant binding validation**: `routes_agents.py` create/update handlers validate that the supplied `webhook_integration_id` resolves to a WebhookIntegration in the caller's tenant before persisting the FK, closing a cross-tenant binding gap.
+- **Emergency stop integration**: webhook inbound endpoint honors `Config.emergency_stop` and returns 503 at ingress (before enqueueing) when the global stop is active. Circuit breaker queuing in `AgentRouter` also maps `webhook_instance_id` for deferred-message tenant/agent resolution.
+
+#### Live Provider Model Discovery (v0.6.1)
+- **Self-updating model dropdowns**: `/setup` and the provider-instance modal now auto-refresh their model lists against the provider's real `/models` endpoint whenever a user pastes an API key — no more hand-maintained Gemini/OpenAI/etc. lists going stale when Google or OpenAI ship new models.
+- **New endpoint** `POST /api/provider-instances/discover-models-raw`: accepts `{vendor, api_key, base_url?}`, performs a single outbound request to the provider, returns the live model list. API key is used once and never stored.
+- **Gemini live discovery**: backend calls Google's `/v1beta/models` with pagination, filters to `generateContent`-capable models, strips the `models/` prefix. Works on both saved instances (Auto-detect button) and pre-save (as the user types their key).
+- **Unified static fallback**: the previously-inlined `KNOWN_MODELS` dict in `discover_models` was replaced by a module-level `PREDEFINED_MODELS` registry consumed by the new public `GET /api/provider-instances/predefined-models` endpoint — used as a suggestion fallback when no API key is available yet.
+- **Supported vendors for live pre-save discovery**: gemini, openai, groq, grok, deepseek, openrouter. Anthropic keeps the static list (no public `/models` endpoint).
+- **Refreshed Gemini static fallback**: added Gemini 3.x preview IDs (`gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`) and 2.5 stable (`gemini-2.5-flash-lite`) for the "no key entered yet" case.
+- **Datalist UX**: instance-modal model input now uses a `<datalist>` bound to the current vendor, so users get vendor-specific autocomplete while retaining free-text entry for custom IDs.
+
+#### Flows Bulk Actions & Page Size Selector (v0.6.1)
+- **Bulk actions bar**: Multi-select flows to Enable, Disable, or Delete them in bulk. Bar appears above the table when rows are selected with selection count and Clear selection link.
+- **Page size selector**: Per-page dropdown (10/25/50/100) added to the pagination footer, replacing the hardcoded 25-per-page limit. Changing page size resets to page 1 and clears any selection.
+- **Force-delete fallback**: Bulk delete detects flows with existing runs and prompts once to force-delete the affected set.
+
+#### OKG Term Memory Skill (v0.6.0)
+- **Ontological Knowledge Graph skill**: New `okg_term_memory` skill providing structured long-term memory with typed metadata (subject/relation/type/confidence). First multi-tool skill in Tsushin.
+- **Three LLM-callable tools**: `okg_store` (store memory with ontological metadata), `okg_recall` (search by query + metadata filters with temporal decay), `okg_forget` (delete by doc_id).
+- **Auto-capture hook**: Post-response FactExtractor integration auto-stores durable facts from conversations with `source=auto_capture`.
+- **Auto-recall (Layer 5)**: `OKGContextInjector` hooks into `AgentMemorySystem.get_context()` to inject relevant OKG memories as XML-tagged `<long_term_memory>` blocks. HTML-escaped content prevents prompt injection.
+- **SkillManager multi-tool support**: `get_all_mcp_tool_definitions()`, `_current_tool_name` dispatch, multi-tool schema validation. All existing single-tool skills unaffected.
+- **OKGMemoryAuditLog table**: Full audit trail of store/recall/forget/auto_capture operations with MemGuard block tracking.
+
+#### MemGuard Vector Store Defense (v0.6.0)
+- **New pattern categories**: `embedding_manipulation` (weight 0.80) detects raw float arrays, metadata overrides, distance manipulation. `cross_tenant_leak` (weight 0.75) detects tenant metadata smuggling and namespace confusion.
+- **Batch poisoning detection**: `detect_batch_poisoning()` with configurable thresholds (max 50 docs / 60s window / 0.95 similarity). Immediate block for batches exceeding max_batch_write_size.
+- **Post-retrieval scanning (Layer C)**: `validate_retrieved_content()` scans retrieved vector store results at lower threshold (0.5 vs 0.7) and verifies tenant_id metadata isolation.
+- **Per-store security config**: `VectorStoreInstance.security_config` JSON column with configurable thresholds, rate limits, and cross-tenant check toggle.
+- **Rate limiter**: `VectorStoreRateLimiter` singleton with sliding-window enforcement for reads (per agent) and writes (per tenant).
+- **Bridge security hooks**: `ProviderBridgeStore` accepts optional `security_context` for automatic post-retrieval MemGuard validation.
+
+#### Sentinel Vector Store Detection (v0.6.0)
+- **New detection type**: `vector_store_poisoning` in DETECTION_REGISTRY with `applies_to: ["vector_store"]`, severity "high", default enabled.
+- **LLM prompts**: 3 aggressiveness levels for vector store content analysis (instruction-bearing docs, embedding manipulation, batch saturation, cross-tenant leakage).
+- **Unified classification update**: `vector_store_poisoning` added to all 3 UNIFIED_CLASSIFICATION_PROMPT levels with proper priority ordering.
+- **Schema**: `detect_vector_store_poisoning` toggle on SentinelConfig, `vector_store_poisoning_prompt` custom prompt, `vector_store_access_enabled` + `vector_store_allowed_configs` on SentinelAgentConfig.
+- **Frontend**: Toggle in Sentinel Settings General tab, Layer C card in MemGuard tab, prompt editor in Prompts tab.
+- **Seed defaults**: System config seeds with `detect_vector_store_poisoning=True`.
+
+
+#### Vector Store Auto-Provisioning
+- **One-click container deployment**: Auto-provision Docker containers for Qdrant and MongoDB directly from the Hub UI. Toggle "Auto-Provision" during creation to have Tsushin spawn, configure, and health-check a container automatically.
+- **Container lifecycle management**: Start, stop, restart auto-provisioned containers from the Vector Store card. Container status (running/stopped/error) displayed with real-time indicators.
+- **Port allocation**: Dedicated port range 6300-6399 for vector store containers (separate from MCP 8080-8180).
+- **Named volumes**: Data persists across container restarts via Docker named volumes (`tsushin-vs-{vendor}-{tenant}-{id}`).
+- **Resource limits**: Configurable memory limits (512MB/1GB/2GB/4GB) per container.
+
+#### Default Vector Store Settings Page
+- **Global tenant default**: New Settings > Vector Stores page with dropdown selector to choose the tenant-wide default vector store. Replaces the confusing per-instance `is_default` toggle.
+- **Three-tier resolution**: Agent override > Tenant default (Settings) > ChromaDB (built-in). Agents without an explicit vector store assignment now use the tenant default.
+- **Settings API**: `GET/PUT /api/settings/vector-stores/default` for managing the default selection.
+
+#### MongoDB Local Mode for Vector Stores
+- **Local cosine similarity fallback**: MongoDB adapter now supports self-hosted MongoDB 7.0+ without Atlas Vector Search. Toggle "Local Mode" in the UI to use Python-side cosine similarity instead of Atlas `$vectorSearch` aggregation.
+- **Registry integration**: `use_native_search` config option passed from `extra_config` through the provider registry.
+- **UI toggle**: MongoAtlasConfigForm has a "Local Mode" toggle that sets `use_native_search: false`.
+
+#### A2A Communication Memory Enrichment
+- **Cross-agent memory retrieval**: When Agent A asks Agent B via A2A communication, Agent B's vector store is now searched for relevant memories and injected into the A2A prompt context. This enables agents to recall facts from their external vector stores (Qdrant, MongoDB) during inter-agent conversations.
+- **disable_skills flag**: Target agents in A2A calls no longer have access to skills/tools, preventing recursive tool invocations. Pure LLM-only responses using memory context.
+
+#### Dynamic Vector Store Vendor Labels
+- **MongoDB vs Atlas badges**: Vector Store cards in the Hub UI now show "MongoDB" badge for local mode instances and "Atlas" for native Atlas Vector Search instances.
+- **Vendor dropdown**: Changed from "MongoDB Atlas" to "MongoDB" in the vendor selector.
+
+### Fixed
+- **Agent API response**: `vector_store_instance_id` and `vector_store_mode` fields were missing from the `GET /api/agents/{id}` response.
+- **A2A memory search**: Use `get_shared_embedding_service()` singleton instead of creating a new `EmbeddingService()` per call (prevents model reload).
+- **MongoDB adapter async safety**: Local cosine search methods now run in `asyncio.to_thread()` to prevent blocking the event loop.
+- **MongoDB adapter memory**: Added projection to `_local_cosine_search_with_embeddings` to prevent loading entire documents into memory.
+- **Frontend toggle**: Fixed Local Mode toggle treating `undefined` as local mode on first click.
+
+---
+
+## [0.6.0] - 2026-04-01
+
+### Implementations
+
+#### Temporal Memory Decay Frontend (Item 37)
+
+- **Agent Studio decay configuration**: New "Temporal Decay" section in Agent Builder Memory Config with enable toggle, decay rate slider (0.001-1.0), archive threshold slider (0-1.0), and MMR diversity slider (0-1.0). Decay fields persisted via builder save endpoint with float validation and rounding.
+- **Memory Inspector freshness badges**: Per-fact colored dots (green=fresh, yellow=fading, orange=stale, gray=archived) with decay factor percentage. Freshness distribution summary bar when decay is enabled.
+- **Archive decayed facts**: Dry-run preview with fact count, then confirm to archive. Clears on agent/thread switch to prevent wrong-context operations.
+
+#### Channel Health Tab in Watcher (Item 38)
+
+- **New Watcher tab**: "Channel Health" tab with summary bar (total, healthy, unhealthy, open circuits), instance cards grid with circuit breaker state visualization, and per-instance Probe/Reset actions.
+- **Event history**: Expandable per-instance event timeline showing circuit breaker state transitions with timestamps and reasons.
+- **Alert configuration**: Collapsible panel with webhook URL, email recipients, cooldown settings, and enable/disable toggle.
+- **8 API client methods**: Full frontend integration with all channel health backend endpoints.
+
+#### Test Connection on Provider Instance Create (Item 27b)
+
+- **New backend endpoint**: `POST /api/provider-instances/test-connection` accepts raw credentials (vendor, base_url, api_key) without requiring a saved instance. SSRF validation on base_url, falls back to tenant-level API key.
+- **Create mode button**: Test Connection button now visible during instance creation (previously edit-only). Disabled when no API key entered (except Ollama).
+
+#### Inline Screenshots in Playground (Item 35)
+
+- **Multi-image support**: Backend now returns all `media_paths` images (previously only first). New `image_urls` array in response alongside backward-compatible `image_url`.
+- **Image grid + lightbox**: Multiple images render in a 2-column grid. Click any image to open full-screen lightbox overlay with close on backdrop click or Escape key.
+
+#### Message Queuing on Circuit Breaker OPEN (Item 38)
+
+- **Router circuit breaker check**: `route_message()` now checks channel circuit breaker state before processing. If the channel's circuit breaker is OPEN, messages are enqueued via `MessageQueueService` instead of being processed immediately. Guarded by `TSN_CB_QUEUE_ENABLED` env var (default: true). Fail-safe: if enqueue fails, falls through to normal processing.
+
+#### Changed
+
+- **Docker env passthrough**: Added `GROQ_API_KEY`, `GROK_API_KEY`, `ELEVENLABS_API_KEY` to docker-compose.yml backend environment.
+- **Docker Compose v2 required**: Installer no longer supports `docker-compose` v1. Reverts the BUG-271 `DOCKER_BUILDKIT=0` workaround (installer would force-disable BuildKit for v1 compatibility). The backend Dockerfile now requires BuildKit for pip/nuclei cache mounts. Docker Compose v2 (`docker compose`) is bundled with Docker Desktop ≥20.10 and is the CLAUDE.md convention. Installer errors out with a clear upgrade message if only v1 is detected.
+
+#### Backend Container Build Optimization (2026-04-04)
+
+- **Backend image size: 11.5 GB → 4.89 GB (-58%)**. Full `--no-cache` build time: 14m22s → 3m59s (-72%). Layer export: 93s → 32s (-66%).
+- **Root cause**: `sentence-transformers` → default `torch` wheel was pulling ~4.3 GB of NVIDIA/CUDA/triton binaries (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, `triton`, etc.) that never execute — embeddings run on CPU via `asyncio.to_thread()`.
+- **Fix**: Install torch from the CPU-only index (`https://download.pytorch.org/whl/cpu`) as a dedicated step before `requirements-phase4.txt`. Saves 4.3 GB of unused CUDA runtime per image.
+- **BuildKit cache mounts**: Added `# syntax=docker/dockerfile:1.4` + `--mount=type=cache,target=/root/.cache/pip` to all pip install steps and the nuclei download. Wheels persist across `--no-cache` rebuilds.
+- **Tiered requirements**: Split `requirements.txt` into `requirements-base.txt` (stable core: fastapi, sqlalchemy, pydantic, security deps), `requirements-app.txt` (volatile integrations: anthropic, openai, google-*, slack, discord, telegram), and `requirements-optional.txt` (kubernetes, gcp-secret-manager, qdrant, pinecone, pymongo). Iterative rebuilds only invalidate the changed tier + below.
+- **Optional deps build arg**: New `INSTALL_OPTIONAL_DEPS` ARG (default: `true`). Local dev can build with `--build-arg INSTALL_OPTIONAL_DEPS=false` to skip K8s/GCP/vector clients (~50 MB saved). All five optional deps are lazy-imported at runtime, so disabling is safe as long as the corresponding feature isn't activated.
+- **Nuclei download cache**: Cached across builds, saving ~5-10s per full rebuild.
+- **Updated references**: `.github/workflows/gke-deploy.yml` and `ops/manage_servers.py` now reference the tiered requirements files.
+
+### Bug fixes
+
+#### Pre-Release Security Audit (2026-04-03)
+
+- **Error detail leaking**: Sanitized 40 `HTTPException(500, detail=str(e))` calls across 10 API route files (`routes_scheduler`, `routes_skills`, `routes_memory`, `routes_custom_skills`, `routes_hub`, `routes_skill_integrations`, `routes_google`, `routes_telegram_instances`, `routes_provider_instances`, `routes_knowledge_base`). All now return generic context-appropriate messages instead of raw Python exception strings. Added missing `logger.error()` calls for 3 Telegram instance routes.
+- **Dev/debug scripts in git**: Removed 13 internal development scripts from git tracking (`check_*.py`, `debug_*.py`, `fix_shell_wait.py`, `e2e_test_results.txt`). Added gitignore patterns to prevent re-tracking.
+- **Inconsistent tenant isolation**: Standardized `list_runs` endpoint in `routes_flows.py` to use `filter_by_tenant()` instead of manual `tenant_id` check, matching all other flow endpoints.
+
+#### Installer Refactor & Security Hardening (2026-04-03)
+
+- **(BUG-269) XSS token theft via localStorage**: SEC-005 Phase 3 — removed all `localStorage` JWT token storage from the frontend. Auth now relies entirely on the httpOnly `tsushin_session` cookie. Backend WebSocket handlers (playground + watcher) updated to authenticate from cookie without requiring first-message token. Setup wizard and SSO exchange endpoints now set the httpOnly cookie. All auth fetch calls include `credentials: 'include'`.
+- **(BUG-270) CORS origin wrong for remote HTTP installs**: Installer set `TSN_CORS_ORIGINS` to `http://localhost:3030` for remote installs, blocking all API calls from the actual IP. Fixed by using the public host for `frontend_url` and CORS origins.
+- **(BUG-271) docker-compose v1 ContainerConfig error**: BuildKit images lack the `ContainerConfig` key that docker-compose v1 expects on container recreate. Installer now sets `DOCKER_BUILDKIT=0` for both `run_docker_compose()` and `build_additional_images()` when using docker-compose v1.
+- **(BUG-272) Setup wizard loses API key if "Add" not clicked**: Users who typed an API key but clicked "Complete Setup" without clicking "Add" lost the key. `handleSubmit` now auto-includes any uncommitted key from the text field.
+
+#### Installer Redesign (2026-04-03)
+
+- **Infrastructure-only installer**: Removed all 7 API key prompts and 8 tenant/admin credential prompts from the installer. User/org creation and AI provider configuration are now handled exclusively by the `/setup` UI wizard after install.
+- **`--defaults` mode simplified**: No longer generates random passwords or bootstraps users. Just sets up `.env`, Docker containers, and SSL — then directs user to `/setup`.
+- **argparse with `--help`**: Added proper CLI flags: `--defaults`, `--http`, `--domain`, `--email`, `--port`, `--frontend-port` with validation and usage examples.
+- **Let's Encrypt via Caddy**: SSL is handled by Caddy with built-in ACME support (no certbot needed). `--domain` flag requires `--email` for Let's Encrypt notifications.
+
+#### Async Embeddings Migration (2026-04-02)
+
+- **Event loop blocking**: Migrated all 12 sync `embed_text()` / `embed_batch_chunked()` call sites to async variants (`embed_text_async()`, `embed_batch_chunked_async()`) using `asyncio.to_thread()`. Health checks and WebSocket connections no longer stall during embedding-heavy agent processing.
+- **SentenceTransformer singleton consolidation**: Removed 4 services that bypassed the shared `EmbeddingService` singleton and instantiated their own `SentenceTransformer` model (combined_knowledge_service, project_memory_service, playground_document_service, project_service). All embedding calls now route through `get_shared_embedding_service()`.
+- **Thread-safe singleton**: Added double-checked locking with `threading.Lock` to `get_shared_embedding_service()` to prevent race conditions from concurrent `asyncio.to_thread()` calls.
+- **Dockerfile workers**: Reverted `--workers 2` to `--workers 1` — async embeddings eliminate the need for a second worker, halving model memory usage.
+
+#### Fresh Install QA (2026-04-02)
+
+**Install Flow (3 fixes):**
+- **(BUG-248) /setup page**: Created frontend setup wizard at `/setup` for first-run account creation. Login page auto-redirects to `/setup` when database is empty. Added `GET /api/auth/setup-status` endpoint.
+- **(BUG-249) --defaults auto-bootstrap**: `python3 install.py --defaults` now creates tenant + admin with random credentials and displays them post-install.
+- **(BUG-250) .local email validation**: Patched `email-validator` to allow `.local` TLD for dev environments.
+
+**Installer Security (1 fix):**
+- **(BUG-256) HTTPS default**: Self-signed HTTPS is now the default for localhost installs, Let's Encrypt for remote. HTTP requires explicit opt-in with plaintext credential warning. `TSN_CORS_ORIGINS` and `TSN_SSL_MODE` auto-configured in `.env`.
+
+**UI/UX (6 fixes):**
+- **(BUG-251) Tenant display name**: Header shows tenant name instead of raw ID slug (`tenant_2026...`).
+- **(BUG-252) Markdown rendering**: Playground renders markdown in agent responses (bold, bullets, code blocks) via ReactMarkdown.
+- **(BUG-253) Thread titles**: Smarter auto-naming strips greetings and extracts topic instead of truncating first 50 chars.
+- **(BUG-254) Console noise**: Expected 401 errors downgraded to `console.debug`, verbose playground logs gated behind `NODE_ENV`.
+- **(BUG-255) Tour highlighting**: Onboarding tour now highlights target UI elements with pulsing teal outline.
+- **(BUG-257) Tour content**: Updated with current AI providers, channel setup guidance, Sentinel security, and API v1 access.
+
+#### Google SSO Enrollment Fixes (2026-04-01)
+
+- **(BUG-246) Soft delete locks SSO re-enrollment**: Team member removal now uses hard delete instead of soft delete. Soft delete left `google_id` linked to a deactivated record, permanently blocking re-enrollment. SSO lookups now also filter `deleted_at` as defense-in-depth. Comprehensive FK cleanup across 12+ tables on user removal.
+- **(BUG-247) Avatar URL exceeds column length**: Google profile avatar URLs can exceed 800 characters. `avatar_url` column changed from `VARCHAR(500)` to `TEXT`. Generic SSO error handler now surfaces actual error detail instead of opaque "Authentication failed".
+
+### Changed
+
+#### Google SSO Auto-Provisioning UI (2026-04-01)
+
+- Auto-provision defaults to **off** (pre-registration required). Users must be added via Team > Invite before signing in with Google SSO.
+- Added contextual disclaimer in Settings > Security explaining enrollment behavior for both modes (auto-provision on vs off).
+- Updated "How Google Sign-In Works" info section with complete enrollment flow documentation.
+
+#### Critical/High Bug Remediation Sprint (2026-03-31)
+
+**Security (5 fixes):**
+- **(SEC-005) httpOnly Cookie Auth — Phase 1 + Phase 2**: Phase 1: Backend sets `tsushin_session` httpOnly cookie on login/signup/invite-accept. `auth_dependencies.py` checks cookie first, Bearer token as fallback. WebSocket accepts cookie auth from upgrade request. Logout endpoint clears cookie. Phase 2: Migrated all 19 frontend files (~84 fetch calls) from manual `localStorage.getItem('tsushin_auth_token')` to centralized `authenticatedFetch()`. Removed all `getAuthHeaders()` helpers. Token only read in 3 intentional locations (AuthContext lifecycle, authenticatedFetch fallback, WebSocket auth).
+- **(SEC-010) API Client JWT Revocation on Secret Rotation**: Added `secret_rotated_at` column to `ApiClient`. JWT claim includes rotation timestamp. `_resolve_api_client_jwt` rejects tokens issued before last rotation. DB migration included.
+- **(SEC-019) File Upload Magic Bytes Validation**: PDF and DOCX uploads validated via `filetype` library magic bytes check. ZIP bomb protection for DOCX with 100MB uncompressed size limit. Extension-only validation for text formats (txt/csv/json).
+- **(LOG-020) Sentinel Configurable Fail Behavior**: Sentinel pre-check exception handling now supports `sentinel_fail_behavior` config field (`"open"` | `"closed"`). Fail-closed blocks message and logs structured error instead of silently allowing.
+- **CORS Hardening**: Replaced wildcard `"*"` with origin reflection (`allow_origin_regex=".*"`) for `credentials: true` support. Restricted `allow_methods` and `allow_headers` from `"*"` to explicit lists. Exception handlers updated to match.
+
+**Multi-Tenancy Isolation (6 fixes):**
+- **(LOG-002) Cross-Tenant Subflow Execution**: `SubflowStepHandler` validates target flow belongs to same tenant before execution. `run_flow()` accepts optional `tenant_id` filter.
+- **(LOG-003) Cross-Tenant Memory Query Leakage**: `_get_thread_messages()` in `conversation_knowledge_service.py` now scopes Memory queries by agent_ids belonging to the caller's tenant.
+- **(LOG-004) Cross-Tenant Document Chunk IDOR**: `get_project_knowledge_chunks()` verifies `doc_id` belongs to the verified `project_id` before returning chunks.
+- **(LOG-012) ContactAgentMapping Tenant Isolation**: Added `tenant_id` column with DB migration + backfill from agent's tenant. Router contact lookup scoped by MCP instance's tenant.
+- **(LOG-014) Cross-Tenant Agent-to-Project Assignment**: `update_project_agents()` validates each `agent_id` belongs to the caller's tenant before creating `AgentProjectAccess` records.
+- **(LOG-018) Anonymous Contact Hash Fallback**: Replaced `hash(sender) % 1000000` phantom ID fallback with re-raise. Callers use sender-string-based memory key.
+
+**Flow Engine (3 fixes):**
+- **(LOG-007) Stale Flow Run Recovery**: `run_flow()` resets "running" flows older than 1 hour to "failed" on startup. `on_failure=continue` with failed steps now reports `"completed_with_errors"` instead of `"completed"`.
+- **(LOG-010) Step Idempotency TOCTOU**: SELECT FOR UPDATE with `skip_locked=True` + IntegrityError handling prevents concurrent step execution race.
+- **(LOG-011) Flow Cancellation**: `db.refresh(flow_run)` between steps detects external cancellation and breaks the execution loop.
+
+**Logic (2 fixes):**
+- **(LOG-006) A2A Depth Limit Enforcement**: `SkillManager.execute_tool_call()` propagates `comm_depth` and `comm_parent_session_id` from message metadata into skill config for chained delegation depth tracking.
+- **Already fixed (validated):** SEC-001 (admin password reset JWT invalidation), SEC-008 (update_client privilege escalation check), SEC-016 (shell queue_command tenant policies).
+
+---
+
+## [0.6.0-rc1] - 2026-03-30
+
+### Added
+
+#### AI Providers
+- **Groq LLM Provider**: Ultra-fast LLM inference via OpenAI-compatible API. Models: Llama 3.3 70B Versatile, Llama 3.1 8B Instant, Mixtral 8x7B 32K, Gemma2 9B IT. Full streaming support.
+- **Grok (xAI) LLM Provider**: xAI's Grok models via OpenAI-compatible API. Models: Grok 3, Grok 3 Mini, Grok 2. Full streaming support.
+- **DeepSeek LLM Provider**: Full backend + Hub integration. Models: DeepSeek-V3, DeepSeek-R1 (reasoning). OpenAI-compatible endpoint.
+- **ElevenLabs TTS (complete implementation)**: Premium voice AI synthesis. Dynamic voice list from API, 29+ languages, emotional tone control, character-based usage tracking, health check via subscription endpoint.
+- **OpenAI-Compatible URL Rebase & Multi-Instance Providers**: Configure custom OpenAI-compatible base URLs for LiteLLM, vLLM, LocalAI, Azure OpenAI, or any proxy. Multiple named instances of the same vendor with independent API keys and model lists. Agent-level instance selection via dropdown.
+- **Settings > Integrations UI**: Branded provider cards for Groq, Grok, ElevenLabs, and DeepSeek. Configure/Edit/Remove modals, Test Connection with inline results, encryption at rest, multi-tenancy key isolation.
+- **Test Connection Endpoints**: `POST /api/integrations/{service}/test` for all providers. Provider-specific validation (ElevenLabs via `/v1/user`, Groq/Grok via minimal test message).
+- **Hub AI Providers UX Cleanup**: ElevenLabs added to vendor lists and instance modal. Grok/Groq now have distinct icons. API key precedence indicator (legacy vs instance key).
+- **Vertex AI Provider (Phase 1+2)**: Google Cloud Model Garden integration. Phase 1: Gemini models via Vertex AI endpoint (us-east5 region). Phase 2: Claude models via Google Cloud (Anthropic-on-Vertex). Service account auth with Application Default Credentials. Region-aware endpoint routing. Full streaming support. Hub integration with Vertex AI provider card.
+- **Hub Local Services Management**: Kokoro TTS start/stop/status controls via Docker API. Ollama auto-create/enable/disable toggle, inline URL editing, test connection, model refresh. Ollama removed from Provider Instances vendor list (only in Local Services).
+
+#### Security
+- **Sentinel Security Profiles**: Granular security profiles with custom configuration per protection rule. Hierarchical inheritance at tenant → agent → skill level — lower-level overrides inherit from higher. Full CRUD UI in Settings > Sentinel > Profiles (create/edit/clone/delete). Tenant-level assignment in General tab, agent-level in Agents > Security modal, skill-level via SkillSecurityPanel. Hierarchy visualization tab.
+- **MemGuard — Memory Poisoning Detection**: Fifth Sentinel detection type (`memory_poisoning`). Layer A: pre-storage regex pattern matching (EN + PT) blocks poisoned messages. Layer B: fact validation gate blocks credential injection, command patterns, and contradictions before SemanticKnowledge writes. Zero-migration integration via `detection_overrides` inheritance in Security Profiles. Dedicated MemGuard tab in Sentinel settings with branded UI.
+- **Custom Skill Scanning — Dedicated Sentinel Profile**: Context-aware LLM prompt that understands skill instructions modify behavior by design. "Custom Skill Scanning" card in Settings > Sentinel > General with profile picker. Scan detail popover showing rejection reason, detection type, threat score, and profile. Gray "unknown" badge for unscanned skills. Auto-open popover after re-scan. Rejected skills cannot be used by agents until re-scanned clean.
+- **SSRF Protection for Browser Automation**: Comprehensive Server-Side Request Forgery protection for the browser automation skill. New `browser_ssrf` Sentinel detection type with LLM-based intent analysis at 3 aggressiveness levels. DNS-resolution-based URL validation blocks private IPs, cloud metadata, Docker/Kubernetes internals, CGNAT ranges, and loopback addresses. Per-tenant URL allowlist/blocklist in BrowserConfig. Sentinel `analyze_browser_url()` pre-navigation check integrated into both legacy and MCP tool paths. Browser SSRF toggle in Sentinel settings UI (critical severity, enabled by default). Automatic DB migration for existing installations.
+- **API v1 Security Hardening & OpenAPI Documentation**: OAuth token endpoint rate limiting (10 req/min per IP). HTML sanitization validators on Persona, Contact, and Agent fields (stored XSS prevention). Phone number E.164 validation. Shared v1 schemas module with 20+ reusable Pydantic models. `response_model=` wired on all 40 v1 endpoints. Error documentation (401/403/404/422/429) on all endpoints. `X-API-Version: v1` response header. Static `docs/openapi.json` export (435 paths, 413 schemas).
+- **Slash Command Hardening**: sender_key spoofing fix (always derive from JWT), email cache cross-user isolation (keyed by agent_id + sender_key), agent-level sandboxed tool authorization check, pattern cache language scoping, permission_required field enforcement warning.
+
+#### Custom Skills & MCP Integration
+- **Custom Skills — Phase 1: Instruction Skills**: Tenant-authored instruction-based skills that inject domain knowledge and behavioral rules into agent system prompts. DB migration with `custom_skill`, `custom_skill_version`, `agent_custom_skill`, `custom_skill_execution` tables. `CustomSkillAdapter(BaseSkill)` for instruction injection. CRUD API with full tenant isolation. Full Settings > Custom Skills UI (library list, skill cards, form modal with Definition/Trigger/Instructions sections). New RBAC permissions: `skills.custom.create/read/execute/delete`.
+- **Custom Skills — Phase 2: Script Skills + Container Hardening**: Tenant-authored Python/Bash/Node.js scripts executed inside per-tenant toolbox containers. Container security hardening: `no-new-privileges:true`, `cap_drop=["ALL"]`, `pids_limit=256`. `CustomSkillDeployService` with SHA-256 hash checking and auto-redeploy. Static network import scan. `/deploy`, `/scan`, `/test` endpoints. Script editor UI (language selector, parameters builder, timeout setting).
+- **Custom Skills — Phase 3: Agent Assignment + Flow Integration**: Wire custom skills into agent configuration and flow builder. Agent custom skill assignment endpoints. `AssignCustomSkillModal`, `SkillConfigForm` (schema-driven form renderer). Custom Skills section in agent skills manager. Custom skills in flow builder skill picker under "Custom Skills" separator.
+- **Custom Skills — Phase 4: MCP Server Integration**: External MCP servers as tool providers. Transport abstraction: `SSETransport` (generalized from AsanaMCPClient), `StreamableHTTPTransport`. `MCPConnectionManager` singleton with per-tenant connection pools (limit 10), background health checks (60s), exponential backoff reconnect. `MCPDispatcher` routing by namespaced tool name (`{server}__{tool}`). `MCPSentinelGate` with trust-level-based I/O scanning. Tool description pre-storage Sentinel scan. Hub MCP Servers tab with server cards, tool browser, log viewer.
+- **Custom Skills — Phase 5: Stdio Transport + Network Hardening**: Stdio MCP servers running inside tenant containers. `StdioTransport` with JSON-RPC 2.0. Binary allowlist (uvx, npx, node) validated at config time. Path traversal rejection. `idle_timeout_sec` watchdog (300s). Process resource limits: `ulimit -v 1048576 -t 60`. DNS egress policy (explicit 8.8.8.8/8.8.4.4). MCP Server Periodic Health Check Service with 3-min interval and circuit breaker sync.
+- **MCP Server → Custom Skill UI Wiring**: "MCP Server" as a third skill type in Custom Skills modal. MCP Server dropdown from Hub-configured servers, tool selector with discovered tools, auto-fill from tool metadata. Hub MCP Servers "Create Skill" shortcut button.
+
+#### Channels
+- **Channel Abstraction Layer**: Formal channel abstraction layer decoupling agent logic from transport-specific code. `ChannelAdapter` ABC, `ChannelRegistry`, `InboundMessage`/`SendResult`/`HealthResult` types. `WhatsAppChannelAdapter`, `TelegramChannelAdapter`, `PlaygroundChannelAdapter`. Router `_send_message()` dispatches via registry.
+- **Slack Channel Integration**: Full Slack workspace integration via Socket Mode (no public URL required). Bot Token + App Token auth stored Fernet-encrypted per tenant. Message threading, rich Block Kit formatting. DM policy (open/allowlist/disabled), channel allowlist. Reconnection with exponential backoff (2s → 30s max, 12 attempts). Non-recoverable error detection (token_revoked, invalid_auth). Hub Channels section: Slack card with connect/disconnect and workspace name.
+- **Discord Channel Integration**: Full Discord bot integration via Gateway API v10. Bot token Fernet-encrypted per tenant. Guild/channel allowlists, DM policies, thread support, embed support, slash command bridge (`/tsushin <command>`), emergency stop. Message deduplication TTL cache. Gateway supervisor for non-recoverable errors (4014, token revoked). Hub Channels section: Discord card with connect/disconnect and bot name.
+- **Telegram Channel for Flow Steps**: Telegram as available channel for flow notification/message steps. `_resolve_telegram_sender()` helper. chat_id recipient validation. Multi-recipient support in MessageStepHandler. Removed "Coming Soon" badge in flow channel options.
+- **Multi-Channel Contact Identity — Slack & Discord**: Contact resolution across Slack and Discord via `ContactChannelMapping`. `ensure_contact_from_slack()` and `ensure_contact_from_discord()` auto-create contacts from messages. Channel badges in contact list (Slack purple, Discord indigo). "Channel Identities" management section in edit modal — view/add/remove channel mappings for all 6 channel types.
+- **Channel Health Monitor with Circuit Breakers**: Unified health monitoring for all channels. 30s background probe loop. `CircuitBreaker` state machine: CLOSED → OPEN → HALF_OPEN. WhatsApp, Telegram, Slack, Discord probes. State transition handler: DB persist, audit event, WebSocket emit, Prometheus metric, alert dispatch. Webhook alert system with per-instance cooldown. 4 new Prometheus metrics. 7 REST API endpoints for health status, history, manual probe, circuit reset, and alert config.
+
+#### Messaging & Queuing
+- **Message Queuing System**: Async message queue for all channels (WhatsApp, Telegram, Playground). `MessageQueue` table with SELECT FOR UPDATE SKIP LOCKED for concurrent safety. Dead-letter queue after 3 retries. Ordered delivery guarantees. Playground async/sync modes (`?sync=true`). Frontend WebSocket queue events. QueueWorker asyncio background processor.
+- **WebSocket Streaming**: Token-by-token response streaming via WebSocket. `/ws/playground` endpoint with secure first-message auth. Animated typing indicators via `StreamingMessage` component. `PlaygroundWebSocket` client with auto-reconnect and exponential backoff. Heartbeat ping/pong (30s intervals). Queue event integration.
+
+#### Browser Automation Enhancements
+- **Session Persistence**: `BrowserSessionManager` keyed by `(tenant_id, agent_id, sender_key)`. Reuse existing browser/page across conversation turns. Idle timeout (300s configurable). Background cleanup task. `session_ttl_seconds` column added to browser_automation_integration.
+- **Rich Action Set**: 19 total actions including: scroll (page/element/to_element), select_option, hover, wait_for, go_back, go_forward, get_attribute, get_url, type (character-by-character with delay), open_tab, switch_tab, close_tab, list_tabs.
+- **Multi-Tab Support**: Full browser tab lifecycle management. Tabs tracked per session. Max tabs configurable via BrowserConfig.
+- **CDP Host Browser Mode**: Connect to Chrome running on the host machine via DevTools Protocol (`http://host.docker.internal:9222`). Allows agents to use authenticated browser sessions.
+- **Structured Error Feedback**: `BrowserActionError` with `error_type` (element_not_found/timeout/navigation_failed/security_blocked), actionable `suggestion` per error type, current page URL and title in error context.
+
+#### Platform & Infrastructure
+- **Public API v1**: Full programmatic REST API for external applications. OAuth2 Client Credentials (`POST /api/v1/oauth/token`) and Direct API Key (`X-API-Key` header). 40 endpoints across 7 route files: Agent CRUD, Chat (sync + async + SSE), Thread management, resource listing (skills/tools/personas/security-profiles/tone-presets), profile assignment, Flows (13 endpoints), Hub (6 endpoints), Studio (3 endpoints). Per-client RPM rate limiting with `X-RateLimit-*` headers. Request audit log (`api_request_log` table). 5 API roles: api_agent_only, api_readonly, api_member, api_admin, api_owner. Settings > API Clients management page (create/rotate/revoke). Swagger UI at `/docs`. 44/44 E2E tests passing.
+- **GKE Readiness — Cloud-Native Infrastructure**: `/api/readiness` endpoint for Kubernetes readiness gates. Prometheus `/metrics` endpoint (`http_requests_total`, `http_request_duration_seconds`, `tsn_service_info`). `TSN_LOG_FORMAT` toggle (text/JSON structured logging). `ContainerRuntime` abstraction with `DockerRuntime` (default) and full `K8sRuntime` (maps Docker ops to K8s Deployments/Services/exec API). `SecretProvider` abstraction with `EnvSecretProvider` and `GCPSecretProvider` (Secret Manager with TTL cache). Helm chart (`k8s/tsushin/`) with 16 templates. CI/CD pipeline for GKE (`gke-deploy.yml`, manual trigger). Network policies, HPA, managed TLS, WebSocket ingress support.
+- **SSL Encryption During Installation**: Caddy reverse proxy with 3 SSL modes: Let's Encrypt (auto-enrollment), manual certificates, and self-signed (`tls internal`). `docker-compose.ssl.yml` override. Installer prompts for domain, SSL mode, certificate paths. `ProxyHeadersMiddleware` for real client IP. HTTP→HTTPS redirect (308). WSS auto-detection.
+- **Audit Logs — Tenant-Scoped Event Capture**: `AuditEvent` PostgreSQL model with JSONB details, tenant isolation, composite indexes. 30+ event types via `TenantAuditActions` enum (auth, agents, flows, contacts, settings, security, api_clients, skills, mcp, team). `TenantAuditService` with export, stats, and per-tenant retention. Background retention worker (24h daemon, per-tenant configurable). Enhanced audit logs page: stats bar, 5-filter panel, CSV export, 30+ event icons, expandable detail rows, severity dots, click-to-filter.
+- **Syslog Streaming for Audit Events**: RFC 5424 syslog forwarding via TCP, UDP, or TLS to external syslog servers. `TenantSyslogConfig` with Fernet-encrypted TLS certs. Per-tenant circuit breaker (5 failures → 60s cooldown). Event category filtering (10 categories). Syslog Forwarding card in Settings > Audit Logs with server config, TLS section, test connection.
+- **PostgreSQL Migration**: Full migration from SQLite to PostgreSQL 16 as primary database. Alembic migrations, all queries updated for PostgreSQL compatibility, tone presets visibility and playground search fixed.
+- **Flows server-side pagination**: Flows list page now uses server-side pagination to efficiently handle large numbers of flows.
+
+#### Agent Studio & UX
+- **Agent Studio — Visual Agent Builder**: React Flow canvas in Watcher for visual agent building. Palette panel with 7 profile categories: Persona, Channels, Skills, Sandboxed Tools, Security Profiles, Knowledge Base, Memory. Drag-and-drop with ghost images and category-colored group node glows. Avatars, expandable nodes, tree layout, inline config editing via slide-out panels. Batch builder endpoints. Remove attached items: hover-reveal X button, keyboard Delete, warning toast for last channel removal.
+- **Active Chain Edge Glow (Graph View)**: Edges connecting active nodes glow during real-time processing. Edge glow color matches target node type: cyan (channel→agent), blue (agent chain), teal (skill), violet (KB). Pulse animation synchronized with node glow. Fade-out coordinated with 3s post-processing fade.
+- **Flow Step Variable Reference Panel**: Collapsible `{x} Variable Reference` panel below template textareas. 4 sections: Previous Steps (with type-specific output field chips), Helper Functions (11 helpers), Conditionals (if/else with operators), Flow Context (global variables). `TemplateTextarea` wrapper with cursor-position-aware variable insertion. `CursorSafeInput`/`CursorSafeTextarea` components prevent cursor position loss on re-renders across 22+ text fields.
+- **Smart UX Features**: Auto-save drafts (debounced localStorage per thread). Smart paste auto-detects JSON and code blocks and wraps them in markdown fences. `useDraftSave` hook and `formatPastedContent` utility.
+- **WhatsApp Group Slash Commands via Agent Mention**: Trigger slash commands in WhatsApp groups by mentioning the agent: `@agentname /tool nmap quick_scan target=scanme.nmap.org`. All existing slash command types supported.
+- **Granular Slash Command Permissions per Contact**: Per-contact slash command access control. `slash_commands_enabled` column on Contact, `slash_commands_default_policy` on Tenant. Hierarchical resolution: tenant default → per-contact override. 3-state dropdown UI in Contacts page. Applies across all channels.
+- **Agent-to-Agent Communication**: Agents within the same tenant can communicate directly. 3 actions: `ask` (sync Q&A), `list_agents` (discover capabilities), `delegate` (full handoff with context). Permission management (per-pair grants), rate limiting (per-pair + global), loop detection (parent_session_id chain), depth limiting (default 3). Sentinel `agent_escalation` detection type. "Communication" tab in Agent Studio with session log, permissions CRUD, statistics dashboard.
+- **Billing Structure Audit & Cost Tracking**: Token tracking propagated to all 13 previously-missing AIClient call sites across skills and services (FlowsSkill, SchedulerSkill, SearchSkill, BrowserAutomationSkill, FlightSearchSkill, SchedulerService, FactExtractor, ConversationKnowledgeService, AISummaryService, SentinelService). OpenAI streaming uses `stream_options={"include_usage": True}` for actual token counts. Gemini streaming captures `usage_metadata`. Fixed Gemini token estimation.
+- **Permission Matrix Update**: All 170+ endpoints audited. Scheduler permissions seeded (entire scheduler was returning 403). Frontend `billing.manage` → `billing.write` mismatch fixed. Sentinel profile read endpoints secured. Knowledge base RBAC guards added. Slack/Discord integration permissions seeded.
+
+#### Memory
+- **Temporal Memory Decay with MMR Reranking**: Exponential decay (`e^(-λ × days)`) applied at retrieval time — older memories receive lower relevance scores. MMR reranking for result diversity. Auto-archive facts below configurable threshold. Freshness labels: fresh/fading/stale/archived. Applied to Layer 2 (Episodic/ChromaDB), Layer 3 (Semantic Knowledge), and Layer 4 (Shared Pool). `memory_decay_enabled`, `memory_decay_lambda`, `memory_decay_archive_threshold`, `memory_decay_mmr_lambda` fields on Agent. `last_accessed_at` tracking on SemanticKnowledge and SharedMemory.
+
+#### Image Generation
+- **Image generation for Playground channel**: Generated images from the `generate_image` tool are rendered inline in Playground chat messages. Images can be clicked to open in a new tab.
+- **Image generation for Telegram channel**: Generated images sent as photos via the Telegram Bot API with optional captions.
+- **Image serving endpoint**: New `GET /api/playground/images/{image_id}` endpoint serves generated images to the Playground frontend.
+- **WebSocket image delivery**: Image URLs propagated through the WebSocket streaming pipeline for real-time image display.
+
+#### Other
+- `ROADMAP.md` for tracking planned features and releases.
+- `CHANGELOG.md` for documenting changes across releases.
+
+---
+
+### Changed
+- **Legacy keyword triggering deprecated**: All hybrid skills are now tool-only execution mode. Web scraping skill deprecated and replaced by browser_automation skill.
+- **Weather skill removed**: Deprecated and fully removed from backend, frontend, Hub, and README.
+- **iOS-style toggle switches**: All enable/disable toggles across the entire platform unified to a consistent iOS-style `ToggleSwitch` component.
+- **Agent list performance**: N+1 API calls reduced from 92 requests (~2 per agent for skills) to ~6 requests for a 46-agent list. Agent cards now use `skills_count` from the list response.
+- **Sandboxed Tools config moved to Skills modal**: Dedicated Sandboxed Tools tab removed; config integrated into the Skills modal for a cleaner UI.
+- **Skills UI overhaul**: Separate sections for built-in and custom skills, emoji icons removed, "Add Skill" pattern added.
+- **Design system migration**: Auth pages and Agent Detail page migrated to Tsushin design system tokens. Login page updated with Tsushin kitsune banner.
+- **Watcher Threats by Type**: Compacted from separate cards to inline pill badges for a denser, more scannable layout.
+- **Sentinel default profile**: System default changed from Moderate (block) to Permissive (detect_only) to reduce false positives on fresh installs.
+- **ImageSkill default config**: `enabled_channels` now includes `"telegram"` in addition to `"whatsapp"` and `"playground"`.
+- **TelegramSender**: Added `send_photo()` method for sending images via the Telegram Bot API.
+- **PlaygroundService**: Skill results and agent service results now propagate `media_paths` as cached `image_url` values in both regular and streaming response paths.
+- **PlaygroundWebSocketService**: `done` events now include `image_url` field when images are generated.
+- **PlaygroundChatResponse**: Added `image_url` field to the API response model.
+- **PlaygroundMessage**: Added `image_url` field to the message model (both backend and frontend).
+- **ExpertMode component**: Message bubbles now render generated images with responsive sizing and click-to-open behavior.
+
+---
+
+### Fixed
+
+#### UI/UX QA Audit (BUG-121 to BUG-130)
+- **(BUG-121) Onboarding tour auto-navigates users away**: Removed race condition; tour only activates via explicit `startTour()` call.
+- **(BUG-122) Tour appears on unauthenticated pages**: Added `usePathname()` guard — returns null on `/auth/*` routes.
+- **(BUG-123) Agent list makes 92 API calls for 46 agents (N+1)**: Removed per-agent skills fetch; use `skills_count` from list response. Reduced to ~6 requests.
+- **(BUG-124) System Admin pages fail with mixed content on HTTPS**: Browser-side `API_URL` changed to empty string (relative paths via proxy). Added trailing slashes to admin endpoints to prevent FastAPI 307 redirects.
+- **(BUG-125) Sandboxed Tools "Access Denied" for Owner role**: Created `tools.read` permission, assigned to all roles.
+- **(BUG-126) No "System" navigation link for Global Admin users**: Added conditional System nav item visible only when `isGlobalAdmin`.
+- **(BUG-127) Messages sender column shows "-" for all rows**: Fixed sender column display logic.
+- **(BUG-128) Footer shows copyright year "2025" instead of "2026"**: Updated copyright year.
+- **(BUG-129) Agent list stale refs cause navigation to wrong pages**: Fixed stale reference issues in agent list.
+- **(BUG-130) Organization usage shows 720% over plan limit with no warning**: Added over-limit warning display.
+
+#### Security Audit (BUG-131 to BUG-145)
+- **(BUG-131) Password reset token exposed in API response body**: Removed `reset_token` from response model. Uniform message regardless of email existence.
+- **(BUG-132) Path traversal via unsanitized tenant_id in workspace path construction**: Added regex validation for tenant_id; `Path.resolve()` + bounds check applied.
+- **(BUG-133) Gemini prompt injection via merged system+user prompt**: Fixed by using `system_instruction` parameter in `GenerativeModel` constructor at the API protocol level.
+- **(BUG-134) JWT tokens not invalidated after password change**: Added `password_changed_at` claim comparison on every authenticated request.
+- **(BUG-135) Docker socket mounted in backend container (container escape risk)**: Documented `docker-socket-proxy` requirement for production.
+- **(BUG-136) SSRF bypass via HTTP redirect in webhook handler**: Replaced custom check with `validate_url()` from `ssrf_validator`. Added `follow_redirects=False`.
+- **(BUG-137) SSO `redirect_after` allows open redirect**: Added validation that `redirect_after` is a relative path only.
+- **(BUG-138) `require_global_admin` dependency doesn't return user object**: Added `return current_user`; updated call sites.
+- **(BUG-139) Container `workdir` parameter accepts arbitrary paths**: Added regex pattern constraint restricting to paths under `/workspace`.
+- **(BUG-140 to BUG-143) Four implementation review bugs**: Local get_current_user bypass, and related auth/CORS issues fixed.
+- **(BUG-144) React hooks violation**: Fixed conditional hook usage in playground component.
+- **(BUG-145) CORS gap**: Fixed missing CORS headers on specific endpoints.
+
+#### Slash Command Hardening (BUG-147 to BUG-149)
+- **(BUG-147) sender_key spoofing on /api/commands/execute**: Always derive sender_key from authenticated JWT. Never accept from request body.
+- **(BUG-148) Email cache cross-user data leakage**: Cache key changed from `agent_id` to `(agent_id, sender_key)` tuple.
+- **(BUG-149) Agent-level sandboxed tool authorization bypass**: Added `AgentSandboxedTool` authorization check before execution.
+
+#### RBAC Permission Matrix Audit (BUG-150 to BUG-153)
+- **(BUG-150) Scheduler permissions not seeded — entire scheduler API returns 403**: Added 4 scheduler permissions to `seed_rbac_defaults` with proper role assignments.
+- **(BUG-151) Billing page inaccessible — billing.manage vs billing.write mismatch**: Frontend permission check corrected to `billing.write`.
+- **(BUG-152) Sentinel profile read endpoints missing RBAC**: Added `org.settings.read` guard to 5 read endpoints.
+- **(BUG-153) Knowledge base routes missing RBAC**: Added `knowledge.read/write/delete` guards to all 8 endpoints.
+
+#### Channel Abstraction Code Review (BUG-154 to BUG-155)
+- **(BUG-154) WhatsApp channel adapter behavioral regression**: Mirrored original router logic — allow sends for None/default URL, check only `connected` flag.
+- **(BUG-155) Telegram adapter health_check crash on non-dict response**: Added `isinstance(me, dict)` guard with `getattr` fallback.
+
+#### v0.6.0 Perfection Team Audit — 45 Bugs (BUG-156 to BUG-200)
+
+**Critical (11):**
+- **(BUG-156) Custom skill script_entrypoint shell injection**: Added regex validation on save; `shlex.quote()` at execution.
+- **(BUG-157) TSUSHIN_INPUT env var unquoted shell injection**: Applied `shlex.quote()` around the JSON string.
+- **(BUG-158) stdio_binary allowlist bypass via PUT update endpoint**: Added same allowlist + path traversal + metacharacter checks from POST to PUT endpoint.
+- **(BUG-159) Anthropic AsyncAnthropic coroutine passed to asyncio.to_thread**: Replaced `asyncio.to_thread(...)` with `await self.client.messages.create(...)`.
+- **(BUG-160) Provider instance API key encryption identifier mismatch**: Unified encryption identifiers; routes now delegate to `ProviderInstanceService._encrypt_key/_decrypt_key`.
+- **(BUG-161) Missing permission on /sentinel/cleanup-poisoned-memory**: Added `require_permission("org.settings.write")`.
+- **(BUG-162) Unauthenticated /metrics endpoint exposes telemetry**: Added IP allowlist / bearer token check to Prometheus endpoint.
+- **(BUG-163) thread_id not validated for tenant ownership in API v1 chat**: Added thread ownership validation before passing to service layer.
+- **(BUG-164) Discord media upload sends invalid JSON via repr()**: Replaced `repr()` with `json.dumps({"content": text or ""})`.
+- **(BUG-165) Discord media upload file handle never closed**: Added context manager `with open(media_path, "rb") as f:`.
+- **(BUG-166) WebSocket onMessageComplete stale closure**: Changed to read from `activeThreadIdRef.current`; functional `setMessages(prev => ...)`.
+
+**High (21):**
+- **(BUG-167) Cross-tenant SentinelProfile access via user-controlled ID**: Added `(is_system == True) | (tenant_id == self.tenant_id)` filter.
+- **(BUG-168) OpenRouter discover-models SSRF — no URL validation**: Added `validate_url(base_url)` before HTTP call.
+- **(BUG-169) SlashCommandService._pattern_cache never invalidated**: Added TTL and invalidation on command write operations.
+- **(BUG-170) NameError in Ollama SSRF rejection path**: Fixed bare `logger` reference to `self.logger`.
+- **(BUG-171) BrowserAutomationSkill token tracker attribute mismatch**: Fixed `self._token_tracker` → `self.token_tracker`.
+- **(BUG-172) AgentCustomSkill assignment update missing tenant isolation**: Added `CustomSkill.tenant_id == ctx.tenant_id` filter; return 404 if skill gone.
+- **(BUG-173) StdioTransport.list_tools() always returns empty list**: Implemented JSON-RPC `tools/list` via stdin.
+- **(BUG-174) MCPDiscoveredTool listing missing tenant_id filter**: Added `.filter(MCPDiscoveredTool.tenant_id == ctx.tenant_id)`.
+- **(BUG-175) Slack WebClient blocking I/O in async methods**: Replaced with `AsyncWebClient`.
+- **(BUG-176) Channel alert cooldown key missing tenant_id**: Added `tenant_id` to key: `(tenant_id, channel_type, instance_id)`.
+- **(BUG-177) Phase 21 @agent /command uses wrong tenant's permission policy**: Added `agent.tenant_id == self._router_tenant_id` validation.
+- **(BUG-178) WhatsApp adapter blocking httpx.get() in async send_message**: Replaced with `httpx.AsyncClient` with `await`.
+- **(BUG-179) Agent comm skill always passes depth=0 — depth limit ineffective**: Fixed `depth` and `parent_session_id` forwarding from calling context.
+- **(BUG-180) API v1 sender_key computed but never passed to service**: Passed `sender_key` to `send_message()` and `process_message_streaming()`.
+- **(BUG-181) API v1 list_agents loads all agents into memory**: Pushed search filter to DB `ilike`, applied `offset`/`limit` in SQL.
+- **(BUG-182) HSTS header missing from all Caddyfile SSL modes**: Added `Strict-Transport-Security` header to all SSL mode templates.
+- **(BUG-183) Syslog TLS temp file descriptors leak**: Added `os.close(cert_fd)` and `os.close(key_fd)` to `finally` block.
+- **(BUG-184) Flow step agent_id/persona_id not validated for tenant isolation**: Added tenant ownership check on `agent_id`/`persona_id` in flow step create/update.
+- **(BUG-185) Playground fetchAvailableTools/Agents hardcoded HTTP URL**: Replaced raw `fetch()` calls with `api.*` methods from `client.ts`.
+- **(BUG-186) Dead API_URL constant in contacts page with unsafe fallback**: Removed unused `API_URL` constant.
+- **(BUG-187) Agent Studio updateNodeConfig doesn't set isDirty**: Added `next.isDirty = true` in all three node type branches.
+
+**Medium (13):**
+- **(BUG-188) system_prompt/keywords missing HTML sanitization in API v1**: Added `@field_validator("system_prompt")` with `strip_html_tags`.
+- **(BUG-189) MemGuard warn_only mode doesn't send threat notification**: Added `send_threat_notification` call analogous to Sentinel's warned path.
+- **(BUG-190) _scan_instructions silently returns clean on any exception**: Changed to return `scan_status='pending'` on LLM outage.
+- **(BUG-191) Grok test model grok-3-mini not in PROVIDER_MODELS**: Updated test model to `grok-3`.
+- **(BUG-192) validate-url endpoint rejects valid private IPs for local providers**: Consistent private IP handling with create/update endpoints.
+- **(BUG-193) Custom skill deploy service entrypoint path injection**: Applied same validation as BUG-156 fix.
+- **(BUG-194) Custom skill assignment update crashes on deleted skill**: Added None check; returns 404 if skill deleted.
+- **(BUG-195) Network import scan only covers Python — misses bash/nodejs**: Added language-aware patterns for bash (`nc`, `ncat`, `/dev/tcp`) and Node.js (`require('http')`, etc.).
+- **(BUG-196) Rate limiter _windows dict grows without bound**: Added periodic eviction of keys with empty lists after expiry pruning.
+- **(BUG-197) Audit retention worker no per-tenant rollback on failure**: Wrapped each tenant purge in per-iteration `try/except` with `session.rollback()`.
+- **(BUG-198) API client update allows role escalation without permission check**: Added `updater_permissions` parameter and scope subset check to `update_client`.
+- **(BUG-199) Readiness probe _engine may be None on cold path**: Added null-check; returns 503 with engine-not-initialized message.
+- **(BUG-200) CursorSafeTextarea in flows missing blur-flush**: Added `onValueChange(localValue)` in `onBlur` handler.
+
+#### Other Fixes
+- **Flow step cursor position loss and pending edits lost on save**: `CursorSafeInput`/`CursorSafeTextarea` components created with local state that only syncs from parent when not focused. Flush-on-unmount added so pending edits are not lost when modal closes.
+- **Flow step Notification field mapping mismatch**: Fixed `content` vs `message_template` field read/write inconsistency.
+- **Flow step backend schema missing fields**: `FlowStepConfig` Pydantic model now includes all fields for skill, summarization, and slash_command step types.
+- **[object Object] error toast in Studio**: `handleApiError` now properly extracts Pydantic validation error arrays. All ~200 API methods in `client.ts` now use `handleApiError` for consistent error display.
+- **Contact form "external" role 422 error**: Contact form now supports the `external` role.
+- **Agent Studio builder save**: Persona and channel changes now persist correctly on builder save.
+- **Playground NoneType len() error**: Resolved and improved error handling.
+- **Google credential save crash**: Preserved `tenant_id` for admins to fix credential encryption failures.
+- **Browser skill session manager wiring**: Session manager properly wired, structured errors fixed, value leak resolved.
+
+#### VM Fresh Install Regression
+- **RBAC seeding crash loop on first boot**: Added orphan-permissions guard at the start of `seed_rbac_defaults` — if permissions exist but no roles exist, permissions are cleared before re-seeding. Prevents `UniqueViolation` crash-restart loop on the first backend startup.
+- **Global admin login returns 500 — NULL tenant_id in audit logging**: Added early-return guard in `log_tenant_event()` when `tenant_id is None`. Global admins have no tenant affiliation; their actions are handled by `GlobalAdminAuditService` separately.
+- **(BUG-201) Installer leaves frontend unhealthy — docker-compose v1 health dependency race**: Installer now waits for backend to become healthy before starting the frontend container, working around docker-compose v1.29.2 `service_healthy` condition race on Ubuntu 24.04.
+- **(BUG-202) Browser API calls use relative paths incompatible with HTTP-only installs**: Fixed `client.ts` API URL resolution so installations without Caddy proxy (SSL disabled) work correctly. Relative `/api/*` paths now resolve against the correct origin.
+
+---
+
+## [0.5.0-beta] - 2026-02-01
+
+### Added
+- Initial beta release
+- Multi-agent architecture with intelligent routing
+- Skills-as-Tools system with MCP compliance
+- 16 built-in skills
+- WhatsApp channel via MCP bridge
+- Telegram channel integration
+- Playground web interface with WebSocket streaming
+- 4-layer memory system
+- Knowledge base with document ingestion
+- RBAC with multi-tenant support
+- Watcher dashboard with analytics
+- Sentinel security system

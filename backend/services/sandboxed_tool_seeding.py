@@ -200,6 +200,124 @@ def seed_sandboxed_tools(
         raise
 
 
+def deduplicate_tool_commands(db: Session) -> dict:
+    """
+    Remove duplicate commands and parameters from all sandboxed tools.
+
+    For duplicate commands (same tool_id + command_name):
+      - Keep the one with the most parameters (or lowest ID as tiebreak)
+      - Delete the rest along with their parameters
+
+    For duplicate parameters (same command_id + parameter_name):
+      - Keep the one with the lowest ID
+      - Delete the rest
+
+    Returns:
+        Dict with counts of deleted commands and parameters
+    """
+    from sqlalchemy import func
+
+    deleted_commands = 0
+    deleted_params = 0
+
+    try:
+        # --- Phase 1: Deduplicate commands ---
+        # Find (tool_id, command_name) pairs that have duplicates
+        dup_cmd_groups = (
+            db.query(
+                SandboxedToolCommand.tool_id,
+                SandboxedToolCommand.command_name,
+                func.count(SandboxedToolCommand.id).label("cnt")
+            )
+            .group_by(SandboxedToolCommand.tool_id, SandboxedToolCommand.command_name)
+            .having(func.count(SandboxedToolCommand.id) > 1)
+            .all()
+        )
+
+        for tool_id, cmd_name, cnt in dup_cmd_groups:
+            # Get all duplicate commands ordered by parameter count desc, then id asc
+            dup_cmds = (
+                db.query(SandboxedToolCommand)
+                .filter(
+                    SandboxedToolCommand.tool_id == tool_id,
+                    SandboxedToolCommand.command_name == cmd_name
+                )
+                .all()
+            )
+
+            # Pick the best one: most parameters, lowest id as tiebreak
+            def cmd_sort_key(cmd):
+                param_count = db.query(func.count(SandboxedToolParameter.id)).filter(
+                    SandboxedToolParameter.command_id == cmd.id
+                ).scalar() or 0
+                return (-param_count, cmd.id)
+
+            dup_cmds.sort(key=cmd_sort_key)
+            keeper = dup_cmds[0]
+            to_remove = dup_cmds[1:]
+
+            for cmd in to_remove:
+                # Delete parameters of the duplicate command
+                params_deleted = db.query(SandboxedToolParameter).filter(
+                    SandboxedToolParameter.command_id == cmd.id
+                ).delete()
+                deleted_params += params_deleted
+                db.delete(cmd)
+                deleted_commands += 1
+                logger.info(
+                    f"Dedup: removed duplicate command '{cmd_name}' (ID {cmd.id}) "
+                    f"from tool_id={tool_id}, kept ID {keeper.id}"
+                )
+
+        # --- Phase 2: Deduplicate parameters ---
+        dup_param_groups = (
+            db.query(
+                SandboxedToolParameter.command_id,
+                SandboxedToolParameter.parameter_name,
+                func.count(SandboxedToolParameter.id).label("cnt")
+            )
+            .group_by(SandboxedToolParameter.command_id, SandboxedToolParameter.parameter_name)
+            .having(func.count(SandboxedToolParameter.id) > 1)
+            .all()
+        )
+
+        for command_id, param_name, cnt in dup_param_groups:
+            dup_params = (
+                db.query(SandboxedToolParameter)
+                .filter(
+                    SandboxedToolParameter.command_id == command_id,
+                    SandboxedToolParameter.parameter_name == param_name
+                )
+                .order_by(SandboxedToolParameter.id)
+                .all()
+            )
+
+            # Keep first (lowest ID), delete rest
+            for param in dup_params[1:]:
+                db.delete(param)
+                deleted_params += 1
+                logger.info(
+                    f"Dedup: removed duplicate param '{param_name}' (ID {param.id}) "
+                    f"from command_id={command_id}"
+                )
+
+        if deleted_commands > 0 or deleted_params > 0:
+            db.commit()
+            logger.info(
+                f"Deduplication complete: removed {deleted_commands} duplicate commands, "
+                f"{deleted_params} duplicate parameters"
+            )
+        else:
+            logger.info("Deduplication: no duplicates found")
+
+        return {"deleted_commands": deleted_commands, "deleted_params": deleted_params}
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to deduplicate tool commands: {e}", exc_info=True)
+        raise
+
+
 def update_existing_tools(
     tenant_id: str,
     db: Session,
@@ -209,6 +327,9 @@ def update_existing_tools(
     Update existing sandboxed tools from manifests for a tenant.
     Updates system_prompt, command templates, and parameters to match
     current manifest definitions.
+
+    Also removes duplicate commands/parameters and prunes commands
+    that no longer exist in the manifest.
 
     Args:
         tenant_id: Tenant ID
@@ -241,15 +362,39 @@ def update_existing_tools(
                 existing.system_prompt = new_prompt
                 logger.info(f"Updated system_prompt for tool '{tool_name}'")
 
+            # Collect valid command names from manifest for pruning later
+            manifest_command_names = set()
+
             # Update commands and parameters
             for cmd_config in manifest.get("commands", []):
+                manifest_command_names.add(cmd_config["name"])
+
                 # Map timeout category to seconds (use canonical values from discovery service)
                 timeout = TIMEOUT_CATEGORIES.get(cmd_config.get("timeout_category", "standard"), 120)
 
-                existing_cmd = db.query(SandboxedToolCommand).filter(
+                # Get ALL matching commands (to detect duplicates)
+                matching_cmds = db.query(SandboxedToolCommand).filter(
                     SandboxedToolCommand.tool_id == existing.id,
                     SandboxedToolCommand.command_name == cmd_config["name"]
-                ).first()
+                ).order_by(SandboxedToolCommand.id).all()
+
+                if len(matching_cmds) > 1:
+                    # Duplicates found -- keep first, delete rest
+                    existing_cmd = matching_cmds[0]
+                    for dup_cmd in matching_cmds[1:]:
+                        # Delete parameters of duplicate command
+                        db.query(SandboxedToolParameter).filter(
+                            SandboxedToolParameter.command_id == dup_cmd.id
+                        ).delete()
+                        db.delete(dup_cmd)
+                        logger.info(
+                            f"Removed duplicate command '{cmd_config['name']}' "
+                            f"(ID {dup_cmd.id}) from tool '{tool_name}'"
+                        )
+                elif len(matching_cmds) == 1:
+                    existing_cmd = matching_cmds[0]
+                else:
+                    existing_cmd = None
 
                 if existing_cmd:
                     # Update existing command
@@ -270,12 +415,30 @@ def update_existing_tools(
                     db.add(existing_cmd)
                     db.flush()
 
+                # Collect valid param names from manifest for pruning
+                manifest_param_names = {p["name"] for p in cmd_config.get("parameters", [])}
+
                 # Sync parameters
                 for param_config in cmd_config.get("parameters", []):
-                    existing_param = db.query(SandboxedToolParameter).filter(
+                    # Get ALL matching params (to detect duplicates)
+                    matching_params = db.query(SandboxedToolParameter).filter(
                         SandboxedToolParameter.command_id == existing_cmd.id,
                         SandboxedToolParameter.parameter_name == param_config["name"]
-                    ).first()
+                    ).order_by(SandboxedToolParameter.id).all()
+
+                    if len(matching_params) > 1:
+                        # Keep first, delete rest
+                        existing_param = matching_params[0]
+                        for dup_param in matching_params[1:]:
+                            db.delete(dup_param)
+                            logger.info(
+                                f"Removed duplicate param '{param_config['name']}' "
+                                f"(ID {dup_param.id}) from {tool_name}.{cmd_config['name']}"
+                            )
+                    elif len(matching_params) == 1:
+                        existing_param = matching_params[0]
+                    else:
+                        existing_param = None
 
                     if existing_param:
                         existing_param.is_mandatory = param_config.get("required", False)
@@ -290,6 +453,33 @@ def update_existing_tools(
                             description=param_config.get("description", "")
                         )
                         db.add(param)
+
+                # Prune parameters not in manifest
+                orphan_params = db.query(SandboxedToolParameter).filter(
+                    SandboxedToolParameter.command_id == existing_cmd.id,
+                    ~SandboxedToolParameter.parameter_name.in_(manifest_param_names)
+                ).all()
+                for orphan in orphan_params:
+                    db.delete(orphan)
+                    logger.info(
+                        f"Pruned orphan param '{orphan.parameter_name}' "
+                        f"from {tool_name}.{existing_cmd.command_name}"
+                    )
+
+            # Prune commands not in manifest
+            orphan_cmds = db.query(SandboxedToolCommand).filter(
+                SandboxedToolCommand.tool_id == existing.id,
+                ~SandboxedToolCommand.command_name.in_(manifest_command_names)
+            ).all()
+            for orphan_cmd in orphan_cmds:
+                db.query(SandboxedToolParameter).filter(
+                    SandboxedToolParameter.command_id == orphan_cmd.id
+                ).delete()
+                db.delete(orphan_cmd)
+                logger.info(
+                    f"Pruned orphan command '{orphan_cmd.command_name}' "
+                    f"from tool '{tool_name}'"
+                )
 
             db.commit()
             updated_tools.append({"name": tool_name, "tool_id": existing.id})
@@ -451,7 +641,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Initialize database
-    engine = get_engine()
+    import settings
+    engine = get_engine(settings.DATABASE_URL)
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
 

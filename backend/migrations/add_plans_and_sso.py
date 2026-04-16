@@ -116,7 +116,7 @@ def upgrade(db_path: str):
 
             if not column_exists(cursor, 'user', 'avatar_url'):
                 logger.info("Adding avatar_url column to user table...")
-                cursor.execute("ALTER TABLE user ADD COLUMN avatar_url VARCHAR(500)")
+                cursor.execute("ALTER TABLE user ADD COLUMN avatar_url TEXT")
                 logger.info("✓ Added avatar_url column")
 
             # Make password_hash nullable for SSO users

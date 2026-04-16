@@ -55,8 +55,7 @@ class SkillManager:
 
         API Tools Migration: Migrated API Tools to Skills system:
         - SearchSkill (web_search) - replaces google_search tool
-        - WeatherSkill (weather) - replaces weather tool
-        - WebScrapingSkill (web_scraping) - replaces web_scraping tool
+        - (web_scraping removed — functionality merged into search skill)
         """
         try:
             # Note: Asana is now a provider for the Scheduler skill (not standalone)
@@ -66,15 +65,9 @@ class SkillManager:
             from agent.skills.flight_search_skill import FlightSearchSkill
             self.register_skill(FlightSearchSkill)
 
-            # API Tools Migration: Web Search, Weather, Web Scraping
+            # API Tools Migration: Web Search
             from agent.skills.search_skill import SearchSkill
             self.register_skill(SearchSkill)
-
-            from agent.skills.weather_skill import WeatherSkill
-            self.register_skill(WeatherSkill)
-
-            from agent.skills.web_scraping_skill import WebScrapingSkill
-            self.register_skill(WebScrapingSkill)
 
             # Import audio transcription skill
             from agent.skills.audio_transcript import AudioTranscriptSkill
@@ -104,6 +97,10 @@ class SkillManager:
             from agent.skills.agent_switcher_skill import AgentSwitcherSkill
             self.register_skill(AgentSwitcherSkill)
 
+            # Agent Communication: Inter-agent messaging (v0.6.0 Item 15)
+            from agent.skills.agent_communication_skill import AgentCommunicationSkill
+            self.register_skill(AgentCommunicationSkill)
+
             # Gmail: Import Gmail skill for email reading
             from agent.skills.gmail_skill import GmailSkill
             self.register_skill(GmailSkill)
@@ -116,6 +113,10 @@ class SkillManager:
             from agent.skills.browser_automation_skill import BrowserAutomationSkill
             self.register_skill(BrowserAutomationSkill)
 
+            # Image Analysis Skill: multimodal understanding for inbound images
+            from agent.skills.image_analysis_skill import ImageAnalysisSkill
+            self.register_skill(ImageAnalysisSkill)
+
             # Image Skill: Image generation and editing (Skills-as-Tools)
             from agent.skills.image_skill import ImageSkill
             self.register_skill(ImageSkill)
@@ -124,7 +125,11 @@ class SkillManager:
             from agent.skills.sandboxed_tools_skill import SandboxedToolsSkill
             self.register_skill(SandboxedToolsSkill)
 
-            logger.info("Built-in skills registered: flight_search, web_search, weather, web_scraping, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, gmail, shell, browser_automation, image, sandboxed_tools")
+            # v0.6.0 Item 3: OKG Term Memory — structured long-term memory
+            from agent.skills.okg_term_memory_skill import OKGTermMemorySkill
+            self.register_skill(OKGTermMemorySkill)
+
+            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory")
         except Exception as e:
             logger.error(f"Error registering built-in skills: {e}", exc_info=True)
 
@@ -294,18 +299,37 @@ class SkillManager:
                     is_enabled = skill_instance.is_tool_enabled(config)
                     logger.info(f"[SKILL TOOLS] Skill '{skill_type}' is_tool_enabled={is_enabled}")
                     if is_enabled:
+                        # Multi-tool skills (e.g., OKG with okg_store/okg_recall/okg_forget)
+                        if hasattr(skill_instance, 'get_all_mcp_tool_definitions'):
+                            all_defs = skill_instance.get_all_mcp_tool_definitions()
+                            if len(all_defs) > 1:
+                                for mcp_def in all_defs:
+                                    tool_def = {
+                                        "type": "function",
+                                        "function": {
+                                            "name": mcp_def["name"],
+                                            "description": mcp_def.get("description", ""),
+                                            "parameters": mcp_def.get("inputSchema", {"type": "object", "properties": {}})
+                                        }
+                                    }
+                                    tool_definitions.append(tool_def)
+                                logger.info(f"Added {len(all_defs)} tools from multi-tool skill '{skill_type}'")
+                                continue
+
                         tool_def = None
 
                         # Phase 4: Try new MCP format first (get_mcp_tool_definition)
-                        has_mcp = hasattr(skill_class, 'get_mcp_tool_definition')
+                        # BUG-391 fix: Use skill_instance (not skill_class) so custom skills
+                        # have access to self._record for tool definition generation
+                        has_mcp = hasattr(skill_instance, 'get_mcp_tool_definition')
                         logger.info(f"[SKILL TOOLS] Skill '{skill_type}' has get_mcp_tool_definition={has_mcp}")
                         if has_mcp:
-                            mcp_def = skill_class.get_mcp_tool_definition()
+                            mcp_def = skill_instance.get_mcp_tool_definition()
                             logger.info(f"[SKILL TOOLS] Skill '{skill_type}' MCP definition name: {mcp_def.get('name') if mcp_def else None}")
                             if mcp_def:
                                 # Convert MCP to OpenAI format using to_openai_tool()
-                                if hasattr(skill_class, 'to_openai_tool'):
-                                    tool_def = skill_class.to_openai_tool()
+                                if hasattr(skill_instance, 'to_openai_tool'):
+                                    tool_def = skill_instance.to_openai_tool()
                                 else:
                                     # Manual conversion if to_openai_tool not available
                                     tool_def = {
@@ -400,16 +424,37 @@ class SkillManager:
                 if not skill_instance.is_tool_enabled(config):
                     continue
 
-                # Get tool definition in provider-specific format
-                if provider == "anthropic":
-                    tool_def = skill_class.to_anthropic_tool()
+                # v0.6.0: Multi-tool skills (e.g., OKG with 3 tools)
+                if hasattr(skill_class, 'get_all_mcp_tool_definitions'):
+                    all_defs = skill_class.get_all_mcp_tool_definitions()
+                    for mcp_def in all_defs:
+                        if provider == "anthropic":
+                            tool_def = {
+                                "name": mcp_def["name"],
+                                "description": mcp_def["description"],
+                                "input_schema": mcp_def["inputSchema"]
+                            }
+                        else:
+                            tool_def = {
+                                "type": "function",
+                                "function": {
+                                    "name": mcp_def["name"],
+                                    "description": mcp_def["description"],
+                                    "parameters": mcp_def["inputSchema"]
+                                }
+                            }
+                        tools.append(tool_def)
+                    logger.debug(f"Added {len(all_defs)} tools from multi-tool skill '{skill_type}'")
                 else:
-                    # OpenAI format works for: openai, openrouter, groq, ollama, gemini
-                    tool_def = skill_class.to_openai_tool()
+                    # Single-tool skill (standard path)
+                    if provider == "anthropic":
+                        tool_def = skill_class.to_anthropic_tool()
+                    else:
+                        tool_def = skill_class.to_openai_tool()
 
-                if tool_def:
-                    tools.append(tool_def)
-                    logger.debug(f"Added tool from skill '{skill_type}' for provider '{provider}'")
+                    if tool_def:
+                        tools.append(tool_def)
+                        logger.debug(f"Added tool from skill '{skill_type}' for provider '{provider}'")
 
             if tools:
                 logger.info(f"Collected {len(tools)} skill tools for agent {agent_id} (provider: {provider})")
@@ -462,9 +507,15 @@ class SkillManager:
                 if not skill_instance.is_tool_enabled(config):
                     continue
 
-                mcp_def = skill_class.get_mcp_tool_definition()
-                if mcp_def:
-                    tools.append(mcp_def)
+                # v0.6.0: Multi-tool skills
+                # BUG-391 fix: Use skill_instance instead of skill_class
+                if hasattr(skill_instance, 'get_all_mcp_tool_definitions'):
+                    for mcp_def in skill_instance.get_all_mcp_tool_definitions():
+                        tools.append(mcp_def)
+                else:
+                    mcp_def = skill_instance.get_mcp_tool_definition()
+                    if mcp_def:
+                        tools.append(mcp_def)
 
             return tools
 
@@ -523,33 +574,77 @@ class SkillManager:
                 logger.warning(f"Unknown tool: {tool_name}")
                 return f"Error: Unknown tool '{tool_name}'"
 
-            # Get skill config
+            # Get skill config — custom skills use AgentCustomSkill, not AgentSkill
             skill_record = await self._get_skill_record(db, agent_id, skill_class.skill_type)
 
             if not skill_record or not skill_record.is_enabled:
-                return f"Error: Tool '{tool_name}' is not enabled for this agent"
+                # BUG-391 fix: For custom skills, check AgentCustomSkill table
+                if skill_class.skill_type.startswith("custom:"):
+                    from models import AgentCustomSkill, CustomSkill
+                    record = getattr(skill_class, '_custom_skill_record', None)
+                    if record:
+                        assignment = db.query(AgentCustomSkill).filter(
+                            AgentCustomSkill.agent_id == agent_id,
+                            AgentCustomSkill.custom_skill_id == record.id,
+                            AgentCustomSkill.is_enabled == True
+                        ).first()
+                        if assignment:
+                            # Custom skill is assigned and enabled — proceed with empty config
+                            skill_record = None  # Will use empty config below
+                        else:
+                            return f"Error: Tool '{tool_name}' is not enabled for this agent"
+                    else:
+                        return f"Error: Tool '{tool_name}' is not enabled for this agent"
+                else:
+                    return f"Error: Tool '{tool_name}' is not enabled for this agent"
 
-            config = skill_record.config or {}
+            config = (skill_record.config if skill_record else None) or {}
 
-            # Inject tenant_id into config for API key lookups (same as process_message)
-            if 'tenant_id' not in config:
+            # BUG-384: Inject tenant_id and agent_id — handle None values too
+            if not config.get('tenant_id') or 'agent_id' not in config:
                 from models import Agent as AgentModel
                 agent_obj = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
                 if agent_obj:
                     config['tenant_id'] = agent_obj.tenant_id
+            config['agent_id'] = agent_id
+            config['db'] = db
+
+            # BUG-LOG-006 FIX: Propagate A2A comm_depth and parent_session_id from message
+            # so agent_communication_skill can enforce depth limits on chained delegations
+            if message:
+                if hasattr(message, 'metadata') and message.metadata:
+                    if 'comm_depth' in message.metadata:
+                        config['comm_depth'] = message.metadata['comm_depth']
+                    if 'comm_parent_session_id' in message.metadata:
+                        config['comm_parent_session_id'] = message.metadata['comm_parent_session_id']
+
+            # Create skill instance (before schema validation so custom skills have self._record)
+            skill_instance = self._create_skill_instance(skill_class, db, agent_id)
 
             # Validate arguments against input schema
-            mcp_def = skill_class.get_mcp_tool_definition()
+            # v0.6.0: Multi-tool skills — find the right schema by tool_name
+            # BUG-391 fix: Use skill_instance instead of skill_class
+            mcp_def = None
+            if hasattr(skill_instance, 'get_all_mcp_tool_definitions'):
+                for d in skill_instance.get_all_mcp_tool_definitions():
+                    if d.get("name") == tool_name:
+                        mcp_def = d
+                        break
+            if not mcp_def:
+                mcp_def = skill_instance.get_mcp_tool_definition()
             if mcp_def and mcp_def.get("inputSchema"):
                 validation_error = self._validate_arguments(arguments, mcp_def["inputSchema"])
                 if validation_error:
                     return f"Error: Invalid arguments - {validation_error}"
-
-            # Create skill instance
-            skill_instance = self._create_skill_instance(skill_class, db, agent_id)
             skill_instance._config = config
             skill_instance.set_db_session(db)
             skill_instance._agent_id = agent_id
+            # v0.6.0: For multi-tool skills, tell the instance which tool was invoked
+            if hasattr(skill_instance, '_current_tool_name'):
+                skill_instance._current_tool_name = tool_name
+            # Phase 0.6.0: Propagate token tracker for cost monitoring
+            if hasattr(skill_instance, 'set_token_tracker') and self.token_tracker:
+                skill_instance.set_token_tracker(self.token_tracker)
 
             # Create synthetic message if not provided
             if message is None:
@@ -578,7 +673,35 @@ class SkillManager:
 
             # Execute tool
             try:
+                import time as _time
+                _start = _time.time()
                 result = await skill_instance.execute_tool(arguments, message, config)
+                _elapsed_ms = int((_time.time() - _start) * 1000)
+
+                # BUG-509: Write CustomSkillExecution history for runtime tool calls
+                # so assigned custom-skill invocations (Playground/WhatsApp) show up
+                # in execution history just like /api/custom-skills/{id}/test calls.
+                try:
+                    from agent.skills.custom_skill_adapter import CustomSkillAdapter as _CustomSkillAdapter
+                    if isinstance(skill_instance, _CustomSkillAdapter) and getattr(skill_instance, '_record', None):
+                        from models import CustomSkillExecution as _CSE
+                        _rec = skill_instance._record
+                        _exec_row = _CSE(
+                            tenant_id=config.get('tenant_id') or _rec.tenant_id,
+                            agent_id=agent_id,
+                            custom_skill_id=_rec.id,
+                            skill_name=_rec.name,
+                            input_json=arguments or {},
+                            status='completed' if result.success else 'failed',
+                            output=(result.output[:4000] if result.output else None) if result.success else None,
+                            error=(result.output[:4000] if result.output else None) if not result.success else None,
+                            execution_time_ms=_elapsed_ms,
+                        )
+                        db.add(_exec_row)
+                        db.commit()
+                except Exception as _hist_err:
+                    logger.warning(f"Failed to write CustomSkillExecution history: {_hist_err}")
+
                 if return_full_result:
                     return result
                 return result.output if result.success else f"Error: {result.output}"
@@ -598,6 +721,9 @@ class SkillManager:
         """
         Map tool name to skill class using MCP definition.
 
+        Supports multi-tool skills (e.g., OKG with okg_store/okg_recall/okg_forget)
+        via get_all_mcp_tool_definitions().
+
         Args:
             tool_name: Name from LLM tool call
 
@@ -605,13 +731,30 @@ class SkillManager:
             Skill class or None if not found
         """
         for skill_class in self.registry.values():
-            # Check MCP definition first
-            mcp_def = skill_class.get_mcp_tool_definition()
-            if mcp_def and mcp_def.get("name") == tool_name:
-                return skill_class
+            try:
+                # BUG-391 fix: For custom skills, instantiate to get tool definitions
+                if getattr(skill_class, 'skill_type', '').startswith('custom:'):
+                    record = getattr(skill_class, '_custom_skill_record', None)
+                    inst = skill_class(skill_record=record)
+                else:
+                    inst = skill_class
 
-            # Fallback: Check legacy get_tool_definition
-            tool_def = skill_class.get_tool_definition()
+                # Check multi-tool definitions first (v0.6.0: OKG Term Memory)
+                if hasattr(inst, 'get_all_mcp_tool_definitions'):
+                    all_defs = inst.get_all_mcp_tool_definitions()
+                    if any(d.get("name") == tool_name for d in all_defs):
+                        return skill_class
+
+                # Check single MCP definition
+                mcp_def = inst.get_mcp_tool_definition()
+                if mcp_def and mcp_def.get("name") == tool_name:
+                    return skill_class
+
+                # Fallback: Check legacy get_tool_definition
+                tool_def = inst.get_tool_definition() if hasattr(inst, 'get_tool_definition') else skill_class.get_tool_definition()
+            except Exception:
+                continue
+
             if tool_def:
                 # Handle both wrapped and unwrapped formats
                 if tool_def.get("type") == "function":
@@ -619,6 +762,15 @@ class SkillManager:
                         return skill_class
                 elif tool_def.get("name") == tool_name:
                     return skill_class
+
+        # BUG-353 FIX: Custom skills are registered under "custom:{slug}" keys but
+        # their tool definitions use "custom_{slug}" names.  The dynamic subclass
+        # created in register_custom_skills() has no _record, so
+        # get_mcp_tool_definition() returns None.  Resolve via registry key.
+        if tool_name.startswith("custom_"):
+            custom_key = f"custom:{tool_name[7:]}"
+            if custom_key in self.registry:
+                return self.registry[custom_key]
 
         return None
 
@@ -679,9 +831,15 @@ class SkillManager:
                         pass
                 return f"Field '{field}' must be an integer"
             if expected_type == "boolean" and not isinstance(value, bool):
-                return f"Field '{field}' must be a boolean"
+                if isinstance(value, str) and value.lower() in ("true", "false"):
+                    arguments[field] = value.lower() == "true"
+                else:
+                    return f"Field '{field}' must be a boolean"
             if expected_type == "array" and not isinstance(value, list):
-                return f"Field '{field}' must be an array"
+                if isinstance(value, str):
+                    arguments[field] = [v.strip() for v in value.split(",") if v.strip()] if value else []
+                else:
+                    return f"Field '{field}' must be an array"
             if expected_type == "object" and not isinstance(value, dict):
                 return f"Field '{field}' must be an object"
 
@@ -713,8 +871,18 @@ class SkillManager:
             return skill_class(db, agent_id)
         elif skill_type == "browser_automation":
             return skill_class(db=db, token_tracker=self.token_tracker)
+        elif skill_type == "image_analysis":
+            return skill_class(token_tracker=self.token_tracker)
         elif skill_type == "image":
             return skill_class(token_tracker=self.token_tracker)
+        elif skill_type == "okg_term_memory":
+            return skill_class(db=db, agent_id=agent_id)
+        elif skill_type.startswith("custom:"):
+            # BUG-391 fix: Dynamic custom skill classes store the DB record as a class
+            # attribute (_custom_skill_record) via type(). Pass it to __init__ so that
+            # self._record is set and get_mcp_tool_definition() works correctly.
+            record = getattr(skill_class, '_custom_skill_record', None)
+            return skill_class(skill_record=record)
         else:
             return skill_class()
 
@@ -965,6 +1133,10 @@ class SkillManager:
                 if hasattr(skill_instance, 'set_db_session'):
                     skill_instance.set_db_session(db)
 
+                # Phase 0.6.0: Set token tracker for all skills (for LLM cost monitoring)
+                if hasattr(skill_instance, 'set_token_tracker') and self.token_tracker:
+                    skill_instance.set_token_tracker(self.token_tracker)
+
                 # Phase 6.11.4: Pass agent_id to all skills for Agendador detection
                 skill_instance._agent_id = agent_id
 
@@ -994,8 +1166,8 @@ class SkillManager:
                     config = skill_record.config or {}
                     config['agent_id'] = agent_id
 
-                    # Phase 4 fix: Get tenant_id from agent for skills like AutomationSkill
-                    if 'tenant_id' not in config:
+                    # BUG-384: Get tenant_id from agent — also handle config with tenant_id=None
+                    if not config.get('tenant_id'):
                         from models import Agent
                         agent = db.query(Agent).filter(Agent.id == agent_id).first()
                         if agent:
@@ -1256,6 +1428,144 @@ class SkillManager:
                 raise
             except Exception as e:
                 logger.warning(f"Error checking conflict rule '{rule['name']}': {e}")
+
+
+    # =========================================================================
+    # PHASE 22: CUSTOM SKILLS FOUNDATION
+    # =========================================================================
+
+    def register_custom_skills(self, db, tenant_id: str):
+        """
+        Load tenant's enabled+clean custom skills into the registry.
+
+        Always refreshes from DB to pick up enable/disable changes.
+        Removes stale entries for skills no longer enabled/clean.
+        """
+        from models import CustomSkill
+        from agent.skills.custom_skill_adapter import CustomSkillAdapter
+
+        skills = db.query(CustomSkill).filter(
+            CustomSkill.tenant_id == tenant_id,
+            CustomSkill.is_enabled == True,
+            CustomSkill.scan_status == 'clean'
+        ).all()
+
+        active_keys = set()
+        for record in skills:
+            key = f"custom:{record.slug}"
+            active_keys.add(key)
+            adapter_class = type(
+                f"CustomSkill_{record.slug}",
+                (CustomSkillAdapter,),
+                {
+                    'skill_type': key,
+                    'skill_name': record.name,
+                    'skill_description': record.description or '',
+                    'execution_mode': record.execution_mode,
+                    '_custom_skill_record': record,
+                }
+            )
+            self.registry[key] = adapter_class
+
+        # Remove stale custom skill entries (disabled or rejected since last registration)
+        stale_keys = [k for k in self.registry if k.startswith("custom:") and k not in active_keys]
+        for k in stale_keys:
+            del self.registry[k]
+            logger.info(f"Unregistered stale custom skill: {k}")
+
+    def get_custom_skill_tool_definitions(self, db, agent_id: int) -> list:
+        """
+        Get OpenAI-format tool definitions for custom skills assigned to this agent.
+
+        Only includes custom skills that are:
+        - Assigned and enabled for this agent
+        - Globally enabled on the CustomSkill record
+        - Have clean scan status
+        - Are in 'tool' or 'hybrid' execution mode
+
+        Args:
+            db: Database session
+            agent_id: Agent ID
+
+        Returns:
+            List of OpenAI-compatible tool definitions
+        """
+        from models import AgentCustomSkill, CustomSkill
+        from agent.skills.custom_skill_adapter import CustomSkillAdapter
+
+        try:
+            assignments = db.query(AgentCustomSkill, CustomSkill).join(
+                CustomSkill, AgentCustomSkill.custom_skill_id == CustomSkill.id
+            ).filter(
+                AgentCustomSkill.agent_id == agent_id,
+                AgentCustomSkill.is_enabled == True,
+                CustomSkill.is_enabled == True,
+                CustomSkill.scan_status == 'clean',
+                CustomSkill.execution_mode.in_(['tool', 'hybrid']),
+            ).all()
+
+            tool_defs = []
+            for _assignment, skill in assignments:
+                adapter = CustomSkillAdapter(skill)
+                tool_def = adapter.get_mcp_tool_definition()
+                if tool_def:
+                    tool_defs.append({
+                        "type": "function",
+                        "function": {
+                            "name": tool_def["name"],
+                            "description": tool_def.get("description", ""),
+                            "parameters": tool_def.get("inputSchema", {"type": "object", "properties": {}})
+                        }
+                    })
+
+            if tool_defs:
+                logger.info(f"Collected {len(tool_defs)} custom skill tool definitions for agent {agent_id}")
+
+            return tool_defs
+
+        except Exception as e:
+            logger.error(f"Error getting custom skill tool definitions: {e}", exc_info=True)
+            return []
+
+    def get_custom_skill_instructions(self, db, agent_id: int) -> str:
+        """
+        Get concatenated instructions from passive instruction-type custom skills
+        assigned to this agent.
+
+        BUG-509: Only skills with ``execution_mode == 'passive'`` inject their raw
+        ``instructions_md`` into the system prompt. Tool/hybrid instruction skills
+        are exposed as callable tools instead and execute through the LLM adapter
+        at runtime (matching the /api/custom-skills/{id}/test behavior), so their
+        raw instructions must NOT be dumped back into the prompt (that is what
+        caused the Playground response to leak the instruction template verbatim).
+
+        Args:
+            db: Database session
+            agent_id: Agent ID
+
+        Returns:
+            Concatenated instruction markdown from matching passive custom skills
+        """
+        from models import AgentCustomSkill, CustomSkill
+
+        assignments = db.query(AgentCustomSkill).join(
+            CustomSkill, AgentCustomSkill.custom_skill_id == CustomSkill.id
+        ).filter(
+            AgentCustomSkill.agent_id == agent_id,
+            AgentCustomSkill.is_enabled == True,
+            CustomSkill.is_enabled == True,
+            CustomSkill.skill_type_variant == 'instruction',
+            CustomSkill.execution_mode == 'passive',
+            CustomSkill.scan_status == 'clean'
+        ).all()
+
+        instructions = []
+        for assignment in assignments:
+            skill = db.query(CustomSkill).filter(CustomSkill.id == assignment.custom_skill_id).first()
+            if skill and skill.instructions_md:
+                instructions.append(f"## Custom Skill: {skill.name}\n{skill.instructions_md}")
+
+        return "\n\n".join(instructions)
 
 
 # Global skill manager instance

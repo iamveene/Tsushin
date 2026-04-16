@@ -184,16 +184,6 @@ DEFAULT_SLASH_COMMANDS = [
     },
     {
         "category": "tool",
-        "command_name": "weather",
-        "language_code": "en",
-        "pattern": r"^/weather\s+(.+)$",
-        "aliases": ["w", "clima"],
-        "description": "Get weather for a location",
-        "help_text": "Usage: /weather <city>\nExample: /weather New York",
-        "sort_order": 31
-    },
-    {
-        "category": "tool",
         "command_name": "search",
         "language_code": "en",
         "pattern": r"^/search\s+(.+)$",

@@ -7,12 +7,13 @@ Handles CRUD operations for agent personas.
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import List, Optional
 from datetime import datetime
 import logging
 
 from models import Persona, TonePreset, Agent
+from api.sanitizers import strip_html_tags
 from models_rbac import User
 from agent.ai_summary_service import AISummaryService
 from auth_dependencies import (
@@ -23,7 +24,7 @@ from auth_dependencies import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/personas", tags=["personas"])
+router = APIRouter(prefix="/api/personas", tags=["personas"], redirect_slashes=False)
 
 # Global engine reference (set by main app.py)
 _engine = None
@@ -56,6 +57,22 @@ class PersonaCreate(BaseModel):
     guardrails: Optional[str] = None
     is_active: bool = True
 
+    @field_validator("name")
+    @classmethod
+    def sanitize_name(cls, v: str) -> str:
+        cleaned = strip_html_tags(v)
+        if not cleaned or not cleaned.strip():
+            raise ValueError("Name must not be empty after removing HTML tags")
+        return cleaned.strip()
+
+    @field_validator("description")
+    @classmethod
+    def sanitize_description(cls, v: str) -> str:
+        cleaned = strip_html_tags(v)
+        if not cleaned or not cleaned.strip():
+            raise ValueError("Description must not be empty after removing HTML tags")
+        return cleaned.strip()
+
 
 class PersonaUpdate(BaseModel):
     name: Optional[str] = None
@@ -70,6 +87,26 @@ class PersonaUpdate(BaseModel):
     enabled_knowledge_bases: Optional[list] = None
     guardrails: Optional[str] = None
     is_active: Optional[bool] = None
+
+    @field_validator("name")
+    @classmethod
+    def sanitize_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        cleaned = strip_html_tags(v)
+        if not cleaned or not cleaned.strip():
+            raise ValueError("Name must not be empty after removing HTML tags")
+        return cleaned.strip()
+
+    @field_validator("description")
+    @classmethod
+    def sanitize_description(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        cleaned = strip_html_tags(v)
+        if not cleaned or not cleaned.strip():
+            raise ValueError("Description must not be empty after removing HTML tags")
+        return cleaned.strip()
 
 
 class PersonaResponse(BaseModel):
@@ -129,6 +166,7 @@ def to_persona_response(persona: Persona, db: Session) -> PersonaResponse:
 
 
 @router.get("/", response_model=List[PersonaResponse])
+@router.get("", response_model=List[PersonaResponse], include_in_schema=False)
 def get_personas(
     active_only: bool = False,
     db: Session = Depends(get_db),
@@ -144,7 +182,7 @@ def get_personas(
     query = db.query(Persona)
 
     # Apply tenant filtering - include tenant's personas AND shared (NULL tenant_id)
-    query = ctx.filter_by_tenant(query, Persona.tenant_id)
+    query = ctx.filter_by_tenant(query, Persona.tenant_id, include_shared=True)
 
     if active_only:
         query = query.filter(Persona.is_active == True)
@@ -172,7 +210,7 @@ def get_persona(
 
     # Verify user can access this persona
     if not ctx.can_access_resource(persona.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this persona")
+        raise HTTPException(status_code=404, detail="Persona not found")
 
     return to_persona_response(persona, db)
 
@@ -210,7 +248,7 @@ def create_persona(
     # Generate AI summary for custom personas
     ai_summary = None
     try:
-        ai_service = AISummaryService()
+        ai_service = AISummaryService(db=db, tenant_id=ctx.tenant_id)
         ai_summary = ai_service.generate_persona_summary(
             name=persona_data.name,
             description=persona_data.description,
@@ -270,7 +308,7 @@ def update_persona(
 
     # Verify user can access this persona
     if not ctx.can_access_resource(persona.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this persona")
+        raise HTTPException(status_code=404, detail="Persona not found")
 
     # System personas cannot be modified (only deactivated)
     if persona.is_system and persona_data.name:
@@ -322,7 +360,7 @@ def update_persona(
                 if tone_preset:
                     tone_preset_name = tone_preset.name
 
-            ai_service = AISummaryService()
+            ai_service = AISummaryService(db=db, tenant_id=ctx.tenant_id)
             persona.ai_summary = ai_service.generate_persona_summary(
                 name=persona.name,
                 description=persona.description,
@@ -364,7 +402,7 @@ def delete_persona(
 
     # Verify user can access this persona
     if not ctx.can_access_resource(persona.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this persona")
+        raise HTTPException(status_code=404, detail="Persona not found")
 
     if persona.is_system:
         raise HTTPException(status_code=403, detail="Cannot delete system persona")

@@ -77,7 +77,8 @@ class AudioTTSSkill(BaseSkill):
         config: Dict[str, Any],
         agent_id: Optional[int] = None,
         sender_key: Optional[str] = None,
-        message_id: Optional[str] = None
+        message_id: Optional[str] = None,
+        tenant_id: Optional[str] = None
     ) -> SkillResult:
         """
         Convert text response to audio using configured TTS provider.
@@ -91,6 +92,7 @@ class AudioTTSSkill(BaseSkill):
             agent_id: Agent ID for token tracking (optional)
             sender_key: Sender identifier for token tracking (optional)
             message_id: Message ID for token tracking (optional)
+            tenant_id: Tenant ID for multi-tenant API key isolation
 
         Returns:
             SkillResult with audio file path or error
@@ -103,7 +105,8 @@ class AudioTTSSkill(BaseSkill):
         provider = TTSProviderRegistry.get_provider(
             provider_name,
             db=self._db_session,
-            token_tracker=self.token_tracker
+            token_tracker=self.token_tracker,
+            tenant_id=tenant_id
         )
 
         if not provider:

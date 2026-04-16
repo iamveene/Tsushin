@@ -30,11 +30,9 @@ class SlashCommandService:
     - Command caching for performance
     """
 
-    # Cache for compiled patterns
-    _pattern_cache: Dict[str, List[Tuple[re.Pattern, Dict]]] = {}
-
     def __init__(self, db: Session):
         self.db = db
+        self._pattern_cache: Dict[str, List[Tuple[re.Pattern, Dict]]] = {}
         self.logger = logging.getLogger(__name__)
 
     # =========================================================================
@@ -98,7 +96,8 @@ class SlashCommandService:
                     "help_text": cmd.help_text,
                     "is_enabled": cmd.is_enabled,
                     "handler_type": cmd.handler_type,
-                    "sort_order": cmd.sort_order
+                    "sort_order": cmd.sort_order,
+                    "permission_required": cmd.permission_required
                 }
 
         return list(result.values())
@@ -124,14 +123,14 @@ class SlashCommandService:
     # Command Detection
     # =========================================================================
 
-    def _get_compiled_patterns(self, tenant_id: str) -> List[Tuple[re.Pattern, Dict]]:
+    def _get_compiled_patterns(self, tenant_id: str, language_code: Optional[str] = None) -> List[Tuple[re.Pattern, Dict]]:
         """Get compiled regex patterns for command matching."""
-        cache_key = tenant_id
+        cache_key = f"{tenant_id}:{language_code}" if language_code else tenant_id
 
         if cache_key in self._pattern_cache:
             return self._pattern_cache[cache_key]
 
-        commands = self.get_commands(tenant_id)
+        commands = self.get_commands(tenant_id, language_code=language_code)
         patterns = []
 
         for cmd in commands:
@@ -160,7 +159,8 @@ class SlashCommandService:
     def detect_command(
         self,
         message: str,
-        tenant_id: str
+        tenant_id: str,
+        language_code: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Detect if a message is a slash command.
@@ -168,6 +168,7 @@ class SlashCommandService:
         Args:
             message: The message text
             tenant_id: Tenant ID for command lookup
+            language_code: Optional language code for scoped pattern matching
 
         Returns:
             Dict with command info and matched groups, or None if not a command
@@ -176,7 +177,7 @@ class SlashCommandService:
             return None
 
         message = message.strip()
-        patterns = self._get_compiled_patterns(tenant_id)
+        patterns = self._get_compiled_patterns(tenant_id, language_code=language_code)
 
         for pattern, cmd in patterns:
             match = pattern.match(message)
@@ -232,8 +233,17 @@ class SlashCommandService:
         cmd = detection["command"]
         handler_type = cmd.get("handler_type", "built-in")
 
+        # SECURITY: Log warning when permission_required is set but not yet enforced
+        # Full RBAC enforcement deferred — requires channel-aware permission resolution
+        if cmd.get("permission_required"):
+            self.logger.warning(
+                f"[SLASH CMD] Command '{cmd['command_name']}' has permission_required="
+                f"'{cmd['permission_required']}' but enforcement is not yet implemented. "
+                f"Channel={channel}, user_id={user_id}"
+            )
+
         if handler_type == "built-in":
-            return await self._execute_builtin(
+            result = await self._execute_builtin(
                 cmd=cmd,
                 groups=detection["groups"],
                 args=detection["args"],
@@ -244,14 +254,39 @@ class SlashCommandService:
                 user_id=user_id
             )
         elif handler_type == "custom":
-            return await self._execute_custom(cmd, detection)
+            result = await self._execute_custom(cmd, detection)
         elif handler_type == "webhook":
-            return await self._execute_webhook(cmd, detection)
+            result = await self._execute_webhook(cmd, detection)
         else:
-            return {
+            result = {
                 "status": "error",
                 "error": f"Unknown handler type: {handler_type}"
             }
+
+        return self._buffer_tool_result(
+            agent_id=agent_id,
+            sender_key=sender_key,
+            result=result,
+        )
+
+    def _buffer_tool_result(
+        self,
+        agent_id: int,
+        sender_key: str,
+        result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Attach a single buffered execution ID for tool results across callers."""
+        if not isinstance(result, dict):
+            return result
+
+        from agent.memory.tool_output_buffer import get_tool_output_buffer
+
+        get_tool_output_buffer().buffer_command_result(
+            agent_id=agent_id,
+            sender_key=sender_key,
+            result=result,
+        )
+        return result
 
     async def _execute_builtin(
         self,
@@ -302,6 +337,7 @@ class SlashCommandService:
             # BUG-014 Fix: Tools listing command
             ("system", "tools"): self._handle_tools_list,
             ("system", "ferramentas"): self._handle_tools_list,
+            ("system", "shell"): self._handle_shell,
 
             # Tool output injection commands
             ("tool", "inject"): self._handle_inject,
@@ -338,10 +374,6 @@ class SlashCommandService:
             ("email", "email inbox"): self._handle_email_inbox,
             ("email", "email search"): self._handle_email_search,
             ("email", "email unread"): self._handle_email_unread,
-
-            # Weather commands - programmatic weather access (zero AI tokens)
-            ("tool", "weather"): self._handle_weather,
-            ("tool", "weather forecast"): self._handle_weather_forecast,
 
             # Search commands - programmatic web search (zero AI tokens)
             ("tool", "search"): self._handle_search,
@@ -388,21 +420,75 @@ class SlashCommandService:
             "args": detection["groups"]
         }
 
-    async def _execute_webhook(self, cmd: Dict, detection: Dict) -> Dict[str, Any]:
-        """Execute a webhook command handler."""
+    async def _execute_webhook(self, cmd: Dict, detection: Dict, **kwargs) -> Dict[str, Any]:
+        """Execute a webhook command handler by making an HTTP call."""
+        import httpx
+        import hashlib
+        import hmac
+        from utils.ssrf_validator import validate_url, SSRFValidationError
+
         handler_config = json.loads(cmd.get("handler_config", "{}"))
         webhook_url = handler_config.get("url")
 
         if not webhook_url:
-            return {"status": "error", "error": "No webhook URL configured"}
+            return {"status": "error", "message": "No webhook URL configured for this command."}
 
-        # TODO: Implement webhook call
-        return {
-            "status": "webhook",
-            "command": cmd["command_name"],
-            "url": webhook_url,
-            "args": detection["groups"]
+        # BUG-136 FIX: Use centralized SSRF validator with DNS-resolution-based IP checking
+        try:
+            validate_url(webhook_url)
+        except SSRFValidationError as e:
+            return {"status": "error", "message": f"Webhook URL blocked by SSRF policy: {e}"}
+
+        method = handler_config.get("method", "POST").upper()
+        custom_headers = handler_config.get("headers", {})
+        timeout_seconds = min(handler_config.get("timeout_seconds", 10), 30)
+        hmac_secret = handler_config.get("hmac_secret")
+
+        payload = {
+            "command_name": cmd.get("command_name"),
+            "category": cmd.get("category"),
+            "args": detection.get("groups", ()),
+            "raw_message": detection.get("message", ""),
+            "sender_key": kwargs.get("sender_key"),
+            "tenant_id": kwargs.get("tenant_id"),
+            "channel": kwargs.get("channel"),
+            "agent_id": kwargs.get("agent_id"),
+            "timestamp": datetime.utcnow().isoformat()
         }
+
+        headers = {"Content-Type": "application/json", **custom_headers}
+
+        # Optional HMAC signature
+        if hmac_secret:
+            payload_bytes = json.dumps(payload, sort_keys=True).encode()
+            signature = hmac.new(hmac_secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
+            headers["X-Tsushin-Signature"] = signature
+
+        try:
+            # BUG-136 FIX: Disable redirect following to prevent SSRF bypass via HTTP redirects
+            async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False) as client:
+                response = await client.request(method, webhook_url, json=payload, headers=headers)
+
+                # Cap response body read to 64KB
+                body = response.text[:65536]
+
+                if response.status_code >= 400:
+                    self.logger.warning(f"Webhook returned {response.status_code} for {cmd['command_name']}: {body[:200]}")
+                    return {
+                        "status": "error",
+                        "message": f"Webhook returned HTTP {response.status_code}."
+                    }
+
+                return {
+                    "status": "success",
+                    "action": "webhook_executed",
+                    "message": body or "Webhook executed successfully."
+                }
+        except httpx.TimeoutException:
+            return {"status": "error", "message": f"Webhook timed out after {timeout_seconds}s."}
+        except httpx.RequestError as e:
+            self.logger.error(f"Webhook request failed for {cmd['command_name']}: {e}")
+            return {"status": "error", "message": "Webhook request failed. Check the URL and try again."}
 
     # =========================================================================
     # Helper Methods
@@ -1028,7 +1114,7 @@ Type `/help all` to see syntax for all commands.
 
     async def _handle_status(self, **kwargs) -> Dict[str, Any]:
         """Handle /status."""
-        from models import Agent, UserProjectSession
+        from models import Agent, Contact, UserProjectSession
 
         agent_id = kwargs.get("agent_id")
         sender_key = kwargs.get("sender_key")
@@ -1036,6 +1122,10 @@ Type `/help all` to see syntax for all commands.
         channel = kwargs.get("channel")
 
         agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+        agent_name = "Unknown"
+        if agent:
+            contact = self.db.query(Contact).filter(Contact.id == agent.contact_id).first()
+            agent_name = contact.friendly_name if contact else f"Agent {agent.id}"
 
         # Check if in project
         session = self.db.query(UserProjectSession).filter(
@@ -1057,7 +1147,7 @@ Type `/help all` to see syntax for all commands.
             "action": "status",
             "message": f"""📊 **System Status**
 
-🤖 **Agent:** {agent.name if agent else 'Unknown'}
+🤖 **Agent:** {agent_name}
 📺 **Channel:** {channel}
 📁 **Project:** {project_status}
 ⏰ **Time:** {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
@@ -1088,7 +1178,15 @@ Type `/help all` to see syntax for all commands.
         BUG-014 Fix: Added tools listing command.
         """
         try:
-            from models import Agent, SandboxedTool, SandboxedToolCommand, AgentSandboxedTool
+            from models import (
+                Agent,
+                AgentCustomSkill,
+                AgentSandboxedTool,
+                AgentSkill,
+                CustomSkill,
+                SandboxedTool,
+                SandboxedToolCommand,
+            )
 
             agent_id = kwargs.get("agent_id")
             tenant_id = kwargs.get("tenant_id")
@@ -1117,7 +1215,6 @@ Type `/help all` to see syntax for all commands.
             lines = ["🔧 **Available Tools:**\n"]
 
             # Check for enabled skills (new Skills system)
-            from models import AgentSkill
             agent_skills = self.db.query(AgentSkill).filter(
                 AgentSkill.agent_id == agent_id,
                 AgentSkill.is_enabled == True
@@ -1127,8 +1224,7 @@ Type `/help all` to see syntax for all commands.
                 lines.append("**Enabled Skills:**")
                 skill_icons = {
                     "web_search": ("🔍", "Search the web"),
-                    "weather": ("🌤️", "Get weather information"),
-                    "web_scraping": ("📄", "Scrape web pages"),
+
                     "calendar": ("📅", "Manage calendar events"),
                     "flight_search": ("✈️", "Search for flights"),
                     "audio_transcript": ("🎙️", "Audio transcription"),
@@ -1136,6 +1232,33 @@ Type `/help all` to see syntax for all commands.
                 for skill in agent_skills:
                     icon, desc = skill_icons.get(skill.skill_type, ("⚙️", f"{skill.skill_type} skill"))
                     lines.append(f"• {icon} **{skill.skill_type}** - {desc}")
+                lines.append("")
+
+            custom_assignments = self.db.query(AgentCustomSkill, CustomSkill).join(
+                CustomSkill,
+                AgentCustomSkill.custom_skill_id == CustomSkill.id,
+            ).filter(
+                AgentCustomSkill.agent_id == agent_id,
+                AgentCustomSkill.is_enabled == True,
+                CustomSkill.tenant_id == tenant_id,
+                CustomSkill.is_enabled == True,
+                CustomSkill.scan_status == "clean",
+                CustomSkill.execution_mode.in_(["tool", "hybrid"]),
+            ).order_by(CustomSkill.name).all()
+
+            if custom_assignments:
+                lines.append("**Custom Skills:**")
+                variant_icons = {
+                    "instruction": "🧠",
+                    "script": "🧩",
+                    "mcp_server": "🔌",
+                }
+                for _, skill in custom_assignments:
+                    icon = variant_icons.get(skill.skill_type_variant, "⚙️")
+                    desc = skill.description or f"{skill.skill_type_variant} custom skill"
+                    if skill.skill_type_variant == "mcp_server" and skill.mcp_tool_name:
+                        desc = f"{desc} (MCP: {skill.mcp_tool_name})"
+                    lines.append(f"• {icon} **{skill.name}** - {desc}")
                 lines.append("")
 
             # Sandboxed tools assigned to this agent
@@ -1180,6 +1303,64 @@ Type `/help all` to see syntax for all commands.
                 "message": f"❌ Failed to list tools: {str(e)}"
             }
 
+    def _resolve_pending_shell_executions(
+        self, agent_id: Optional[int], sender_key: Optional[str]
+    ) -> None:
+        """BUG-510: Update pending shell-command stubs with real beacon output.
+
+        We keep the buffer in-memory while the ShellCommand row lives in the
+        DB. This walks pending stubs (source='shell_command'), fetches the
+        latest status, and rewrites the buffered output once the beacon has
+        completed or failed the command.
+        """
+        if not agent_id or not sender_key:
+            return
+        try:
+            from agent.memory.tool_output_buffer import get_tool_output_buffer
+            from services.shell_command_service import ShellCommandService
+
+            buffer = get_tool_output_buffer()
+            pending = buffer.list_pending_executions(
+                agent_id, sender_key, source="shell_command"
+            )
+            if not pending:
+                return
+
+            svc = ShellCommandService(self.db)
+            # Cap the work per /inject call to avoid runaway DB fan-out.
+            for execution in pending[:10]:
+                if not execution.source_ref:
+                    continue
+                try:
+                    cmd_result = svc.get_command_result(execution.source_ref)
+                except Exception as fetch_err:
+                    self.logger.warning(
+                        f"Failed to fetch shell command {execution.source_ref}: {fetch_err}"
+                    )
+                    continue
+
+                status = (cmd_result.status or "").lower()
+                if status in ("completed", "failed", "timeout", "error"):
+                    output_text = cmd_result.stdout or ""
+                    if cmd_result.stderr:
+                        output_text += ("\n[stderr]\n" + cmd_result.stderr)
+                    if not output_text.strip():
+                        if cmd_result.error_message:
+                            output_text = f"[error] {cmd_result.error_message}"
+                        else:
+                            output_text = f"(no output, status={status})"
+                    buffer.update_execution_output(
+                        agent_id=agent_id,
+                        sender_key=sender_key,
+                        execution_id=execution.execution_id,
+                        output=output_text,
+                        pending=False,
+                    )
+        except Exception as resolver_err:
+            self.logger.warning(
+                f"Failed to resolve pending shell executions: {resolver_err}"
+            )
+
     async def _handle_inject(self, **kwargs) -> Dict[str, Any]:
         """
         Handle /inject command for selective tool output retrieval.
@@ -1206,6 +1387,13 @@ Type `/help all` to see syntax for all commands.
         args_parts = args.strip().split() if args else []
 
         buffer = get_tool_output_buffer()
+
+        # BUG-510: Resolve any pending async shell executions before reading
+        # the buffer. When /shell is fired-and-forget we drop a stub into the
+        # buffer; the real stdout only arrives once the beacon completes the
+        # command and ShellCommandService marks it completed in the DB. On each
+        # /inject call, we lazily pull updated results for any pending entries.
+        self._resolve_pending_shell_executions(agent_id, sender_key)
 
         # Handle /inject list
         if args_parts and args_parts[0].lower() == "list":
@@ -1412,7 +1600,6 @@ Type `/help all` to see syntax for all commands.
 
         Supports:
         - /tool <tool_name> <args> - Generic tool execution
-        - /weather <location> - Direct weather tool
         - /search <query> - Direct search tool
         - /schedule <event> - Direct schedule tool
 
@@ -1427,7 +1614,7 @@ Type `/help all` to see syntax for all commands.
             tool_name = groups[0].lower() if groups else ""
             tool_args = groups[1].strip() if len(groups) > 1 else ""
         else:
-            # Direct tool command like /weather, /search
+            # Direct tool command like /search
             tool_name = command_name
             tool_args = groups[0].strip() if groups else args
 
@@ -1441,10 +1628,7 @@ Type `/help all` to see syntax for all commands.
 
         try:
             # Handle built-in tools
-            if tool_name in ("weather", "clima", "w"):
-                return await self._execute_weather_tool(tool_args, tenant_id)
-
-            elif tool_name in ("search", "buscar", "s"):
+            if tool_name in ("search", "buscar", "s"):
                 return await self._execute_search_tool(tool_args, tenant_id)
 
             elif tool_name in ("schedule", "agenda", "agendar"):
@@ -1464,46 +1648,6 @@ Type `/help all` to see syntax for all commands.
                 "message": f"❌ Tool execution failed: {str(e)}"
             }
 
-    async def _execute_weather_tool(self, location: str, tenant_id: str) -> Dict[str, Any]:
-        """Execute the weather tool."""
-        if not location:
-            return {
-                "status": "error",
-                "message": "❌ Please specify a location. Usage: /weather <city>\nExample: /weather New York"
-            }
-
-        try:
-            from agent.tools.weather_tool import WeatherTool
-
-            weather_tool = WeatherTool(db=self.db)
-
-            # Check if forecast is requested
-            is_forecast = any(word in location.lower() for word in ['forecast', 'próximos', 'next', 'previsão', 'week'])
-
-            if is_forecast:
-                # Remove forecast keywords from location
-                clean_location = location
-                for word in ['forecast', 'próximos dias', 'next days', 'previsão', 'week', 'semana']:
-                    clean_location = clean_location.replace(word, '').strip()
-                weather_data = weather_tool.get_forecast(clean_location or location, days=3)
-                result = weather_tool.format_forecast_data(weather_data)
-            else:
-                weather_data = weather_tool.get_current_weather(location)
-                result = weather_tool.format_weather_data(weather_data)
-
-            return {
-                "status": "success",
-                "action": "tool_executed",
-                "tool_name": "weather",
-                "message": f"🌤️ **Weather for {location}**\n\n{result}"
-            }
-        except Exception as e:
-            self.logger.error(f"Weather tool error: {e}")
-            return {
-                "status": "error",
-                "message": f"❌ Failed to get weather: {str(e)}"
-            }
-
     async def _execute_search_tool(self, query: str, tenant_id: str) -> Dict[str, Any]:
         """Execute the search tool."""
         if not query:
@@ -1515,7 +1659,7 @@ Type `/help all` to see syntax for all commands.
         try:
             from agent.tools.search_tool import SearchTool
 
-            search_tool = SearchTool(db=self.db)
+            search_tool = SearchTool(db=self.db, tenant_id=tenant_id)
             search_data = search_tool.search(query, count=5)
             result = search_tool.format_search_results(search_data)
 
@@ -1531,6 +1675,27 @@ Type `/help all` to see syntax for all commands.
                 "status": "error",
                 "message": f"❌ Failed to search: {str(e)}"
             }
+
+    def _parse_shell_target_and_command(self, groups: tuple, args: str) -> Tuple[str, str]:
+        """Parse /shell target and command from either legacy or current regex groups."""
+        if groups and len(groups) > 1:
+            target = groups[0].strip() if groups[0] else "default"
+            command = groups[1].strip() if groups[1] else ""
+            return target or "default", command
+
+        raw_command = args.strip() if args else ""
+        if not raw_command and groups and groups[0]:
+            raw_command = groups[0].strip()
+
+        if not raw_command:
+            return "default", ""
+
+        if ":" in raw_command:
+            target, command = raw_command.split(":", 1)
+            if target.strip() and command.strip():
+                return target.strip(), command.strip()
+
+        return "default", raw_command
 
     async def _execute_schedule_tool(
         self,
@@ -1661,20 +1826,23 @@ Type `/help all` to see syntax for all commands.
         agent_id: int
     ) -> Dict[str, Any]:
         """Execute a sandboxed tool by name."""
-        from models import SandboxedTool, SandboxedToolCommand, AgentSkill
+        from models import SandboxedTool, SandboxedToolCommand, AgentSkill, AgentSandboxedTool
+
+        # Escape LIKE wildcards to prevent matching arbitrary tools
+        escaped_name = tool_name.replace('%', '\\%').replace('_', '\\_')
 
         # First check if this is an enabled skill/tool for the agent
         # Note: AgentSkill uses skill_type (e.g., "audio_transcript") not skill_name
         skill = self.db.query(AgentSkill).filter(
             AgentSkill.agent_id == agent_id,
-            AgentSkill.skill_type.ilike(f"%{tool_name}%"),
+            AgentSkill.skill_type.ilike(f"%{escaped_name}%"),
             AgentSkill.is_enabled == True
         ).first()
 
         # Look for sandboxed tool
         tool = self.db.query(SandboxedTool).filter(
             SandboxedTool.tenant_id == tenant_id,
-            SandboxedTool.name.ilike(f"%{tool_name}%"),
+            SandboxedTool.name.ilike(f"%{escaped_name}%"),
             SandboxedTool.is_enabled == True
         ).first()
 
@@ -1689,7 +1857,21 @@ Type `/help all` to see syntax for all commands.
 
             return {
                 "status": "error",
-                "message": f"❌ Tool '{tool_name}' not found.\n\n**Available tools:**\n{tool_list}\n\n**Built-in tools:**\n• weather\n• search\n• schedule\n• flights"
+                "message": f"❌ Tool '{tool_name}' not found.\n\n**Available tools:**\n{tool_list}\n\n**Built-in tools:**\n• search\n• schedule\n• flights"
+            }
+
+        # SECURITY: Check agent-level tool assignment (not just tenant-level)
+        agent_tool_auth = self.db.query(AgentSandboxedTool).filter(
+            AgentSandboxedTool.agent_id == agent_id,
+            AgentSandboxedTool.sandboxed_tool_id == tool.id,
+            AgentSandboxedTool.is_enabled == True
+        ).first()
+
+        if not agent_tool_auth:
+            return {
+                "status": "error",
+                "message": f"Tool '{tool_name}' is not assigned to this agent",
+                "tool_name": tool_name
             }
 
         # Parse arguments intelligently
@@ -1884,8 +2066,9 @@ Type `/help all` to see syntax for all commands.
             f"{normalized_sender}@lid"
         ]
 
-        # Find active thread
+        # Find active thread (scoped to tenant for multi-tenant isolation)
         thread = self.db.query(ConversationThread).filter(
+            ConversationThread.tenant_id == tenant_id,
             ConversationThread.recipient.in_(possible_recipients),
             ConversationThread.status == 'active'
         ).first()
@@ -1927,8 +2110,9 @@ Type `/help all` to see syntax for all commands.
             f"{normalized_sender}@lid"
         ]
 
-        # Find all active threads for this user
+        # Find all active threads for this user (scoped to tenant)
         threads = self.db.query(ConversationThread).filter(
+            ConversationThread.tenant_id == tenant_id,
             ConversationThread.recipient.in_(possible_recipients),
             ConversationThread.status == 'active'
         ).order_by(ConversationThread.started_at.desc()).all()
@@ -1978,8 +2162,9 @@ Type `/help all` to see syntax for all commands.
             f"{normalized_sender}@lid"
         ]
 
-        # Find active thread
+        # Find active thread (scoped to tenant for multi-tenant isolation)
         thread = self.db.query(ConversationThread).filter(
+            ConversationThread.tenant_id == tenant_id,
             ConversationThread.recipient.in_(possible_recipients),
             ConversationThread.status == 'active'
         ).order_by(ConversationThread.last_activity_at.desc()).first()
@@ -2038,6 +2223,7 @@ Type `/help all` to see syntax for all commands.
         from models_rbac import User
 
         groups = kwargs.get("groups", ())
+        args = kwargs.get("args", "")
         tenant_id = kwargs.get("tenant_id")
         agent_id = kwargs.get("agent_id")
         sender_key = kwargs.get("sender_key")
@@ -2046,25 +2232,36 @@ Type `/help all` to see syntax for all commands.
         # MED-010 FIX: Permission check - User must have shell.execute permission
         # This ensures users without proper shell permissions cannot execute commands
         # via slash commands, even if the agent has shell skill enabled
-        if user_id:
-            user = self.db.query(User).filter(User.id == user_id).first()
-            if user and not check_permission(user, "shell.execute", self.db):
-                self.logger.warning(
-                    f"Permission denied: user {user.email} attempted /shell without shell.execute permission"
+        if not user_id:
+            self.logger.warning(
+                f"Permission denied: /shell attempted without authenticated user (channel={kwargs.get('channel')})"
+            )
+            return {
+                "status": "error",
+                "action": "permission_denied",
+                "message": (
+                    "🔒 **Permission Denied**\n\n"
+                    "Shell commands require an authenticated user with `shell.execute` permission.\n\n"
+                    "This command is not available via this channel."
                 )
-                return {
-                    "status": "error",
-                    "action": "permission_denied",
-                    "message": (
-                        "🔒 **Permission Denied**\n\n"
-                        "You need the `shell.execute` permission to run shell commands.\n\n"
-                        "Contact your administrator to request access."
-                    )
-                }
+            }
 
-        # Parse groups - pattern captures (target, command)
-        target = groups[0] if groups and groups[0] else "default"
-        command = groups[1].strip() if groups and len(groups) > 1 and groups[1] else ""
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user or not check_permission(user, "shell.execute", self.db):
+            self.logger.warning(
+                f"Permission denied: user {user.email if user else user_id} attempted /shell without shell.execute permission"
+            )
+            return {
+                "status": "error",
+                "action": "permission_denied",
+                "message": (
+                    "🔒 **Permission Denied**\n\n"
+                    "You need the `shell.execute` permission to run shell commands.\n\n"
+                    "Contact your administrator to request access."
+                )
+            }
+
+        target, command = self._parse_shell_target_and_command(groups, args)
 
         if not command:
             return {
@@ -2104,7 +2301,7 @@ Type `/help all` to see syntax for all commands.
         # Get skill config for execution mode
         skill_config = shell_skill.config or {}
         wait_for_result = skill_config.get("wait_for_result", False)  # Slash command defaults to fire-and-forget
-        default_timeout = skill_config.get("default_timeout", 60)
+        default_timeout = skill_config.get("default_timeout", 120)
 
         self.logger.info(f"Executing shell command: target={target}, command={command}, wait={wait_for_result}")
 
@@ -2130,6 +2327,27 @@ Type `/help all` to see syntax for all commands.
                     if len(output) > 1500:
                         output = output[:1500] + "\n... (truncated)"
 
+                    # BUG-510: Buffer completed shell outputs into /inject so
+                    # users can recall them later with `/inject list`.
+                    try:
+                        from agent.memory.tool_output_buffer import get_tool_output_buffer
+                        buffered_output = result.stdout or ""
+                        if result.stderr:
+                            buffered_output += ("\n[stderr]\n" + result.stderr)
+                        get_tool_output_buffer().add_tool_output(
+                            agent_id=agent_id,
+                            sender_key=sender_key,
+                            tool_name="shell",
+                            command_name=command,
+                            output=buffered_output or "(no output)",
+                            target=target,
+                            pending=False,
+                            source="shell_command",
+                            source_ref=result.command_id,
+                        )
+                    except Exception as _buf_err:
+                        self.logger.warning(f"Failed to buffer /shell result for /inject: {_buf_err}")
+
                     return {
                         "status": "success",
                         "action": "shell_executed",
@@ -2139,6 +2357,26 @@ Type `/help all` to see syntax for all commands.
                     }
                 else:
                     # Fire and forget
+                    # BUG-510: Insert a pending stub into the injection buffer so
+                    # /inject list sees the queued command immediately. The lazy
+                    # resolver in /inject pulls the real stdout once the beacon
+                    # marks the ShellCommand row as completed.
+                    try:
+                        from agent.memory.tool_output_buffer import get_tool_output_buffer
+                        get_tool_output_buffer().add_tool_output(
+                            agent_id=agent_id,
+                            sender_key=sender_key,
+                            tool_name="shell",
+                            command_name=command,
+                            output=f"Command queued; pending beacon execution (id={result.command_id}).",
+                            target=target,
+                            pending=True,
+                            source="shell_command",
+                            source_ref=result.command_id,
+                        )
+                    except Exception as _buf_err:
+                        self.logger.warning(f"Failed to buffer /shell pending stub for /inject: {_buf_err}")
+
                     return {
                         "status": "success",
                         "action": "shell_queued",
@@ -2187,7 +2425,8 @@ Type `/help all` to see syntax for all commands.
         return await service.execute_inbox(
             tenant_id=kwargs.get("tenant_id"),
             agent_id=kwargs.get("agent_id"),
-            count=count
+            count=count,
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_search(self, **kwargs) -> Dict[str, Any]:
@@ -2205,7 +2444,8 @@ Type `/help all` to see syntax for all commands.
         return await service.execute_search(
             tenant_id=kwargs.get("tenant_id"),
             agent_id=kwargs.get("agent_id"),
-            query=query
+            query=query,
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_unread(self, **kwargs) -> Dict[str, Any]:
@@ -2219,7 +2459,8 @@ Type `/help all` to see syntax for all commands.
         service = EmailCommandService(self.db)
         return await service.execute_unread(
             tenant_id=kwargs.get("tenant_id"),
-            agent_id=kwargs.get("agent_id")
+            agent_id=kwargs.get("agent_id"),
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_info(self, **kwargs) -> Dict[str, Any]:
@@ -2233,7 +2474,8 @@ Type `/help all` to see syntax for all commands.
         service = EmailCommandService(self.db)
         return await service.execute_info(
             tenant_id=kwargs.get("tenant_id"),
-            agent_id=kwargs.get("agent_id")
+            agent_id=kwargs.get("agent_id"),
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_list(self, **kwargs) -> Dict[str, Any]:
@@ -2252,7 +2494,8 @@ Type `/help all` to see syntax for all commands.
         return await service.execute_list(
             tenant_id=kwargs.get("tenant_id"),
             agent_id=kwargs.get("agent_id"),
-            filter_type=filter_type
+            filter_type=filter_type,
+            sender_key=kwargs.get("sender_key")
         )
 
     async def _handle_email_read(self, **kwargs) -> Dict[str, Any]:
@@ -2270,49 +2513,8 @@ Type `/help all` to see syntax for all commands.
         return await service.execute_read(
             tenant_id=kwargs.get("tenant_id"),
             agent_id=kwargs.get("agent_id"),
-            identifier=identifier
-        )
-
-    # =========================================================================
-    # Weather Command Handlers
-    # =========================================================================
-
-    async def _handle_weather(self, **kwargs) -> Dict[str, Any]:
-        """
-        Handle /weather <location> command.
-
-        Get current weather (programmatic, zero AI tokens).
-        """
-        from services.weather_command_service import WeatherCommandService
-
-        groups = kwargs.get("groups", ())
-        location = groups[0] if groups else ""
-
-        service = WeatherCommandService(self.db)
-        return await service.execute_current(
-            tenant_id=kwargs.get("tenant_id"),
-            agent_id=kwargs.get("agent_id"),
-            location=location
-        )
-
-    async def _handle_weather_forecast(self, **kwargs) -> Dict[str, Any]:
-        """
-        Handle /weather forecast <location> [days] command.
-
-        Get weather forecast (programmatic, zero AI tokens).
-        """
-        from services.weather_command_service import WeatherCommandService
-
-        groups = kwargs.get("groups", ())
-        location = groups[0] if groups else ""
-        days = int(groups[1]) if len(groups) > 1 and groups[1] else 3
-
-        service = WeatherCommandService(self.db)
-        return await service.execute_forecast(
-            tenant_id=kwargs.get("tenant_id"),
-            agent_id=kwargs.get("agent_id"),
-            location=location,
-            days=days
+            identifier=identifier,
+            sender_key=kwargs.get("sender_key")
         )
 
     # =========================================================================

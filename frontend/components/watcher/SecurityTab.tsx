@@ -14,7 +14,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api, SentinelLog, SentinelStats } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
-import { SearchIcon, AlertTriangleIcon, ShieldIcon, CheckCircleIcon, ChartBarIcon, LockIcon, UnlockIcon, EyeIcon } from '@/components/ui/icons'
+import { SearchIcon, AlertTriangleIcon, ShieldIcon, CheckCircleIcon, ChartBarIcon, LockIcon, UnlockIcon, EyeIcon, BrainIcon, TerminalIcon, SyringeIcon, BotIcon } from '@/components/ui/icons'
 
 interface Agent {
   id: number
@@ -85,6 +85,7 @@ export default function SecurityTab() {
     switch (detectionType) {
       case 'shell_malicious':
         return 'bg-red-500/20 text-red-400 border-red-500/50'
+      case 'memory_poisoning':
       case 'prompt_injection':
       case 'agent_takeover':
         return 'bg-orange-500/20 text-orange-400 border-orange-500/50'
@@ -92,6 +93,40 @@ export default function SecurityTab() {
         return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50'
       default:
         return 'bg-gray-500/20 text-gray-400 border-gray-500/50'
+    }
+  }
+
+  const getThreatTypeIcon = (type: string) => {
+    switch (type) {
+      case 'shell_malicious':
+        return <TerminalIcon size={14} />
+      case 'memory_poisoning':
+        return <BrainIcon size={14} />
+      case 'prompt_injection':
+        return <SyringeIcon size={14} />
+      case 'agent_takeover':
+        return <BotIcon size={14} />
+      case 'poisoning':
+        return <AlertTriangleIcon size={14} />
+      default:
+        return <ShieldIcon size={14} />
+    }
+  }
+
+  const getThreatTypeLabel = (type: string): string => {
+    switch (type) {
+      case 'shell_malicious':
+        return 'Shell'
+      case 'memory_poisoning':
+        return 'MemGuard'
+      case 'prompt_injection':
+        return 'Injection'
+      case 'agent_takeover':
+        return 'Takeover'
+      case 'poisoning':
+        return 'Poisoning'
+      default:
+        return type.replace('_', ' ')
     }
   }
 
@@ -265,15 +300,23 @@ export default function SecurityTab() {
 
       {/* Detection Type Breakdown */}
       {stats && Object.keys(stats.by_detection_type).length > 0 && (
-        <div className="glass-card rounded-xl p-6">
-          <h3 className="text-lg font-display font-semibold text-white mb-4 flex items-center gap-2">
-            <ChartBarIcon size={20} className="text-tsushin-indigo" /> Threats by Type
-          </h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="glass-card rounded-xl px-6 py-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h3 className="text-sm font-display font-semibold text-tsushin-slate flex items-center gap-1.5 mr-1">
+              <ChartBarIcon size={16} className="text-tsushin-indigo" /> Threats by Type
+            </h3>
             {Object.entries(stats.by_detection_type).map(([type, count]) => (
-              <div key={type} className={`rounded-lg border p-4 ${getSeverityColor(type)}`}>
-                <p className="text-sm capitalize">{type.replace('_', ' ')}</p>
-                <p className="text-2xl font-bold mt-1">{count}</p>
+              <div
+                key={type}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 ${
+                  type === 'memory_poisoning'
+                    ? 'bg-purple-500/20 text-purple-400 border-purple-500/50'
+                    : getSeverityColor(type)
+                }`}
+              >
+                {getThreatTypeIcon(type)}
+                <span className="text-xs font-medium">{getThreatTypeLabel(type)}</span>
+                <span className="text-sm font-bold">{count}</span>
               </div>
             ))}
           </div>
@@ -307,6 +350,7 @@ export default function SecurityTab() {
               <option value="agent_takeover">Agent Takeover</option>
               <option value="poisoning">Poisoning</option>
               <option value="shell_malicious">Shell Malicious</option>
+              <option value="memory_poisoning">Memory Poisoning</option>
             </select>
           </div>
 
@@ -405,6 +449,13 @@ export default function SecurityTab() {
                           </span>
                         )
                       })()}
+                      {/* MemGuard Badge */}
+                      {log.detection_type === 'memory_poisoning' && (
+                        <span className="px-2 py-0.5 text-xs rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 flex items-center gap-1">
+                          <BrainIcon size={10} />
+                          <span>MemGuard</span>
+                        </span>
+                      )}
                       {/* Detection Mode indicator */}
                       {log.detection_mode_used && log.detection_mode_used !== 'block' && (
                         <span className="px-2 py-0.5 text-xs rounded-full bg-purple-600/30 text-purple-300 border border-purple-500/50">
@@ -485,6 +536,12 @@ export default function SecurityTab() {
                     </span>
                   )
                 })()}
+                {selectedLog.detection_type === 'memory_poisoning' && (
+                  <span className="px-3 py-1 text-sm rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 flex items-center gap-1">
+                    <BrainIcon size={12} />
+                    <span>MemGuard</span>
+                  </span>
+                )}
                 {selectedLog.detection_mode_used && (
                   <span className="px-3 py-1 text-sm rounded-full bg-purple-600/30 text-purple-300 border border-purple-500/50">
                     Mode: {selectedLog.detection_mode_used}

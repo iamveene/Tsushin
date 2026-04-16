@@ -9,9 +9,11 @@ Provides REST API endpoints for:
 """
 
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy.orm import Session
@@ -23,7 +25,7 @@ from models import (
     Agent,
 )
 from models_rbac import User
-from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from auth_dependencies import TenantContext, get_tenant_context, require_permission, get_current_user_required
 from services.sentinel_service import SentinelService
 from services.sentinel_detections import DETECTION_REGISTRY, get_detection_types
 
@@ -60,6 +62,7 @@ class SentinelConfigResponse(BaseModel):
     """Response model for Sentinel configuration."""
     id: int
     tenant_id: Optional[str]
+    enabled: bool
     is_enabled: bool
     enable_prompt_analysis: bool
     enable_tool_analysis: bool
@@ -68,6 +71,9 @@ class SentinelConfigResponse(BaseModel):
     detect_agent_takeover: bool
     detect_poisoning: bool
     detect_shell_malicious_intent: bool
+    detect_memory_poisoning: bool
+    detect_browser_ssrf: bool
+    detect_vector_store_poisoning: bool
     aggressiveness_level: int
     llm_provider: str
     llm_model: str
@@ -103,6 +109,7 @@ class SentinelConfigResponse(BaseModel):
 
 class SentinelConfigUpdate(BaseModel):
     """Request model for updating Sentinel configuration."""
+    enabled: Optional[bool] = None
     is_enabled: Optional[bool] = None
     enable_prompt_analysis: Optional[bool] = None
     enable_tool_analysis: Optional[bool] = None
@@ -111,6 +118,9 @@ class SentinelConfigUpdate(BaseModel):
     detect_agent_takeover: Optional[bool] = None
     detect_poisoning: Optional[bool] = None
     detect_shell_malicious_intent: Optional[bool] = None
+    detect_memory_poisoning: Optional[bool] = None
+    detect_browser_ssrf: Optional[bool] = None
+    detect_vector_store_poisoning: Optional[bool] = None
     aggressiveness_level: Optional[int] = Field(None, ge=0, le=3)
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
@@ -261,6 +271,7 @@ class LLMTestResponse(BaseModel):
 
 @router.get("/config", response_model=SentinelConfigResponse)
 async def get_sentinel_config(
+    current_user: User = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -289,11 +300,15 @@ async def get_sentinel_config(
         config.agent_takeover_prompt,
         config.poisoning_prompt,
         config.shell_intent_prompt,
+        getattr(config, 'memory_poisoning_prompt', None),
+        getattr(config, 'browser_ssrf_prompt', None),
+        getattr(config, 'vector_store_poisoning_prompt', None),
     ])
 
     return SentinelConfigResponse(
         id=config.id,
         tenant_id=config.tenant_id,
+        enabled=config.is_enabled,
         is_enabled=config.is_enabled,
         enable_prompt_analysis=config.enable_prompt_analysis,
         enable_tool_analysis=config.enable_tool_analysis,
@@ -302,6 +317,9 @@ async def get_sentinel_config(
         detect_agent_takeover=config.detect_agent_takeover,
         detect_poisoning=config.detect_poisoning,
         detect_shell_malicious_intent=config.detect_shell_malicious_intent,
+        detect_memory_poisoning=config.detect_memory_poisoning,
+        detect_browser_ssrf=getattr(config, 'detect_browser_ssrf', True),
+        detect_vector_store_poisoning=getattr(config, 'detect_vector_store_poisoning', True),
         aggressiveness_level=config.aggressiveness_level,
         llm_provider=config.llm_provider,
         llm_model=config.llm_model,
@@ -362,6 +380,9 @@ async def update_sentinel_config(
             detect_agent_takeover=system_config.detect_agent_takeover,
             detect_poisoning=system_config.detect_poisoning,
             detect_shell_malicious_intent=system_config.detect_shell_malicious_intent,
+            detect_memory_poisoning=system_config.detect_memory_poisoning,
+            detect_browser_ssrf=getattr(system_config, 'detect_browser_ssrf', True),
+            detect_vector_store_poisoning=getattr(system_config, 'detect_vector_store_poisoning', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -383,8 +404,10 @@ async def update_sentinel_config(
         )
         db.add(config)
 
-    # Apply updates
+    # Accept both legacy `enabled` and canonical `is_enabled`.
     update_data = update.dict(exclude_unset=True)
+    if "enabled" in update_data and "is_enabled" not in update_data:
+        update_data["is_enabled"] = update_data.pop("enabled")
     for field, value in update_data.items():
         if hasattr(config, field):
             setattr(config, field, value)
@@ -401,11 +424,15 @@ async def update_sentinel_config(
         config.agent_takeover_prompt,
         config.poisoning_prompt,
         config.shell_intent_prompt,
+        getattr(config, 'memory_poisoning_prompt', None),
+        getattr(config, 'browser_ssrf_prompt', None),
+        getattr(config, 'vector_store_poisoning_prompt', None),
     ])
 
     return SentinelConfigResponse(
         id=config.id,
         tenant_id=config.tenant_id,
+        enabled=config.is_enabled,
         is_enabled=config.is_enabled,
         enable_prompt_analysis=config.enable_prompt_analysis,
         enable_tool_analysis=config.enable_tool_analysis,
@@ -414,6 +441,9 @@ async def update_sentinel_config(
         detect_agent_takeover=config.detect_agent_takeover,
         detect_poisoning=config.detect_poisoning,
         detect_shell_malicious_intent=config.detect_shell_malicious_intent,
+        detect_memory_poisoning=config.detect_memory_poisoning,
+        detect_browser_ssrf=getattr(config, 'detect_browser_ssrf', True),
+        detect_vector_store_poisoning=getattr(config, 'detect_vector_store_poisoning', True),
         aggressiveness_level=config.aggressiveness_level,
         llm_provider=config.llm_provider,
         llm_model=config.llm_model,
@@ -444,6 +474,7 @@ async def update_sentinel_config(
 @router.get("/config/agent/{agent_id}", response_model=Optional[SentinelAgentConfigResponse])
 async def get_agent_sentinel_config(
     agent_id: int,
+    current_user: User = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -454,7 +485,7 @@ async def get_agent_sentinel_config(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     override = db.query(SentinelAgentConfig).filter(
         SentinelAgentConfig.agent_id == agent_id
@@ -491,7 +522,7 @@ async def update_agent_sentinel_config(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Get or create agent override
     override = db.query(SentinelAgentConfig).filter(
@@ -540,7 +571,7 @@ async def delete_agent_sentinel_config(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     deleted = db.query(SentinelAgentConfig).filter(
         SentinelAgentConfig.agent_id == agent_id
@@ -563,6 +594,7 @@ async def get_sentinel_logs(
     detection_type: Optional[str] = Query(None),
     analysis_type: Optional[str] = Query(None, description="Filter by analysis type: prompt, tool, shell"),
     agent_id: Optional[int] = Query(None),
+    current_user: User = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -607,6 +639,7 @@ async def get_sentinel_logs(
 @router.get("/stats", response_model=SentinelStatsResponse)
 async def get_sentinel_stats(
     days: int = Query(7, ge=1, le=90),
+    current_user: User = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -685,6 +718,7 @@ async def test_sentinel_analysis(
 
 @router.get("/prompts", response_model=List[SentinelPromptResponse])
 async def get_sentinel_prompts(
+    _perm: None = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -710,6 +744,10 @@ async def get_sentinel_prompts(
                 "agent_takeover": config.agent_takeover_prompt,
                 "poisoning": config.poisoning_prompt,
                 "shell_malicious": config.shell_intent_prompt,
+                "memory_poisoning": getattr(config, 'memory_poisoning_prompt', None),
+                "browser_ssrf": getattr(config, 'browser_ssrf_prompt', None),
+                "agent_escalation": getattr(config, 'agent_escalation_prompt', None),
+                "vector_store_poisoning": getattr(config, 'vector_store_poisoning_prompt', None),
             }
             custom_prompt = prompt_map.get(detection_type)
 
@@ -764,6 +802,9 @@ async def update_sentinel_prompt(
             detect_agent_takeover=system_config.detect_agent_takeover,
             detect_poisoning=system_config.detect_poisoning,
             detect_shell_malicious_intent=system_config.detect_shell_malicious_intent,
+            detect_memory_poisoning=system_config.detect_memory_poisoning,
+            detect_browser_ssrf=getattr(system_config, 'detect_browser_ssrf', True),
+            detect_vector_store_poisoning=getattr(system_config, 'detect_vector_store_poisoning', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -777,10 +818,14 @@ async def update_sentinel_prompt(
         "agent_takeover": "agent_takeover_prompt",
         "poisoning": "poisoning_prompt",
         "shell_malicious": "shell_intent_prompt",
+        "memory_poisoning": "memory_poisoning_prompt",
+        "browser_ssrf": "browser_ssrf_prompt",
+        "agent_escalation": "agent_escalation_prompt",
+        "vector_store_poisoning": "vector_store_poisoning_prompt",
     }
 
     field_name = prompt_field_map.get(detection_type)
-    if field_name:
+    if field_name and hasattr(config, field_name):
         setattr(config, field_name, update.prompt)  # None = reset to default
 
     config.updated_by = current_user.id
@@ -812,10 +857,12 @@ LLM_MODELS = {
         "gemini-2.0-flash-lite",
     ],
     "anthropic": [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
         "claude-sonnet-4-20250514",
         "claude-3-5-sonnet-20241022",
         "claude-3-opus-20240229",
-        "claude-3-haiku-20240307",
     ],
     "openai": [
         "gpt-4o",
@@ -835,18 +882,51 @@ LLM_MODELS = {
         "meta-llama/llama-3.1-8b-instruct",
         "mistralai/mistral-7b-instruct",
     ],
-    "ollama": [
-        "llama3.2:latest",
-        "llama3.1",
-        "mistral",
-        "phi3",
-    ],
+    "ollama": [],  # Populated dynamically from running Ollama instance
 }
 
 
+async def _get_ollama_models() -> List[str]:
+    """Fetch available models from the configured Ollama instance."""
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+    try:
+        from models import Config
+        from db import get_global_engine
+        from sqlalchemy.orm import sessionmaker
+        engine = get_global_engine()
+        if engine:
+            _Session = sessionmaker(bind=engine)
+            db = _Session()
+            try:
+                config = db.query(Config).first()
+                if config and config.ollama_base_url:
+                    ollama_base_url = config.ollama_base_url
+            finally:
+                db.close()
+    except Exception:
+        pass
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{ollama_base_url.rstrip('/')}/api/tags")
+            if resp.status_code == 200:
+                data = resp.json()
+                return sorted(
+                    m["name"] for m in data.get("models", [])
+                    if isinstance(m, dict) and "name" in m
+                )
+    except Exception:
+        pass
+    return []
+
+
 @router.get("/llm/providers", response_model=List[LLMProviderResponse])
-async def get_llm_providers():
+async def get_llm_providers(
+    current_user: User = Depends(get_current_user_required),
+):
     """Get available LLM providers for Sentinel analysis."""
+    ollama_models = await _get_ollama_models()
+
     return [
         LLMProviderResponse(
             name="gemini",
@@ -871,16 +951,22 @@ async def get_llm_providers():
         LLMProviderResponse(
             name="ollama",
             display_name="Ollama (Local)",
-            models=LLM_MODELS["ollama"],
+            models=ollama_models,
         ),
     ]
 
 
 @router.get("/llm/models/{provider}")
-async def get_llm_models(provider: str):
+async def get_llm_models(
+    provider: str,
+    current_user: User = Depends(get_current_user_required),
+):
     """Get available models for a specific LLM provider."""
     if provider not in LLM_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    if provider == "ollama":
+        return {"provider": provider, "models": await _get_ollama_models()}
 
     return {"provider": provider, "models": LLM_MODELS[provider]}
 
@@ -899,10 +985,14 @@ async def test_llm_connection(
     start_time = time.time()
 
     try:
+        from analytics.token_tracker import TokenTracker
+        tracker = TokenTracker(db, ctx.tenant_id)
+
         client = AIClient(
             provider=request.provider,
             model_name=request.model,
             db=db,
+            token_tracker=tracker,
             temperature=0.1,
             max_tokens=50,
             tenant_id=ctx.tenant_id,
@@ -955,6 +1045,7 @@ class MemoryCleanupResponse(BaseModel):
 async def cleanup_poisoned_memory(
     agent_id: Optional[int] = Query(None, description="Optional: limit cleanup to specific agent"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write")),
     tenant: TenantContext = Depends(get_tenant_context),
 ):
     """
@@ -985,8 +1076,8 @@ async def cleanup_poisoned_memory(
             **stats
         )
     except Exception as e:
-        logger.error(f"Memory cleanup failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+        logger.exception(f"Memory cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail="Cleanup failed. Check server logs for details.")
 
 
 # =============================================================================
@@ -994,7 +1085,9 @@ async def cleanup_poisoned_memory(
 # =============================================================================
 
 @router.get("/detection-types")
-async def get_detection_types_endpoint():
+async def get_detection_types_endpoint(
+    current_user: User = Depends(get_current_user_required),
+):
     """Get all available detection types with metadata."""
     return {
         detection_type: {

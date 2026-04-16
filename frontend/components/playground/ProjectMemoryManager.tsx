@@ -169,7 +169,7 @@ export default function ProjectMemoryManager({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-4xl max-h-[80vh] bg-[#14141f] border border-white/10 rounded-2xl overflow-hidden shadow-2xl"
+        className="w-full max-w-4xl max-h-[80vh] bg-tsushin-ink border border-white/10 rounded-2xl overflow-hidden shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}

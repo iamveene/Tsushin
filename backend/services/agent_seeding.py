@@ -86,7 +86,7 @@ def seed_default_agents(
         tenant_id: Tenant ID to assign agents to
         user_id: User ID who created the tenant (owner)
         db: Database session
-        model_provider: AI provider (gemini, openai, anthropic)
+        model_provider: AI provider (gemini, openai, anthropic, groq, grok)
         model_name: Model name to use for agents
 
     Returns:
@@ -105,14 +105,14 @@ Your role:
 - Assist users with information, tasks, and problem-solving
 - Provide accurate and helpful responses
 - Be friendly, professional, and concise
-- Use tools when needed (search, weather, etc.)
+- Use tools when needed (search, etc.)
 
 Communication style:
 - Clear and concise
 - Professional but approachable
 - Ask clarifying questions when needed
 - Provide actionable information""",
-            "skills": ["web_search", "weather", "knowledge_sharing", "image", "automation"],
+            "skills": ["web_search", "knowledge_sharing", "image", "automation"],
             "channels": ["playground", "whatsapp", "telegram"],
             "trigger_dm_enabled": True,
             "trigger_group_filters": [],
@@ -436,7 +436,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Initialize database
-    engine = get_engine()
+    import settings
+    engine = get_engine(settings.DATABASE_URL)
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
 

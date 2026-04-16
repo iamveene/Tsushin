@@ -84,6 +84,7 @@ class IntegrationResponse(BaseModel):
     name: str
     is_active: bool
     health_status: str
+    health_status_reason: Optional[str] = None
     tenant_id: Optional[str] = None
     workspace_gid: Optional[str] = None
     workspace_name: Optional[str] = None
@@ -227,7 +228,7 @@ def verify_integration_access(
     Phase 7.9.2: Checks tenant isolation.
     """
     if not ctx.can_access_resource(integration.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this integration")
+        raise HTTPException(status_code=404, detail="Integration not found")
 
 
 # ============================================================================
@@ -260,7 +261,7 @@ async def asana_oauth_authorize(
         )
     except Exception as e:
         logger.error(f"OAuth authorize failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/asana/oauth/callback", response_model=OAuthCallbackResponse)
@@ -299,7 +300,7 @@ async def asana_oauth_callback(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"OAuth callback error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/asana/oauth/disconnect/{integration_id}")
@@ -338,7 +339,7 @@ async def asana_oauth_disconnect(
         raise
     except Exception as e:
         logger.error(f"Disconnect failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ============================================================================
@@ -373,13 +374,22 @@ async def list_integrations(
     query = ctx.filter_by_tenant(query, HubIntegration.tenant_id)
 
     if active_only:
-        query = query.filter(HubIntegration.is_active == True)
+        # Also include unavailable integrations (need re-auth) so the UI can show them
+        from sqlalchemy import or_
+        query = query.filter(or_(
+            HubIntegration.is_active == True,
+            HubIntegration.health_status == "unavailable"
+        ))
 
     hub_integrations = query.all()
     logger.info(f"[list_integrations] Found {len(hub_integrations)} integrations: {[(h.id, h.type, h.tenant_id) for h in hub_integrations]}")
 
     integrations = []
     for hub in hub_integrations:
+        # Skip unsupported integration types (e.g., shell probes)
+        if hub.type not in ('asana', 'calendar', 'gmail'):
+            continue
+
         # Get type-specific data by checking the type
         asana = None
         calendar = None
@@ -437,6 +447,7 @@ async def list_integrations(
             name=hub.name,
             is_active=hub.is_active,
             health_status=hub.health_status,
+            health_status_reason=getattr(hub, 'health_status_reason', None),
             tenant_id=hub.tenant_id,
             workspace_gid=asana.workspace_gid if asana else None,
             workspace_name=asana.workspace_name if asana else None,
@@ -478,7 +489,7 @@ async def asana_health_check(
         raise
     except Exception as e:
         logger.error(f"Health check failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if service:
             await service.close()
@@ -523,7 +534,7 @@ async def asana_list_tools(
         raise
     except Exception as e:
         logger.error(f"List tools failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if service:
             await service.close()
@@ -565,7 +576,7 @@ async def asana_execute_tool(
         raise
     except Exception as e:
         logger.error(f"Tool execution failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if service:
             await service.close()

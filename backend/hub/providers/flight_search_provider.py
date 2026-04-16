@@ -27,9 +27,10 @@ class FlightSearchRequest:
     currency: str = "USD"
     max_results: int = 5
     prefer_direct: bool = False
+    sort_by: str = "best"          # "best" (Google algorithm) or "cheapest" (price ascending)
 
     def __post_init__(self):
-        """Validate request parameters"""
+        """Validate and normalize request parameters."""
         self.origin = self.origin.upper()
         self.destination = self.destination.upper()
 
@@ -41,6 +42,16 @@ class FlightSearchRequest:
 
         if self.travel_class not in ["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"]:
             raise ValueError("Invalid travel class")
+
+        if self.sort_by not in ("best", "cheapest"):
+            raise ValueError("sort_by must be 'best' or 'cheapest'")
+
+        # BUG-316: Defensively strip quotes/whitespace from date strings.
+        # LLM-extracted dates may arrive as "'2026-04-07'" or '"2026-04-07"'.
+        if self.departure_date:
+            self.departure_date = self.departure_date.strip().strip("'\"`").strip()
+        if self.return_date:
+            self.return_date = self.return_date.strip().strip("'\"`").strip()
 
 
 @dataclass
@@ -233,8 +244,10 @@ class FlightSearchProvider(ABC):
         request = response.search_request
         is_round_trip = request.return_date is not None
 
+        sort_label = " - Cheapest First" if response.search_request.sort_by == "cheapest" else ""
+
         if not response.offers:
-            output = [f"✈️ **Flight Search Results** (via {response.provider.title()})\n"]
+            output = [f"✈️ **Flight Search Results{sort_label}** (via {response.provider.title()})\n"]
             output.append(
                 f"**Route:** {request.origin} ↔ {request.destination}"
                 if is_round_trip
@@ -249,7 +262,7 @@ class FlightSearchProvider(ABC):
             output.append(f"**🔗 View on Google Flights:** {self._generate_google_flights_url(request)}")
             return "\n".join(output)
 
-        output = [f"✈️ **Flight Search Results** (via {response.provider.title()})\n"]
+        output = [f"✈️ **Flight Search Results{sort_label}** (via {response.provider.title()})\n"]
         output.append(f"**Route:** {request.origin} ↔ {request.destination}" if is_round_trip else f"**Route:** {request.origin} → {request.destination}")
         output.append(f"**Departure:** {request.departure_date}")
 
@@ -257,7 +270,8 @@ class FlightSearchProvider(ABC):
             output.append(f"**Return:** {request.return_date}")
 
         output.append(f"**Passengers:** {request.adults} adult(s)")
-        output.append(f"\nFound {len(response.offers)} option(s):\n")
+        sort_desc = "sorted by price" if response.search_request.sort_by == "cheapest" else "sorted by best match"
+        output.append(f"\nFound {len(response.offers)} option(s) ({sort_desc}):\n")
 
         for idx, offer in enumerate(response.offers[:request.max_results], 1):
             outbound_stops_text = "Direct" if offer.stops == 0 else f"{offer.stops} stop(s)"
@@ -315,7 +329,8 @@ class FlightSearchProvider(ABC):
         # Add Google Flights link
         google_flights_url = self._generate_google_flights_url(request)
         output.append("\n---")
-        output.append(f"**🔗 View on Google Flights:** {google_flights_url}")
+        sort_note = " (click 'Price' tab for cheapest)" if request.sort_by == "cheapest" else ""
+        output.append(f"**🔗 View on Google Flights{sort_note}:** {google_flights_url}")
 
         return "\n".join(output)
 

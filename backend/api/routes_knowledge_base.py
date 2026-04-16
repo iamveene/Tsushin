@@ -3,11 +3,14 @@ Phase 5.0: Knowledge Base - API Routes
 REST API endpoints for managing agent document knowledge base.
 """
 
+import io
 import logging
 import os
 import re
 import tempfile
+import zipfile
 from typing import List
+import filetype as ft
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -16,7 +19,7 @@ from pydantic import BaseModel
 from models import AgentKnowledge, KnowledgeChunk, Agent
 from models_rbac import User
 from agent.knowledge.knowledge_service import KnowledgeService
-from auth_dependencies import get_current_user_required, get_tenant_context, TenantContext
+from auth_dependencies import get_current_user_required, get_tenant_context, TenantContext, require_permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -157,7 +160,8 @@ async def upload_knowledge(
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.write")),
 ):
     """
     Upload a document to the agent's knowledge base (requires authentication).
@@ -173,7 +177,7 @@ async def upload_knowledge(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Sanitize filename to prevent path traversal attacks
     safe_filename = secure_filename(file.filename or "document")
@@ -209,6 +213,38 @@ async def upload_knowledge(
                 detail=f"File too large. Maximum size is {MAX_FILE_SIZE_BYTES // (1024*1024)} MB"
             )
 
+        # SEC-019: Validate actual file content via magic bytes (prevent extension spoofing)
+        # txt/csv/json have no reliable magic bytes — extension check is sufficient for those
+        MIME_MAP = {
+            ".pdf": "application/pdf",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        expected_mime = MIME_MAP.get(file_ext)
+        if expected_mime is not None:
+            kind = ft.guess(content)
+            if kind is None or kind.mime != expected_mime:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File content does not match declared type '{file_ext}'"
+                )
+
+        # SEC-019: ZIP bomb protection for DOCX (DOCX is a ZIP-based format)
+        if file_ext == ".docx":
+            MAX_UNCOMPRESSED = 100 * 1024 * 1024  # 100 MB uncompressed limit
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                    total_uncompressed = sum(info.file_size for info in zf.infolist())
+                    if total_uncompressed > MAX_UNCOMPRESSED:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="DOCX file exceeds maximum uncompressed size limit"
+                        )
+            except zipfile.BadZipFile:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid DOCX file (bad ZIP structure)"
+                )
+
         # Save uploaded file to temporary location
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
             tmp_file.write(content)
@@ -228,7 +264,7 @@ async def upload_knowledge(
             background_tasks.add_task(service.process_document, knowledge.id)
         else:
             # Process immediately if no background tasks available
-            service.process_document(knowledge.id)
+            await service.process_document(knowledge.id)
 
         # Clean up temporary file
         try:
@@ -238,16 +274,19 @@ async def upload_knowledge(
 
         return KnowledgeResponse.from_orm(knowledge)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error uploading knowledge: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/agents/{agent_id}/knowledge-base", response_model=List[KnowledgeResponse])
 def list_knowledge(
     agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get all knowledge documents for an agent (requires authentication)."""
     # Verify agent exists and user has access
@@ -255,7 +294,7 @@ def list_knowledge(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge_list = service.get_agent_knowledge(agent_id)
@@ -267,7 +306,8 @@ def list_knowledge(
 def get_knowledge_stats(
     agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get statistics about agent's knowledge base (requires authentication)."""
     # Verify agent exists and user has access
@@ -275,7 +315,7 @@ def get_knowledge_stats(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     return service.get_knowledge_stats(agent_id)
@@ -286,7 +326,8 @@ def get_knowledge_detail(
     agent_id: int,
     knowledge_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get details of a specific knowledge document (requires authentication)."""
     # Verify agent exists and user has access
@@ -294,7 +335,7 @@ def get_knowledge_detail(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -303,7 +344,7 @@ def get_knowledge_detail(
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
     if knowledge.agent_id != agent_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Knowledge not found")
 
     return KnowledgeResponse.from_orm(knowledge)
 
@@ -313,7 +354,8 @@ def get_knowledge_chunks(
     agent_id: int,
     knowledge_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get all chunks for a knowledge document (requires authentication)."""
     # Verify agent exists and user has access
@@ -321,7 +363,7 @@ def get_knowledge_chunks(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -330,7 +372,7 @@ def get_knowledge_chunks(
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
     if knowledge.agent_id != agent_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Knowledge not found")
 
     chunks = service.get_knowledge_chunks(knowledge_id)
     return [KnowledgeChunkResponse.from_orm(c) for c in chunks]
@@ -341,7 +383,8 @@ def delete_knowledge(
     agent_id: int,
     knowledge_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.delete")),
 ):
     """Delete a knowledge document and all its chunks (requires authentication)."""
     # Verify agent exists and user has access
@@ -349,7 +392,7 @@ def delete_knowledge(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -358,7 +401,7 @@ def delete_knowledge(
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
     if knowledge.agent_id != agent_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Knowledge not found")
 
     success = service.delete_knowledge(knowledge_id)
 
@@ -369,11 +412,12 @@ def delete_knowledge(
 
 
 @router.post("/agents/{agent_id}/knowledge-base/search", response_model=List[SearchResult])
-def search_knowledge(
+async def search_knowledge(
     agent_id: int,
     request: SearchRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """
     Search agent's knowledge base using semantic similarity (requires authentication).
@@ -385,10 +429,10 @@ def search_knowledge(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
-    results = service.search_knowledge(
+    results = await service.search_knowledge(
         agent_id=agent_id,
         query=request.query,
         max_results=request.max_results,
@@ -404,7 +448,8 @@ def reprocess_knowledge(
     knowledge_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.write")),
 ):
     """Reprocess a knowledge document (re-chunk and re-embed, requires authentication)."""
     # Verify agent exists and user has access
@@ -412,7 +457,7 @@ def reprocess_knowledge(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied to agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -421,7 +466,7 @@ def reprocess_knowledge(
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
     if knowledge.agent_id != agent_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Knowledge not found")
 
     # Delete existing chunks
     chunks = service.get_knowledge_chunks(knowledge_id)

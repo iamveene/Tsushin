@@ -14,10 +14,12 @@ interface UsePlaygroundWebSocketOptions {
   onMessageComplete: (message: PlaygroundMessage) => void
   onThreadCreated?: (threadId: number, title: string) => void
   onError: (error: string) => void
+  // Message Queue event handlers
+  onQueueProcessingStarted?: (queueId: number) => void
+  onQueueMessageCompleted?: (queueId: number, result: any) => void
 }
 
 export function usePlaygroundWebSocket(
-  token: string | null,
   options: UsePlaygroundWebSocketOptions
 ) {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected')
@@ -27,15 +29,23 @@ export function usePlaygroundWebSocket(
   const streamingMetadataRef = useRef<any>(null)
   const streamStartTimeRef = useRef<number>(0)
 
+  // BUG-376: Use refs for callbacks to avoid stale closures in WebSocket event handlers.
+  // The useEffect that registers ws.on() handlers runs only when options.enabled changes,
+  // but the callbacks passed in options change on every parent render. Without refs,
+  // the event handlers capture the initial callback references and never see updates,
+  // causing setMessages to operate on stale state snapshots.
+  const optionsRef = useRef(options)
+  useEffect(() => { optionsRef.current = options }, [options])
+
   // Initialize WebSocket connection
   useEffect(() => {
-    if (!token || !options.enabled) {
-      console.log('[WebSocket Hook] Skipping init - token:', !!token, 'enabled:', options.enabled)
+    if (!options.enabled) {
+      console.log('[WebSocket Hook] Skipping init - enabled:', options.enabled)
       return
     }
 
-    console.log('[WebSocket Hook] Initializing connection with token')
-    const ws = new PlaygroundWebSocket(token)
+    console.log('[WebSocket Hook] Initializing connection (cookie auth)')
+    const ws = new PlaygroundWebSocket()
     wsRef.current = ws
 
     // Connection state tracking
@@ -56,7 +66,7 @@ export function usePlaygroundWebSocket(
       streamStartTimeRef.current = Date.now()
 
       // Notify parent with thinking indicator
-      options.onStreamingMessage({
+      optionsRef.current.onStreamingMessage({
         role: 'assistant',
         content: '',
         timestamp: new Date().toISOString(),
@@ -65,8 +75,8 @@ export function usePlaygroundWebSocket(
 
     ws.on('thread_created', (message) => {
       console.log('[WebSocket Hook] Thread created:', message)
-      if (options.onThreadCreated && message.thread_id) {
-        options.onThreadCreated(message.thread_id, message.title)
+      if (optionsRef.current.onThreadCreated && message.thread_id) {
+        optionsRef.current.onThreadCreated(message.thread_id, message.title)
       }
     })
 
@@ -75,7 +85,7 @@ export function usePlaygroundWebSocket(
         streamingMessageRef.current += message.content
 
         // Notify parent with accumulated content
-        options.onStreamingMessage({
+        optionsRef.current.onStreamingMessage({
           role: 'assistant',
           content: streamingMessageRef.current,
           timestamp: new Date().toISOString(),
@@ -93,6 +103,8 @@ export function usePlaygroundWebSocket(
         content: streamingMessageRef.current,
         timestamp: message.timestamp || new Date().toISOString(),
         message_id: message.message_id || `msg_${Date.now()}`,
+        image_url: message.image_url || undefined,  // Phase 6: Image generation
+        image_urls: message.image_urls || undefined,  // Phase 6: All generated images
         metadata: {
           tokenCount: message.token_usage?.total,
           duration,
@@ -107,7 +119,7 @@ export function usePlaygroundWebSocket(
       }
 
       // Notify parent of complete message
-      options.onMessageComplete(completedMessage)
+      optionsRef.current.onMessageComplete(completedMessage)
 
       // Reset streaming state
       streamingMessageRef.current = ''
@@ -117,7 +129,7 @@ export function usePlaygroundWebSocket(
     ws.on('error', (message) => {
       console.error('[WebSocket Hook] Error:', message)
       setIsStreaming(false)
-      options.onError(message.error || 'WebSocket error')
+      optionsRef.current.onError(message.error || 'WebSocket error')
 
       // Reset streaming state
       streamingMessageRef.current = ''
@@ -125,6 +137,21 @@ export function usePlaygroundWebSocket(
 
     ws.on('pong', () => {
       // Heartbeat response - no action needed
+    })
+
+    // Message Queue events
+    ws.on('queue_processing_started', (message: any) => {
+      console.log('[WebSocket Hook] Queue processing started:', message.queue_id)
+      if (optionsRef.current.onQueueProcessingStarted) {
+        optionsRef.current.onQueueProcessingStarted(message.queue_id)
+      }
+    })
+
+    ws.on('queue_message_completed', (message: any) => {
+      console.log('[WebSocket Hook] Queue message completed:', message.queue_id)
+      if (optionsRef.current.onQueueMessageCompleted) {
+        optionsRef.current.onQueueMessageCompleted(message.queue_id, message.result)
+      }
     })
 
     // Connect
@@ -136,7 +163,7 @@ export function usePlaygroundWebSocket(
       ws.disconnect()
       wsRef.current = null
     }
-  }, [token, options.enabled])
+  }, [options.enabled])
 
   // Send message via WebSocket
   const sendMessage = useCallback((agentId: number, message: string, threadId?: number) => {

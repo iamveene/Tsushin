@@ -14,7 +14,7 @@ from models import TokenUsage, Agent, Contact
 logger = logging.getLogger(__name__)
 
 
-# Pricing per 1M tokens (USD) - Updated February 2026
+# Pricing per 1M tokens (USD) - Updated March 2026
 #
 # Note on cost tracking:
 # - LLM token costs: Tracked per agent message in AgentRun.token_usage_json
@@ -32,7 +32,20 @@ MODEL_PRICING = {
     "gpt-4o-2024-08-06": {"prompt": 2.5, "completion": 10.0},
     "gpt-4o-mini-2024-07-18": {"prompt": 0.15, "completion": 0.60},
 
-    # OpenAI - O-series reasoning models (NEW)
+    # OpenAI - GPT-5 series (latest flagship)
+    "gpt-5": {"prompt": 1.25, "completion": 10.0},
+    "gpt-5.3": {"prompt": 1.75, "completion": 14.0},
+    "gpt-5.4": {"prompt": 2.50, "completion": 15.0},
+    "gpt-5.4-pro": {"prompt": 30.0, "completion": 180.0},
+    "gpt-5-mini": {"prompt": 0.25, "completion": 2.0},
+    "gpt-5-nano": {"prompt": 0.05, "completion": 0.40},
+
+    # OpenAI - GPT-4.1 series
+    "gpt-4.1": {"prompt": 2.0, "completion": 8.0},
+    "gpt-4.1-mini": {"prompt": 0.40, "completion": 1.60},
+    "gpt-4.1-nano": {"prompt": 0.10, "completion": 0.40},
+
+    # OpenAI - O-series reasoning models
     "o1": {"prompt": 15.0, "completion": 60.0},
     "o1-2024-12-17": {"prompt": 15.0, "completion": 60.0},
     "o1-preview": {"prompt": 15.0, "completion": 60.0},
@@ -42,13 +55,15 @@ MODEL_PRICING = {
     "o3": {"prompt": 2.0, "completion": 8.0},
     "o3-mini": {"prompt": 1.10, "completion": 4.40},
     "o3-mini-2025-01-31": {"prompt": 1.10, "completion": 4.40},
+    "o4-mini": {"prompt": 1.10, "completion": 4.40},
+    "o4-mini-2025-04-16": {"prompt": 1.10, "completion": 4.40},
 
-    # OpenAI - GPT-4 series
+    # OpenAI - GPT-4 series (legacy)
     "gpt-4": {"prompt": 30.0, "completion": 60.0},
     "gpt-4-turbo": {"prompt": 10.0, "completion": 30.0},
     "gpt-4-turbo-preview": {"prompt": 10.0, "completion": 30.0},
 
-    # OpenAI - GPT-3.5
+    # OpenAI - GPT-3.5 (legacy)
     "gpt-3.5-turbo": {"prompt": 0.5, "completion": 1.5},
     "gpt-3.5-turbo-0125": {"prompt": 0.5, "completion": 1.5},
 
@@ -61,20 +76,33 @@ MODEL_PRICING = {
     "tts-1": {"prompt": 15.0, "completion": 0.0},  # $0.015 per 1K chars = $15 per 1M chars
     "tts-1-hd": {"prompt": 30.0, "completion": 0.0},  # $0.030 per 1K chars = $30 per 1M chars
 
-    # Anthropic - Claude Opus 4.5 series (NEW - latest flagship)
+    # Anthropic - Claude Opus 4.6 series (latest flagship)
+    "claude-opus-4-6": {"prompt": 5.0, "completion": 25.0},
+    "claude-opus-4-6-latest": {"prompt": 5.0, "completion": 25.0},
+
+    # Anthropic - Claude Sonnet 4.6 series
+    "claude-sonnet-4-6": {"prompt": 3.0, "completion": 15.0},
+    "claude-sonnet-4-6-latest": {"prompt": 3.0, "completion": 15.0},
+
+    # Anthropic - Claude Opus 4.5 series
     "claude-opus-4-5-20251101": {"prompt": 5.0, "completion": 25.0},
     "claude-opus-4-5-latest": {"prompt": 5.0, "completion": 25.0},
 
-    # Anthropic - Claude Sonnet 4 series (NEW)
+    # Anthropic - Claude 4.6 series
+    "claude-opus-4-6": {"prompt": 15.0, "completion": 75.0},
+    "claude-sonnet-4-6": {"prompt": 3.0, "completion": 15.0},
+
+    # Anthropic - Claude Sonnet 4 series
     "claude-sonnet-4-20250514": {"prompt": 3.0, "completion": 15.0},
     "claude-sonnet-4-latest": {"prompt": 3.0, "completion": 15.0},
 
-    # Anthropic - Claude 3.5 series
+    # Anthropic - Claude 3.5 series (legacy)
     "claude-3-5-sonnet-20241022": {"prompt": 3.0, "completion": 15.0},
     "claude-3-5-sonnet-latest": {"prompt": 3.0, "completion": 15.0},
     "claude-3-5-haiku-20241022": {"prompt": 0.80, "completion": 4.0},
 
-    # Anthropic - Claude Haiku 4.5 (NEW - faster, cheaper)
+    # Anthropic - Claude Haiku 4.5
+    "claude-haiku-4-5": {"prompt": 0.80, "completion": 4.0},
     "claude-haiku-4-5-20251022": {"prompt": 1.0, "completion": 5.0},
     "claude-haiku-4-5-latest": {"prompt": 1.0, "completion": 5.0},
 
@@ -114,6 +142,16 @@ MODEL_PRICING = {
     "elevenlabs": {"prompt": 30.0, "completion": 0.0},
 
     # ============================================================
+    # xAI Grok models (direct API)
+    # ============================================================
+    "grok-3": {"prompt": 3.0, "completion": 15.0},
+    "grok-3-fast": {"prompt": 5.0, "completion": 25.0},
+    "grok-4": {"prompt": 3.0, "completion": 15.0},
+    "grok-4-fast": {"prompt": 0.20, "completion": 0.50},
+    "grok-4.1-fast": {"prompt": 0.20, "completion": 0.50},
+    "grok-4.20-beta": {"prompt": 2.0, "completion": 6.0},
+
+    # ============================================================
     # OpenRouter models (provider/model format)
     # OpenRouter adds ~5% markup to base provider costs
     # ============================================================
@@ -129,6 +167,11 @@ MODEL_PRICING = {
     "google/gemini-1.5-pro": {"prompt": 1.25, "completion": 5.0},
 
     # OpenRouter - Anthropic Claude
+    "anthropic/claude-opus-4-6": {"prompt": 5.0, "completion": 25.0},
+    "anthropic/claude-sonnet-4-6": {"prompt": 3.0, "completion": 15.0},
+    "anthropic/claude-opus-4-5": {"prompt": 5.0, "completion": 25.0},
+    "anthropic/claude-sonnet-4": {"prompt": 3.0, "completion": 15.0},
+    "anthropic/claude-haiku-4-5": {"prompt": 1.0, "completion": 5.0},
     "anthropic/claude-3.5-haiku": {"prompt": 0.80, "completion": 4.0},
     "anthropic/claude-3-5-haiku-20241022": {"prompt": 0.80, "completion": 4.0},
     "anthropic/claude-3.5-sonnet": {"prompt": 3.0, "completion": 15.0},
@@ -136,6 +179,13 @@ MODEL_PRICING = {
     "anthropic/claude-3-opus": {"prompt": 15.0, "completion": 75.0},
 
     # OpenRouter - OpenAI
+    "openai/gpt-5.4": {"prompt": 2.50, "completion": 15.0},
+    "openai/gpt-5.3": {"prompt": 1.75, "completion": 14.0},
+    "openai/gpt-5": {"prompt": 1.25, "completion": 10.0},
+    "openai/gpt-5-mini": {"prompt": 0.25, "completion": 2.0},
+    "openai/gpt-4.1": {"prompt": 2.0, "completion": 8.0},
+    "openai/gpt-4.1-mini": {"prompt": 0.40, "completion": 1.60},
+    "openai/gpt-4.1-nano": {"prompt": 0.10, "completion": 0.40},
     "openai/gpt-4o-mini": {"prompt": 0.15, "completion": 0.60},
     "openai/gpt-4o-mini-2024-07-18": {"prompt": 0.15, "completion": 0.60},
     "openai/gpt-4o": {"prompt": 2.5, "completion": 10.0},
@@ -144,6 +194,14 @@ MODEL_PRICING = {
     "openai/o1": {"prompt": 15.0, "completion": 60.0},
     "openai/o1-mini": {"prompt": 1.10, "completion": 4.40},
     "openai/o3-mini": {"prompt": 1.10, "completion": 4.40},
+    "openai/o4-mini": {"prompt": 1.10, "completion": 4.40},
+
+    # OpenRouter - xAI Grok
+    "x-ai/grok-4": {"prompt": 3.0, "completion": 15.0},
+    "x-ai/grok-4-fast": {"prompt": 0.20, "completion": 0.50},
+    "x-ai/grok-4.1-fast": {"prompt": 0.20, "completion": 0.50},
+    "x-ai/grok-4.20-beta": {"prompt": 2.0, "completion": 6.0},
+    "x-ai/grok-3": {"prompt": 3.0, "completion": 15.0},
 
     # OpenRouter - Meta Llama (free tier)
     "meta-llama/llama-3.1-8b-instruct:free": {"prompt": 0.0, "completion": 0.0},
@@ -169,15 +227,9 @@ MODEL_PRICING = {
     "deepseek-chat": {"prompt": 0.14, "completion": 0.28},
     "deepseek-reasoner": {"prompt": 0.55, "completion": 2.19},
 
-    # Ollama (local, free - no API costs)
-    "llama3.2": {"prompt": 0.0, "completion": 0.0},
-    "llama3.1": {"prompt": 0.0, "completion": 0.0},
-    "llama3": {"prompt": 0.0, "completion": 0.0},
-    "mistral": {"prompt": 0.0, "completion": 0.0},
-    "mixtral": {"prompt": 0.0, "completion": 0.0},
-    "qwen2.5": {"prompt": 0.0, "completion": 0.0},
-    "codellama": {"prompt": 0.0, "completion": 0.0},
-    "deepseek-r1": {"prompt": 0.0, "completion": 0.0},  # Local reasoning model
+    # Ollama (local, free) — no hardcoded models needed.
+    # Any model with provider="ollama" is automatically treated as free ($0)
+    # via the provider-level check in _get_pricing().
 
     # Embeddings (using free local model by default)
     # If using OpenAI embeddings in the future:
@@ -323,6 +375,13 @@ class TokenTracker:
                 self._pricing_cache[cache_key] = pricing
                 logger.debug(f"Version fallback pricing for {model_name} -> {base_name_match}")
                 return pricing
+
+        # Strategy 5: Ollama models are always free (local inference)
+        if model_provider and model_provider.lower() == "ollama":
+            free_pricing = {"prompt": 0.0, "completion": 0.0}
+            self._pricing_cache[cache_key] = free_pricing
+            logger.debug(f"Ollama model (free): {model_name}")
+            return free_pricing
 
         # No pricing found
         logger.debug(f"No pricing data for model: {model_name} (provider: {model_provider})")

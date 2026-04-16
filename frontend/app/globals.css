@@ -507,6 +507,23 @@
     @apply h-px w-full;
     background: linear-gradient(90deg, transparent, rgba(20, 184, 166, 0.3), transparent);
   }
+
+  /* ============================================
+     Tour Highlight
+     ============================================ */
+  .tour-highlight {
+    outline: 2px solid #2dd4bf !important;
+    outline-offset: 4px;
+    border-radius: 8px;
+    animation: tour-pulse 1.5s ease-in-out infinite;
+    position: relative;
+    z-index: 40;
+  }
+
+  @keyframes tour-pulse {
+    0%, 100% { outline-color: #2dd4bf; }
+    50% { outline-color: #14b8a6; outline-offset: 6px; }
+  }
 }
 
 @layer utilities {

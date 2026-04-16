@@ -47,7 +47,7 @@ class GmailSkill(BaseSkill):
     skill_type = "gmail"
     skill_name = "Gmail"
     skill_description = "Read and search emails from connected Gmail accounts"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
 
     # Keywords that trigger this skill
     EMAIL_KEYWORDS = [
@@ -1108,7 +1108,7 @@ class GmailSkill(BaseSkill):
         return {
             "execution_mode": "hybrid",
             "enabled": True,
-            "keywords": cls.EMAIL_KEYWORDS,
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "integration_id": None,  # Must be configured per-agent

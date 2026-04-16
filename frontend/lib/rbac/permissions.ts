@@ -63,27 +63,6 @@ export type PermissionKey = keyof typeof PERMISSIONS
 export type PermissionValue = (typeof PERMISSIONS)[PermissionKey]
 
 /**
- * Check if a permission string matches a required permission
- * Supports wildcard matching (e.g., 'agents.*' matches 'agents.read')
- */
-export function matchesPermission(userPermission: string, requiredPermission: string): boolean {
-  // Global admin has all permissions
-  if (userPermission === 'global.*') return true
-
-  // Exact match
-  if (userPermission === requiredPermission) return true
-
-  // Wildcard match
-  const parts = requiredPermission.split('.')
-  for (let i = parts.length; i > 0; i--) {
-    const wildcardPerm = parts.slice(0, i).join('.') + '.*'
-    if (userPermission === wildcardPerm) return true
-  }
-
-  return false
-}
-
-/**
  * Get all permissions for a role
  */
 export function getPermissionsForRole(role: string): string[] {

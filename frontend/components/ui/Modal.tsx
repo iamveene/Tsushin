@@ -1,6 +1,7 @@
 'use client'
 
-import { ReactNode, useEffect } from 'react'
+import { ReactNode, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 interface ModalProps {
   isOpen: boolean
@@ -9,6 +10,7 @@ interface ModalProps {
   children: ReactNode
   footer?: ReactNode
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
+  autoHeight?: boolean
   showCloseButton?: boolean
 }
 
@@ -27,8 +29,13 @@ export default function Modal({
   children,
   footer,
   size = 'md',
+  autoHeight = false,
   showCloseButton = true
 }: ModalProps) {
+  // SSR safety: only render portal after mount
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
   // Handle ESC key to close modal
   useEffect(() => {
     if (!isOpen) return
@@ -43,11 +50,11 @@ export default function Modal({
     return () => window.removeEventListener('keydown', handleEscape)
   }, [isOpen, onClose])
 
-  if (!isOpen) return null
+  if (!isOpen || !mounted) return null
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
       onClick={(e) => {
         // Close modal when clicking backdrop
         if (e.target === e.currentTarget) {
@@ -56,18 +63,18 @@ export default function Modal({
       }}
     >
       <div
-        className={`bg-white dark:bg-gray-800 rounded-lg ${sizeClasses[size]} w-full max-h-[85vh] flex flex-col shadow-xl`}
+        className={`bg-tsushin-elevated border border-tsushin-border rounded-2xl ${sizeClasses[size]} w-full ${autoHeight ? 'max-h-[calc(100vh-2rem)]' : 'max-h-[85vh]'} flex flex-col shadow-elevated animate-scale-in`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b dark:border-gray-700">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+        <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
+          <h2 className="text-xl font-bold text-white">
             {title}
           </h2>
           {showCloseButton && (
             <button
               onClick={onClose}
-              className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+              className="text-tsushin-slate hover:text-white transition-colors"
               aria-label="Close modal"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -84,11 +91,12 @@ export default function Modal({
 
         {/* Footer */}
         {footer && (
-          <div className="p-6 border-t dark:border-gray-700">
+          <div className="p-6 border-t border-tsushin-border">
             {footer}
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

@@ -104,7 +104,7 @@ export default function BillingPage() {
   // Get the active plan info
   const activePlan = PLANS.find((p) => isCurrentPlan(p.name)) || PLANS[0]
 
-  if (!hasPermission('billing.manage')) {
+  if (!hasPermission('billing.write')) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">

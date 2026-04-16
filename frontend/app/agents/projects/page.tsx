@@ -8,6 +8,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter, usePathname } from 'next/navigation'
+import StudioTabs from '@/components/studio/StudioTabs'
 import { useRequireAuth } from '@/contexts/AuthContext'
 import { api, Project, PlaygroundAgentInfo } from '@/lib/client'
 import {
@@ -107,6 +108,7 @@ export default function StudioProjectsPage() {
   })
 
   const loadProjects = useCallback(async () => {
+    setError(null)
     try {
       const data = await api.getProjects()
       setProjects(data)
@@ -238,72 +240,7 @@ export default function StudioProjectsPage() {
 
       {/* Sub Navigation */}
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-0 space-y-6">
-        <div className="glass-card rounded-xl overflow-hidden">
-          <div className="border-b border-tsushin-border/50">
-            <nav className="flex">
-              <Link
-                href="/agents"
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  pathname === '/agents'
-                    ? 'text-white'
-                    : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10">
-                  Agents
-                </span>
-                {pathname === '/agents' && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
-                )}
-              </Link>
-              <Link
-                href="/agents/contacts"
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  pathname === '/agents/contacts'
-                    ? 'text-white'
-                    : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10">
-                  Contacts
-                </span>
-                {pathname === '/agents/contacts' && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
-                )}
-              </Link>
-              <Link
-                href="/agents/personas"
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  pathname === '/agents/personas'
-                    ? 'text-white'
-                    : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10">
-                  Personas
-                </span>
-                {pathname === '/agents/personas' && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
-                )}
-              </Link>
-              <Link
-                href="/agents/projects"
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  pathname?.startsWith('/agents/projects')
-                    ? 'text-white'
-                    : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10">
-                  Projects
-                </span>
-                {pathname?.startsWith('/agents/projects') && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
-                )}
-              </Link>
-            </nav>
-          </div>
-        </div>
+        <StudioTabs />
 
         {/* Error */}
         {error && (

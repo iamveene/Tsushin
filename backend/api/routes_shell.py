@@ -24,7 +24,9 @@ from auth_dependencies import (
     TenantContext,
     get_tenant_context,
     require_permission,
-    get_current_user_required
+    get_current_user_required,
+    get_current_user_optional_strict_from_request,
+    ensure_permission,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,7 +108,7 @@ def verify_integration_access(
 ) -> None:
     """Verify user can access an integration (tenant check)."""
     if not ctx.can_access_resource(integration.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this integration")
+        raise HTTPException(status_code=404, detail="Integration not found")
 
 
 # ============================================================================
@@ -592,7 +594,7 @@ async def toggle_persistence(
         commands=[system_commands[action]],
         initiated_by=f"user:{current_user.email}",
         status="queued",
-        timeout_seconds=60
+        timeout_seconds=120
     )
 
     db.add(command)
@@ -746,82 +748,33 @@ async def beacon_checkin(
     shell_id = integration.id  # Store ID before commit to use in logs
     db.commit()
 
-    # FIX (2026-01-30): Use a FRESH session from db._global_engine to query commands
-    # This ensures we're using the exact same engine as shell_command_service.py
-    # and guarantees we see the committed commands
-    from sqlalchemy.orm import sessionmaker
-    import db as db_module
+    # BUG-355 FIX: Use the injected session with expire_all() instead of creating
+    # fresh sessions.  The checkin update was already committed (line above), so
+    # expire_all() lets us see commands committed by shell_command_service.
+    # Previously, creating a fresh sessionmaker on every check-in contributed to
+    # connection pool exhaustion under load.
+    db.expire_all()
 
-    logger.debug(f"[BEACON-DEBUG] beacon_checkin: shell_id={shell_id}")
-    logger.debug(f"[BEACON-DEBUG] routes_shell._engine = {_engine}")
-    logger.debug(f"[BEACON-DEBUG] db._global_engine = {db_module._global_engine}")
+    pending = db.query(ShellCommand).filter(
+        ShellCommand.shell_id == shell_id,
+        ShellCommand.status == "queued"
+    ).order_by(ShellCommand.queued_at).all()
 
-    if db_module._global_engine:
-        # Use fresh session from the global engine for querying commands
-        FreshSession = sessionmaker(bind=db_module._global_engine)
-        fresh_db = FreshSession()
-        try:
-            pending = fresh_db.query(ShellCommand).filter(
-                ShellCommand.shell_id == shell_id,
-                ShellCommand.status == "queued"
-            ).order_by(ShellCommand.queued_at).all()
+    if pending:
+        logger.debug(f"Beacon check-in: shell_id={shell_id} found {len(pending)} queued commands")
 
-            logger.debug(f"[BEACON-DEBUG] shell_id={shell_id} found {len(pending)} queued commands (fresh session)")
+    # Mark commands as sent
+    pending_commands = []
+    for cmd in pending:
+        cmd.status = "sent"
+        cmd.sent_at = datetime.utcnow()
+        pending_commands.append({
+            "id": cmd.id,
+            "commands": cmd.commands,
+            "timeout": cmd.timeout_seconds
+        })
 
-            if pending:
-                logger.debug(f"[BEACON-DEBUG] commands: {[p.id for p in pending]}")
-            else:
-                # Check if there are any commands at all for this shell
-                all_commands = fresh_db.query(ShellCommand).filter(
-                    ShellCommand.shell_id == shell_id
-                ).order_by(ShellCommand.queued_at.desc()).limit(3).all()
-                if all_commands:
-                    logger.debug(f"[BEACON-DEBUG] no queued, recent: {[(c.id[:8], c.status) for c in all_commands]}")
-
-            # Mark commands as sent using fresh session
-            pending_commands = []
-            for cmd in pending:
-                cmd.status = "sent"
-                cmd.sent_at = datetime.utcnow()
-                pending_commands.append({
-                    "id": cmd.id,
-                    "commands": cmd.commands,
-                    "timeout": cmd.timeout_seconds
-                })
-
-            fresh_db.commit()
-        finally:
-            fresh_db.close()
-    else:
-        # Fallback to original session with expire_all
-        logger.debug(f"[BEACON-DEBUG] FALLBACK: db._global_engine is None, using original session")
-        db.expire_all()
-
-        pending = db.query(ShellCommand).filter(
-            ShellCommand.shell_id == shell_id,
-            ShellCommand.status == "queued"
-        ).order_by(ShellCommand.queued_at).all()
-
-        if pending:
-            logger.debug(f"[BEACON-DEBUG] shell_id={shell_id} found {len(pending)} queued commands (fallback)")
-        else:
-            all_commands = db.query(ShellCommand).filter(
-                ShellCommand.shell_id == shell_id
-            ).order_by(ShellCommand.queued_at.desc()).limit(3).all()
-            if all_commands:
-                logger.debug(f"[BEACON-DEBUG] no queued, recent: {[(c.id[:8], c.status) for c in all_commands]}")
-
-        # Mark commands as sent
-        pending_commands = []
-        for cmd in pending:
-            cmd.status = "sent"
-            cmd.sent_at = datetime.utcnow()
-            pending_commands.append({
-                "id": cmd.id,
-                "commands": cmd.commands,
-                "timeout": cmd.timeout_seconds
-            })
-
+    if pending_commands:
         db.commit()
 
     return BeaconCheckinResponse(
@@ -964,7 +917,9 @@ async def queue_command(
         commands=request.commands,
         allowed_commands=integration.allowed_commands or None,
         allowed_paths=integration.allowed_paths or None,
-        require_approval_for_high_risk=True
+        require_approval_for_high_risk=True,
+        tenant_id=ctx.tenant_id,
+        db=db
     )
 
     if not all_allowed:
@@ -1098,7 +1053,7 @@ async def get_command(
         raise HTTPException(status_code=404, detail="Command not found")
 
     if not ctx.can_access_resource(command.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     return CommandResponse(
         id=command.id,
@@ -1137,12 +1092,23 @@ class BeaconVersionResponse(BaseModel):
 
 
 @router.get("/beacon/version", response_model=BeaconVersionResponse)
-async def get_beacon_version():
+async def get_beacon_version(
+    x_api_key: str = Header(..., alias="X-API-Key"),
+    db: Session = Depends(get_db),
+):
     """
     Get the latest beacon version info for auto-update.
 
     Beacons call this endpoint on startup and periodically to check for updates.
+
+    v0.6.0 Remote Access hardening: requires X-API-Key matching an existing
+    ShellIntegration. Prevents anonymous recon of beacon version, download URL,
+    and payload checksum on publicly-tunneled instances.
     """
+    integration = verify_beacon_api_key(x_api_key, db)
+    if not integration:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
     import os
     import hashlib
     from pathlib import Path
@@ -1174,12 +1140,34 @@ async def get_beacon_version():
 
 
 @router.get("/beacon/download")
-async def download_beacon():
+async def download_beacon(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
     """
     Download the latest beacon package as a zip file.
 
     Returns the shell_beacon package for installation on remote hosts.
+
+    v0.6.0 Remote Access hardening: dual auth. Accepts EITHER a valid session
+    JWT (so the "/hub/shell" UI anchor click works over the tunnel — the
+    browser auto-sends the tsushin_session cookie on same-origin requests)
+    OR an X-API-Key header matching an existing ShellIntegration (so the
+    curl-from-target-host install flow keeps working, and so beacons can
+    auto-update via the URL returned from /beacon/version).
     """
+    if x_api_key and verify_beacon_api_key(x_api_key, db):
+        jwt_ok = True
+    else:
+        jwt_ok = False
+
+    if not jwt_ok:
+        current_user = get_current_user_optional_strict_from_request(request, db)
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        ensure_permission(current_user, "shell.read", db)
+
     import io
     import zipfile
     from pathlib import Path
@@ -1239,7 +1227,7 @@ async def cancel_command(
         raise HTTPException(status_code=404, detail="Command not found")
 
     if not ctx.can_access_resource(command.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Command not found")
 
     if command.status != "queued":
         raise HTTPException(
@@ -1487,7 +1475,7 @@ async def update_security_pattern(
 
     # Tenant patterns - check access
     if not ctx.can_access_resource(pattern.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Pattern not found")
 
     # Apply updates
     if request.pattern is not None:
@@ -1554,7 +1542,7 @@ async def delete_security_pattern(
         )
 
     if not ctx.can_access_resource(pattern.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Pattern not found")
 
     db.delete(pattern)
     db.commit()

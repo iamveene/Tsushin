@@ -46,17 +46,25 @@ COMPLETION_PHRASES = [
 class SchedulerService:
     """Service for managing scheduled events with conversation support."""
 
-    def __init__(self, db: Session, memory_manager=None):
+    def __init__(self, db: Session, memory_manager=None, token_tracker=None, tenant_id: Optional[str] = None):
         """
         Initialize SchedulerService.
 
         Args:
             db: Database session
             memory_manager: Optional MultiAgentMemoryManager for semantic memory integration (Item 11)
+            token_tracker: Optional TokenTracker for LLM cost monitoring (Phase 0.6.0)
+            tenant_id: V060-CHN-006 follow-up — scoping ContactService queries so
+                that scheduled messages for Tenant A can't resolve recipients/
+                senders to contacts belonging to Tenant B. Optional for back-
+                compat; when None, ContactService falls back to its legacy
+                unscoped behavior (logs a warning via _fetch_from_db).
         """
         self.db = db
-        self.contact_service = ContactService(db)
+        self.tenant_id = tenant_id
+        self.contact_service = ContactService(db, tenant_id=tenant_id)
         self.memory_manager = memory_manager  # Item 11: For semantic memory in conversations
+        self.token_tracker = token_tracker  # Phase 0.6.0: Track background LLM costs
 
     def _sanitize_ai_reply(self, agent_id: int, reply: str) -> str:
         if not reply:
@@ -319,6 +327,8 @@ class SchedulerService:
 
     def _execute_notification_event(self, event: ScheduledEvent, payload: Dict):
         """Execute a notification event."""
+        import re
+
         recipient = payload.get('recipient_resolved')
         content = payload.get('message_content')
         platform = payload.get('platform', 'whatsapp')
@@ -333,9 +343,15 @@ class SchedulerService:
         if not agent_id:
             raise ValueError("Notification missing agent_id")
 
+        # BUG-356 FIX: Detect playground recipients (format playground_u{id}_a{id})
+        # Playground self-reminders don't have phone numbers and can't be sent via WhatsApp.
+        # Log the reminder as delivered — the user will see it in their next playground session.
+        if re.match(r'^playground_u\d+_a\d+(_t\d+)?$', recipient):
+            logger.info(f"[NOTIFICATION] Playground self-reminder delivered: {content} (recipient={recipient})")
+            return  # Successfully "delivered" — no WhatsApp send needed
+
         # CRITICAL: Validate recipient is a phone number (not WhatsApp ID)
         # WhatsApp MCP API only accepts phone numbers for sending
-        import re
         # Phone numbers are typically 10-15 digits (international format, optional + prefix)
         if not re.match(r'^\+?\d{10,15}$', recipient):
             logger.error(f"Invalid recipient format: {recipient} (not a phone number)")
@@ -1127,7 +1143,9 @@ Important:
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Get analysis (AWAIT the async method)
@@ -1351,7 +1369,9 @@ Generate your reply to continue working towards the objective.""")
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Generate reply (AWAIT and use correct parameters)
@@ -1576,7 +1596,9 @@ Generate ONLY the message text - no quotes, no explanations."""
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Generate opening (AWAIT the coroutine)
@@ -1667,7 +1689,9 @@ Generate a brief, professional closing message. Thank them and confirm completio
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             # Generate closing (AWAIT the async method)
@@ -1791,7 +1815,9 @@ Generate a message to get the conversation back on track towards the objective, 
             ai_client = AIClient(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
 
             response = await ai_client.generate(

@@ -12,7 +12,8 @@ Performance Goals:
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple
 import logging
-from models import Contact
+from sqlalchemy import or_
+from models import Contact, ContactChannelMapping
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,16 @@ class CachedContactService:
     - Reduced database load
     """
 
-    def __init__(self, db):
+    def __init__(self, db, tenant_id: Optional[str] = None):
+        """
+        V060-CHN-006: tenant_id is required to prevent cross-tenant contact leakage.
+        Accepted as Optional for backward-compat with call sites that don't yet
+        pass it, but strongly-typed routing paths should always supply it.
+        When tenant_id is None, _fetch_from_db returns None (fail-closed) instead
+        of leaking contacts from other tenants.
+        """
         self.db = db
+        self.tenant_id = tenant_id
         self._cache: Dict[str, Tuple[datetime, Optional[Contact]]] = {}
         self._cache_ttl = timedelta(minutes=5)
         self._cache_hits = 0
@@ -58,10 +67,15 @@ class CachedContactService:
         if not candidates:
             return None
 
+        # V060-CHN-006: Scope cache keys by tenant_id so two tenants with the
+        # same raw identifier (e.g., phone number) can't share cached hits.
+        tenant_prefix = f"{self.tenant_id or '__no_tenant__'}::"
+
         # Check cache for any known identifier
         for candidate in candidates:
-            if candidate in self._cache:
-                cached_time, contact = self._cache[candidate]
+            cache_key = tenant_prefix + candidate
+            if cache_key in self._cache:
+                cached_time, contact = self._cache[cache_key]
                 if now - cached_time < self._cache_ttl:
                     self._cache_hits += 1
                     if contact:
@@ -69,7 +83,7 @@ class CachedContactService:
                         return contact
                     continue
                 else:
-                    del self._cache[candidate]
+                    del self._cache[cache_key]
                     self.logger.debug(f"Contact cache EXPIRED for {candidate[:10]}...")
 
         # Cache miss - fetch from database across candidates
@@ -79,13 +93,13 @@ class CachedContactService:
             contact = self._fetch_from_db(candidate)
             if contact:
                 for alias in candidates:
-                    self._cache[alias] = (now, contact)
+                    self._cache[tenant_prefix + alias] = (now, contact)
                 self._evict_if_needed(now)
                 return contact
 
         # Store negative result for all candidates to prevent repeated lookups
         for alias in candidates:
-            self._cache[alias] = (now, None)
+            self._cache[tenant_prefix + alias] = (now, None)
         self._evict_if_needed(now)
 
         return None
@@ -113,14 +127,47 @@ class CachedContactService:
         return candidates
 
     def _fetch_from_db(self, identifier: str) -> Optional[Contact]:
-        """Fetch contact from database (Phase 10.1.1: Added telegram_id support)"""
+        """Fetch contact from database (Phase 10.1.1: Added telegram_id support).
+
+        V060-CHN-006: Queries are scoped to self.tenant_id. When tenant_id is
+        unset, this returns None (fail-closed) so we never leak contacts across
+        tenants. Legacy rows with NULL tenant_id are intentionally unreachable
+        via tenant-scoped lookups.
+        """
+        if not self.tenant_id:
+            self.logger.warning(
+                "CachedContactService._fetch_from_db called without tenant_id — "
+                "refusing to query untenanted contacts (V060-CHN-006 fail-closed)."
+            )
+            return None
+
         contact = self.db.query(Contact).filter(
+            Contact.tenant_id == self.tenant_id,
             (Contact.phone_number == identifier) |
             (Contact.whatsapp_id == identifier) |
             (Contact.telegram_id == identifier)  # Phase 10.1.1
         ).first()
 
-        return contact
+        if contact:
+            return contact
+
+        # Fallback: Search channel mappings (Slack, Discord, etc.) — tenant-scoped
+        mapping = self.db.query(ContactChannelMapping).filter(
+            ContactChannelMapping.tenant_id == self.tenant_id,
+            or_(
+                ContactChannelMapping.channel_identifier == identifier,
+                ContactChannelMapping.channel_identifier.like(f"%:{identifier}")
+            )
+        ).first()
+
+        if mapping:
+            return self.db.query(Contact).filter(
+                Contact.id == mapping.contact_id,
+                Contact.tenant_id == self.tenant_id,
+                Contact.is_active == True
+            ).first()
+
+        return None
 
     def _evict_if_needed(self, now: datetime):
         """Evict expired or excess entries"""
@@ -174,8 +221,14 @@ class CachedContactService:
     def get_mentioned_agent(self, message_text: str):
         """Delegate to base implementation (no caching needed)"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         return base_service.get_mentioned_agent(message_text)
+
+    def extract_mention_and_command(self, message_body: str):
+        """Delegate to base implementation (no caching needed)"""
+        from agent.contact_service import ContactService
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
+        return base_service.extract_mention_and_command(message_body)
 
     def resolve_identifier(self, identifier: str):
         """Delegate with caching"""
@@ -184,13 +237,13 @@ class CachedContactService:
     def get_all_contacts(self):
         """Get all contacts (no caching - infrequent operation)"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         return base_service.get_all_contacts()
 
     def create_contact(self, *args, **kwargs):
         """Create contact and clear cache"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         result = base_service.create_contact(*args, **kwargs)
         self.clear_cache()
         return result
@@ -198,7 +251,7 @@ class CachedContactService:
     def update_contact(self, *args, **kwargs):
         """Update contact and clear cache"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         result = base_service.update_contact(*args, **kwargs)
         self.clear_cache()
         return result
@@ -206,7 +259,7 @@ class CachedContactService:
     def delete_contact(self, *args, **kwargs):
         """Delete contact and clear cache"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         result = base_service.delete_contact(*args, **kwargs)
         self.clear_cache()
         return result
@@ -214,31 +267,31 @@ class CachedContactService:
     def format_contacts_for_context(self, agent_id=None):
         """Format contacts for AI context (no caching - infrequent operation)"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         return base_service.format_contacts_for_context(agent_id)
 
     def detect_mentions(self, message_body: str):
         """Detect mentions (no caching - per-message operation)"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         return base_service.detect_mentions(message_body)
 
     def get_agent_contacts(self):
         """Get agent contacts (no caching - infrequent operation)"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         return base_service.get_agent_contacts()
 
     def get_user_contacts(self):
         """Get user contacts (no caching - infrequent operation)"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         return base_service.get_user_contacts()
 
     def get_dm_trigger_contacts(self):
         """Get DM trigger contacts (no caching - infrequent operation)"""
         from agent.contact_service import ContactService
-        base_service = ContactService(self.db)
+        base_service = ContactService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006
         return base_service.get_dm_trigger_contacts()
 
     def enrich_message_with_sender_info(self, message):

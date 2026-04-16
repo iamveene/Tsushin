@@ -7,16 +7,21 @@ Includes RBAC protection and tenant isolation.
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import List, Optional
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from db import get_db
-from models import WhatsAppMCPInstance, Agent
+from models import WhatsAppMCPInstance
 from models_rbac import User
 from services.mcp_container_manager import MCPContainerManager
+from services.mcp_auth_service import get_auth_headers
+from services.whatsapp_binding_service import backfill_unambiguous_whatsapp_bindings
 from auth_dependencies import get_current_user_required, require_permission, get_tenant_context, TenantContext
 
 logger = logging.getLogger(__name__)
@@ -34,6 +39,7 @@ class MCPInstanceCreate(BaseModel):
     """Request schema for creating MCP instance"""
     phone_number: str = Field(..., description="WhatsApp phone number (e.g., +5500000000001)")
     instance_type: str = Field(default="agent", pattern="^(agent|tester)$", description="Instance type: 'agent' (bot) or 'tester' (QA)")
+    display_name: Optional[str] = Field(None, max_length=100, description="Optional human-readable label for this instance")
 
     class Config:
         json_schema_extra = {
@@ -63,7 +69,8 @@ class MCPInstanceResponse(BaseModel):
     group_filters: Optional[List[str]] = None  # WhatsApp group names to monitor
     number_filters: Optional[List[str]] = None  # Phone numbers for DM allowlist
     group_keywords: Optional[List[str]] = None  # Keywords that trigger responses
-    dm_auto_mode: bool = False  # Auto-reply to unknown DMs
+    display_name: Optional[str] = None  # Optional human-readable label
+    dm_auto_mode: bool = True  # Auto-reply to unknown DMs (matches model default)
     created_at: datetime
     last_started_at: Optional[datetime]
     last_stopped_at: Optional[datetime]
@@ -98,6 +105,7 @@ class MCPHealthResponse(BaseModel):
     session_age_sec: Optional[int] = 0
     last_activity_sec: Optional[int] = 0
     error: Optional[str]
+    warning: Optional[str] = None
 
 
 class QRCodeResponse(BaseModel):
@@ -114,9 +122,154 @@ class LogoutResponse(BaseModel):
     backup_path: Optional[str] = None
 
 
+class TesterStatusResponse(BaseModel):
+    name: str
+    api_url: str
+    status: str
+    container_id: Optional[str] = None
+    container_state: str
+    image: Optional[str] = None
+    api_reachable: bool
+    connected: Optional[bool] = False
+    authenticated: Optional[bool] = False
+    needs_reauth: Optional[bool] = False
+    is_reconnecting: Optional[bool] = False
+    reconnect_attempts: Optional[int] = 0
+    session_age_sec: Optional[int] = 0
+    last_activity_sec: Optional[int] = 0
+    qr_available: bool = False
+    qr_message: Optional[str] = None
+    error: Optional[str] = None
+    warning: Optional[str] = None
+    source: Optional[str] = None  # BUG-395: 'compose' or 'runtime'
+
+
+def _normalize_phone_number(phone_number: Optional[str]) -> str:
+    return re.sub(r"\D+", "", phone_number or "")
+
+
+def _require_user_tenant_id(current_user: User) -> str:
+    tenant_id = getattr(current_user, "tenant_id", None)
+    if tenant_id:
+        return tenant_id
+
+    raise HTTPException(
+        status_code=403,
+        detail="Tenant context required for tenant-scoped MCP operations",
+    )
+
+
+def _build_tester_phone_conflict_warning(
+    db: Session,
+    tenant_id: str,
+    tester_phone_number: Optional[str],
+    *,
+    exclude_instance_id: Optional[int] = None,
+) -> Optional[str]:
+    normalized_tester_phone = _normalize_phone_number(tester_phone_number)
+    if not normalized_tester_phone:
+        return None
+
+    query = db.query(WhatsAppMCPInstance).filter(
+        WhatsAppMCPInstance.tenant_id == tenant_id,
+        WhatsAppMCPInstance.instance_type == "agent",
+    )
+    if exclude_instance_id is not None:
+        query = query.filter(WhatsAppMCPInstance.id != exclude_instance_id)
+
+    conflicting_instances = [
+        instance
+        for instance in query.all()
+        if _normalize_phone_number(instance.phone_number) == normalized_tester_phone
+    ]
+    if not conflicting_instances:
+        return None
+
+    instance_labels = ", ".join(
+        f"{instance.id}:{instance.display_name or instance.container_name}"
+        for instance in conflicting_instances
+    )
+    return (
+        "Tester and agent WhatsApp sessions share the same phone number. "
+        f"Conflicting agent instance(s): {instance_labels}. "
+        "Use different WhatsApp accounts for tester and agent validation."
+    )
+
+
 # ============================================================================
 # API Endpoints
 # ============================================================================
+
+@router.get("/tester/status", response_model=TesterStatusResponse)
+async def get_tester_status(
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.read")),
+    db: Session = Depends(get_db),
+):
+    tenant_id = _require_user_tenant_id(current_user)
+    manager = MCPContainerManager(tenant_id)
+    status = manager.get_tester_status()
+    status["warning"] = _build_tester_phone_conflict_warning(
+        db,
+        tenant_id,
+        manager.get_tester_phone_number(),
+    )
+    return TesterStatusResponse(
+        **status,
+        qr_message="Scan QR code with WhatsApp" if status.get("qr_available") else None,
+    )
+
+
+@router.get("/tester/qr-code", response_model=QRCodeResponse)
+async def get_tester_qr_code(
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.read")),
+):
+    tenant_id = _require_user_tenant_id(current_user)
+    manager = MCPContainerManager(tenant_id)
+    try:
+        qr_code = manager.get_tester_qr_code()
+        return QRCodeResponse(
+            qr_code=qr_code,
+            message="Scan QR code with WhatsApp" if qr_code else "QR code not available yet"
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch tester QR code: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch tester QR code. Check server logs for details.")
+
+
+@router.post("/tester/restart")
+async def restart_tester(
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.manage")),
+):
+    tenant_id = _require_user_tenant_id(current_user)
+    manager = MCPContainerManager(tenant_id)
+    try:
+        manager.restart_tester()
+        return {"success": True, "message": "Tester restarting"}
+    except Exception as e:
+        logger.error(f"Failed to restart tester: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to restart tester. Check server logs for details.")
+
+
+@router.post("/tester/logout", response_model=LogoutResponse)
+async def logout_tester(
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.manage")),
+):
+    tenant_id = _require_user_tenant_id(current_user)
+    manager = MCPContainerManager(tenant_id)
+    try:
+        result = manager.logout_tester()
+        return LogoutResponse(
+            success=bool(result.get("success", True)),
+            message=result.get("message", "Tester authentication reset"),
+            qr_code_ready=False,
+        )
+    except Exception as e:
+        logger.error(f"Failed to reset tester auth: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to reset tester auth. Check server logs for details.")
 
 @router.post("/", response_model=MCPInstanceResponse)
 async def create_mcp_instance(
@@ -137,17 +290,54 @@ async def create_mcp_instance(
     Use `/health` endpoint to monitor startup progress.
     """
     try:
-        manager = MCPContainerManager()
+        tenant_id = _require_user_tenant_id(current_user)
+        manager = MCPContainerManager(tenant_id)
+        normalized_requested_phone = _normalize_phone_number(data.phone_number)
+
+        conflicting_instance = next(
+            (
+                instance
+                for instance in db.query(WhatsAppMCPInstance).all()
+                if _normalize_phone_number(instance.phone_number) == normalized_requested_phone
+            ),
+            None,
+        )
+        if conflicting_instance:
+            raise HTTPException(
+                status_code=409,
+                detail="An existing WhatsApp MCP instance already uses this phone number.",
+            )
+
+        tester_status = manager.get_tester_status()
+        tester_phone_number = manager.get_tester_phone_number()
+        if (
+            tester_status.get("authenticated")
+            and tester_status.get("connected")
+            and _normalize_phone_number(tester_phone_number) == normalized_requested_phone
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The QA tester session is already authenticated with this WhatsApp phone number. "
+                    "Use a different number for tenant agent instances so tester-to-agent E2E validation remains possible."
+                ),
+            )
 
         instance = manager.create_instance(
-            tenant_id=current_user.tenant_id,
+            tenant_id=tenant_id,
             phone_number=data.phone_number,
             db=db,
             created_by=current_user.id,
             instance_type=data.instance_type
         )
 
-        logger.info(f"MCP instance {instance.id} ({data.instance_type}) created for tenant {current_user.tenant_id}")
+        # Set display_name if provided
+        if data.display_name:
+            instance.display_name = data.display_name.strip()
+            db.commit()
+
+        manager.reconcile_instance(instance, db)
+        logger.info(f"MCP instance {instance.id} ({data.instance_type}) created for tenant {tenant_id}")
 
         # Start watcher dynamically ONLY for agent instances (not tester)
         if data.instance_type == "agent" and hasattr(request.app.state, 'watcher_manager'):
@@ -160,44 +350,31 @@ async def create_mcp_instance(
             logger.info(f"Skipping watcher for tester instance {instance.id}")
 
         # Auto-link: assign this WhatsApp instance to agents that have
-        # "whatsapp" enabled but no whatsapp_integration_id yet (agent instances only)
+        # "whatsapp" enabled but no whatsapp_integration_id yet when there is
+        # exactly one unambiguous active agent instance for the tenant.
         if data.instance_type == "agent":
-            import json as json_lib
-
-            unlinked_agents = db.query(Agent).filter(
-                Agent.tenant_id == current_user.tenant_id,
-                Agent.whatsapp_integration_id == None,
-                Agent.is_active == True
-            ).all()
-
-            linked_count = 0
-            for agent in unlinked_agents:
-                enabled_channels = agent.enabled_channels if isinstance(agent.enabled_channels, list) else (
-                    json_lib.loads(agent.enabled_channels) if agent.enabled_channels else []
-                )
-                if "whatsapp" in enabled_channels:
-                    agent.whatsapp_integration_id = instance.id
-                    linked_count += 1
-
+            linked_count = backfill_unambiguous_whatsapp_bindings(db, tenant_id)
             if linked_count > 0:
                 db.commit()
-                logger.info(f"Auto-linked WhatsApp instance {instance.id} to {linked_count} agent(s) in tenant {current_user.tenant_id}")
+                logger.info(f"Auto-linked WhatsApp instance {instance.id} to {linked_count} agent(s) in tenant {tenant_id}")
 
             # Mark first agent instance as group handler if none set yet
             existing_group_handler = db.query(WhatsAppMCPInstance).filter(
-                WhatsAppMCPInstance.tenant_id == current_user.tenant_id,
+                WhatsAppMCPInstance.tenant_id == tenant_id,
                 WhatsAppMCPInstance.is_group_handler == True
             ).first()
             if not existing_group_handler:
                 instance.is_group_handler = True
                 db.commit()
-                logger.info(f"Marked WhatsApp instance {instance.id} as group handler for tenant {current_user.tenant_id}")
+                logger.info(f"Marked WhatsApp instance {instance.id} as group handler for tenant {tenant_id}")
 
         return MCPInstanceResponse.model_validate(instance)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create MCP instance: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to create MCP instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to create MCP instance. Check server logs for details.")
 
 
 @router.get("/", response_model=List[MCPInstanceResponse])
@@ -217,6 +394,12 @@ async def list_mcp_instances(
     """
     query = context.filter_by_tenant(db.query(WhatsAppMCPInstance), WhatsAppMCPInstance.tenant_id)
     instances = query.order_by(WhatsAppMCPInstance.created_at.desc()).all()
+    manager = MCPContainerManager()
+    for instance in instances:
+        try:
+            manager.reconcile_instance(instance, db)
+        except Exception as e:
+            logger.warning(f"Failed to reconcile instance {instance.id} during list: {e}")
 
     logger.info(f"Returning {len(instances)} MCP instances for tenant {current_user.tenant_id}")
 
@@ -243,8 +426,9 @@ async def get_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
+    MCPContainerManager().reconcile_instance(instance, db)
     return MCPInstanceResponse.model_validate(instance)
 
 
@@ -268,7 +452,7 @@ async def start_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         manager = MCPContainerManager()
@@ -321,7 +505,7 @@ async def start_mcp_instance(
 
     except Exception as e:
         logger.error(f"Failed to start instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to start instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to start instance. Check server logs for details.")
 
 
 @router.post("/{instance_id}/stop")
@@ -344,7 +528,7 @@ async def stop_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         manager = MCPContainerManager()
@@ -356,7 +540,7 @@ async def stop_mcp_instance(
 
     except Exception as e:
         logger.error(f"Failed to stop instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to stop instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to stop instance. Check server logs for details.")
 
 
 @router.post("/{instance_id}/restart")
@@ -379,7 +563,7 @@ async def restart_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         manager = MCPContainerManager()
@@ -391,7 +575,7 @@ async def restart_mcp_instance(
 
     except Exception as e:
         logger.error(f"Failed to restart instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to restart instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to restart instance. Check server logs for details.")
 
 
 @router.post("/{instance_id}/pause")
@@ -416,7 +600,7 @@ async def pause_watcher_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Get watcher manager from app state
@@ -437,7 +621,7 @@ async def pause_watcher_instance(
         raise
     except Exception as e:
         logger.error(f"Failed to pause watcher for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to pause watcher: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to pause watcher. Check server logs for details.")
 
 
 @router.post("/{instance_id}/resume")
@@ -462,7 +646,7 @@ async def resume_watcher_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Get watcher manager from app state
@@ -483,7 +667,7 @@ async def resume_watcher_instance(
         raise
     except Exception as e:
         logger.error(f"Failed to resume watcher for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to resume watcher: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to resume watcher. Check server logs for details.")
 
 
 @router.get("/{instance_id}/watcher-status")
@@ -508,7 +692,7 @@ async def get_watcher_status(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Get watcher manager from app state
@@ -522,7 +706,7 @@ async def get_watcher_status(
 
     except Exception as e:
         logger.error(f"Failed to get watcher status for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to get watcher status: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get watcher status. Check server logs for details.")
 
 
 @router.put("/{instance_id}/group-handler")
@@ -551,7 +735,7 @@ async def set_group_handler(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # If setting as group handler, unset all other instances in this tenant
@@ -578,7 +762,7 @@ async def set_group_handler(
 
     except Exception as e:
         logger.error(f"Failed to set group handler for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to set group handler: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to set group handler. Check server logs for details.")
 
 
 @router.put("/{instance_id}/filters", response_model=MCPInstanceResponse)
@@ -613,7 +797,7 @@ async def update_instance_filters(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Update only provided fields
@@ -658,7 +842,7 @@ async def update_instance_filters(
     except Exception as e:
         logger.error(f"Failed to update filters for instance {instance_id}: {e}", exc_info=True)
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update filters: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update filters. Check server logs for details.")
 
 
 @router.delete("/{instance_id}")
@@ -687,7 +871,7 @@ async def delete_mcp_instance(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         # Stop watcher BEFORE deleting instance
@@ -705,7 +889,7 @@ async def delete_mcp_instance(
 
     except Exception as e:
         logger.error(f"Failed to delete instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to delete instance: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to delete instance. Check server logs for details.")
 
 
 @router.get("/{instance_id}/health", response_model=MCPHealthResponse)
@@ -734,11 +918,27 @@ async def get_mcp_health(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
-        manager = MCPContainerManager()
-        health_data = manager.health_check(instance)
+        manager = MCPContainerManager(instance.tenant_id)
+        manager.reconcile_instance(instance, db)
+        health_data = manager.health_check(instance, db)
+        health_data["warning"] = _build_tester_phone_conflict_warning(
+            db,
+            instance.tenant_id,
+            manager.get_tester_phone_number(),
+            exclude_instance_id=instance.id if instance.instance_type == "agent" else None,
+        )
+        if (
+            instance.instance_type == "agent"
+            and _normalize_phone_number(instance.phone_number)
+            == _normalize_phone_number(manager.get_tester_phone_number())
+        ):
+            health_data["warning"] = (
+                "This agent shares the tester WhatsApp phone number. "
+                "Tester-to-agent round-trip validation requires different WhatsApp accounts."
+            )
 
         # Log health check results for debugging
         logger.info(
@@ -770,7 +970,19 @@ async def get_mcp_health(
 
     except Exception as e:
         logger.error(f"Failed to check health for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to check health: {str(e)}")
+        return MCPHealthResponse(
+            status="error",
+            container_state=instance.status or "unknown",
+            api_reachable=False,
+            connected=False,
+            authenticated=False,
+            needs_reauth=False,
+            is_reconnecting=False,
+            reconnect_attempts=0,
+            session_age_sec=0,
+            last_activity_sec=0,
+            error=str(e),
+        )
 
 
 @router.get("/{instance_id}/qr-code", response_model=QRCodeResponse)
@@ -796,11 +1008,12 @@ async def get_qr_code(
 
     # Check tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     try:
         manager = MCPContainerManager()
-        qr_code = manager.get_qr_code(instance)
+        manager.reconcile_instance(instance, db)
+        qr_code = manager.get_qr_code(instance, db)
 
         if qr_code:
             return QRCodeResponse(qr_code=qr_code, message="Scan QR code with WhatsApp")
@@ -812,7 +1025,7 @@ async def get_qr_code(
 
     except Exception as e:
         logger.error(f"Failed to fetch QR code for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch QR code: {str(e)}")
+        return QRCodeResponse(qr_code=None, message=f"QR code unavailable: {e}")
 
 
 @router.post("/{instance_id}/logout", response_model=LogoutResponse)
@@ -864,7 +1077,7 @@ async def logout_mcp_instance(
 
     # 2. Verify tenant access
     if not context.can_access_resource(instance.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="MCP instance not found")
 
     # 3. Call service layer
     try:
@@ -880,4 +1093,102 @@ async def logout_mcp_instance(
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
         logger.error(f"Logout failed for instance {instance_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Logout failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Logout failed. Check server logs for details.")
+
+
+# ============================================================================
+# WhatsApp Typeahead Proxies (Groups / Contacts)
+# Used by Hub > Communications > WhatsApp filter autocomplete
+# ============================================================================
+
+
+@router.get("/{instance_id}/wa/groups")
+async def list_wa_groups(
+    instance_id: int,
+    q: str = Query("", description="Case-insensitive substring filter on group name"),
+    limit: int = Query(20, ge=1, le=100, description="Max results (1-100)"),
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db)
+):
+    """
+    List WhatsApp groups the instance is a member of (typeahead source).
+
+    **Permissions Required:** `mcp.instances.read`
+
+    Returns groups filtered by name substring, sorted by recent activity.
+    Result shape: {"success": bool, "groups": [{"jid": str, "name": str}], "count": int}
+    """
+    instance = db.query(WhatsAppMCPInstance).filter(WhatsAppMCPInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail=f"MCP instance {instance_id} not found")
+    if not context.can_access_resource(instance.tenant_id):
+        raise HTTPException(status_code=404, detail="MCP instance not found")
+
+    headers = get_auth_headers(instance.api_secret)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{instance.mcp_api_url}/groups",
+                params={"q": q, "limit": limit},
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                f"MCP /groups returned HTTP {resp.status_code} for instance {instance_id}: {resp.text[:200]}"
+            )
+            return {"success": False, "groups": [], "count": 0, "message": f"MCP returned HTTP {resp.status_code}"}
+        return resp.json()
+    except httpx.TimeoutException:
+        logger.warning(f"Timeout calling MCP /groups for instance {instance_id}")
+        return {"success": False, "groups": [], "count": 0, "message": "MCP timeout"}
+    except Exception as e:
+        logger.error(f"Failed listing WA groups for instance {instance_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Failed to query MCP for groups")
+
+
+@router.get("/{instance_id}/wa/contacts")
+async def list_wa_contacts(
+    instance_id: int,
+    q: str = Query("", description="Case-insensitive name substring OR phone-prefix filter"),
+    limit: int = Query(20, ge=1, le=100, description="Max results (1-100)"),
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("mcp.instances.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db)
+):
+    """
+    List WhatsApp contacts known to the instance (typeahead source).
+
+    **Permissions Required:** `mcp.instances.read`
+
+    Merges the whatsmeow address book with DM chats the user has messaged.
+    Result shape: {"success": bool, "contacts": [{"jid": str, "phone": str, "name": str}], "count": int}
+    """
+    instance = db.query(WhatsAppMCPInstance).filter(WhatsAppMCPInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail=f"MCP instance {instance_id} not found")
+    if not context.can_access_resource(instance.tenant_id):
+        raise HTTPException(status_code=404, detail="MCP instance not found")
+
+    headers = get_auth_headers(instance.api_secret)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{instance.mcp_api_url}/contacts",
+                params={"q": q, "limit": limit},
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                f"MCP /contacts returned HTTP {resp.status_code} for instance {instance_id}: {resp.text[:200]}"
+            )
+            return {"success": False, "contacts": [], "count": 0, "message": f"MCP returned HTTP {resp.status_code}"}
+        return resp.json()
+    except httpx.TimeoutException:
+        logger.warning(f"Timeout calling MCP /contacts for instance {instance_id}")
+        return {"success": False, "contacts": [], "count": 0, "message": "MCP timeout"}
+    except Exception as e:
+        logger.error(f"Failed listing WA contacts for instance {instance_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Failed to query MCP for contacts")

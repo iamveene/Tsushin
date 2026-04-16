@@ -5,6 +5,7 @@ Provides full-text and semantic search across playground conversations.
 
 import logging
 import json
+import html
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -29,13 +30,26 @@ class ConversationSearchService:
         self.logger = logging.getLogger(__name__)
         self._fts5_available = None
 
+    def _safe_rollback(self) -> None:
+        """Clear aborted DB transactions after a failed search probe."""
+        try:
+            self.db.rollback()
+        except Exception:
+            pass
+
     def _check_fts5_available(self) -> bool:
         """Check if FTS5 is available in SQLite."""
         if self._fts5_available is None:
+            bind = self.db.get_bind()
+            dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
+            if dialect_name != "sqlite":
+                self._fts5_available = False
+                return self._fts5_available
             try:
                 result = self.db.execute(text("PRAGMA compile_options;")).fetchall()
                 self._fts5_available = any('FTS5' in str(row[0]) for row in result)
-            except:
+            except Exception:
+                self._safe_rollback()
                 self._fts5_available = False
         return self._fts5_available
 
@@ -111,6 +125,7 @@ class ConversationSearchService:
 
             return result
         except Exception as e:
+            self._safe_rollback()
             self.logger.error(f"Full-text search failed: {e}")
             return {
                 "status": "error",
@@ -230,7 +245,9 @@ class ConversationSearchService:
         where_clause = " AND ".join(where_parts)
 
         # Count total results
-        # Note: SQL structure is static, only parameterized values vary
+        # Note: SQL structure is static, only parameterized values vary.
+        # where_clause is built by _build_fts5_filter() with whitelist + regex validation (MED-003).
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
         count_sql = text(f"""
             SELECT COUNT(*)
             FROM conversation_search_fts
@@ -240,7 +257,9 @@ class ConversationSearchService:
         total = self.db.execute(count_sql, params).scalar() or 0
 
         # Get results with highlighting
-        # Note: SQL structure is static, only parameterized values vary
+        # Note: SQL structure is static, only parameterized values vary.
+        # where_clause is built by _build_fts5_filter() with whitelist + regex validation (MED-003).
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
         search_sql = text(f"""
             SELECT
                 thread_id,
@@ -272,7 +291,7 @@ class ConversationSearchService:
                 "content": row[3],
                 "timestamp": row[4],
                 "agent_id": row[5],
-                "snippet": row[6],
+                "snippet": self._sanitize_sql_snippet(row[6]),
                 "rank": row[7]
             })
 
@@ -304,12 +323,13 @@ class ConversationSearchService:
         """Fallback search using LIKE queries."""
 
         # Search in Memory table (messages stored as JSON)
-        from models import Memory, Agent, ConversationThread
+        from models import Memory, ConversationThread
 
+        # BUG-LOG-015: Memory now has tenant_id — filter directly, no join needed.
+        # (Previously required Agent join for tenant isolation; see BUG-083 history.)
         query_obj = self.db.query(Memory).filter(
             Memory.tenant_id == tenant_id,
-            Memory.user_id == user_id,
-            Memory.sender_key.like('playground_%')
+            Memory.sender_key.like(f'playground_{user_id}_%')
         )
 
         if agent_id:
@@ -396,12 +416,15 @@ class ConversationSearchService:
 
     def _create_snippet(self, content: str, query: str, context_length: int = 64) -> str:
         """Create highlighted snippet around query match."""
+        import re
+
         query_lower = query.lower()
         content_lower = content.lower()
 
         idx = content_lower.find(query_lower)
         if idx == -1:
-            return content[:context_length] + "..."
+            snippet = content[:context_length] + "..."
+            return html.escape(snippet)
 
         # Get context around match
         start = max(0, idx - context_length // 2)
@@ -415,14 +438,40 @@ class ConversationSearchService:
         if end < len(content):
             snippet = snippet + "..."
 
-        # Highlight the query
-        import re
-        pattern = re.compile(re.escape(query), re.IGNORECASE)
+        # HTML-escape the snippet content FIRST to prevent XSS
+        snippet = html.escape(snippet)
+
+        # THEN highlight the query (on the escaped text)
+        escaped_query = html.escape(query)
+        pattern = re.compile(re.escape(escaped_query), re.IGNORECASE)
         snippet = pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", snippet)
 
         return snippet
 
-    def search_semantic(
+    @staticmethod
+    def _sanitize_sql_snippet(snippet: str) -> str:
+        """
+        Sanitize a snippet generated by SQL snippet()/ts_headline() functions.
+
+        These SQL functions insert <mark>...</mark> around matches but do NOT
+        HTML-escape the surrounding content. This method preserves <mark> tags
+        while escaping everything else.
+        """
+        import re
+        if not snippet:
+            return snippet
+
+        # Split on <mark> and </mark> tags, preserving them
+        parts = re.split(r'(<mark>|</mark>)', snippet)
+        sanitized_parts = []
+        for part in parts:
+            if part in ('<mark>', '</mark>'):
+                sanitized_parts.append(part)
+            else:
+                sanitized_parts.append(html.escape(part))
+        return ''.join(sanitized_parts)
+
+    async def search_semantic(
         self,
         query: str,
         tenant_id: str,
@@ -460,7 +509,7 @@ class ConversationSearchService:
                     vector_store = get_vector_store(persist_directory=chroma_path)
 
                     # Search with sender_key filter for playground messages
-                    search_results = vector_store.search_similar(
+                    search_results = await vector_store.search_similar(
                         query_text=query,
                         sender_key=f"playground_u{user_id}_a{agent_id}",
                         limit=limit * 2  # Get more to filter
@@ -497,7 +546,7 @@ class ConversationSearchService:
                     try:
                         vector_store = get_vector_store(persist_directory=chroma_path)
 
-                        search_results = vector_store.search_similar(
+                        search_results = await vector_store.search_similar(
                             query_text=query,
                             sender_key=f"playground_u{user_id}",
                             limit=limit
@@ -534,6 +583,7 @@ class ConversationSearchService:
             }
 
         except Exception as e:
+            self._safe_rollback()
             self.logger.error(f"Semantic search failed: {e}")
             return {
                 "status": "error",
@@ -542,7 +592,7 @@ class ConversationSearchService:
                 "total": 0
             }
 
-    def search_combined(
+    async def search_combined(
         self,
         query: str,
         tenant_id: str,
@@ -566,7 +616,7 @@ class ConversationSearchService:
             )
 
             # Get semantic results
-            sem_results = self.search_semantic(
+            sem_results = await self.search_semantic(
                 query, tenant_id, user_id, agent_id, limit // 2, 0.5
             )
 
@@ -598,6 +648,7 @@ class ConversationSearchService:
             }
 
         except Exception as e:
+            self._safe_rollback()
             self.logger.error(f"Combined search failed: {e}")
             return {
                 "status": "error",
@@ -708,6 +759,7 @@ class ConversationSearchService:
             return results[:limit]
 
         except Exception as e:
+            self._safe_rollback()
             self.logger.error(f"Tool execution search failed: {e}")
             return []
 
@@ -738,6 +790,7 @@ class ConversationSearchService:
             suggestions.extend([t[0] for t in tags])
 
         except Exception as e:
+            self._safe_rollback()
             self.logger.warning(f"Failed to get search suggestions: {e}")
 
         return suggestions[:limit]

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from fastapi import WebSocket, HTTPException
 from datetime import datetime
 
-from models import Agent, ConversationThread
+from models import Agent, ConversationThread, Contact
 from models_rbac import User
 from services.playground_service import PlaygroundService
 
@@ -79,7 +79,6 @@ class PlaygroundWebSocketService:
                 thread_service = PlaygroundThreadService(self.db)
 
                 # Get agent name for default title
-                from models import Contact
                 contact = self.db.query(Contact).filter(Contact.id == agent.contact_id).first() if agent else None
                 agent_name = contact.friendly_name if contact else f"Bot"
                 default_title = f"New Conversation ({agent_name})"
@@ -109,8 +108,15 @@ class PlaygroundWebSocketService:
             thread.updated_at = datetime.utcnow()
             self.db.commit()
 
-            # Send "thinking" indicator
-            yield {"type": "thinking", "agent_id": agent_id}
+            # Send "thinking" indicator with agent metadata
+            contact = self.db.query(Contact).filter(Contact.id == agent.contact_id).first() if agent else None
+            agent_name = contact.friendly_name if contact else f"Agent {agent_id}"
+            yield {
+                "type": "thinking",
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "avatar": getattr(agent, 'avatar', None),
+            }
 
             # Use the streaming method from PlaygroundService
             accumulated_response = ""
@@ -135,6 +141,7 @@ class PlaygroundWebSocketService:
                     # Final metadata
                     token_usage = chunk.get("token_usage")
                     message_id = chunk.get("message_id")
+                    image_url = chunk.get("image_url")  # Phase 6: Image generation
 
                     # Auto-rename thread based on first message
                     thread_renamed = False
@@ -142,7 +149,12 @@ class PlaygroundWebSocketService:
 
                     if thread_id:
                         from services.playground_thread_service import PlaygroundThreadService
-                        from models import Memory
+
+                        # Ensure clean DB session before post-streaming queries
+                        try:
+                            self.db.rollback()
+                        except Exception:
+                            pass
 
                         # Check if this is a fresh thread (only 2 messages: user + assistant)
                         current_thread = self.db.query(ConversationThread).filter(
@@ -150,15 +162,11 @@ class PlaygroundWebSocketService:
                         ).first()
 
                         if current_thread:
-                            # Count messages from Memory table (where they're actually stored)
-                            memory_sender_key = f"sender_{current_thread.recipient}"
-                            memory = self.db.query(Memory).filter(
-                                Memory.agent_id == agent_id,
-                                Memory.sender_key == memory_sender_key
-                            ).first()
-
-                            message_count = len(memory.messages_json) if memory and memory.messages_json else 0
-                            self.logger.warning(f"[Auto-rename WS] Thread {thread_id}: memory_key={memory_sender_key}, message_count={message_count}")
+                            message_count = PlaygroundThreadService(self.db).count_thread_messages(current_thread)
+                            self.logger.warning(
+                                f"[Auto-rename WS] Thread {thread_id}: "
+                                f"recipient={current_thread.recipient}, message_count={message_count}"
+                            )
 
                             # Only auto-rename after first exchange (2 messages: user + assistant)
                             if message_count <= 2:
@@ -175,6 +183,33 @@ class PlaygroundWebSocketService:
                             else:
                                 self.logger.warning(f"[Auto-rename WS] Thread {thread_id} skipped: already has {message_count} messages")
 
+                    # Invoke post-response hooks (knowledge sharing, OKG auto-capture, etc.)
+                    if accumulated_response:
+                        try:
+                            from agent.ai_client import AIClient
+                            sender_key = f"playground_u{self.user_id}_a{agent_id}_t{thread_id}"
+                            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+                            ai_client = AIClient(
+                                provider="gemini",
+                                model_name="gemini-2.5-flash-lite",
+                                db=self.db,
+                                tenant_id=agent.tenant_id if agent else None,
+                            )
+                            await self.playground_service._invoke_post_response_hooks(
+                                agent_id=agent_id,
+                                user_message=message,
+                                agent_response=accumulated_response,
+                                context={
+                                    "sender_key": sender_key,
+                                    "sender_name": f"Playground User {self.user_id}",
+                                    "is_group": False,
+                                    "chat_id": sender_key,
+                                },
+                                ai_client=ai_client,
+                            )
+                        except Exception as e:
+                            self.logger.error(f"Post-response hooks error (non-blocking): {e}")
+
                     # Send completion with rename info
                     # FIX 2026-01-30: Include agent_id for frontend to use in loadThreads callback
                     yield {
@@ -185,7 +220,8 @@ class PlaygroundWebSocketService:
                         "token_usage": token_usage,
                         "timestamp": datetime.utcnow().isoformat() + "Z",
                         "thread_renamed": thread_renamed,
-                        "new_thread_title": new_thread_title
+                        "new_thread_title": new_thread_title,
+                        "image_url": image_url,  # Phase 6: Image generation
                     }
 
                 elif chunk_type == "error":
@@ -200,6 +236,10 @@ class PlaygroundWebSocketService:
 
         except Exception as e:
             self.logger.error(f"Error in streaming message: {e}", exc_info=True)
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
             yield {
                 "type": "error",
                 "error": str(e)

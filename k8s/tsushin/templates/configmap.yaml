@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tsushin.configMapName" . }}
+  namespace: {{ include "tsushin.namespace" . }}
+  labels:
+    {{- include "tsushin.labels" . | nindent 4 }}
+data:
+  {{- range $key, $val := .Values.backend.env }}
+  {{ $key }}: {{ $val | quote }}
+  {{- end }}
+  # GCP Project ID — derived from global.project (required for GCPSecretProvider)
+  {{- if .Values.global.project }}
+  TSN_GCP_PROJECT_ID: {{ .Values.global.project | quote }}
+  {{- end }}
+  # Frontend URL — derived from ingress host
+  {{- if .Values.ingress.host }}
+  TSN_FRONTEND_URL: {{ printf "https://%s" .Values.ingress.host | quote }}
+  TSN_BACKEND_URL: {{ printf "https://%s" .Values.ingress.host | quote }}
+  TSN_GOOGLE_OAUTH_REDIRECT_URI: {{ printf "https://%s/api/hub/google/oauth/callback" .Values.ingress.host | quote }}
+  ASANA_REDIRECT_URI: {{ printf "https://%s/hub/asana/callback" .Values.ingress.host | quote }}
+  {{- end }}

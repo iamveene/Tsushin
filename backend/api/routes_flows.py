@@ -5,7 +5,7 @@ Handles CRUD operations for flow definitions, steps, runs, conversation threads,
 Phase 7.9: Added RBAC protection and tenant isolation
 """
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Literal
@@ -22,6 +22,7 @@ from auth_dependencies import (
     TenantContext
 )
 from models_rbac import User
+from services.audit_service import log_tenant_event, TenantAuditActions
 from schemas import (
     FlowCreate, FlowUpdate, FlowResponse, FlowDetailResponse,
     FlowStepCreate, FlowStepUpdate, FlowStepResponse,
@@ -37,6 +38,27 @@ router = APIRouter(prefix="/api/flows", tags=["flows"])
 
 # Global engine reference (set by main app.py)
 _engine = None
+
+
+def _serialize_step_config(step_type: StepType, step_config: Optional[Any]) -> Dict[str, Any]:
+    config = step_config.model_dump() if step_config else {}
+    if step_type == StepType.MESSAGE:
+        recipients = config.get("recipients") or []
+        if isinstance(recipients, str):
+            recipients = [recipients]
+        else:
+            recipients = [item for item in recipients if isinstance(item, str) and item]
+
+        recipient = config.get("recipient")
+        if isinstance(recipient, str):
+            recipient = recipient.strip()
+            config["recipient"] = recipient or None
+
+        if recipient and recipient not in recipients:
+            recipients.append(recipient)
+        config["recipients"] = recipients
+
+    return config
 
 def set_engine(engine):
     global _engine
@@ -59,6 +81,8 @@ class FlowDefinitionCreate(BaseModel):
     name: str
     description: Optional[str] = None
     is_active: bool = True
+    flow_type: Optional[str] = None  # BUG-342: was ignored, now passed through
+    execution_method: Optional[str] = None  # BUG-342: was ignored, now passed through
 
 
 class FlowDefinitionUpdate(BaseModel):
@@ -82,6 +106,9 @@ class FlowDefinitionResponse(BaseModel):
     execution_method: Optional[str] = "immediate"
     scheduled_at: Optional[datetime] = None
     flow_type: Optional[str] = "workflow"
+    default_agent_id: Optional[int] = None
+    # BUG-336: Keyword triggers
+    trigger_keywords: Optional[List] = None
 
     class Config:
         from_attributes = True
@@ -246,7 +273,9 @@ def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionRespons
         node_count=count_flow_nodes(db, flow.id),
         execution_method=flow.execution_method or "immediate",
         scheduled_at=flow.scheduled_at,
-        flow_type=flow.flow_type or "workflow"
+        flow_type=flow.flow_type or "workflow",
+        default_agent_id=flow.default_agent_id,
+        trigger_keywords=flow.trigger_keywords or []  # BUG-336
     )
 
 
@@ -291,10 +320,12 @@ class TemplateValidationResponse(BaseModel):
     rendered: Optional[str] = None  # Only if context provided
 
 
-@router.post("/template/validate", response_model=TemplateValidationResponse)
+@router.post("/template/validate", response_model=TemplateValidationResponse,
+    dependencies=[Depends(require_permission("flows.read"))])
 def validate_template(
     request: TemplateValidationRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required)
 ):
     """
     Validate a template string for syntax errors and extract variables.
@@ -336,14 +367,16 @@ def validate_template(
         )
 
     except Exception as e:
-        logger.error(f"Template validation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Template validation error")
+        raise HTTPException(status_code=500, detail="Failed to validate template")
 
 
-@router.post("/template/render")
+@router.post("/template/render",
+    dependencies=[Depends(require_permission("flows.read"))])
 def render_template(
     request: TemplateValidationRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required)
 ):
     """
     Render a template with the provided context.
@@ -380,13 +413,13 @@ def render_template(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Template render error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Template render error")
+        raise HTTPException(status_code=500, detail="Failed to render template")
 
 
 # ============= STATS ENDPOINT (must be before /{flow_id} routes) =============
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(require_permission("flows.read"))])
 def get_flow_stats(
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
@@ -400,17 +433,18 @@ def get_flow_stats(
         active_flows = flow_query.filter(FlowDefinition.is_active == True).count()
 
         run_query = db.query(FlowRun)
-        if tenant_context.tenant_id:
-            run_query = run_query.filter(FlowRun.tenant_id == tenant_context.tenant_id)
+        run_query = tenant_context.filter_by_tenant(run_query, FlowRun.tenant_id)
 
         total_runs = run_query.count()
         completed_runs = run_query.filter(FlowRun.status == 'completed').count()
         failed_runs = run_query.filter(FlowRun.status == 'failed').count()
         running_runs = run_query.filter(FlowRun.status == 'running').count()
 
-        active_threads = db.query(ConversationThread).filter(
+        thread_query = db.query(ConversationThread).filter(
             ConversationThread.status == 'active'
-        ).count()
+        )
+        thread_query = tenant_context.filter_by_tenant(thread_query, ConversationThread.tenant_id)
+        active_threads = thread_query.count()
 
         return {
             "flows": {
@@ -430,13 +464,14 @@ def get_flow_stats(
         }
 
     except Exception as e:
-        logger.error(f"Error getting flow stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error getting flow stats")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow statistics")
 
 
 # ============= CONVERSATION THREAD ENDPOINTS (must be before /{flow_id} routes) =============
 
-@router.get("/conversations/active", response_model=List[ConversationThreadResponse])
+@router.get("/conversations/active", response_model=List[ConversationThreadResponse],
+    dependencies=[Depends(require_permission("flows.read"))])
 def list_active_conversations(
     recipient: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -493,11 +528,12 @@ def list_active_conversations(
         return result
 
     except Exception as e:
-        logger.error(f"Error listing active conversations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error listing active conversations")
+        raise HTTPException(status_code=500, detail="Failed to list active conversations")
 
 
-@router.get("/conversations/{thread_id}", response_model=ConversationThreadResponse)
+@router.get("/conversations/{thread_id}", response_model=ConversationThreadResponse,
+    dependencies=[Depends(require_permission("flows.read"))])
 def get_conversation_thread(
     thread_id: int,
     db: Session = Depends(get_db),
@@ -517,8 +553,8 @@ def get_conversation_thread(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting conversation thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting conversation thread {thread_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve conversation thread")
 
 
 @router.post("/conversations/{thread_id}/reply", response_model=ConversationReplyResponse,
@@ -632,8 +668,8 @@ async def process_conversation_reply(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing reply for thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error processing reply for thread {thread_id}")
+        raise HTTPException(status_code=500, detail="Failed to process conversation reply")
 
 
 @router.post("/conversations/{thread_id}/complete", status_code=200,
@@ -671,8 +707,8 @@ def complete_conversation_thread(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error completing conversation thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error completing conversation thread {thread_id}")
+        raise HTTPException(status_code=500, detail="Failed to complete conversation thread")
 
 
 # ============= FLOW RUN ENDPOINTS =============
@@ -691,8 +727,7 @@ def list_runs(
         query = db.query(FlowRun)
 
         # Tenant isolation
-        if tenant_context.tenant_id:
-            query = query.filter(FlowRun.tenant_id == tenant_context.tenant_id)
+        query = tenant_context.filter_by_tenant(query, FlowRun.tenant_id)
 
         if flow_id is not None:
             query = query.filter(FlowRun.flow_definition_id == flow_id)
@@ -719,8 +754,8 @@ def list_runs(
         ) for run in runs]
 
     except Exception as e:
-        logger.error(f"Error listing flow runs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error listing flow runs")
+        raise HTTPException(status_code=500, detail="Failed to list flow runs")
 
 
 @router.get("/runs/{run_id}", response_model=LegacyFlowRunResponse,
@@ -758,8 +793,8 @@ def get_run(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting run {run_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting run {run_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow run")
 
 
 @router.get("/runs/{run_id}/steps", response_model=List[FlowNodeRunResponse],
@@ -787,8 +822,8 @@ def get_run_steps(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting step runs for run {run_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting step runs for run {run_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow run steps")
 
 
 # Alias for backward compatibility
@@ -805,39 +840,63 @@ def get_run_nodes(
 
 # ============= FLOW DEFINITION ENDPOINTS =============
 
+VALID_FLOW_TYPES = {"notification", "conversation", "workflow", "task"}
+VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring", "keyword"}  # BUG-336: added keyword
+
+
+@router.post("", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))], include_in_schema=False)
 @router.post("/", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))])
 def create_flow(
     flow: FlowDefinitionCreate,
+    request: Request,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
     """Create a new flow definition."""
     try:
+        # BUG-342: Validate and apply flow_type / execution_method from request
+        resolved_flow_type = (flow.flow_type or "workflow").lower()
+        if resolved_flow_type not in VALID_FLOW_TYPES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid flow_type '{resolved_flow_type}'. Must be one of: {sorted(VALID_FLOW_TYPES)}"
+            )
+        resolved_execution_method = (flow.execution_method or "immediate").lower()
+        if resolved_execution_method not in VALID_EXECUTION_METHODS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid execution_method '{resolved_execution_method}'. Must be one of: {sorted(VALID_EXECUTION_METHODS)}"
+            )
+
         db_flow = FlowDefinition(
             name=flow.name,
             description=flow.description,
             is_active=flow.is_active,
             tenant_id=tenant_context.tenant_id,
-            execution_method="immediate",
-            flow_type="workflow"
+            execution_method=resolved_execution_method,
+            flow_type=resolved_flow_type
         )
         db.add(db_flow)
         db.commit()
         db.refresh(db_flow)
 
+        log_tenant_event(db, tenant_context.tenant_id, tenant_context.user.id, TenantAuditActions.FLOW_CREATE, "flow", str(db_flow.id), {"name": db_flow.name}, request)
         logger.info(f"Created flow definition: {db_flow.id} - {db_flow.name}")
 
         return flow_to_response(db_flow, db)
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error creating flow definition: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error creating flow definition")
+        raise HTTPException(status_code=500, detail="Failed to create flow")
 
 
 @router.post("/create", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))])
 def create_flow_v2(
     flow: FlowCreate,
+    request: Request,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
@@ -855,6 +914,7 @@ def create_flow_v2(
             recurrence_rule=flow.recurrence_rule.model_dump() if flow.recurrence_rule else None,
             flow_type=flow.flow_type.value,
             default_agent_id=flow.default_agent_id,
+            trigger_keywords=flow.trigger_keywords or [],  # BUG-336: keyword triggers
             is_active=True
         )
         db.add(db_flow)
@@ -864,6 +924,210 @@ def create_flow_v2(
         # Create steps if provided
         if flow.steps:
             for step_data in flow.steps:
+                db_step = FlowNode(
+                    flow_definition_id=db_flow.id,
+                    name=step_data.name,
+                    step_description=step_data.description,
+                    type=step_data.type.value,
+                    position=step_data.position,
+                    config_json=json.dumps(_serialize_step_config(step_data.type, step_data.config)),
+                    timeout_seconds=step_data.timeout_seconds,
+                    retry_on_failure=step_data.retry_on_failure,
+                    max_retries=step_data.max_retries,
+                    retry_delay_seconds=step_data.retry_delay_seconds,
+                    condition=step_data.condition,
+                    on_success=step_data.on_success,
+                    on_failure=step_data.on_failure,
+                    allow_multi_turn=step_data.allow_multi_turn,
+                    max_turns=step_data.max_turns,
+                    conversation_objective=step_data.conversation_objective,
+                    agent_id=step_data.agent_id,
+                    persona_id=step_data.persona_id
+                )
+                db.add(db_step)
+            db.commit()
+
+        log_tenant_event(db, tenant_context.tenant_id, tenant_context.user.id, TenantAuditActions.FLOW_CREATE, "flow", str(db_flow.id), {"name": db_flow.name}, request)
+        logger.info(f"Created flow definition v2: {db_flow.id} - {db_flow.name}")
+
+        return flow_to_response(db_flow, db)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error creating flow definition v2")
+        raise HTTPException(status_code=500, detail="Failed to create flow")
+
+
+# ============= FLOW TEMPLATES (WIZARD) ==============
+
+class FlowTemplateInstantiateRequest(BaseModel):
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FlowTemplateInstantiateResponse(BaseModel):
+    flow_id: int
+    name: str
+    steps_created: int
+    template_id: str
+
+
+@router.get("/templates", dependencies=[Depends(require_permission("flows.read"))])
+def list_flow_templates():
+    """List all available pre-built flow templates (wizard catalog)."""
+    from services.flow_template_seeding import list_templates
+    return [t.to_summary() for t in list_templates()]
+
+
+def _validate_template_params(template, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Enforce the template's declared params_schema (required / options / min / max).
+
+    Mutates-and-returns a sanitized copy of the params dict. Numeric bounds are
+    clamped (never trust client-side clamping). Unknown keys are preserved but
+    logged — they are ignored by builders that don't read them.
+    """
+    cleaned: Dict[str, Any] = dict(params or {})
+    # Pass 1: apply defaults for missing keys
+    for spec in template.params_schema:
+        if (cleaned.get(spec.key) is None or cleaned.get(spec.key) == "") and spec.default is not None:
+            cleaned[spec.key] = spec.default
+    # Pass 2: validate
+    for spec in template.params_schema:
+        key = spec.key
+        v = cleaned.get(key)
+        if v is None or v == "":
+            if spec.required:
+                raise HTTPException(status_code=422, detail=f"Missing required parameter: {key}")
+            continue
+        # Numeric clamping
+        if spec.type == "number":
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail=f"Parameter '{key}' must be a number")
+            if spec.min is not None and iv < spec.min:
+                iv = spec.min
+            if spec.max is not None and iv > spec.max:
+                iv = spec.max
+            cleaned[key] = iv
+        # Select / channel — validate against options whitelist
+        if spec.type in ("select", "channel") and spec.options:
+            allowed = [str(o.get("value")) for o in spec.options]
+            if str(v) not in allowed:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Parameter '{key}' must be one of: {', '.join(allowed)}",
+                )
+        # Bound recipient length (defence-in-depth)
+        if spec.type in ("text", "contact", "textarea") and isinstance(v, str) and len(v) > 4000:
+            raise HTTPException(status_code=422, detail=f"Parameter '{key}' exceeds 4000 chars")
+    return cleaned
+
+
+def _validate_tenant_refs(db: Session, tenant_id: str, flow_create) -> None:
+    """Verify every agent_id / persona_id / sandboxed tool referenced by the
+    generated FlowCreate belongs to the caller's tenant. Prevents cross-tenant
+    resource leak through wizard-generated flows.
+    """
+    from models import Persona as PersonaModel, SandboxedTool as SandboxedToolModel
+
+    def _check_agent(agent_id):
+        if agent_id is None:
+            return
+        row = db.query(Agent.id).filter(
+            Agent.id == int(agent_id), Agent.tenant_id == tenant_id
+        ).first()
+        if not row:
+            raise HTTPException(status_code=422, detail=f"Agent {agent_id} not found in this tenant")
+
+    def _check_persona(persona_id):
+        if persona_id is None:
+            return
+        row = db.query(PersonaModel.id).filter(
+            PersonaModel.id == int(persona_id), PersonaModel.tenant_id == tenant_id
+        ).first()
+        if not row:
+            raise HTTPException(status_code=422, detail=f"Persona {persona_id} not found in this tenant")
+
+    def _check_tool(tool_name):
+        if not tool_name:
+            return
+        row = db.query(SandboxedToolModel.id).filter(
+            SandboxedToolModel.name == tool_name,
+            SandboxedToolModel.tenant_id == tenant_id,
+            SandboxedToolModel.is_enabled == True,  # noqa: E712
+        ).first()
+        if not row:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Tool '{tool_name}' not found or disabled in this tenant",
+            )
+
+    _check_agent(flow_create.default_agent_id)
+    for step in (flow_create.steps or []):
+        _check_agent(step.agent_id)
+        _check_persona(step.persona_id)
+        if step.config and getattr(step.config, "tool_name", None) and step.config.tool_type == "custom":
+            _check_tool(step.config.tool_name)
+
+
+@router.post(
+    "/templates/{template_id}/instantiate",
+    response_model=FlowTemplateInstantiateResponse,
+    status_code=201,
+    dependencies=[Depends(require_permission("flows.write"))],
+)
+def instantiate_flow_template(
+    template_id: str,
+    req: FlowTemplateInstantiateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    tenant_context: TenantContext = Depends(get_tenant_context),
+):
+    """Instantiate a pre-built flow template with user-supplied parameters."""
+    from services.flow_template_seeding import get_template
+
+    tmpl = get_template(template_id)
+    if tmpl is None:
+        raise HTTPException(status_code=404, detail=f"Unknown template: {template_id}")
+
+    # 1. Validate + sanitize params against template's declared schema
+    cleaned_params = _validate_template_params(tmpl, req.params)
+
+    # 2. Run builder
+    try:
+        flow_create = tmpl.build(cleaned_params, tenant_context.tenant_id)
+    except KeyError as e:
+        raise HTTPException(status_code=422, detail=f"Missing required parameter: {e}")
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"Invalid parameter: {e}")
+    except Exception:
+        logger.exception(f"Template build failed for {template_id}")
+        raise HTTPException(status_code=500, detail="Template build failed")
+
+    # 3. Enforce multi-tenant isolation on every referenced resource
+    _validate_tenant_refs(db, tenant_context.tenant_id, flow_create)
+
+    try:
+        db_flow = FlowDefinition(
+            name=flow_create.name,
+            description=flow_create.description,
+            tenant_id=tenant_context.tenant_id,
+            execution_method=flow_create.execution_method.value,
+            scheduled_at=flow_create.scheduled_at,
+            recurrence_rule=flow_create.recurrence_rule.model_dump() if flow_create.recurrence_rule else None,
+            flow_type=flow_create.flow_type.value,
+            default_agent_id=flow_create.default_agent_id,
+            is_active=True,
+        )
+        db.add(db_flow)
+        db.commit()
+        db.refresh(db_flow)
+
+        steps_created = 0
+        if flow_create.steps:
+            for step_data in flow_create.steps:
                 db_step = FlowNode(
                     flow_definition_id=db_flow.id,
                     name=step_data.name,
@@ -882,31 +1146,45 @@ def create_flow_v2(
                     max_turns=step_data.max_turns,
                     conversation_objective=step_data.conversation_objective,
                     agent_id=step_data.agent_id,
-                    persona_id=step_data.persona_id
+                    persona_id=step_data.persona_id,
                 )
                 db.add(db_step)
+                steps_created += 1
             db.commit()
 
-        logger.info(f"Created flow definition v2: {db_flow.id} - {db_flow.name}")
+        log_tenant_event(
+            db, tenant_context.tenant_id, tenant_context.user.id,
+            TenantAuditActions.FLOW_CREATE, "flow", str(db_flow.id),
+            {"name": db_flow.name, "template_id": template_id}, request,
+        )
+        logger.info(f"Instantiated flow {db_flow.id} from template {template_id} ({steps_created} steps)")
 
-        return flow_to_response(db_flow, db)
+        return FlowTemplateInstantiateResponse(
+            flow_id=db_flow.id,
+            name=db_flow.name,
+            steps_created=steps_created,
+            template_id=template_id,
+        )
 
-    except Exception as e:
+    except Exception:
         db.rollback()
-        logger.error(f"Error creating flow definition v2: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error instantiating flow template {template_id}")
+        raise HTTPException(status_code=500, detail="Failed to instantiate template")
 
 
-@router.get("/", response_model=List[FlowDefinitionResponse], dependencies=[Depends(require_permission("flows.read"))])
+@router.get("", dependencies=[Depends(require_permission("flows.read"))], include_in_schema=False)
+@router.get("/", dependencies=[Depends(require_permission("flows.read"))])
 def list_flows(
     active: Optional[bool] = None,
     flow_type: Optional[str] = None,
     execution_method: Optional[str] = None,
-    limit: int = 50,
+    search: Optional[str] = None,
+    limit: int = 25,
+    offset: int = 0,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
-    """List all flow definitions with optional filtering."""
+    """List all flow definitions with optional filtering and pagination."""
     try:
         query = db.query(FlowDefinition)
 
@@ -921,13 +1199,22 @@ def list_flows(
         if execution_method is not None:
             query = query.filter(FlowDefinition.execution_method == execution_method)
 
-        flows = query.order_by(FlowDefinition.created_at.desc()).limit(limit).all()
+        if search:
+            query = query.filter(FlowDefinition.name.ilike(f"%{search}%"))
 
-        return [flow_to_response(flow, db) for flow in flows]
+        total = query.count()
+        flows = query.order_by(FlowDefinition.created_at.desc()).offset(offset).limit(limit).all()
+
+        return {
+            "items": [flow_to_response(flow, db) for flow in flows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     except Exception as e:
-        logger.error(f"Error listing flows: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error listing flows")
+        raise HTTPException(status_code=500, detail="Failed to list flows")
 
 
 # ============================================================================
@@ -971,21 +1258,6 @@ def get_tool_metadata(
                                 "name": "query",
                                 "required": True,
                                 "description": "Search query text"
-                            }
-                        ]
-                    }]
-                },
-                "weather": {
-                    "id": "weather",
-                    "name": "Weather",
-                    "commands": [{
-                        "id": "current",
-                        "name": "current",
-                        "parameters": [
-                            {
-                                "name": "location",
-                                "required": True,
-                                "description": "City name or coordinates"
                             }
                         ]
                     }]
@@ -1113,8 +1385,8 @@ def get_tool_metadata(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching tool metadata: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch tool metadata: {str(e)}")
+        logger.exception("Error fetching tool metadata")
+        raise HTTPException(status_code=500, detail="Failed to fetch tool metadata")
 
 
 @router.get("/{flow_id}", response_model=FlowDefinitionResponse, dependencies=[Depends(require_permission("flows.read"))])
@@ -1136,8 +1408,8 @@ def get_flow(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow")
 
 
 @router.get("/{flow_id}/detail", dependencies=[Depends(require_permission("flows.read"))])
@@ -1166,14 +1438,15 @@ def get_flow_detail(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting flow detail {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting flow detail {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve flow details")
 
 
 @router.put("/{flow_id}", response_model=FlowDefinitionResponse, dependencies=[Depends(require_permission("flows.write"))])
 def update_flow(
     flow_id: int,
     flow: FlowDefinitionUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
@@ -1227,6 +1500,7 @@ def update_flow(
         db.commit()
         db.refresh(db_flow)
 
+        log_tenant_event(db, tenant_context.tenant_id, tenant_context.user.id, TenantAuditActions.FLOW_UPDATE, "flow", str(flow_id), {"name": db_flow.name}, request)
         logger.info(f"Updated flow: {flow_id}")
 
         return flow_to_response(db_flow, db)
@@ -1235,8 +1509,8 @@ def update_flow(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error updating flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error updating flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to update flow")
 
 
 @router.patch("/{flow_id}", response_model=FlowDefinitionResponse, dependencies=[Depends(require_permission("flows.write"))])
@@ -1267,7 +1541,10 @@ def patch_flow(
         if flow.flow_type is not None:
             db_flow.flow_type = flow.flow_type.value
         if flow.default_agent_id is not None:
-            db_flow.default_agent_id = flow.default_agent_id
+            # 0 or negative means "clear the default agent"
+            db_flow.default_agent_id = flow.default_agent_id if flow.default_agent_id > 0 else None
+        if flow.trigger_keywords is not None:  # BUG-336: update keyword triggers
+            db_flow.trigger_keywords = flow.trigger_keywords
         if flow.is_active is not None:
             # CRITICAL FIX 2026-01-08: Close active conversation threads when flow is deactivated
             if flow.is_active == False and db_flow.is_active == True:
@@ -1314,13 +1591,14 @@ def patch_flow(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error patching flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error patching flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to update flow")
 
 
 @router.delete("/{flow_id}", status_code=204, dependencies=[Depends(require_permission("flows.delete"))])
 def delete_flow(
     flow_id: int,
+    request: Request,
     force: bool = False,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
@@ -1340,38 +1618,49 @@ def delete_flow(
                 detail=f"Cannot delete flow with {run_count} existing run(s). Use force=true or deactivate instead."
             )
 
-        # Cancel any active conversation threads before deleting
+        # Cancel conversation threads and clear FK references before deleting runs
         if force and run_count > 0:
             # Find all FlowNodeRun IDs for this flow's runs
             run_ids = [r.id for r in db.query(FlowRun.id).filter(FlowRun.flow_definition_id == flow_id).all()]
             if run_ids:
                 node_run_ids = [nr.id for nr in db.query(FlowNodeRun.id).filter(FlowNodeRun.flow_run_id.in_(run_ids)).all()]
                 if node_run_ids:
-                    # Mark active conversation threads as cancelled (not deleted)
                     from datetime import datetime
+                    now = datetime.utcnow()
+                    # Cancel ACTIVE threads (state transition)
                     db.query(ConversationThread).filter(
                         ConversationThread.flow_step_run_id.in_(node_run_ids),
                         ConversationThread.status == 'active'
                     ).update({
                         'status': 'cancelled',
-                        'completed_at': datetime.utcnow(),
+                        'completed_at': now,
                         'goal_summary': 'Flow was deleted'
                     }, synchronize_session=False)
+                    # Clear FK on ALL remaining threads (any status — completed/timeout/cancelled/etc.)
+                    # This is required because the FK has no ON DELETE action and would
+                    # otherwise block the FlowNodeRun cascade below.
+                    db.query(ConversationThread).filter(
+                        ConversationThread.flow_step_run_id.in_(node_run_ids)
+                    ).update({'flow_step_run_id': None}, synchronize_session=False)
 
-            # Delete related runs
-            db.query(FlowRun).filter(FlowRun.flow_definition_id == flow_id).delete()
+            # Delete related node runs first (FK to FlowRun), then runs
+            if run_ids:
+                db.query(FlowNodeRun).filter(FlowNodeRun.flow_run_id.in_(run_ids)).delete(synchronize_session=False)
+            db.query(FlowRun).filter(FlowRun.flow_definition_id == flow_id).delete(synchronize_session=False)
 
+        flow_name = flow.name
         db.delete(flow)
         db.commit()
 
+        log_tenant_event(db, tenant_context.tenant_id, tenant_context.user.id, TenantAuditActions.FLOW_DELETE, "flow", str(flow_id), {"name": flow_name}, request)
         logger.info(f"Deleted flow: {flow_id}")
 
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error deleting flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error deleting flow {flow_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete flow")
 
 
 # ============= FLOW STEP ENDPOINTS =============
@@ -1432,8 +1721,8 @@ def create_step(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error creating step for flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error creating step for flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to create flow step")
 
 
 # Alias for backward compatibility
@@ -1471,8 +1760,8 @@ def list_steps(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error listing steps for flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error listing steps for flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to list flow steps")
 
 
 # Alias for backward compatibility
@@ -1551,8 +1840,8 @@ def update_step(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error updating step {step_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error updating step {step_id}")
+        raise HTTPException(status_code=500, detail="Failed to update flow step")
 
 
 # Alias for backward compatibility
@@ -1566,6 +1855,68 @@ def update_node(
 ):
     """Update node configuration (alias for update_step)."""
     return update_step(flow_id, node_id, node, db, tenant_context)
+
+
+@router.post("/{flow_id}/steps/reorder", dependencies=[Depends(require_permission("flows.write"))])
+def reorder_steps(
+    flow_id: int,
+    positions: list[dict],
+    db: Session = Depends(get_db),
+    tenant_context: TenantContext = Depends(get_tenant_context)
+):
+    """Atomically reorder steps by updating all positions in a single transaction.
+
+    Accepts a list of {step_id, position} dicts. Uses a two-phase approach:
+    first sets all positions to negative temporaries (to avoid unique constraint),
+    then sets final positions.
+    """
+    try:
+        flow_query = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id)
+        flow_query = tenant_context.filter_by_tenant(flow_query, FlowDefinition.tenant_id)
+        if not flow_query.first():
+            raise HTTPException(status_code=404, detail="Flow not found")
+
+        # Validate all steps exist
+        step_ids = [p["step_id"] for p in positions]
+        steps = db.query(FlowNode).filter(
+            FlowNode.flow_definition_id == flow_id,
+            FlowNode.id.in_(step_ids)
+        ).all()
+        if len(steps) != len(step_ids):
+            raise HTTPException(status_code=400, detail="One or more steps not found")
+
+        # Phase 1: Set all affected positions to negative temporaries
+        for i, p in enumerate(positions):
+            db.query(FlowNode).filter(FlowNode.id == p["step_id"]).update(
+                {"position": -(i + 1)}, synchronize_session="fetch"
+            )
+        db.flush()
+
+        # Phase 2: Set final positions and optionally update names
+        for p in positions:
+            update_fields = {"position": p["position"], "updated_at": datetime.utcnow()}
+            if "name" in p and p["name"] is not None:
+                update_fields["name"] = p["name"]
+            db.query(FlowNode).filter(FlowNode.id == p["step_id"]).update(
+                update_fields, synchronize_session="fetch"
+            )
+
+        db.commit()
+        logger.info(f"Reordered {len(positions)} steps for flow {flow_id}")
+
+        # Return updated steps
+        updated = db.query(FlowNode).filter(
+            FlowNode.flow_definition_id == flow_id
+        ).order_by(FlowNode.position).all()
+
+        return [node_to_response(s) for s in updated]
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception(f"Error reordering steps for flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to reorder steps")
 
 
 @router.delete("/{flow_id}/steps/{step_id}", status_code=204, dependencies=[Depends(require_permission("flows.write"))])
@@ -1599,8 +1950,8 @@ def delete_step(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error deleting step {step_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error deleting step {step_id}")
+        raise HTTPException(status_code=500, detail="Failed to delete flow step")
 
 
 # Alias for backward compatibility
@@ -1650,8 +2001,8 @@ def validate_flow(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error validating flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error validating flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to validate flow")
 
 
 # ============= FLOW EXECUTION ENDPOINTS =============
@@ -1665,7 +2016,8 @@ async def execute_flow(
 ):
     """
     Execute a flow immediately (Phase 8.0).
-    Returns immediately with created FlowRun.
+    Returns immediately with a pending FlowRun; execution runs in background.
+    Poll GET /flows/runs/{run_id} for live progress.
     """
     try:
         query = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id)
@@ -1681,21 +2033,44 @@ async def execute_flow(
         if not is_valid:
             raise HTTPException(status_code=400, detail=f"Invalid flow structure: {error_message}")
 
-        logger.info(f"Executing flow {flow_id}")
+        logger.info(f"Executing flow {flow_id} (async)")
 
-        from flows.flow_engine import FlowEngine
-
-        engine = FlowEngine(db)
         trigger_context = run_data.trigger_context_json if run_data else None
 
-        flow_run = await engine.run_flow(
-            flow_definition_id=flow_id,
-            trigger_context=trigger_context,
-            initiator="api",
-            trigger_type="immediate"
-        )
+        # Count steps for the immediate response
+        step_count = db.query(FlowNode).filter(
+            FlowNode.flow_definition_id == flow_id
+        ).count()
 
-        logger.info(f"Flow run {flow_run.id} completed with status: {flow_run.status}")
+        # Create a pending FlowRun and return immediately
+        flow_run = FlowRun(
+            flow_definition_id=flow_id,
+            tenant_id=flow.tenant_id,
+            status="pending",
+            started_at=datetime.utcnow(),
+            initiator="api",
+            trigger_type="immediate",
+            total_steps=step_count,
+            completed_steps=0,
+            failed_steps=0,
+            trigger_context_json=json.dumps(trigger_context) if trigger_context else None
+        )
+        db.add(flow_run)
+        db.commit()
+        db.refresh(flow_run)
+
+        run_id = flow_run.id
+        flow_tenant_id = flow.tenant_id
+
+        # Fire background execution
+        asyncio.create_task(_run_flow_background(
+            run_id=run_id,
+            flow_id=flow_id,
+            trigger_context=trigger_context,
+            tenant_id=flow_tenant_id,
+        ))
+
+        logger.info(f"Flow run {run_id} created (pending), background execution started")
 
         return LegacyFlowRunResponse(
             id=flow_run.id,
@@ -1716,8 +2091,43 @@ async def execute_flow(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error executing flow {flow_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error executing flow {flow_id}")
+        raise HTTPException(status_code=500, detail="Failed to execute flow")
+
+
+async def _run_flow_background(run_id: int, flow_id: int, trigger_context, tenant_id: str):
+    """Execute a flow in the background using its own DB session."""
+    from db import get_global_engine
+    from sqlalchemy.orm import sessionmaker
+    from flows.flow_engine import FlowEngine
+
+    engine_obj = get_global_engine()
+    SessionLocal = sessionmaker(bind=engine_obj)
+    bg_db = SessionLocal()
+    try:
+        flow_engine = FlowEngine(bg_db)
+        await flow_engine.run_flow(
+            flow_definition_id=flow_id,
+            trigger_context=trigger_context,
+            initiator="api",
+            trigger_type="immediate",
+            tenant_id=tenant_id,
+            resume_run_id=run_id,
+        )
+        logger.info(f"Background flow run {run_id} finished")
+    except Exception as e:
+        logger.exception(f"Background flow execution failed for run {run_id}")
+        try:
+            flow_run = bg_db.query(FlowRun).filter(FlowRun.id == run_id).first()
+            if flow_run and flow_run.status not in ("completed", "completed_with_errors", "failed", "cancelled"):
+                flow_run.status = "failed"
+                flow_run.completed_at = datetime.utcnow()
+                flow_run.error_text = f"Background execution error: {str(e)}"
+                bg_db.commit()
+        except Exception:
+            logger.exception(f"Failed to mark run {run_id} as failed after background error")
+    finally:
+        bg_db.close()
 
 
 # Alias for backward compatibility
@@ -1771,5 +2181,5 @@ def cancel_run(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error cancelling run {run_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error cancelling run {run_id}")
+        raise HTTPException(status_code=500, detail="Failed to cancel flow run")

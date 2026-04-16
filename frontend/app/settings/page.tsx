@@ -6,7 +6,7 @@
  * Agent configuration moved to Studio (/agents)
  */
 
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 
@@ -17,6 +17,9 @@ interface SettingCard {
   href: string
   permission?: string
 }
+
+// Essential setting titles — always visible
+const ESSENTIAL_TITLES = ['Organization', 'Team Members', 'System AI', 'Integrations']
 
 // SVG Icon components
 const icons = {
@@ -75,10 +78,37 @@ const icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
     </svg>
   ),
+  filter: (
+    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+    </svg>
+  ),
+  apiClients: (
+    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+    </svg>
+  ),
 }
 
 export default function SettingsHubPage() {
   const { hasPermission, isGlobalAdmin } = useAuth()
+  const [showAdvanced, setShowAdvanced] = useState(false)
+
+  // Persist preference in localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('tsushin_settings_advanced')
+      if (saved === 'true') setShowAdvanced(true)
+    } catch {}
+  }, [])
+
+  const toggleAdvanced = () => {
+    setShowAdvanced(prev => {
+      const next = !prev
+      try { localStorage.setItem('tsushin_settings_advanced', String(next)) } catch {}
+      return next
+    })
+  }
 
   const settingsSections: SettingCard[] = [
     {
@@ -125,10 +155,10 @@ export default function SettingsHubPage() {
     },
     {
       title: 'Audit Logs',
-      description: 'Track all activities and changes in your organization',
+      description: 'Track activities, export logs, and configure syslog forwarding',
       icon: icons.audit,
       href: '/settings/audit-logs',
-      permission: 'users.read',
+      permission: 'audit.read',
     },
     {
       title: 'Model Pricing',
@@ -145,6 +175,13 @@ export default function SettingsHubPage() {
       permission: 'org.settings.write',
     },
     {
+      title: 'Vector Stores',
+      description: 'Configure default vector store for agent memory',
+      icon: icons.ai,
+      href: '/settings/vector-stores',
+      permission: 'org.settings.read',
+    },
+    {
       title: 'Prompts & Patterns',
       description: 'Manage system prompts, tone presets, and command patterns',
       icon: icons.ai,
@@ -156,6 +193,20 @@ export default function SettingsHubPage() {
       description: 'AI-powered security monitoring and threat detection',
       icon: icons.sentinel,
       href: '/settings/sentinel',
+      permission: 'org.settings.write',
+    },
+    {
+      title: 'API Clients',
+      description: 'Manage OAuth2 API clients for programmatic access',
+      icon: icons.apiClients,
+      href: '/settings/api-clients',
+      permission: 'org.settings.read',
+    },
+    {
+      title: 'Message Filtering',
+      description: 'Configure group filters, DM allowlists, keywords, and auto-response rules.',
+      icon: icons.filter,
+      href: '/settings/filtering',
       permission: 'org.settings.write',
     },
   ]
@@ -173,6 +224,9 @@ export default function SettingsHubPage() {
   const availableSections = settingsSections.filter(
     (section) => !section.permission || hasPermission(section.permission)
   )
+
+  const essentialSections = availableSections.filter((s) => ESSENTIAL_TITLES.includes(s.title))
+  const advancedSections = availableSections.filter((s) => !ESSENTIAL_TITLES.includes(s.title))
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -216,13 +270,11 @@ export default function SettingsHubPage() {
           </div>
         )}
 
-        {/* Settings Sections */}
-        <div>
-          <h2 className="text-xl font-display font-semibold text-white mb-6">
-            Settings
-          </h2>
+        {/* Essential Settings */}
+        <div className="mb-8">
+          <p className="text-xs font-semibold text-tsushin-slate uppercase tracking-wider mb-3">Essential</p>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {availableSections.map((section) => (
+            {essentialSections.map((section) => (
               <Link key={section.href} href={section.href}>
                 <div className="glass-card rounded-xl p-6 hover:border-teal-500/50 transition-all hover:scale-[1.02] cursor-pointer group">
                   <div className="w-14 h-14 rounded-xl bg-teal-500/10 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
@@ -237,6 +289,40 @@ export default function SettingsHubPage() {
             ))}
           </div>
         </div>
+
+        {/* Advanced Settings Toggle */}
+        {advancedSections.length > 0 && (
+          <div className="mb-8">
+            <button
+              onClick={toggleAdvanced}
+              className="flex items-center gap-2 text-sm text-tsushin-slate hover:text-white transition-colors mb-3"
+            >
+              <svg className={`w-4 h-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              <span className="text-xs font-semibold uppercase tracking-wider">
+                {showAdvanced ? 'Hide' : 'Show'} advanced settings ({advancedSections.length} more)
+              </span>
+            </button>
+            {showAdvanced && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in">
+                {advancedSections.map((section) => (
+                  <Link key={section.href} href={section.href}>
+                    <div className="glass-card rounded-xl p-6 hover:border-teal-500/50 transition-all hover:scale-[1.02] cursor-pointer group">
+                      <div className="w-14 h-14 rounded-xl bg-teal-500/10 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        {section.icon}
+                      </div>
+                      <h3 className="text-lg font-semibold text-white mb-2">
+                        {section.title}
+                      </h3>
+                      <p className="text-sm text-tsushin-slate">{section.description}</p>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Quick Links to Related Sections */}
         <div className="mt-12 glass-card rounded-xl p-6">
@@ -259,6 +345,10 @@ export default function SettingsHubPage() {
             <Link href="/agents/personas" className="flex items-center gap-2 text-teal-400 hover:text-teal-300 transition-colors">
               <span>Personas</span>
               <span className="text-tsushin-slate">→ Studio / Personas</span>
+            </Link>
+            <Link href="/agents/custom-skills" className="flex items-center gap-2 text-teal-400 hover:text-teal-300 transition-colors">
+              <span>Custom Skills</span>
+              <span className="text-tsushin-slate">→ Studio / Custom Skills</span>
             </Link>
           </div>
         </div>

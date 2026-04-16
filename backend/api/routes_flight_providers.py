@@ -121,10 +121,10 @@ def list_flight_providers(
             for p in providers
         ]
     except Exception as e:
-        logger.error(f"Failed to list providers: {e}")
+        logger.exception("Failed to list providers")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list providers: {str(e)}"
+            detail="Failed to list providers"
         )
 
 
@@ -299,10 +299,10 @@ def configure_amadeus(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Failed to configure Amadeus: {e}")
+        logger.exception("Failed to configure Amadeus")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to configure Amadeus: {str(e)}"
+            detail="Failed to configure Amadeus integration"
         )
 
 
@@ -395,10 +395,10 @@ async def test_amadeus_connection(
         return health
 
     except Exception as e:
-        logger.error(f"Amadeus connection test failed: {e}")
+        logger.exception("Amadeus connection test failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Connection test failed: {str(e)}"
+            detail="Connection test failed"
         )
 
 
@@ -445,8 +445,8 @@ def delete_amadeus_integration(
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Failed to delete Amadeus integration: {e}")
+        logger.exception("Failed to delete Amadeus integration")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete integration: {str(e)}"
+            detail="Failed to delete integration"
         )

@@ -2,7 +2,9 @@
 
 **Production-ready Text-to-Speech using Kokoro-82M model via Kokoro-FastAPI**
 
-This directory contains Docker Compose configuration for running the [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) service, which provides an **OpenAI-compatible API** for the Kokoro TTS model.
+This directory documents the upstream [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) image used by the standalone `backend/kokoro-tts/docker-compose.yml` example. The main repository also exposes Kokoro through the optional root-level `tts` profile.
+
+The checked-in `kokoro_service.py` file is a separate reference FastAPI implementation for local experimentation. It is **not** the service launched by the root compose stack or by the standalone compose file in this directory.
 
 ## Why Kokoro-FastAPI?
 
@@ -19,6 +21,7 @@ This directory contains Docker Compose configuration for running the [Kokoro-Fas
 ### Option 1: Docker Compose (Recommended)
 
 ```bash
+# From this directory
 cd backend/kokoro-tts
 
 # Pull the latest image (optional, will pull on first up)
@@ -33,6 +36,8 @@ sudo docker compose logs -f kokoro-tts
 # Stop the service
 sudo docker compose down
 ```
+
+From the repository root, you can also enable Kokoro in the main stack with `docker compose --profile tts up -d`.
 
 ### Option 2: Docker Run
 

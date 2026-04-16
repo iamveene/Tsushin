@@ -68,15 +68,23 @@ def run_migration():
             ]
 
             for name, resource, action, description in permissions_to_add:
-                # Check if permission exists
                 existing = session.execute(
-                    text(f"SELECT id FROM permission WHERE name = '{name}'")
+                    text("SELECT id FROM permission WHERE name = :name"),
+                    {"name": name},
                 ).fetchone()
 
                 if not existing:
                     session.execute(
-                        text(f"""INSERT INTO permission (name, resource, action, description)
-                            VALUES ('{name}', '{resource}', '{action}', '{description}')""")
+                        text(
+                            "INSERT INTO permission (name, resource, action, description) "
+                            "VALUES (:name, :resource, :action, :description)"
+                        ),
+                        {
+                            "name": name,
+                            "resource": resource,
+                            "action": action,
+                            "description": description,
+                        },
                     )
                     print(f"  [+] Added permission: {name}")
                 else:
@@ -86,11 +94,13 @@ def run_migration():
 
         # Get permission IDs
         tools_manage_id = session.execute(
-            text("SELECT id FROM permission WHERE name = 'tools.manage'")
+            text("SELECT id FROM permission WHERE name = :name"),
+            {"name": "tools.manage"},
         ).fetchone()[0]
 
         tools_execute_id = session.execute(
-            text("SELECT id FROM permission WHERE name = 'tools.execute'")
+            text("SELECT id FROM permission WHERE name = :name"),
+            {"name": "tools.execute"},
         ).fetchone()[0]
 
         print(f"[INFO] Permission IDs: tools.manage={tools_manage_id}, tools.execute={tools_execute_id}")
@@ -105,9 +115,9 @@ def run_migration():
         ]
 
         for role_name, perm_ids in role_permissions:
-            # Get role ID
             role_result = session.execute(
-                text(f"SELECT id FROM role WHERE name = '{role_name}'")
+                text("SELECT id FROM role WHERE name = :role_name"),
+                {"role_name": role_name},
             ).fetchone()
 
             if not role_result:
@@ -117,16 +127,21 @@ def run_migration():
             role_id = role_result[0]
 
             for perm_id in perm_ids:
-                # Check if mapping exists
                 existing_mapping = session.execute(
-                    text(f"""SELECT id FROM role_permission
-                        WHERE role_id = {role_id} AND permission_id = {perm_id}""")
+                    text(
+                        "SELECT id FROM role_permission "
+                        "WHERE role_id = :role_id AND permission_id = :perm_id"
+                    ),
+                    {"role_id": role_id, "perm_id": perm_id},
                 ).fetchone()
 
                 if not existing_mapping:
                     session.execute(
-                        text(f"""INSERT INTO role_permission (role_id, permission_id)
-                            VALUES ({role_id}, {perm_id})""")
+                        text(
+                            "INSERT INTO role_permission (role_id, permission_id) "
+                            "VALUES (:role_id, :perm_id)"
+                        ),
+                        {"role_id": role_id, "perm_id": perm_id},
                     )
                     perm_name = "tools.manage" if perm_id == tools_manage_id else "tools.execute"
                     print(f"  [+] Assigned {perm_name} to role: {role_name}")

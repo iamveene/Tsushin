@@ -4,7 +4,7 @@ Browser Automation Skill - AI-powered web browser control
 Phase 14.5: Browser Automation Skill
 
 Allows agents to control web browsers via natural language commands.
-Supports both container mode (isolated) and host mode (authenticated sessions).
+Uses Playwright in container mode for secure, isolated browser automation.
 
 Actions supported:
 - Navigate to URLs
@@ -39,13 +39,12 @@ class BrowserAutomationSkill(BaseSkill):
     Browser Automation skill for AI-powered web interaction.
 
     Parses natural language commands into browser actions and executes them
-    via the configured provider (Playwright for container mode, MCP Browser for host mode).
+    via Playwright in container mode.
 
     Features:
     - Natural language to action parsing
     - Multi-step command execution
     - Screenshot capture with auto-upload capability
-    - Host mode authorization (whitelist-based)
     - Token tracking for cost monitoring
 
     Skills-as-Tools (Phase 4):
@@ -57,7 +56,20 @@ class BrowserAutomationSkill(BaseSkill):
     skill_type = "browser_automation"
     skill_name = "Browser Automation"
     skill_description = "Control web browsers, navigate websites, click elements, fill forms, extract content, and capture screenshots"
-    execution_mode = "hybrid"  # Support both tool and legacy modes
+    execution_mode = "tool"
+
+    def _resolve_tenant_id(self) -> Optional[str]:
+        """Resolve tenant_id from agent context for API key lookups."""
+        agent_id = getattr(self, '_agent_id', None)
+        if agent_id and self._db:
+            try:
+                from models import Agent
+                agent = self._db.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    return agent.tenant_id
+            except Exception:
+                pass
+        return None
 
     def __init__(self, db: Optional[Session] = None, token_tracker=None):
         """
@@ -83,14 +95,15 @@ class BrowserAutomationSkill(BaseSkill):
         Returns:
             True if message requests browser automation
         """
+        config = getattr(self, '_config', {}) or self.get_default_config()
+        if not self.is_legacy_enabled(config):
+            return False
+
         # Skip if message has media (audio, image, etc.)
         if message.media_type:
             return False
 
         text = message.body.lower()
-
-        # Get configuration
-        config = getattr(self, '_config', {}) or self.get_default_config()
         keywords = config.get('keywords', self.get_default_config()['keywords'])
         use_ai_fallback = config.get('use_ai_fallback', True)
 
@@ -158,7 +171,7 @@ class BrowserAutomationSkill(BaseSkill):
             skill_description=self.skill_description,
             model=ai_model,
             custom_examples=custom_examples,
-            db=self._db_session
+            db=self._db
         )
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
@@ -166,10 +179,9 @@ class BrowserAutomationSkill(BaseSkill):
         Process browser automation request.
 
         Steps:
-        1. Check host mode authorization (if applicable)
-        2. Parse natural language into actions
-        3. Execute actions via provider
-        4. Format and return results
+        1. Parse natural language into actions
+        2. Execute actions via Playwright provider
+        3. Format and return results
 
         Args:
             message: Inbound message with browser command
@@ -181,26 +193,12 @@ class BrowserAutomationSkill(BaseSkill):
         try:
             logger.info(f"BrowserAutomationSkill: Processing message: {message.body[:100]}...")
 
-            # Get mode and provider settings
-            mode = config.get('mode', 'container')
-            provider_type = config.get('provider_type', 'playwright')
+            # Store context for Sentinel SSRF checks in _execute_action
+            self._tenant_id = getattr(message, 'tenant_id', None)
+            self._agent_id = getattr(message, 'agent_id', None)
+            self._sender_key = getattr(message, 'sender_key', None)
 
-            # TODO: Re-enable when host mode is implemented
-            # Host mode authorization check
-            # if mode == 'host':
-            #     allowed_users = config.get('allowed_user_keys', [])
-            #     if allowed_users and message.sender_key not in allowed_users:
-            #         logger.warning(
-            #             f"BrowserAutomationSkill: Unauthorized host mode access attempt "
-            #             f"by {message.sender_key}"
-            #         )
-            #         return SkillResult(
-            #             success=False,
-            #             output="You don't have permission to use host browser mode. "
-            #                    "Contact the admin to be added to the whitelist.",
-            #             metadata={'error': 'unauthorized', 'mode': 'host'}
-            #         )
-            #     logger.info(f"BrowserAutomationSkill: Host mode access granted to {message.sender_key}")
+            provider_type = config.get('provider_type', 'playwright')
 
             # Parse natural language into actions
             actions = await self._parse_intent(message.body, config)
@@ -293,7 +291,6 @@ class BrowserAutomationSkill(BaseSkill):
 
             metadata = {
                 'provider': provider_type,
-                'mode': mode,
                 'actions_executed': len(results),
                 'actions_succeeded': sum(1 for r in results if r.success),
                 'screenshot_paths': screenshot_paths,
@@ -333,7 +330,9 @@ class BrowserAutomationSkill(BaseSkill):
             ai_client = AIClient(
                 provider=config.get('model_provider', 'gemini'),
                 model_name=config.get('model_name', 'gemini-2.5-flash'),
-                db=self._db
+                db=self._db,
+                token_tracker=self.token_tracker,
+                tenant_id=self._resolve_tenant_id()
             )
 
             system_prompt = """You are a browser automation command parser. Convert natural language into structured browser actions.
@@ -478,6 +477,70 @@ Return JSON array only:"""
 
         return None
 
+    async def _sentinel_ssrf_check(self, url: str, tenant_id: str = None, agent_id: int = None, sender_key: str = None) -> bool:
+        """
+        Run Sentinel browser_ssrf analysis on a URL before navigation.
+
+        This provides LLM-based intent analysis complementing the pattern-based
+        SSRF validation in ssrf_validator.py. Catches obfuscated or indirect
+        SSRF attempts that pattern matching might miss.
+
+        Args:
+            url: URL to check
+            tenant_id: Tenant ID for config resolution
+            agent_id: Agent ID for agent-specific config
+            sender_key: User identifier for audit logging
+
+        Returns:
+            True if URL is safe to navigate, False if blocked by Sentinel
+        """
+        if not self._db:
+            return True  # No DB session = can't run Sentinel check
+
+        try:
+            from services.sentinel_service import SentinelService
+            sentinel = SentinelService(self._db, tenant_id, token_tracker=self.token_tracker)
+            result = await sentinel.analyze_browser_url(
+                url=url,
+                agent_id=agent_id,
+                sender_key=sender_key,
+                skill_type="browser_automation",
+            )
+
+            if result.is_threat_detected and result.action == "blocked":
+                # BUG-354 FIX: When Sentinel's LLM is unavailable it returns a
+                # fail-closed block with "Security analysis unavailable".  For
+                # browser navigation this is too aggressive — allow navigation
+                # and let the pattern-based ssrf_validator in PlaywrightProvider
+                # still protect against real SSRF.
+                if "Security analysis unavailable" in (result.threat_reason or ""):
+                    logger.warning(
+                        f"Sentinel browser_ssrf LLM unavailable for {url}, "
+                        f"allowing navigation (pattern-based SSRF validator still active)"
+                    )
+                    return True
+
+                logger.warning(
+                    f"Sentinel browser_ssrf blocked navigation to {url}: "
+                    f"score={result.threat_score}, reason={result.threat_reason}"
+                )
+                return False
+
+            if result.is_threat_detected:
+                # detect_only or warn_only mode — log but allow
+                logger.info(
+                    f"Sentinel browser_ssrf detected (non-blocking): {url}, "
+                    f"score={result.threat_score}, reason={result.threat_reason}"
+                )
+
+            return True
+
+        except Exception as e:
+            # Fail open: if Sentinel check fails, allow navigation
+            # The pattern-based ssrf_validator in PlaywrightProvider still protects
+            logger.warning(f"Sentinel browser_ssrf check failed (allowing): {e}")
+            return True
+
     async def _execute_action(self, provider, action_def: Dict) -> BrowserResult:
         """
         Execute a single browser action.
@@ -495,8 +558,22 @@ Return JSON array only:"""
         logger.info(f"Executing action: {action_name} with params: {params}")
 
         if action_name == 'navigate':
+            url = params.get('url', '')
+            # Sentinel SSRF pre-check (LLM-based intent analysis)
+            if not await self._sentinel_ssrf_check(
+                url,
+                tenant_id=getattr(self, '_tenant_id', None),
+                agent_id=getattr(self, '_agent_id', None),
+                sender_key=getattr(self, '_sender_key', None),
+            ):
+                return BrowserResult(
+                    success=False,
+                    action='navigate',
+                    data={},
+                    error="Navigation blocked by security policy"
+                )
             return await provider.navigate(
-                url=params.get('url', ''),
+                url=url,
                 wait_until=params.get('wait_until', 'load')
             )
 
@@ -527,12 +604,65 @@ Return JSON array only:"""
                 script=params.get('script', '')
             )
 
+        # 35b: Rich action set
+        elif action_name == 'scroll':
+            return await provider.scroll(
+                selector=params.get('selector', 'body'),
+                x=params.get('x', 0),
+                y=params.get('y', 300),
+            )
+        elif action_name == 'select_option':
+            return await provider.select_option(
+                selector=params.get('selector', ''),
+                value=params.get('value', ''),
+            )
+        elif action_name == 'hover':
+            return await provider.hover(
+                selector=params.get('selector', ''),
+            )
+        elif action_name == 'wait_for':
+            return await provider.wait_for(
+                selector=params.get('selector', ''),
+                state=params.get('state', 'visible'),
+                timeout_ms=params.get('timeout_ms'),
+            )
+        elif action_name == 'go_back':
+            return await provider.go_back()
+        elif action_name == 'go_forward':
+            return await provider.go_forward()
+        elif action_name == 'get_attribute':
+            return await provider.get_attribute(
+                selector=params.get('selector', ''),
+                attribute=params.get('attribute', ''),
+            )
+        elif action_name == 'get_page_url':
+            return await provider.get_page_url()
+        elif action_name == 'type_text':
+            return await provider.type_text(
+                selector=params.get('selector', ''),
+                text=params.get('text', params.get('value', '')),
+                delay_ms=params.get('delay_ms', 0),
+            )
+
+        # 35c: Multi-tab actions
+        elif action_name == 'open_tab':
+            return await provider.open_tab(url=params.get('url'))
+        elif action_name == 'switch_tab':
+            return await provider.switch_tab(tab_id=params.get('tab_id', ''))
+        elif action_name == 'close_tab':
+            return await provider.close_tab(tab_id=params.get('tab_id', ''))
+        elif action_name == 'list_tabs':
+            return await provider.list_tabs()
+
         else:
+            from hub.providers.browser_automation_provider import BrowserErrorCode
             return BrowserResult(
                 success=False,
                 action=action_name,
                 data={},
-                error=f"Unknown action: {action_name}"
+                error=f"Unknown action: {action_name}",
+                error_code=BrowserErrorCode.UNKNOWN,
+                suggestions=[f"Available actions: navigate, click, fill, extract, screenshot, execute_script, scroll, select_option, hover, wait_for, go_back, go_forward, get_attribute, get_page_url, type_text, open_tab, switch_tab, close_tab, list_tabs"],
             )
 
     def _format_results(self, results: List[BrowserResult]) -> str:
@@ -583,7 +713,14 @@ Return JSON array only:"""
                     lines.append(f"{result.action}: Success")
 
             else:
-                lines.append(f"{result.action}: Failed - {result.error}")
+                # 35f: Structured error feedback
+                msg = f"{result.action}: Failed"
+                if result.error_code:
+                    msg += f" [{result.error_code.value}]"
+                msg += f" — {result.error}"
+                if result.suggestions:
+                    msg += "\n  Suggestions:\n" + "\n".join(f"  - {s}" for s in result.suggestions)
+                lines.append(msg)
 
         return "\n\n".join(lines) if lines else "No actions executed."
 
@@ -596,14 +733,7 @@ Return JSON array only:"""
             Default config dict
         """
         return {
-            "keywords": [
-                # English
-                "browser", "browse", "navigate", "screenshot", "webpage", "website",
-                "web page", "go to",
-                # Portuguese
-                "navegador", "navegar", "captura de tela", "pagina", "site",
-                "acessar"
-            ],
+            "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "provider_type": "playwright",
@@ -638,8 +768,8 @@ Return JSON array only:"""
                 },
                 "provider_type": {
                     "type": "string",
-                    "enum": ["playwright", "mcp_browser"],
-                    "description": "Browser automation provider",
+                    "enum": ["playwright", "cdp"],
+                    "description": "playwright=isolated container browser, cdp=connect to Chrome on host (authenticated sessions)",
                     "default": "playwright"
                 },
                 "timeout_seconds": {
@@ -684,10 +814,19 @@ Return JSON array only:"""
             "risk_notes": (
                 "URL mentions and screenshot requests are expected for browser automation. "
                 "Still flag: credential harvesting pages, phishing domains, "
-                "requests to extract passwords/sensitive data, or commands that "
-                "try to bypass security measures."
+                "requests to extract passwords/sensitive data, commands that "
+                "try to bypass security measures, and SSRF attempts targeting "
+                "internal IPs, cloud metadata, or Docker/Kubernetes services."
             )
         }
+
+    @classmethod
+    def get_sentinel_exemptions(cls) -> list:
+        """
+        Browser automation does NOT exempt browser_ssrf detection.
+        SSRF protection must remain active even when the skill is enabled.
+        """
+        return []  # No exemptions — SSRF checks stay active
 
     # =========================================================================
     # SKILLS-AS-TOOLS: MCP TOOL DEFINITIONS (Phase 4)
@@ -708,28 +847,38 @@ Return JSON array only:"""
             "title": "Browser Control",
             "description": (
                 "Control a web browser to navigate websites, take screenshots, click elements, "
-                "fill forms, and extract content. Use 'container' mode for public websites, "
-                "'host' mode for sites requiring your logged-in browser session (requires authorization)."
+                "fill forms, extract content, scroll, hover, wait for elements, manage tabs, "
+                "and more. Use 'container' mode for public websites."
             ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["navigate", "screenshot", "click", "fill", "extract"],
-                        "description": "Browser action to perform"
+                        "enum": [
+                            "navigate", "screenshot", "click", "fill", "extract", "execute_script",
+                            "scroll", "select_option", "hover", "wait_for",
+                            "go_back", "go_forward", "get_attribute", "get_page_url", "type_text",
+                            "open_tab", "switch_tab", "close_tab", "list_tabs",
+                        ],
+                        "description": (
+                            "Browser action to perform. Core: navigate, click, fill, extract, screenshot. "
+                            "Interaction: scroll, hover, select_option, wait_for, type_text, execute_script. "
+                            "Navigation: go_back, go_forward, get_page_url, get_attribute. "
+                            "Tabs: open_tab, switch_tab, close_tab, list_tabs."
+                        ),
                     },
                     "url": {
                         "type": "string",
-                        "description": "URL to navigate to (required for 'navigate' action)"
+                        "description": "URL for navigate/open_tab actions"
                     },
                     "selector": {
                         "type": "string",
-                        "description": "CSS selector for element targeting (for click/fill/extract/screenshot). Examples: '#login-btn', 'input[name=email]', '.submit-button'"
+                        "description": "CSS selector for element targeting. Examples: '#login-btn', 'input[name=email]', '.submit-button'"
                     },
                     "value": {
                         "type": "string",
-                        "description": "Text value to fill (required for 'fill' action)"
+                        "description": "Text value for fill/select_option/type_text actions"
                     },
                     "full_page": {
                         "type": "boolean",
@@ -738,21 +887,58 @@ Return JSON array only:"""
                     },
                     "mode": {
                         "type": "string",
-                        "enum": ["container", "host"],
-                        "description": "container=isolated browser (default), host=user's authenticated browser (requires whitelist)",
+                        "enum": ["container", "cdp"],
+                        "description": "container=isolated Playwright browser (default), cdp=connect to host Chrome with authenticated sessions",
                         "default": "container"
                     },
                     "wait_until": {
                         "type": "string",
                         "enum": ["load", "domcontentloaded", "networkidle"],
-                        "description": "When to consider navigation complete (for navigate action)",
+                        "description": "When to consider navigation complete",
                         "default": "load"
-                    }
+                    },
+                    "x": {
+                        "type": "integer",
+                        "description": "Horizontal scroll amount in pixels (for scroll action)",
+                        "default": 0
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Vertical scroll amount in pixels (for scroll action). Positive=down, negative=up",
+                        "default": 300
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": ["visible", "hidden", "attached", "detached"],
+                        "description": "Element state to wait for (for wait_for action)",
+                        "default": "visible"
+                    },
+                    "attribute": {
+                        "type": "string",
+                        "description": "Element attribute name to read (for get_attribute action). Examples: 'href', 'src', 'class', 'data-id'"
+                    },
+                    "delay_ms": {
+                        "type": "integer",
+                        "description": "Delay between keystrokes in ms (for type_text action, 0=instant)",
+                        "default": 0
+                    },
+                    "tab_id": {
+                        "type": "string",
+                        "description": "Tab identifier (for switch_tab/close_tab actions). Use list_tabs to see available IDs"
+                    },
+                    "script": {
+                        "type": "string",
+                        "description": "JavaScript code to execute (for execute_script action)"
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Custom timeout in milliseconds (for wait_for action)"
+                    },
                 },
                 "required": ["action"]
             },
             "annotations": {
-                "destructive": True,  # Can modify page state
+                "destructive": True,
                 "idempotent": False,
                 "audience": ["user", "assistant"]
             }
@@ -784,43 +970,83 @@ Return JSON array only:"""
         Returns:
             SkillResult with browser operation result
         """
+        # Store context for Sentinel SSRF checks
+        self._tenant_id = getattr(message, 'tenant_id', None)
+        self._agent_id = getattr(message, 'agent_id', None)
+        self._sender_key = getattr(message, 'sender_key', None)
+
         action = arguments.get("action")
+
+        ALL_ACTIONS = [
+            "navigate", "screenshot", "click", "fill", "extract", "execute_script",
+            "scroll", "select_option", "hover", "wait_for",
+            "go_back", "go_forward", "get_attribute", "get_page_url", "type_text",
+            "open_tab", "switch_tab", "close_tab", "list_tabs",
+        ]
 
         if not action:
             return SkillResult(
                 success=False,
-                output="Action is required. Use 'navigate', 'screenshot', 'click', 'fill', or 'extract'.",
+                output=f"Action is required. Available actions: {', '.join(ALL_ACTIONS)}",
                 metadata={"error": "missing_action", "skip_ai": True}
             )
 
-        # Get mode from arguments or config
-        mode = arguments.get("mode", config.get("mode", "container"))
-        provider_type = config.get("provider_type", "playwright")
+        # Resolve provider: mode argument overrides config
+        mode = arguments.get("mode")
+        if mode == "cdp":
+            provider_type = "cdp"
+        elif mode == "container":
+            provider_type = "playwright"
+        else:
+            provider_type = config.get("provider_type", "playwright")
 
-        # Host mode authorization check
-        if mode == "host":
-            allowed_users = config.get("allowed_user_keys", [])
-            if allowed_users and message.sender_key not in allowed_users:
-                logger.warning(
-                    f"BrowserAutomationSkill.execute_tool: Unauthorized host mode access attempt "
-                    f"by {message.sender_key}"
-                )
-                return SkillResult(
-                    success=False,
-                    output="You don't have permission to use host browser mode. "
-                           "Contact the admin to be added to the whitelist.",
-                    metadata={"error": "unauthorized", "mode": "host", "skip_ai": True}
-                )
-            logger.info(f"BrowserAutomationSkill.execute_tool: Host mode access granted to {message.sender_key}")
-
-        logger.info(f"BrowserAutomationSkill.execute_tool: action={action}, mode={mode}, provider={provider_type}")
+        logger.info(f"BrowserAutomationSkill.execute_tool: action={action}, provider={provider_type}")
 
         try:
-            # Get provider
-            provider = BrowserAutomationRegistry.get_provider(
-                provider_name=provider_type,
-                db=self._db
-            )
+            # Determine if we should use persistent sessions
+            # CDP mode defaults to persistent (Chrome is already running)
+            use_session = config.get("session_persistence", provider_type == "cdp")
+
+            if use_session:
+                from hub.providers.browser_session_manager import BrowserSessionManager, BrowserSessionLimitError
+                from hub.providers.browser_automation_provider import BrowserConfig as _BrowserConfig
+                try:
+                    # Build config for session manager
+                    session_config = _BrowserConfig(
+                        provider_type=provider_type,
+                        cdp_url=config.get("cdp_url", "http://host.docker.internal:9222"),
+                        timeout_seconds=config.get("timeout_seconds", 30),
+                    )
+                    # Resolve provider factory
+                    provider_factory = None
+                    if provider_type == "cdp":
+                        from hub.providers.cdp_provider import CDPProvider
+                        provider_factory = CDPProvider
+
+                    session = await BrowserSessionManager.instance().get_or_create(
+                        tenant_id=getattr(message, 'tenant_id', '') or '',
+                        agent_id=getattr(message, 'agent_id', 0) or 0,
+                        sender_key=getattr(message, 'sender_key', '') or '',
+                        config=session_config,
+                        ttl_seconds=config.get("session_ttl_seconds", 300),
+                        provider_factory=provider_factory,
+                    )
+                    provider = session.provider
+                    should_cleanup = False  # Session manager owns lifecycle
+                    logger.info("BrowserAutomationSkill.execute_tool: Using persistent session")
+                except BrowserSessionLimitError as e:
+                    return SkillResult(
+                        success=False,
+                        output=f"Cannot open browser: {e}",
+                        metadata={"error": "session_limit", "skip_ai": True}
+                    )
+            else:
+                # Stateless: fresh provider per request
+                provider = BrowserAutomationRegistry.get_provider(
+                    provider_name=provider_type,
+                    db=self._db
+                )
+                should_cleanup = True
 
             if not provider:
                 return SkillResult(
@@ -833,7 +1059,7 @@ Return JSON array only:"""
             screenshot_paths = []
 
             try:
-                await provider.initialize()
+                await provider.initialize()  # no-op if session already initialized
                 logger.info("BrowserAutomationSkill.execute_tool: Provider initialized")
 
                 # Execute the requested action
@@ -864,26 +1090,55 @@ Return JSON array only:"""
                     result = await self._execute_tool_fill(provider, arguments)
                 elif action == "extract":
                     result = await self._execute_tool_extract(provider, arguments)
+                elif action in ALL_ACTIONS:
+                    # 35b/35c: Delegate all other valid actions via _execute_action
+                    action_def = {"action": action, "params": arguments}
+                    browser_result = await self._execute_action(provider, action_def)
+                    if browser_result.success:
+                        # Format data for output
+                        data_summary = ", ".join(f"{k}={v}" for k, v in browser_result.data.items() if k != "tabs")
+                        output = f"{action}: {data_summary}" if data_summary else f"{action}: Success"
+                        result = SkillResult(
+                            success=True, output=output,
+                            metadata={**browser_result.data, "skip_ai": True}
+                        )
+                    else:
+                        # 35f: Include structured error info
+                        error_info = browser_result.error or "Unknown error"
+                        suggestions_text = ""
+                        if browser_result.suggestions:
+                            suggestions_text = "\nSuggestions:\n" + "\n".join(f"- {s}" for s in browser_result.suggestions)
+                        result = SkillResult(
+                            success=False,
+                            output=f"{action} failed: {error_info}{suggestions_text}",
+                            metadata={
+                                "error": error_info,
+                                "error_code": browser_result.error_code.value if browser_result.error_code else None,
+                                "suggestions": browser_result.suggestions,
+                                "skip_ai": True,
+                            }
+                        )
                 else:
                     result = SkillResult(
                         success=False,
-                        output=f"Unknown action: {action}. Use 'navigate', 'screenshot', 'click', 'fill', or 'extract'.",
+                        output=f"Unknown action: {action}. Available: {', '.join(ALL_ACTIONS)}",
                         metadata={"error": "invalid_action", "skip_ai": True}
                     )
 
             finally:
-                await provider.cleanup()
-                logger.info("BrowserAutomationSkill.execute_tool: Provider cleaned up")
+                if should_cleanup:
+                    await provider.cleanup()
+                    logger.info("BrowserAutomationSkill.execute_tool: Provider cleaned up")
+                else:
+                    logger.info("BrowserAutomationSkill.execute_tool: Session kept alive")
 
             # Add common metadata
             if result.metadata:
                 result.metadata["provider"] = provider_type
-                result.metadata["mode"] = mode
                 result.metadata["action"] = action
             else:
                 result.metadata = {
                     "provider": provider_type,
-                    "mode": mode,
                     "action": action,
                     "skip_ai": True
                 }
@@ -919,6 +1174,19 @@ Return JSON array only:"""
         # Normalize URL
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
+
+        # Sentinel SSRF pre-check (LLM-based intent analysis)
+        if not await self._sentinel_ssrf_check(
+            url,
+            tenant_id=getattr(self, '_tenant_id', None),
+            agent_id=getattr(self, '_agent_id', None),
+            sender_key=getattr(self, '_sender_key', None),
+        ):
+            return SkillResult(
+                success=False,
+                output="Navigation blocked by security policy",
+                metadata={"error": "ssrf_blocked", "skip_ai": True}
+            )
 
         wait_until = arguments.get("wait_until", "load")
 

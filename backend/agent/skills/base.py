@@ -31,6 +31,8 @@ class InboundMessage:
     media_path: Optional[str] = None
     # Phase Skills-as-Tools: Channel information for channel-aware tool behavior
     channel: Optional[str] = None  # "whatsapp", "telegram", "playground", "flow", None
+    # BUG-LOG-006: Metadata dict for propagating comm_depth, parent_session_id, etc.
+    metadata: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -81,6 +83,19 @@ class BaseSkill(ABC):
         """Initialize the skill."""
         self._config: Dict[str, Any] = {}  # Set by skill manager during initialization
         self._db_session = None  # Database session for API key loading (optional)
+        self._token_tracker = None  # Token tracker for cost monitoring (optional)
+
+    def set_token_tracker(self, token_tracker):
+        """
+        Set token tracker for LLM cost monitoring.
+
+        Automatically called by SkillManager after skill instantiation.
+        Skills should pass self._token_tracker to AIClient instances.
+
+        Args:
+            token_tracker: TokenTracker instance for recording usage
+        """
+        self._token_tracker = token_tracker
 
     def set_db_session(self, db):
         """
@@ -248,6 +263,23 @@ class BaseSkill(ABC):
             "expected_patterns": [],
             "risk_notes": None
         }
+
+    @classmethod
+    def get_sentinel_exemptions(cls) -> list:
+        """
+        Detection types to auto-exempt when this skill is enabled on an agent.
+
+        The skill being enabled IS the authorization decision. Sentinel should
+        not block legitimate use of an explicitly enabled skill.
+
+        Override in skills that map to specific detection types:
+        - ShellSkill → ["shell_malicious"]
+        - AgentSwitcherSkill → ["agent_takeover"]
+
+        Returns:
+            List of detection type keys from DETECTION_REGISTRY.
+        """
+        return []
 
     # =========================================================================
     # SKILLS-AS-TOOLS: EXECUTION MODE CONTROL
@@ -520,7 +552,8 @@ class BaseSkill(ABC):
             skill_name=self.skill_name,
             skill_description=self.skill_description,
             model=ai_model,  # None = use system AI config
-            db=self._db_session  # Pass database session for API key loading and system config
+            db=self._db_session,  # Pass database session for API key loading and system config
+            token_tracker=self._token_tracker  # Phase 0.6.0: Track classification costs
         )
 
     def __repr__(self) -> str:

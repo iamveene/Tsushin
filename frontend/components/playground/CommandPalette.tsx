@@ -159,7 +159,7 @@ export default function CommandPalette({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-[600px] bg-[#14141f] border border-white/10 rounded-2xl overflow-hidden shadow-2xl animate-slide-up"
+        className="w-full max-w-[600px] bg-tsushin-ink border border-white/10 rounded-2xl overflow-hidden shadow-2xl animate-slide-up"
         onClick={e => e.stopPropagation()}
       >
         {/* Search Input */}
@@ -174,7 +174,7 @@ export default function CommandPalette({
             className="w-full px-5 py-4 bg-transparent border-b border-white/10 text-white text-base outline-none placeholder:text-white/40"
           />
           <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
-            <span className="text-xs text-white/30 bg-[#0a0a0f] px-2 py-1 rounded">ESC</span>
+            <span className="text-xs text-white/30 bg-tsushin-ink px-2 py-1 rounded">ESC</span>
           </div>
         </div>
 
@@ -217,7 +217,7 @@ export default function CommandPalette({
                   }}
                   className={`
                     flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors
-                    ${isSelected ? 'bg-[#1a1a2e]' : 'hover:bg-[#1a1a2e]'}
+                    ${isSelected ? 'bg-tsushin-surface' : 'hover:bg-tsushin-surface'}
                   `}
                 >
                   <span className="text-white/60">
@@ -238,9 +238,12 @@ export default function CommandPalette({
                     {cmd.description && (
                       <p className="text-white/50 text-xs mt-0.5 truncate">{cmd.description}</p>
                     )}
+                    {isSelected && cmd.help_text && (
+                      <p className="text-white/40 text-xs mt-1 line-clamp-2 font-mono">{cmd.help_text}</p>
+                    )}
                   </div>
                   {isSelected && (
-                    <span className="text-xs text-white/30 bg-[#0a0a0f] px-2 py-1 rounded">↵</span>
+                    <span className="text-xs text-white/30 bg-tsushin-ink px-2 py-1 rounded">↵</span>
                   )}
                 </div>
               )

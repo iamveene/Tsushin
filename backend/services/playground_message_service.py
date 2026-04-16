@@ -13,6 +13,7 @@ import uuid
 from models import Memory, Agent, ConversationThread
 from agent.agent_service import AgentService
 from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+from services.playground_thread_service import build_api_channel_id, build_playground_channel_id
 
 logger = logging.getLogger(__name__)
 
@@ -49,20 +50,84 @@ class PlaygroundMessageService:
         Returns:
             Memory object or None
         """
-        # Try with "sender_" prefix first (new format)
-        memory = self.db.query(Memory).filter(
-            Memory.agent_id == agent_id,
-            Memory.sender_key == f"sender_{thread.recipient}"
-        ).first()
+        agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+        isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
 
-        if not memory:
-            # Try without prefix (legacy format)
+        candidate_keys: List[str] = []
+        if isolation_mode == "shared":
+            candidate_keys = ["shared", f"agent_{agent_id}:shared"]
+        elif isolation_mode == "channel_isolated":
+            if thread.api_client_id:
+                channel_id = build_api_channel_id(api_client_id=thread.api_client_id)
+            else:
+                channel_id = build_playground_channel_id(thread.user_id or 0)
+            candidate_keys = [f"channel_{channel_id}"]
+        else:
+            candidate_keys = [
+                f"sender_{thread.recipient}",
+                thread.recipient,
+            ]
+
+        # BUG-LOG-015: belt-and-suspenders tenant_id filter alongside agent_id.
+        # ConversationThread has a tenant_id column — use it as the source of truth.
+        for key in candidate_keys:
             memory = self.db.query(Memory).filter(
                 Memory.agent_id == agent_id,
-                Memory.sender_key == thread.recipient
+                Memory.tenant_id == thread.tenant_id,
+                Memory.sender_key == key
             ).first()
+            if memory:
+                return memory
 
-        return memory
+        return None
+
+    def get_thread_messages(
+        self,
+        thread_id: int,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict]:
+        """
+        Get messages for a thread from memory storage.
+
+        Args:
+            thread_id: Thread ID
+            limit: Max messages to return
+            offset: Number of messages to skip
+
+        Returns:
+            List of message dicts with role, content, timestamp, message_id
+        """
+        thread = self.db.query(ConversationThread).filter(
+            ConversationThread.id == thread_id
+        ).first()
+        if not thread:
+            return []
+
+        memory = self._get_thread_memory(thread.agent_id, thread)
+        if not memory or not memory.messages_json:
+            return []
+
+        messages = memory.messages_json
+        agent = self.db.query(Agent).filter(Agent.id == thread.agent_id).first()
+        isolation_mode = getattr(agent, "memory_isolation_mode", "isolated") or "isolated"
+
+        if isolation_mode in ("shared", "channel_isolated"):
+            thread_messages = [
+                msg for msg in messages
+                if not isinstance(msg.get("metadata"), dict)
+                or msg["metadata"].get("thread_id") is None
+                or msg["metadata"].get("thread_id") == thread_id
+            ]
+            messages = thread_messages or messages
+
+        # Assign message_ids if not present
+        for idx, msg in enumerate(messages):
+            if not msg.get("message_id"):
+                msg["message_id"] = f"msg_{thread_id}_{idx}"
+
+        # Apply pagination
+        return messages[offset:offset + limit]
 
     def _find_message_by_id(
         self,
@@ -215,8 +280,10 @@ class PlaygroundMessageService:
 
                 if result.get("status") == "success":
                     # Re-query the memory to get fresh data after send_message persisted
+                    # BUG-LOG-015: tenant_id filter (PK lookup is already safe, but belt-and-suspenders).
                     refreshed_memory = self.db.query(Memory).filter(
-                        Memory.id == memory.id
+                        Memory.id == memory.id,
+                        Memory.tenant_id == thread.tenant_id,
                     ).first()
 
                     return {
@@ -611,6 +678,7 @@ class PlaygroundMessageService:
             new_recipient = f"playground_u{user_id}_a{agent_id}_t{new_thread['id']}"
 
             new_memory = Memory(
+                tenant_id=tenant_id,
                 agent_id=agent_id,
                 sender_key=new_recipient,
                 messages_json=branched_messages

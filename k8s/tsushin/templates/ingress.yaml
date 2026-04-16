@@ -1,0 +1,79 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "tsushin.fullname" . }}
+  namespace: {{ include "tsushin.namespace" . }}
+  labels:
+    {{- include "tsushin.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    {{- if .Values.ingress.tls.enabled }}
+    networking.gke.io/managed-certificates: {{ .Values.ingress.tls.managedCertName | quote }}
+    networking.gke.io/v1beta1.FrontendConfig: {{ include "tsushin.fullname" . }}-frontend-config
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if and .Values.ingress.tls.enabled .Values.ingress.host }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # API and WebSocket traffic → backend
+          - path: /api/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "tsushin.fullname" . }}-backend
+                port:
+                  number: {{ .Values.backend.port }}
+          - path: /ws/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "tsushin.fullname" . }}-backend
+                port:
+                  number: {{ .Values.backend.port }}
+          # /metrics is NOT publicly routed — Prometheus scrapes in-cluster only
+          # Everything else → frontend
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "tsushin.fullname" . }}-frontend
+                port:
+                  number: {{ .Values.frontend.port }}
+---
+{{- if .Values.ingress.tls.enabled }}
+# ManagedCertificate for automatic TLS via Google-managed certificates
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.ingress.tls.managedCertName }}
+  namespace: {{ include "tsushin.namespace" . }}
+  labels:
+    {{- include "tsushin.labels" . | nindent 4 }}
+spec:
+  domains:
+    - {{ .Values.ingress.host }}
+---
+# FrontendConfig to redirect HTTP → HTTPS
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: {{ include "tsushin.fullname" . }}-frontend-config
+  namespace: {{ include "tsushin.namespace" . }}
+  labels:
+    {{- include "tsushin.labels" . | nindent 4 }}
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT
+{{- end }}
+{{- end }}

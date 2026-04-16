@@ -30,6 +30,20 @@ export default function TenantsPage() {
     plan: 'free',
   })
 
+  // Edit tenant state
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editLoading, setEditLoading] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+  const [editingTenant, setEditingTenant] = useState<TenantInfo | null>(null)
+  const [editForm, setEditForm] = useState({
+    name: '',
+    plan: 'free',
+    max_users: 5,
+    max_agents: 5,
+    max_monthly_requests: 10000,
+    status: 'active',
+  })
+
   // Pagination
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -47,7 +61,7 @@ export default function TenantsPage() {
         status: filterStatus !== 'all' ? filterStatus : undefined,
         plan: filterPlan !== 'all' ? filterPlan : undefined,
       })
-      setTenants(response.tenants)
+      setTenants(response.items)
       setTotal(response.total)
     } catch (err) {
       console.error('Failed to fetch tenants:', err)
@@ -110,6 +124,44 @@ export default function TenantsPage() {
     }
   }
 
+  const handleOpenEdit = (tenant: TenantInfo) => {
+    setEditingTenant(tenant)
+    setEditForm({
+      name: tenant.name,
+      plan: tenant.plan,
+      max_users: tenant.max_users,
+      max_agents: tenant.max_agents,
+      max_monthly_requests: tenant.max_monthly_requests,
+      status: tenant.status,
+    })
+    setEditError(null)
+    setShowEditModal(true)
+  }
+
+  const handleUpdateTenant = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingTenant) return
+    setEditLoading(true)
+    setEditError(null)
+    try {
+      await api.updateTenant(editingTenant.id, {
+        name: editForm.name,
+        plan: editForm.plan,
+        max_users: editForm.max_users,
+        max_agents: editForm.max_agents,
+        max_monthly_requests: editForm.max_monthly_requests,
+        status: editForm.status,
+      })
+      setShowEditModal(false)
+      setEditingTenant(null)
+      fetchTenants()
+    } catch (err: any) {
+      setEditError(err.message || 'Failed to update tenant')
+    } finally {
+      setEditLoading(false)
+    }
+  }
+
   const handleDeleteTenant = async (tenantId: string) => {
     if (!confirm('Are you sure you want to delete this tenant? This action cannot be undone.'))
       return
@@ -125,7 +177,7 @@ export default function TenantsPage() {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-600 dark:text-gray-400">Loading...</div>
+        <div className="text-tsushin-slate">Loading...</div>
       </div>
     )
   }
@@ -145,21 +197,21 @@ export default function TenantsPage() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <div className="flex items-center space-x-3 mb-2">
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
+              <h1 className="text-3xl font-bold text-white">
                 Tenant Management
               </h1>
               <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-900 dark:text-purple-200 text-sm font-semibold rounded-full inline-flex items-center gap-1">
                 <GlobeIcon size={14} /> Global Admin
               </span>
             </div>
-            <p className="text-gray-600 dark:text-gray-400">
+            <p className="text-tsushin-slate">
               Manage all organizations on the platform
             </p>
           </div>
 
           <button
             onClick={() => setShowCreateModal(true)}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-md transition-colors"
+            className="btn-primary px-4 py-2 font-medium rounded-md transition-colors"
           >
             + Create Tenant
           </button>
@@ -167,24 +219,24 @@ export default function TenantsPage() {
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-            <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Tenants</div>
-            <div className="text-3xl font-bold text-gray-900 dark:text-gray-100">{stats.total}</div>
+          <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+            <div className="text-sm text-tsushin-slate mb-1">Total Tenants</div>
+            <div className="text-3xl font-bold text-white">{stats.total}</div>
           </div>
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-            <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Active</div>
+          <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+            <div className="text-sm text-tsushin-slate mb-1">Active</div>
             <div className="text-3xl font-bold text-green-600 dark:text-green-400">
               {stats.active}
             </div>
           </div>
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-            <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Trial</div>
+          <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+            <div className="text-sm text-tsushin-slate mb-1">Trial</div>
             <div className="text-3xl font-bold text-yellow-600 dark:text-yellow-400">
               {stats.trial}
             </div>
           </div>
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-            <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Suspended</div>
+          <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
+            <div className="text-sm text-tsushin-slate mb-1">Suspended</div>
             <div className="text-3xl font-bold text-red-600 dark:text-red-400">
               {stats.suspended}
             </div>
@@ -205,10 +257,11 @@ export default function TenantsPage() {
         )}
 
         {/* Filters */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 mb-6">
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
             <div>
-              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+              <label className="block text-sm font-medium text-white mb-2">
                 Search Tenants
               </label>
               <input
@@ -216,12 +269,12 @@ export default function TenantsPage() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search by name or slug..."
-                className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-purple-500"
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface focus:ring-2 focus:ring-teal-500"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+              <label className="block text-sm font-medium text-white mb-2">
                 Filter by Status
               </label>
               <select
@@ -230,7 +283,7 @@ export default function TenantsPage() {
                   setFilterStatus(e.target.value)
                   setPage(1)
                 }}
-                className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
               >
                 <option value="all">All Status</option>
                 <option value="active">Active</option>
@@ -240,7 +293,7 @@ export default function TenantsPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+              <label className="block text-sm font-medium text-white mb-2">
                 Filter by Plan
               </label>
               <select
@@ -249,7 +302,7 @@ export default function TenantsPage() {
                   setFilterPlan(e.target.value)
                   setPage(1)
                 }}
-                className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
               >
                 <option value="all">All Plans</option>
                 <option value="free">Free</option>
@@ -262,39 +315,39 @@ export default function TenantsPage() {
         </div>
 
         {/* Tenants Table */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
+        <div className="bg-tsushin-surface rounded-xl border border-tsushin-border overflow-hidden">
           {loading ? (
-            <div className="p-8 text-center text-gray-600 dark:text-gray-400">
+            <div className="p-8 text-center text-tsushin-slate">
               Loading tenants...
             </div>
           ) : tenants.length === 0 ? (
-            <div className="p-8 text-center text-gray-600 dark:text-gray-400">
+            <div className="p-8 text-center text-tsushin-slate">
               No tenants found matching your filters.
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                  <tr className="bg-tsushin-ink border-b border-tsushin-border">
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">
                       Organization
                     </th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">
                       Plan
                     </th>
-                    <th className="text-center py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    <th className="text-center py-3 px-4 text-sm font-semibold text-white">
                       Users
                     </th>
-                    <th className="text-center py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    <th className="text-center py-3 px-4 text-sm font-semibold text-white">
                       Agents
                     </th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">
                       Status
                     </th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-white">
                       Created
                     </th>
-                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-white">
                       Actions
                     </th>
                   </tr>
@@ -303,14 +356,14 @@ export default function TenantsPage() {
                   {tenants.map((tenant) => (
                     <tr
                       key={tenant.id}
-                      className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/50"
+                      className="border-b border-tsushin-border hover:bg-tsushin-surface"
                     >
                       <td className="py-3 px-4">
                         <div>
-                          <div className="font-medium text-gray-900 dark:text-gray-100">
+                          <div className="font-medium text-white">
                             {tenant.name}
                           </div>
-                          <div className="text-sm text-gray-600 dark:text-gray-400">
+                          <div className="text-sm text-tsushin-slate">
                             {tenant.slug}
                           </div>
                         </div>
@@ -320,10 +373,10 @@ export default function TenantsPage() {
                           {tenant.plan}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-center text-sm text-gray-700 dark:text-gray-300">
+                      <td className="py-3 px-4 text-center text-sm text-tsushin-fog">
                         {tenant.user_count} / {tenant.max_users}
                       </td>
-                      <td className="py-3 px-4 text-center text-sm text-gray-700 dark:text-gray-300">
+                      <td className="py-3 px-4 text-center text-sm text-tsushin-fog">
                         {tenant.agent_count} / {tenant.max_agents}
                       </td>
                       <td className="py-3 px-4">
@@ -339,14 +392,17 @@ export default function TenantsPage() {
                           {tenant.status.toUpperCase()}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-sm text-gray-700 dark:text-gray-300">
+                      <td className="py-3 px-4 text-sm text-tsushin-fog">
                         {tenant.created_at
                           ? new Date(tenant.created_at).toLocaleDateString()
                           : 'N/A'}
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <button className="text-sm text-purple-600 dark:text-purple-400 hover:underline mr-3">
-                          View
+                        <button
+                          onClick={() => handleOpenEdit(tenant)}
+                          className="text-sm text-teal-400 hover:underline mr-3"
+                        >
+                          Edit
                         </button>
                         <button
                           onClick={() => handleDeleteTenant(tenant.id)}
@@ -364,8 +420,8 @@ export default function TenantsPage() {
 
           {/* Pagination */}
           {total > pageSize && (
-            <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-700">
-              <div className="text-sm text-gray-600 dark:text-gray-400">
+            <div className="flex items-center justify-between p-4 border-t border-tsushin-border">
+              <div className="text-sm text-tsushin-slate">
                 Showing {(page - 1) * pageSize + 1} to {Math.min(page * pageSize, total)} of{' '}
                 {total} tenants
               </div>
@@ -373,14 +429,14 @@ export default function TenantsPage() {
                 <button
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   disabled={page === 1}
-                  className="px-3 py-1 bg-gray-200 dark:bg-gray-700 rounded disabled:opacity-50"
+                  className="px-3 py-1 bg-tsushin-elevated rounded disabled:opacity-50"
                 >
                   Previous
                 </button>
                 <button
                   onClick={() => setPage((p) => p + 1)}
                   disabled={page * pageSize >= total}
-                  className="px-3 py-1 bg-gray-200 dark:bg-gray-700 rounded disabled:opacity-50"
+                  className="px-3 py-1 bg-tsushin-elevated rounded disabled:opacity-50"
                 >
                   Next
                 </button>
@@ -389,17 +445,156 @@ export default function TenantsPage() {
           )}
         </div>
 
+        {/* Edit Tenant Modal */}
+        {showEditModal && editingTenant && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border shadow-xl max-w-2xl w-full">
+              <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
+                <h2 className="text-xl font-bold text-white">
+                  Edit Tenant: {editingTenant.name}
+                </h2>
+                <button
+                  onClick={() => setShowEditModal(false)}
+                  className="p-2 text-tsushin-slate hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateTenant}>
+                <div className="p-6 space-y-4">
+                  {editError && (
+                    <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-800 dark:text-red-200">
+                      {editError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      Organization Name
+                    </label>
+                    <input
+                      type="text"
+                      value={editForm.name}
+                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                      required
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Plan
+                      </label>
+                      <select
+                        value={editForm.plan}
+                        onChange={(e) => setEditForm({ ...editForm, plan: e.target.value })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      >
+                        <option value="free">Free</option>
+                        <option value="pro">Pro</option>
+                        <option value="team">Team</option>
+                        <option value="enterprise">Enterprise</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Status
+                      </label>
+                      <select
+                        value={editForm.status}
+                        onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      >
+                        <option value="active">Active</option>
+                        <option value="trial">Trial</option>
+                        <option value="suspended">Suspended</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Max Users
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={editForm.max_users}
+                        onChange={(e) => setEditForm({ ...editForm, max_users: parseInt(e.target.value) || 1 })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Max Agents
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={editForm.max_agents}
+                        onChange={(e) => setEditForm({ ...editForm, max_agents: parseInt(e.target.value) || 1 })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Monthly Request Limit
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={editForm.max_monthly_requests}
+                        onChange={(e) => setEditForm({ ...editForm, max_monthly_requests: parseInt(e.target.value) || 1 })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-tsushin-slate bg-tsushin-ink rounded p-3">
+                    Current usage: <span className="text-white font-medium">{editingTenant.user_count}</span> / {editingTenant.max_users} users
+                    &nbsp;&bull;&nbsp;
+                    <span className="text-white font-medium">{editingTenant.agent_count}</span> / {editingTenant.max_agents} agents
+                  </div>
+                </div>
+
+                <div className="flex justify-end space-x-3 p-6 border-t border-tsushin-border">
+                  <button
+                    type="button"
+                    onClick={() => setShowEditModal(false)}
+                    className="px-4 py-2 bg-tsushin-elevated text-white rounded-md"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={editLoading}
+                    className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
+                  >
+                    {editLoading ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* Create Tenant Modal */}
         {showCreateModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full">
-              <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border shadow-xl max-w-2xl w-full">
+              <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
+                <h2 className="text-xl font-bold text-white">
                   Create New Tenant
                 </h2>
                 <button
                   onClick={() => setShowCreateModal(false)}
-                  className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+                  className="p-2 text-tsushin-slate hover:text-white"
                 >
                   ✕
                 </button>
@@ -414,7 +609,7 @@ export default function TenantsPage() {
                   )}
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                    <label className="block text-sm font-medium text-white mb-2">
                       Organization Name
                     </label>
                     <input
@@ -423,12 +618,12 @@ export default function TenantsPage() {
                       onChange={(e) => setNewTenant({ ...newTenant, name: e.target.value })}
                       placeholder="Acme Corp"
                       required
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                    <label className="block text-sm font-medium text-white mb-2">
                       Owner Name
                     </label>
                     <input
@@ -437,12 +632,12 @@ export default function TenantsPage() {
                       onChange={(e) => setNewTenant({ ...newTenant, owner_name: e.target.value })}
                       placeholder="John Doe"
                       required
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                    <label className="block text-sm font-medium text-white mb-2">
                       Owner Email
                     </label>
                     <input
@@ -451,12 +646,12 @@ export default function TenantsPage() {
                       onChange={(e) => setNewTenant({ ...newTenant, owner_email: e.target.value })}
                       placeholder="owner@example.com"
                       required
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                    <label className="block text-sm font-medium text-white mb-2">
                       Owner Password
                     </label>
                     <input
@@ -465,21 +660,21 @@ export default function TenantsPage() {
                       onChange={(e) =>
                         setNewTenant({ ...newTenant, owner_password: e.target.value })
                       }
-                      placeholder="Min 8 characters"
+                      placeholder="Min 6 characters"
                       required
-                      minLength={8}
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                      minLength={6}
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                    <label className="block text-sm font-medium text-white mb-2">
                       Plan
                     </label>
                     <select
                       value={newTenant.plan}
                       onChange={(e) => setNewTenant({ ...newTenant, plan: e.target.value })}
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800"
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
                     >
                       <option value="free">Free</option>
                       <option value="pro">Pro</option>
@@ -489,18 +684,18 @@ export default function TenantsPage() {
                   </div>
                 </div>
 
-                <div className="flex justify-end space-x-3 p-6 border-t border-gray-200 dark:border-gray-700">
+                <div className="flex justify-end space-x-3 p-6 border-t border-tsushin-border">
                   <button
                     type="button"
                     onClick={() => setShowCreateModal(false)}
-                    className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md"
+                    className="px-4 py-2 bg-tsushin-elevated text-white rounded-md"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={createLoading}
-                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md disabled:opacity-50"
+                    className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
                   >
                     {createLoading ? 'Creating...' : 'Create Tenant'}
                   </button>

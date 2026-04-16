@@ -100,7 +100,7 @@ class FlowsProvider(SchedulerProviderBase):
         """Lazy-load SchedulerService to avoid circular imports."""
         if self._scheduler_service is None:
             from scheduler.scheduler_service import SchedulerService
-            self._scheduler_service = SchedulerService(self.db)
+            self._scheduler_service = SchedulerService(self.db, tenant_id=self.tenant_id)  # V060-CHN-006 follow-up
         return self._scheduler_service
 
     def _scheduled_event_to_scheduler_event(self, event) -> SchedulerEvent:
@@ -232,6 +232,7 @@ class FlowsProvider(SchedulerProviderBase):
                 'recipient_raw': recipient,
                 'reminder_text': title,
                 'message_template': kwargs.get('message_template', 'Reminder: {reminder_text}'),
+                'sender_key': kwargs.get('sender_key', ''),  # BUG-356 FIX: pass sender_key for recipient resolution
             }
             if description:
                 payload['reminder_text'] = f"{title} - {description}"

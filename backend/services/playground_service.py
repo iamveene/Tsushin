@@ -14,8 +14,19 @@ from agent.utils import summarize_tool_result
 from agent.memory.tool_output_buffer import get_tool_output_buffer
 # Phase 8: Watcher Activity Events
 from services.watcher_activity_service import emit_agent_processing_async
+from services.playground_thread_service import (
+    build_playground_channel_id,
+    build_playground_thread_recipient,
+    get_agent_memory_isolation_mode,
+    resolve_playground_identity,
+    sync_playground_thread_recipient,
+)
 
 logger = logging.getLogger(__name__)
+
+# Module-level caches for generated media (persist across PlaygroundService instances)
+_IMAGE_CACHE: dict[str, str] = {}
+_AUDIO_CACHE: dict[str, str] = {}
 
 
 class PlaygroundService:
@@ -91,6 +102,59 @@ class PlaygroundService:
             self.logger.error(f"Error resolving user identity for user {user_id}: {e}", exc_info=True)
             return f"playground_user_{user_id}"
 
+    def _should_use_contact_mapping(self, sender_key: Optional[str]) -> bool:
+        """Synthetic thread/channel sender keys should bypass contact resolution."""
+        if not sender_key:
+            return True
+
+        synthetic_prefixes = (
+            "playground_u",
+            "api_client_",
+            "api_user_",
+            "api_thread_",
+        )
+        if sender_key == "shared":
+            return False
+        if sender_key.startswith(synthetic_prefixes):
+            return False
+        if sender_key.startswith("playground_") and sender_key[len("playground_"):].isdigit():
+            return False
+        return True
+
+    def _resolve_chat_id(self, user_id: int, chat_id_override: Optional[str] = None) -> str:
+        """Resolve the logical channel identifier used for channel-scoped memory."""
+        return chat_id_override or build_playground_channel_id(user_id)
+
+    def _get_thread_record(
+        self,
+        *,
+        thread_id: Optional[int],
+        user_id: int,
+        agent_id: int,
+        tenant_id: Optional[str] = None,
+    ):
+        """Load and normalize a Playground thread when the caller provided one."""
+        if not thread_id:
+            return None
+
+        from models import ConversationThread
+
+        query = self.db.query(ConversationThread).filter(
+            ConversationThread.id == thread_id,
+            ConversationThread.agent_id == agent_id,
+            ConversationThread.thread_type == "playground",
+        )
+        if tenant_id is not None:
+            query = query.filter(ConversationThread.tenant_id == tenant_id)
+        query = query.filter(ConversationThread.user_id == user_id)
+
+        thread = query.first()
+        if thread:
+            recipient = sync_playground_thread_recipient(thread)
+            if thread.recipient != recipient:
+                thread.recipient = recipient
+        return thread
+
     async def send_message(
         self,
         user_id: int,
@@ -100,7 +164,10 @@ class PlaygroundService:
         media_type: Optional[str] = None,
         media_data: Optional[bytes] = None,
         skip_user_message: bool = False,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        sender_key: Optional[str] = None,
+        chat_id_override: Optional[str] = None,
+        project_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Send a message to an agent from the playground.
@@ -132,41 +199,6 @@ class PlaygroundService:
         from agent.memory.multi_agent_memory import MultiAgentMemoryManager
 
         try:
-            # FIX 2026-01-30: Thread isolation takes priority for Playground
-            # Previously, contact-based sender_key took priority which caused ALL threads
-            # to share the same memory (breaking thread isolation)
-            # Now: thread_id > contact-based > generic user key
-            if thread_id:
-                # Phase 14.1: Use thread-specific sender_key for thread isolation
-                sender_key = f"playground_u{user_id}_a{agent_id}_t{thread_id}"
-                self.logger.info(f"Using thread-specific sender_key: {sender_key}")
-            else:
-                # Fallback for backward compatibility - check contact mapping
-                user_contact_mapping = self.db.query(UserContactMapping).filter(
-                    UserContactMapping.user_id == user_id
-                ).first()
-
-                if user_contact_mapping:
-                    contact = self.db.query(Contact).filter(Contact.id == user_contact_mapping.contact_id).first()
-                    if contact and contact.phone_number:
-                        sender_key = contact.phone_number
-                        self.logger.info(f"Using contact-based sender_key (no thread): {sender_key}")
-                    elif contact and contact.whatsapp_id:
-                        sender_key = contact.whatsapp_id
-                        self.logger.info(f"Using contact whatsapp_id sender_key (no thread): {sender_key}")
-                    else:
-                        sender_key = f"playground_user_{user_id}"
-                        self.logger.warning(f"Contact has no phone/whatsapp, using user-based key")
-                else:
-                    sender_key = self.resolve_user_identity(user_id)
-                    self.logger.warning(f"No thread_id or contact mapping, using generic sender_key: {sender_key}")
-
-            if not sender_key:
-                return {
-                    "error": "Failed to resolve user identity",
-                    "status": "error"
-                }
-
             # Get agent configuration with optional tenant validation (HIGH-011 defense-in-depth)
             query = self.db.query(Agent).filter(Agent.id == agent_id)
             if tenant_id:
@@ -177,6 +209,70 @@ class PlaygroundService:
                     "error": f"Agent {agent_id} not found or inactive",
                     "status": "error"
                 }
+
+            thread = self._get_thread_record(
+                thread_id=thread_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                tenant_id=tenant_id or agent.tenant_id,
+            )
+            if thread_id and not thread:
+                return {
+                    "error": f"Thread {thread_id} not found",
+                    "status": "error",
+                }
+
+            isolation_mode = get_agent_memory_isolation_mode(agent)
+            identity = resolve_playground_identity(
+                user_id=user_id,
+                agent_id=agent_id,
+                isolation_mode=isolation_mode,
+                thread_id=thread.id if thread else thread_id,
+                thread_recipient=thread.recipient if thread else None,
+                sender_key_override=sender_key,
+                chat_id_override=chat_id_override,
+            )
+
+            sender_key = identity["sender_key"]
+            chat_id = identity["chat_id"] or self._resolve_chat_id(user_id, chat_id_override)
+
+            if sender_key:
+                self.logger.info(
+                    f"Using playground identity sender_key={sender_key}, chat_id={chat_id}, "
+                    f"thread_id={thread.id if thread else thread_id}, isolation={isolation_mode}"
+                )
+            else:
+                # Fallback for legacy non-thread traffic
+                user_contact_mapping = self.db.query(UserContactMapping).filter(
+                    UserContactMapping.user_id == user_id
+                ).first()
+
+                if user_contact_mapping:
+                    contact = self.db.query(Contact).filter(Contact.id == user_contact_mapping.contact_id).first()
+                    if contact and contact.phone_number:
+                        sender_key = contact.phone_number
+                    elif contact and contact.whatsapp_id:
+                        sender_key = contact.whatsapp_id
+                    else:
+                        sender_key = f"playground_user_{user_id}"
+                else:
+                    sender_key = self.resolve_user_identity(user_id)
+
+                self.logger.warning(
+                    f"No canonical Playground thread sender_key was available; "
+                    f"falling back to {sender_key}"
+                )
+
+            if thread and thread.recipient != identity["thread_recipient"]:
+                thread.recipient = identity["thread_recipient"]
+                self.db.commit()
+
+            if not sender_key:
+                return {
+                    "error": "Failed to resolve user identity",
+                    "status": "error"
+                }
+            use_contact_mapping = self._should_use_contact_mapping(sender_key)
 
             # Phase 10: Check if playground channel is enabled for this agent
             import json as json_module
@@ -243,6 +339,8 @@ class PlaygroundService:
                 "max_tokens": max_tokens,
                 "semantic_search_results": agent.semantic_search_results or 10,
                 "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
+                # BUG-387 fix: Pass provider_instance_id so AIClient resolves instance-scoped credentials
+                "provider_instance_id": agent.provider_instance_id,
                 # Fact extraction configuration (auto-enabled for all conversations)
                 "auto_extract_facts": True,
                 "fact_extraction_threshold": 3,  # Lower threshold for playground (faster testing)
@@ -255,16 +353,28 @@ class PlaygroundService:
             # Phase 21: This prevents memory poisoning from blocked messages
             # The message must be analyzed BEFORE storing to memory, otherwise
             # malicious content pollutes the agent's memory even if blocked
+            transcript_only_message = False
             if not skip_user_message and agent.tenant_id:
                 try:
                     from services.sentinel_service import SentinelService
                     sentinel = SentinelService(self.db, agent.tenant_id)
 
+                    # Load skill context so Sentinel knows which skills are enabled
+                    skill_context_str = None
+                    try:
+                        from services.skill_context_service import SkillContextService
+                        skill_ctx_service = SkillContextService(self.db)
+                        skill_ctx = skill_ctx_service.get_agent_skill_context(agent_id)
+                        skill_context_str = skill_ctx.get('formatted_context')
+                    except Exception as skill_e:
+                        self.logger.warning(f"Failed to load skill context for Sentinel: {skill_e}")
+
                     sentinel_result = await sentinel.analyze_prompt(
                         prompt=message_text,
                         agent_id=agent_id,
                         sender_key=sender_key,
-                        source=None,  # User message - no internal source tag
+                        source=None,
+                        skill_context=skill_context_str,
                     )
 
                     if sentinel_result.is_threat_detected:
@@ -276,17 +386,29 @@ class PlaygroundService:
                             # Return early with blocked response (no memory storage = no poisoning)
                             return {
                                 "status": "blocked",
-                                "message": sentinel_result.response_message or "Message blocked for security reasons.",
+                                "message": sentinel_result.threat_reason or "Message blocked for security reasons.",
                                 "agent_name": agent_name,
                                 "security_blocked": True,
                                 "threat_type": sentinel_result.detection_type,
                                 "timestamp": datetime.utcnow().isoformat() + "Z"
                             }
-                        # detect_only mode: threat detected but allowed - will proceed to store message
-                        self.logger.info(
-                            f"🛡️ SENTINEL (detect_only): Threat detected but allowing - "
-                            f"{sentinel_result.detection_type}"
+                        # BUG-382: detect_only mode — allow response but keep the message
+                        # transcript-only for injection/poisoning threats so the thread
+                        # stays complete while future memory reuse can stay filtered.
+                        transcript_only_message = sentinel_result.detection_type in (
+                            'prompt_injection', 'memory_poisoning', 'instruction_injection',
+                            'jailbreak', 'system_prompt_override'
                         )
+                        if transcript_only_message:
+                            self.logger.warning(
+                                f"🛡️ SENTINEL (detect_only): Marking transcript-only for "
+                                f"{sentinel_result.detection_type} — response still allowed"
+                            )
+                        else:
+                            self.logger.info(
+                                f"🛡️ SENTINEL (detect_only): Threat detected but allowing - "
+                                f"{sentinel_result.detection_type}"
+                            )
                 except Exception as e:
                     self.logger.warning(f"Sentinel pre-check failed, allowing message: {e}")
 
@@ -295,18 +417,27 @@ class PlaygroundService:
             # Skip if skip_user_message=True (for regeneration after edit)
             message_id = f"msg_user_{user_id}_{int(datetime.utcnow().timestamp() * 1000)}"
             if not skip_user_message:
+                user_message_metadata = {
+                    "source": "playground",
+                    "agent_id": agent_id,
+                    "user_id": user_id,
+                    "thread_id": thread_id
+                }
+                if transcript_only_message:
+                    user_message_metadata.update({
+                        "playground_transcript_only": True,
+                        "playground_transcript_only_reason": "sentinel_detect_only",
+                        "playground_sentinel_detection_type": sentinel_result.detection_type,
+                    })
                 await memory_manager.add_message(
                     agent_id=agent_id,
                     sender_key=sender_key,
                     role="user",
                     content=message_text,
-                    chat_id=f"playground_{user_id}",
+                    chat_id=chat_id,
                     message_id=message_id,
-                    metadata={
-                        "source": "playground",
-                        "agent_id": agent_id,
-                        "user_id": user_id
-                    }
+                    metadata=user_message_metadata,
+                    use_contact_mapping=use_contact_mapping,
                 )
                 self.logger.info(f"Added user message to memory before processing (WhatsApp consistency)")
             else:
@@ -355,6 +486,12 @@ class PlaygroundService:
             # Layer 2: Episodic memory (semantic search of past conversations)
             # Layer 3: Semantic knowledge (learned facts about user)
             # Layer 4: Shared memory (cross-agent knowledge pool)
+            # BUG-366: Respect memory_isolation_mode for shared memory inclusion.
+            # In 'isolated' mode, cross-agent shared knowledge should NOT be included
+            # to prevent data leakage between different API clients/users.
+            isolation_mode = config_dict.get("memory_isolation_mode", "isolated")
+            include_shared_memory = isolation_mode == "shared"
+
             memory_context = await memory_manager.get_context(
                 agent_id=agent_id,
                 sender_key=sender_key,
@@ -362,9 +499,9 @@ class PlaygroundService:
                 max_semantic_results=config_dict.get("semantic_search_results", 5),
                 similarity_threshold=config_dict.get("semantic_similarity_threshold", 0.3),
                 include_knowledge=True,  # Layer 3: Include learned facts about user
-                include_shared=True,  # Layer 4: Include cross-agent shared knowledge
-                chat_id=f"playground_{user_id}",
-                use_contact_mapping=True
+                include_shared=include_shared_memory,  # BUG-366: Only share in shared mode
+                chat_id=chat_id,
+                use_contact_mapping=use_contact_mapping
             )
 
             # Build full message with context using format_context_for_prompt()
@@ -388,6 +525,34 @@ class PlaygroundService:
                     ])
                     full_message = f"Recent conversation:\n{context_str}\n\n[Current message]: {message_text}"
 
+            # BUG-381: Layer 4.5 — Inject uploaded Playground documents into chat context.
+            # PlaygroundDocumentService stores uploaded files, but send_message() never
+            # consulted them. Search for relevant document content to include in context.
+            try:
+                from services.playground_document_service import PlaygroundDocumentService
+                doc_service = PlaygroundDocumentService(self.db)
+                doc_results = await doc_service.search_documents(
+                    tenant_id=agent.tenant_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    query=message_text,
+                    max_results=3
+                )
+                if doc_results:
+                    doc_context_parts = []
+                    for dr in doc_results:
+                        sim = dr.get("similarity", 0)
+                        if sim > 0.3:  # Only include reasonably relevant results
+                            content = dr.get("content", "")[:1000]
+                            source = dr.get("metadata", {}).get("document_name", "uploaded file")
+                            doc_context_parts.append(f"[From {source}]: {content}")
+                    if doc_context_parts:
+                        doc_context = "[Uploaded Documents Context]\n" + "\n\n".join(doc_context_parts)
+                        full_message = f"{doc_context}\n\n{full_message}"
+                        self.logger.info(f"BUG-381: Injected {len(doc_context_parts)} document chunks into context")
+            except Exception as doc_err:
+                self.logger.warning(f"BUG-381: Document context retrieval failed: {doc_err}")
+
             # Layer 5: Selective tool output injection
             # - Always show lightweight reference (what tools are available)
             # - Inject full output only when user explicitly requests it (via /inject or natural language)
@@ -397,6 +562,21 @@ class PlaygroundService:
             if tool_context:
                 full_message = f"{tool_context}\n\n{full_message}"
                 self.logger.info(f"Injected Layer 5 tool context ({len(tool_context)} chars)")
+
+            # STEP 2.5: BUG-336 — Check keyword-triggered flows BEFORE skill/AI processing
+            # If the message matches a keyword for an active keyword-triggered flow,
+            # execute that flow and return its result instead of passing to AI.
+            flow_result = await self._check_keyword_flow_triggers(
+                agent=agent,
+                message_text=message_text,
+                sender_key=sender_key,
+                user_id=user_id,
+                thread_id=thread_id,
+                memory_manager=memory_manager,
+            )
+            if flow_result:
+                self.logger.info(f"[BUG-336] Flow keyword trigger matched — returning flow result")
+                return flow_result
 
             # STEP 3: Process with skills FIRST (if agent has skills enabled)
             from agent.skills.skill_manager import SkillManager
@@ -411,7 +591,7 @@ class PlaygroundService:
                 sender=f"playground_user_{user_id}",
                 sender_key=sender_key,
                 body=message_text,
-                chat_id=f"playground_{user_id}",
+                chat_id=chat_id,
                 chat_name="Playground",
                 is_group=False,
                 timestamp=datetime.utcnow(),
@@ -441,10 +621,24 @@ class PlaygroundService:
                         sender_key=sender_key,
                         role="assistant",
                         content=skill_result.output,
-                        chat_id=f"playground_{user_id}",
+                        chat_id=chat_id,
                         message_id=f"msg_skill_{agent_id}_{int(datetime.utcnow().timestamp() * 1000)}",
-                        metadata=skill_result.metadata
+                        metadata=skill_result.metadata,
+                        use_contact_mapping=use_contact_mapping,
                     )
+
+                    # Phase 6: Cache generated images and include URL in response
+                    image_url = None
+                    image_urls = []
+                    if skill_result.media_paths:
+                        import os
+                        for media_path in skill_result.media_paths:
+                            if os.path.exists(media_path):
+                                cached_url = self._cache_image(media_path)
+                                self.logger.info(f"Cached skill image: {media_path} -> {cached_url}")
+                                image_urls.append(cached_url)
+                                if image_url is None:
+                                    image_url = cached_url
 
                     # Return skill result directly
                     return {
@@ -453,7 +647,9 @@ class PlaygroundService:
                         "agent_name": agent_name,
                         "tool_used": f"skill:{inbound_msg.sender}",  # Skill identifier
                         "execution_time": None,
-                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "image_url": image_url,
+                        "image_urls": image_urls if image_urls else None,
                     }
 
             except Exception as e:
@@ -462,71 +658,74 @@ class PlaygroundService:
             # STEP 4: If no skill handled it, process with AgentService (AI)
             # Phase 9.3: Pass tenant_id and persona_id for custom tool discovery
             # Phase 16: Check if user is in project context and pass project_id
-            project_id = None
-            try:
-                from models import UserProjectSession, AgentProjectAccess
-                # BUGFIX: Project sessions use generic sender_key format (playground_user_{id})
-                # but send_message uses thread-specific format (playground_u{id}_a{id}_t{id})
-                # Need to check using the generic format
-                generic_sender_key = f"playground_user_{user_id}"
+            # BUG-446: If project_id was explicitly provided by caller (e.g.
+            # ProjectService), use it directly — skip the session lookup.
+            if project_id is not None:
+                self.logger.info(f"[KB FIX] BUG-446: Using explicit project_id={project_id} from caller")
+            else:
+                try:
+                    from models import UserProjectSession, AgentProjectAccess
+                    session_sender_keys = []
+                    for candidate in (
+                        sender_key,
+                        chat_id,
+                        f"playground_user_{user_id}",
+                    ):
+                        if candidate and candidate not in session_sender_keys:
+                            session_sender_keys.append(candidate)
 
-                # Phase 1: Comprehensive logging for diagnosis
-                self.logger.info(f"[KB FIX] Session lookup parameters:")
-                self.logger.info(f"  - tenant_id: {agent.tenant_id}")
-                self.logger.info(f"  - sender_key: {generic_sender_key}")
-                self.logger.info(f"  - agent_id: {agent_id}")
-                self.logger.info(f"  - channel: playground")
+                    self.logger.info(
+                        f"[KB FIX] Session lookup: tenant={agent.tenant_id}, "
+                        f"senders={session_sender_keys}, agent={agent_id}"
+                    )
 
-                # Query all sessions for debugging
-                all_sessions = self.db.query(UserProjectSession).filter(
-                    UserProjectSession.sender_key == generic_sender_key,
-                    UserProjectSession.channel == "playground"
-                ).all()
-                self.logger.info(f"[KB FIX] Found {len(all_sessions)} total sessions for this user/channel")
-                for sess in all_sessions:
-                    self.logger.info(f"  - Session: agent_id={sess.agent_id}, project_id={sess.project_id}, tenant_id={sess.tenant_id}")
+                    project_session = None
+                    for session_sender_key in session_sender_keys:
+                        project_session = self.db.query(UserProjectSession).filter(
+                            UserProjectSession.tenant_id == agent.tenant_id,
+                            UserProjectSession.sender_key == session_sender_key,
+                            UserProjectSession.agent_id == agent_id,
+                            UserProjectSession.channel == "playground",
+                            UserProjectSession.project_id.isnot(None)
+                        ).first()
+                        if project_session:
+                            break
 
-                # Phase 2: Fixed logic - try to find session for this specific agent first
-                project_session = self.db.query(UserProjectSession).filter(
-                    UserProjectSession.tenant_id == agent.tenant_id,
-                    UserProjectSession.sender_key == generic_sender_key,
-                    UserProjectSession.agent_id == agent_id,
-                    UserProjectSession.channel == "playground",
-                    UserProjectSession.project_id.isnot(None)  # Only active project sessions
-                ).first()
+                    if not project_session:
+                        for session_sender_key in session_sender_keys:
+                            project_session = self.db.query(UserProjectSession).filter(
+                                UserProjectSession.tenant_id == agent.tenant_id,
+                                UserProjectSession.sender_key == session_sender_key,
+                                UserProjectSession.channel == "playground",
+                                UserProjectSession.project_id.isnot(None)
+                            ).first()
 
-                # If not found, check if user is in a project with ANY agent (cross-agent access)
-                if not project_session:
-                    self.logger.info(f"[KB FIX] No session found for agent {agent_id}, checking for any project session")
-                    project_session = self.db.query(UserProjectSession).filter(
-                        UserProjectSession.tenant_id == agent.tenant_id,
-                        UserProjectSession.sender_key == generic_sender_key,
-                        UserProjectSession.channel == "playground",
-                        UserProjectSession.project_id.isnot(None)
-                    ).first()
+                            if not project_session:
+                                continue
+
+                            access = self.db.query(AgentProjectAccess).filter(
+                                AgentProjectAccess.agent_id == agent_id,
+                                AgentProjectAccess.project_id == project_session.project_id
+                            ).first()
+
+                            if access:
+                                break
+
+                            self.logger.warning(
+                                f"[KB FIX] Agent {agent_id} doesn't have access to project "
+                                f"{project_session.project_id}"
+                            )
+                            project_session = None
 
                     if project_session:
-                        # Verify agent has access to this project
-                        access = self.db.query(AgentProjectAccess).filter(
-                            AgentProjectAccess.agent_id == agent_id,
-                            AgentProjectAccess.project_id == project_session.project_id
-                        ).first()
-
-                        if not access:
-                            self.logger.warning(f"[KB FIX] Agent {agent_id} doesn't have access to project {project_session.project_id}")
-                            project_session = None
-                        else:
-                            self.logger.info(f"[KB FIX] ✅ Cross-agent access granted: agent {agent_id} can access project {project_session.project_id}")
-
-                if project_session:
-                    project_id = project_session.project_id
-                    self.logger.info(f"[KB FIX] ✅ User in project context: project_id={project_id}")
-                else:
-                    self.logger.info(f"[KB FIX] ❌ No project session found for user")
-            except Exception as e:
-                import traceback
-                self.logger.error(f"[KB FIX] Error checking project context: {e}")
-                self.logger.error(f"[KB FIX] Traceback: {traceback.format_exc()}")
+                        project_id = project_session.project_id
+                        self.logger.info(f"[KB FIX] User in project context: project_id={project_id}")
+                    else:
+                        self.logger.info(f"[KB FIX] No project session found for user")
+                except Exception as e:
+                    import traceback
+                    self.logger.error(f"[KB FIX] Error checking project context: {e}")
+                    self.logger.error(f"[KB FIX] Traceback: {traceback.format_exc()}")
 
             agent_service = AgentService(
                 config_dict,
@@ -550,11 +749,44 @@ class PlaygroundService:
                 channel="playground"
             )
 
+            # BUG-378: Create AgentRun record BEFORE processing (same as router.py)
+            # This ensures Watcher dashboard and Conversations tab show Playground activity
+            from models import AgentRun as AgentRunModel
+            import time as _time
+            _run_start = _time.time()
+            agent_run = AgentRunModel(
+                agent_id=agent_id,
+                triggered_by="playground",
+                sender_key=sender_key,
+                input_preview=message_text[:200],
+                status="processing"
+            )
+            self.db.add(agent_run)
+            self.db.commit()
+            self.db.refresh(agent_run)
+            agent_run_id = agent_run.id
+
             result = await agent_service.process_message(
                 sender_key=sender_key,
                 message_text=full_message,
                 original_query=message_text
             )
+
+            # BUG-378: Update AgentRun with result
+            try:
+                _run_end = _time.time()
+                agent_run.status = "error" if result.get("error") else "success"
+                agent_run.output_preview = (result.get("answer") or result.get("error") or "")[:500]
+                agent_run.model_used = effective_model
+                agent_run.execution_time_ms = int((_run_end - _run_start) * 1000)
+                agent_run.tool_used = result.get("tool_used")
+                if result.get("tokens"):
+                    agent_run.token_usage_json = result["tokens"]
+                if result.get("error"):
+                    agent_run.error_text = str(result["error"])[:500]
+                self.db.commit()
+            except Exception as run_err:
+                self.logger.warning(f"Failed to update agent_run {agent_run_id}: {run_err}")
 
             # Phase 8: Emit activity end event (non-blocking)
             emit_agent_processing_async(
@@ -572,8 +804,15 @@ class PlaygroundService:
                 # Build metadata for memory storage
                 memory_metadata = {
                     "source": "playground",
-                    "agent_id": agent_id
+                    "agent_id": agent_id,
+                    "thread_id": thread_id
                 }
+                if transcript_only_message:
+                    memory_metadata.update({
+                        "playground_transcript_only": True,
+                        "playground_transcript_only_reason": "sentinel_detect_only",
+                        "playground_sentinel_detection_type": sentinel_result.detection_type,
+                    })
                 memory_content = result["answer"]  # Always store FULL content for UI display
 
                 # Include KB usage tracking if available
@@ -621,9 +860,10 @@ class PlaygroundService:
                     sender_key=sender_key,
                     role="assistant",
                     content=memory_content,  # Store FULL content for UI display
-                    chat_id=f"playground_{user_id}",
+                    chat_id=chat_id,
                     message_id=agent_message_id,
-                    metadata=memory_metadata  # Include tool metadata and KB usage
+                    metadata=memory_metadata,  # Include tool metadata and KB usage
+                    use_contact_mapping=use_contact_mapping,
                 )
 
                 # Phase 14.5: Index agent response in FTS5 for conversation search
@@ -672,7 +912,7 @@ class PlaygroundService:
                             "sender_key": sender_key,
                             "sender_name": f"Playground User {user_id}",
                             "is_group": False,
-                            "chat_id": f"playground_{user_id}"
+                            "chat_id": chat_id
                         },
                         ai_client=agent_service.ai_client
                     )
@@ -689,14 +929,31 @@ class PlaygroundService:
                     "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
+            # Phase 6: Cache generated images from tool execution
+            image_url = None
+            image_urls = []
+            media_paths = result.get("media_paths")
+            if media_paths:
+                import os
+                for media_path in media_paths:
+                    if os.path.exists(media_path):
+                        cached_url = self._cache_image(media_path)
+                        self.logger.info(f"Cached tool image: {media_path} -> {cached_url}")
+                        image_urls.append(cached_url)
+                        if image_url is None:
+                            image_url = cached_url
+
             return {
                 "status": "success",
                 "message": result.get("answer") or "",
                 "tool_used": result.get("tool_used"),
                 "execution_time": result.get("execution_time"),
+                "tokens": result.get("tokens"),  # Token usage from AI provider
                 "agent_name": agent_name,
                 "kb_used": result.get("kb_used", []),  # KB usage tracking
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "image_url": image_url,
+                "image_urls": image_urls if image_urls else None,
             }
 
         except Exception as e:
@@ -713,7 +970,9 @@ class PlaygroundService:
         agent_id: int,
         message_text: str,
         thread_id: Optional[int] = None,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        sender_key: Optional[str] = None,
+        chat_id_override: Optional[str] = None,
     ):
         """
         Process message with streaming response (Phase 14.9).
@@ -740,10 +999,11 @@ class PlaygroundService:
 
         try:
             # FIX 2026-01-30: Thread isolation takes priority for Playground (streaming)
-            # Same logic as send_message() - thread_id > contact-based > generic user key
-            if thread_id:
-                # Phase 14.1: Use thread-specific sender_key for thread isolation
-                sender_key = f"playground_u{user_id}_a{agent_id}_t{thread_id}"
+            # Same logic as send_message() - explicit sender_key > thread_id > contact-based > generic user key
+            if sender_key:
+                self.logger.info(f"Using explicit sender_key: {sender_key}")
+            elif thread_id:
+                sender_key = build_playground_thread_recipient(user_id, agent_id, thread_id)
                 self.logger.info(f"[STREAMING] Using thread-specific sender_key: {sender_key}")
             else:
                 # Fallback for backward compatibility - check contact mapping
@@ -769,6 +1029,8 @@ class PlaygroundService:
             if not sender_key:
                 yield {"type": "error", "error": "Failed to resolve user identity"}
                 return
+            chat_id = self._resolve_chat_id(user_id, chat_id_override)
+            use_contact_mapping = self._should_use_contact_mapping(sender_key)
 
             # Get agent configuration (HIGH-011 defense-in-depth)
             query = self.db.query(Agent).filter(Agent.id == agent_id)
@@ -778,6 +1040,11 @@ class PlaygroundService:
             if not agent or not agent.is_active:
                 yield {"type": "error", "error": f"Agent {agent_id} not found or inactive"}
                 return
+
+            # BUG-388 fix: For shared-memory agents, use a stable "shared" sender_key
+            if getattr(agent, 'memory_isolation_mode', 'isolated') == 'shared':
+                sender_key = "shared"
+                self.logger.info(f"[STREAMING] BUG-388: Shared memory mode — overriding sender_key to 'shared'")
 
             # Check if playground channel is enabled
             import json as json_module
@@ -883,6 +1150,8 @@ class PlaygroundService:
                 "max_tokens": max_tokens,
                 "semantic_search_results": agent.semantic_search_results or 10,
                 "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
+                # BUG-387 fix: Pass provider_instance_id so AIClient resolves instance-scoped credentials
+                "provider_instance_id": agent.provider_instance_id,
             }
 
             # Initialize memory manager
@@ -895,13 +1164,15 @@ class PlaygroundService:
                 sender_key=sender_key,
                 role="user",
                 content=message_text,
-                chat_id=f"playground_{user_id}",
+                chat_id=chat_id,
                 message_id=message_id,
                 metadata={
                     "source": "playground",
                     "agent_id": agent_id,
-                    "user_id": user_id
-                }
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                },
+                use_contact_mapping=use_contact_mapping,
             )
 
             # Index in FTS5
@@ -933,8 +1204,8 @@ class PlaygroundService:
                 similarity_threshold=config_dict.get("semantic_similarity_threshold", 0.3),
                 include_knowledge=True,
                 include_shared=True,
-                chat_id=f"playground_{user_id}",
-                use_contact_mapping=True
+                chat_id=chat_id,
+                use_contact_mapping=use_contact_mapping
             )
 
             # Build full message with context
@@ -954,16 +1225,36 @@ class PlaygroundService:
             if tool_context:
                 full_message = f"{tool_context}\n\n{full_message}"
 
-            # STEP 3: Try to process with skills FIRST (before AI)
-            # Phase 8: Emit activity start event for streaming
-            emit_agent_processing_async(
-                tenant_id=agent.tenant_id,
-                agent_id=agent_id,
-                status="start",
+            # STEP 2.5: BUG-336 — Check keyword-triggered flows (streaming path)
+            flow_result = await self._check_keyword_flow_triggers(
+                agent=agent,
+                message_text=message_text,
                 sender_key=sender_key,
-                channel="playground"
+                user_id=user_id,
+                thread_id=thread_id,
+                memory_manager=memory_manager,
             )
+            if flow_result:
+                self.logger.info(f"[BUG-336] Flow keyword trigger matched (streaming) — yielding flow result")
+                # Yield the message as a token chunk so the frontend streaming view receives it
+                yield {
+                    "type": "token",
+                    "content": flow_result.get("message", ""),
+                }
+                yield {
+                    "type": "done",
+                    "message_id": None,
+                    "thread_id": thread_id,
+                    "agent_id": agent_id,
+                    "token_usage": None,
+                    "timestamp": flow_result.get("timestamp"),
+                    "thread_renamed": False,
+                    "new_thread_title": None,
+                    "image_url": None,
+                }
+                return
 
+            # STEP 3: Try to process with skills FIRST (before AI)
             from agent.skills.skill_manager import get_skill_manager
             from agent.skills.base import InboundMessage
             skill_manager = get_skill_manager()
@@ -973,7 +1264,7 @@ class PlaygroundService:
                 sender=sender_key,
                 sender_key=sender_key,
                 body=message_text,
-                chat_id=f"playground_{user_id}",
+                chat_id=chat_id,
                 chat_name=None,
                 is_group=False,
                 timestamp=datetime.utcnow(),
@@ -993,6 +1284,14 @@ class PlaygroundService:
                 if skill_result and skill_result.success:
                     self.logger.info(f"[STREAMING] Message processed by skill: {skill_result.output[:100]}...")
 
+                    emit_agent_processing_async(
+                        tenant_id=agent.tenant_id,
+                        agent_id=agent_id,
+                        status="start",
+                        sender_key=sender_key,
+                        channel="playground"
+                    )
+
                     # Stream the skill response
                     skill_output = skill_result.output
                     for char in skill_output:
@@ -1004,9 +1303,10 @@ class PlaygroundService:
                         sender_key=sender_key,
                         role="assistant",
                         content=skill_output,
-                        chat_id=f"playground_{user_id}",
+                        chat_id=chat_id,
                         message_id=f"msg_skill_{agent_id}_{int(datetime.utcnow().timestamp() * 1000)}",
-                        metadata=skill_result.metadata
+                        metadata=skill_result.metadata,
+                        use_contact_mapping=use_contact_mapping,
                     )
 
                     # Index in FTS5
@@ -1038,12 +1338,27 @@ class PlaygroundService:
                         channel="playground"
                     )
 
+                    # Phase 6: Cache generated images from skill in streaming path
+                    image_url = None
+                    image_urls = []
+                    if skill_result.media_paths:
+                        import os
+                        for media_path in skill_result.media_paths:
+                            if os.path.exists(media_path):
+                                cached_url = self._cache_image(media_path)
+                                self.logger.info(f"[STREAMING] Cached skill image: {media_path} -> {cached_url}")
+                                image_urls.append(cached_url)
+                                if image_url is None:
+                                    image_url = cached_url
+
                     # Return done
                     yield {
                         "type": "done",
                         "message_id": message_id,
                         "thread_id": thread_id,
-                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "image_url": image_url,
+                        "image_urls": image_urls if image_urls else None,
                     }
                     return  # Skill handled it, don't process with AI
 
@@ -1064,7 +1379,9 @@ class PlaygroundService:
                 agent_id=agent_id,
                 message_text=message_text,
                 thread_id=thread_id,
-                skip_user_message=True  # Already added user message above
+                skip_user_message=True,  # Already added user message above
+                sender_key=sender_key,
+                chat_id_override=chat_id,
             )
 
             if response.get("status") == "error":
@@ -1093,7 +1410,9 @@ class PlaygroundService:
                 "agent_name": agent_name,
                 "tool_used": response.get("tool_used"),
                 "kb_used": response.get("kb_used", []),
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "image_url": response.get("image_url"),  # Phase 6: Image generation
+                "image_urls": response.get("image_urls"),  # Phase 6: All generated images
             }
 
         except Exception as e:
@@ -1244,7 +1563,9 @@ class PlaygroundService:
             fact_extractor = FactExtractor(
                 provider=agent.model_provider,
                 model_name=agent.model_name,
-                db=self.db
+                db=self.db,
+                token_tracker=self.token_tracker,
+                tenant_id=agent.tenant_id
             )
             if not fact_extractor.should_extract_facts(conversation, min_user_messages=1):
                 return
@@ -1288,7 +1609,9 @@ class PlaygroundService:
         self,
         user_id: int,
         agent_id: int,
-        limit: int = 50
+        limit: int = 50,
+        thread_id: Optional[int] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get conversation history between user and agent.
@@ -1297,51 +1620,47 @@ class PlaygroundService:
             user_id: RBAC user ID
             agent_id: Agent ID
             limit: Maximum number of messages to return
+            thread_id: Optional thread ID for thread-aware history reads
+            tenant_id: Optional tenant ID for ownership validation
 
         Returns:
             List of messages with role, content, timestamp
         """
-        from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+        from models import ConversationThread
+        from services.playground_thread_service import PlaygroundThreadService
 
         try:
-            # Resolve user identity
-            sender_key = self.resolve_user_identity(user_id)
-            if not sender_key:
+            thread_service = PlaygroundThreadService(self.db)
+            thread = None
+            if thread_id is not None:
+                thread = thread_service.get_thread_record(
+                    thread_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                )
+            else:
+                query = self.db.query(ConversationThread).filter(
+                    ConversationThread.user_id == user_id,
+                    ConversationThread.agent_id == agent_id,
+                    ConversationThread.thread_type == "playground",
+                    ConversationThread.is_archived == False,
+                )
+                if tenant_id is not None:
+                    query = query.filter(ConversationThread.tenant_id == tenant_id)
+                thread = query.order_by(ConversationThread.updated_at.desc()).first()
+                if thread:
+                    sync_playground_thread_recipient(thread)
+
+            if not thread:
                 return []
 
-            # Build a minimal config for memory manager
-            from models import Agent
-            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
-            if not agent:
+            raw_messages = thread_service._get_thread_messages_from_memory(thread)
+            if not raw_messages:
                 return []
 
-            config_dict = {
-                "memory_size": agent.memory_size or 1000,
-                "enable_semantic_search": agent.enable_semantic_search,
-                "semantic_search_results": agent.semantic_search_results or 10,
-                "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
-            }
-
-            # Initialize memory manager
-            memory_manager = MultiAgentMemoryManager(self.db, config_dict)
-
-            # Get conversation context (working memory contains the message history)
-            context = await memory_manager.get_context(
-                agent_id=agent_id,
-                sender_key=sender_key,
-                current_message="",
-                chat_id=f"playground_{user_id}",
-                include_knowledge=False,  # Don't need facts for history display
-                include_shared=False  # Don't need shared memory for history display
-            )
-
-            # Use working_memory key (Layer 1 - recent messages)
-            if not context or not context.get("working_memory"):
-                return []
-
-            # Format messages for frontend
             messages = []
-            for msg in context["working_memory"][-limit:]:
+            for msg in raw_messages[-limit:]:
                 messages.append({
                     "role": msg["role"],
                     "content": msg["content"],
@@ -1363,7 +1682,9 @@ class PlaygroundService:
     async def clear_conversation_history(
         self,
         user_id: int,
-        agent_id: int
+        agent_id: int,
+        thread_id: Optional[int] = None,
+        tenant_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Clear conversation history between user and agent.
@@ -1371,20 +1692,16 @@ class PlaygroundService:
         Args:
             user_id: RBAC user ID
             agent_id: Agent ID
+            thread_id: Optional thread ID for scoped clears
+            tenant_id: Optional tenant ID for ownership validation
 
         Returns:
             Success status
         """
-        from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+        from models import Agent, ConversationThread
+        from services.playground_thread_service import PlaygroundThreadService
 
         try:
-            # Resolve user identity
-            sender_key = self.resolve_user_identity(user_id)
-            if not sender_key:
-                return {"success": False, "error": "Failed to resolve user identity"}
-
-            # Build a minimal config for memory manager
-            from models import Agent
             agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
             if not agent:
                 return {"success": False, "error": "Agent not found"}
@@ -1394,13 +1711,57 @@ class PlaygroundService:
                 "enable_semantic_search": agent.enable_semantic_search,
             }
 
-            # Initialize memory manager
-            memory_manager = MultiAgentMemoryManager(self.db, config_dict)
+            thread_service = PlaygroundThreadService(self.db)
+            thread = None
+            if thread_id is not None:
+                thread = thread_service.get_thread_record(
+                    thread_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                )
+            else:
+                query = self.db.query(ConversationThread).filter(
+                    ConversationThread.user_id == user_id,
+                    ConversationThread.agent_id == agent_id,
+                    ConversationThread.thread_type == "playground",
+                    ConversationThread.is_archived == False,
+                )
+                if tenant_id is not None:
+                    query = query.filter(ConversationThread.tenant_id == tenant_id)
+                thread = query.order_by(ConversationThread.updated_at.desc()).first()
+                if thread:
+                    sync_playground_thread_recipient(thread)
 
-            # Clear memory for this conversation
+            if not thread:
+                return {"success": True, "message": "No conversation history to clear"}
+
+            isolation_mode = get_agent_memory_isolation_mode(agent)
+
+            if isolation_mode in ("shared", "channel_isolated"):
+                memory = thread_service._find_memory_record(thread, isolation_mode)
+                if memory and memory.messages_json:
+                    retained_messages = [
+                        msg for msg in (memory.messages_json or [])
+                        if not isinstance(msg.get("metadata"), dict)
+                        or msg["metadata"].get("thread_id") != thread.id
+                    ]
+                    if retained_messages:
+                        memory.messages_json = retained_messages
+                    else:
+                        self.db.delete(memory)
+                    self.db.commit()
+                return {
+                    "success": True,
+                    "message": "Conversation history cleared",
+                }
+
+            from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+
+            memory_manager = MultiAgentMemoryManager(self.db, config_dict)
             memory_manager.clear_agent_memory(
                 agent_id=agent_id,
-                sender_key=sender_key
+                sender_key=thread.recipient,
             )
             success = True
 
@@ -1457,7 +1818,8 @@ class PlaygroundService:
             if not sender_key:
                 return {
                     "status": "error",
-                    "error": "Failed to resolve user identity"
+                    "error": "Failed to resolve user identity",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             # Get agent and check if it exists and is active (HIGH-011 defense-in-depth)
@@ -1468,7 +1830,8 @@ class PlaygroundService:
             if not agent or not agent.is_active:
                 return {
                     "status": "error",
-                    "error": f"Agent {agent_id} not found or inactive"
+                    "error": f"Agent {agent_id} not found or inactive",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             # Check if agent has audio_transcript skill enabled
@@ -1481,7 +1844,8 @@ class PlaygroundService:
             if not audio_skill:
                 return {
                     "status": "error",
-                    "error": "This agent does not have audio transcription enabled"
+                    "error": "This agent does not have audio transcription enabled",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             # Save audio to temp file
@@ -1515,8 +1879,10 @@ class PlaygroundService:
 
             # Initialize and run transcription skill
             skill_instance = AudioTranscriptSkill()
+            skill_instance.set_db_session(self.db)  # BUG-357 FIX: reuse caller's session
             skill_config = audio_skill.config or {}
             skill_config['agent_id'] = agent_id
+            skill_config['tenant_id'] = agent.tenant_id  # BUG-357 FIX: tenant-scoped key lookup
 
             transcript_result = await skill_instance.process(inbound_msg, skill_config)
 
@@ -1528,7 +1894,8 @@ class PlaygroundService:
                     pass
                 return {
                     "status": "error",
-                    "error": transcript_result.output or "Transcription failed"
+                    "error": transcript_result.output or "Transcription failed",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             # Get transcript text
@@ -1545,7 +1912,8 @@ class PlaygroundService:
                     pass
                 return {
                     "status": "error",
-                    "error": "Transcription returned empty text"
+                    "error": "Transcription returned empty text",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
             self.logger.info(f"Transcript: {transcript[:100]}...")
@@ -1653,10 +2021,8 @@ class PlaygroundService:
                     # Generate audio ID for serving
                     audio_id = str(uuid.uuid4())
 
-                    # Store audio path mapping (in-memory for now, could use Redis/DB)
-                    if not hasattr(self, '_audio_cache'):
-                        self._audio_cache = {}
-                    self._audio_cache[audio_id] = audio_path
+                    # Store audio path mapping in module-level cache
+                    _AUDIO_CACHE[audio_id] = audio_path
 
                     return {
                         "audio_url": f"/api/playground/audio/{audio_id}",
@@ -1680,9 +2046,39 @@ class PlaygroundService:
         Returns:
             File path or None if not found
         """
-        if not hasattr(self, '_audio_cache'):
-            self._audio_cache = {}
-        return self._audio_cache.get(audio_id)
+        return _AUDIO_CACHE.get(audio_id)
+
+    def _cache_image(self, image_path: str) -> str:
+        """
+        Cache an image file and return a serveable URL.
+
+        Phase 6: Image Generation for Playground.
+        Uses module-level cache so the GET endpoint can find the image
+        even though it creates a new PlaygroundService instance.
+
+        Args:
+            image_path: Path to the generated image file
+
+        Returns:
+            URL path for serving the image (e.g., /api/playground/images/{id})
+        """
+        import uuid
+
+        image_id = str(uuid.uuid4())
+        _IMAGE_CACHE[image_id] = image_path
+        return f"/api/playground/images/{image_id}"
+
+    def get_image_path(self, image_id: str) -> Optional[str]:
+        """
+        Get image file path by ID.
+
+        Args:
+            image_id: Image file ID
+
+        Returns:
+            File path or None if not found
+        """
+        return _IMAGE_CACHE.get(image_id)
 
     async def check_agent_audio_capabilities(self, agent_id: int) -> Dict[str, Any]:
         """
@@ -1731,3 +2127,162 @@ class PlaygroundService:
                 "has_tts": False,
                 "transcript_mode": "conversational"
             }
+
+    # -----------------------------------------------------------------------
+    # BUG-336: Keyword-triggered flow evaluation for Playground channel
+    # -----------------------------------------------------------------------
+
+    async def _check_keyword_flow_triggers(
+        self,
+        agent,
+        message_text: str,
+        sender_key: str,
+        user_id: int,
+        thread_id: Optional[int],
+        memory_manager,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check if the incoming playground message matches any active keyword-triggered flow.
+
+        Flows with execution_method='keyword' and non-empty trigger_keywords are evaluated
+        here so the Playground experiences the same flow-interception behaviour as channel
+        messages (WhatsApp, Telegram).
+
+        Args:
+            agent: Agent ORM object
+            message_text: The user's raw message
+            sender_key: Thread-isolated sender key
+            user_id: RBAC user ID
+            thread_id: Active thread ID (may be None)
+            memory_manager: MultiAgentMemoryManager instance for storing the response
+
+        Returns:
+            Playground response dict if a flow was triggered, None otherwise.
+        """
+        try:
+            from models import FlowDefinition
+            from flows.flow_engine import FlowEngine
+
+            # Query all active keyword flows for this tenant
+            keyword_flows = self.db.query(FlowDefinition).filter(
+                FlowDefinition.tenant_id == agent.tenant_id,
+                FlowDefinition.is_active == True,
+                FlowDefinition.execution_method == 'keyword',
+            ).all()
+
+            if not keyword_flows:
+                return None
+
+            message_lower = message_text.lower().strip()
+
+            matched_flow = None
+            for flow in keyword_flows:
+                keywords = flow.trigger_keywords or []
+                if not keywords:
+                    continue
+                for kw in keywords:
+                    # Match exact command (e.g. "/testflow") or keyword anywhere in message
+                    kw_lower = kw.lower().strip()
+                    if not kw_lower:
+                        continue
+                    if kw_lower.startswith('/'):
+                        # Slash commands: match only if message starts with the keyword
+                        if message_lower == kw_lower or message_lower.startswith(kw_lower + ' '):
+                            matched_flow = flow
+                            break
+                    else:
+                        # Regular keywords: match if keyword appears anywhere in the message
+                        if kw_lower in message_lower:
+                            matched_flow = flow
+                            break
+                if matched_flow:
+                    break
+
+            if not matched_flow:
+                return None
+
+            self.logger.info(
+                f"[BUG-336] Keyword flow match: flow_id={matched_flow.id} "
+                f"'{matched_flow.name}' triggered by '{message_text[:60]}'"
+            )
+
+            # Execute the flow asynchronously (non-blocking background task)
+            engine = FlowEngine(self.db)
+            try:
+                flow_run = await engine.run_flow(
+                    flow_definition_id=matched_flow.id,
+                    trigger_context={
+                        "triggered_by_keyword": True,
+                        "sender_key": sender_key,
+                        "agent_id": agent.id,
+                        "trigger_source": "playground",
+                        "original_message": message_text,
+                        "user_id": user_id,
+                        "thread_id": thread_id,
+                    },
+                    initiator="playground_keyword",
+                    trigger_type="keyword",
+                    triggered_by=sender_key
+                )
+            except Exception as engine_err:
+                self.logger.error(
+                    f"[BUG-336] Flow engine error for flow {matched_flow.id}: {engine_err}",
+                    exc_info=True
+                )
+                # Return a friendly error rather than falling through to AI
+                return {
+                    "status": "error",
+                    "message": f"Flow '{matched_flow.name}' failed to execute: {engine_err}",
+                    "agent_name": getattr(agent, '_name', f"Agent {agent.id}"),
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                }
+
+            # Build acknowledgement message for the playground UI
+            status_emoji = {
+                "running": "🚀",
+                "completed": "✅",
+                "failed": "❌",
+                "pending": "⏳",
+            }.get(flow_run.status, "▶️")
+
+            ack_message = (
+                f"{status_emoji} **Flow triggered: {matched_flow.name}**\n\n"
+                f"Run ID: {flow_run.id} · Status: {flow_run.status} · "
+                f"Steps: {flow_run.total_steps}"
+            )
+            if flow_run.status == "failed" and flow_run.error_text:
+                ack_message += f"\n\n❌ Error: {flow_run.error_text}"
+            elif flow_run.status == "completed":
+                ack_message += "\n\n✅ Completed successfully."
+
+            # Store the ack in memory so conversation history is consistent
+            await memory_manager.add_message(
+                agent_id=agent.id,
+                sender_key=sender_key,
+                role="assistant",
+                content=ack_message,
+                chat_id=f"playground_{user_id}",
+                message_id=f"msg_flow_{matched_flow.id}_{int(datetime.utcnow().timestamp() * 1000)}",
+                metadata={"flow_run_id": flow_run.id, "triggered_by_keyword": True}
+            )
+
+            # Resolve agent name for response
+            from models import Contact
+            contact = self.db.query(Contact).filter(Contact.id == agent.contact_id).first()
+            agent_name = contact.friendly_name if contact else f"Agent {agent.id}"
+
+            return {
+                "status": "success",
+                "message": ack_message,
+                "agent_name": agent_name,
+                "tool_used": f"flow:keyword:{matched_flow.id}",
+                "execution_time": None,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+
+        except Exception as e:
+            self.logger.error(
+                f"[BUG-336] Error checking keyword flow triggers: {e}", exc_info=True
+            )
+            # Silently ignore errors — fall through to normal processing
+            return None

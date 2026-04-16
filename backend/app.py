@@ -1,5 +1,8 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -40,6 +43,8 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 logger.info(f"Starting {settings.SERVICE_NAME} v{settings.SERVICE_VERSION}")
+
+import email_config  # noqa: F401
 
 from db import get_engine, init_database
 from models import Config
@@ -92,8 +97,12 @@ from api.routes_analytics import router as analytics_router
 from auth_routes import router as auth_router
 # Phase 7.6.4: Protected Endpoints (Example)
 from api.routes_agents_protected import router as agents_protected_router
+# Phase I: Agent Builder Batch Endpoints
+from api.routes_agent_builder import router as agent_builder_router
 # Phase 8: MCP Instance Management
 from api.routes_mcp_instances import router as mcp_instances_router
+from api.routes_webhook_inbound import router as webhook_inbound_router  # v0.6.0: Webhook-as-Channel
+from api.routes_webhook_instances import router as webhook_instances_router  # v0.6.0: Webhook-as-Channel
 # Playground Feature
 from api.routes_playground import router as playground_router
 # Phase 14.4: Projects
@@ -103,6 +112,7 @@ from api.routes_commands import router as commands_router
 from api.routes_user_contact_mapping import router as user_contact_mapping_router
 # Phase 7.9: RBAC & Multi-tenancy
 from api.routes_tenants import router as tenants_router
+from api.routes_tenant_settings import router as tenant_settings_router
 from api.routes_team import router as team_router
 # Plans Management
 from api.routes_plans import router as plans_router
@@ -118,14 +128,45 @@ from api.routes_skill_integrations import router as skill_integrations_router, s
 from api.routes_model_pricing import router as model_pricing_router
 # Phase 10.1.1: Telegram Integration
 from api.routes_telegram_instances import router as telegram_instances_router
+# v0.6.0 Item 33: Slack Integration
+from api.routes_slack import router as slack_router
+# v0.6.0 Item 34: Discord Integration
+from api.routes_discord import router as discord_router
 # Phase 17: System AI Configuration
 from api.routes_system_ai import router as system_ai_router
+# Integration Test Connection endpoints (Groq, Grok, ElevenLabs, etc.)
+from api.routes_integrations import router as integrations_router
 # Phase 20: Sentinel Security Agent
 from api.routes_sentinel import router as sentinel_router, set_engine as set_sentinel_engine
 from api.routes_sentinel_exceptions import router as sentinel_exceptions_router, set_engine as set_sentinel_exceptions_engine
+# v1.6.0: Sentinel Security Profiles
+from api.routes_sentinel_profiles import router as sentinel_profiles_router, set_engine as set_sentinel_profiles_engine
+# Message Queue System
+from api.routes_queue import router as queue_router
+from api.routes_api_clients import router as api_clients_router
+from api.routes_audit import router as audit_router
+from api.routes_syslog import router as syslog_config_router
+# Phase 21: Provider Instance Management
+from api.routes_provider_instances import router as provider_instances_router, set_engine as set_provider_instances_engine
+# v0.6.0: Vector Store Instance Management
+from api.routes_vector_stores import router as vector_stores_router, set_engine as set_vector_stores_engine
+# Phase 22: Custom Skills Foundation
+from api.routes_custom_skills import router as custom_skills_router, set_engine as set_custom_skills_engine
+# Phase 22.4: MCP Server Integration
+from api.routes_mcp_servers import router as mcp_servers_router, set_engine as set_mcp_servers_engine
+from api.routes_services import router as services_router
+from api.routes_agent_communication import router as agent_comm_router, set_engine as set_agent_comm_engine
+# v0.6.0 Remote Access (Cloudflare Tunnel)
+from api.routes_remote_access import router as remote_access_router
+from api.v1.router import v1_router
+from middleware.rate_limiter import ApiV1RateLimitMiddleware
+from services.queue_worker import start_queue_worker, stop_queue_worker
+# Phase 23: Channel Inbound Webhooks (BUG-311, BUG-312, BUG-313)
+from api.routes_channel_webhooks import router as channel_webhooks_router
 # MCP Health Monitor Service (auto-recovery for keepalive timeouts)
 from services.mcp_health_monitor import MCPHealthMonitorService
 from services.mcp_container_manager import MCPContainerManager
+from services.whatsapp_binding_service import backfill_unambiguous_whatsapp_bindings
 
 # Global engine and watcher
 engine = None
@@ -141,7 +182,7 @@ async def lifespan(app: FastAPI):
     global engine, watcher, watcher_task, watchers, watcher_tasks, flow_executor_task
 
     # Initialize database
-    engine = get_engine(os.getenv("INTERNAL_DB_PATH"))
+    engine = get_engine(settings.DATABASE_URL)
     init_database(engine)
     set_engine(engine)
 
@@ -180,6 +221,21 @@ async def lifespan(app: FastAPI):
     # Phase 20: Sentinel Security Agent
     set_sentinel_engine(engine)
     set_sentinel_exceptions_engine(engine)
+    set_sentinel_profiles_engine(engine)
+
+    # Phase 21: Provider Instance Management
+    set_provider_instances_engine(engine)
+    # v0.6.0: Vector Store Instance Management
+    set_vector_stores_engine(engine)
+
+    # Phase 22: Custom Skills Foundation
+    set_custom_skills_engine(engine)
+
+    # Phase 22.4: MCP Server Integration
+    set_mcp_servers_engine(engine)
+
+    # v0.6.0 Item 15: Agent-to-Agent Communication
+    set_agent_comm_engine(engine)
 
     logging.info("Database initialized")
 
@@ -187,10 +243,22 @@ async def lifespan(app: FastAPI):
     try:
         MigrationSession = sessionmaker(bind=engine)
         migration_db = MigrationSession()
-        from services.sandboxed_tool_seeding import ensure_sandboxed_tools_skill, update_existing_tools
+        from services.sandboxed_tool_seeding import ensure_sandboxed_tools_skill, update_existing_tools, deduplicate_tool_commands
         created = ensure_sandboxed_tools_skill(migration_db)
         if created > 0:
             print(f"📦 Migration: Created sandboxed_tools skill for {created} agents")
+
+        # BUG-273: Seed shell skill for every agent (per-agent enable/disable UI)
+        from services.shell_skill_seeding import backfill_shell_skill_all_tenants
+        shell_created = backfill_shell_skill_all_tenants(migration_db)
+        if shell_created > 0:
+            print(f"📦 Migration: Created shell skill for {shell_created} agents")
+
+        # BUG-044: Deduplicate tool commands/params before updating from manifests
+        dedup_result = deduplicate_tool_commands(migration_db)
+        if dedup_result["deleted_commands"] > 0 or dedup_result["deleted_params"] > 0:
+            print(f"📦 Dedup: removed {dedup_result['deleted_commands']} duplicate commands, "
+                  f"{dedup_result['deleted_params']} duplicate parameters")
 
         # Update existing tools from manifests (picks up template/prompt changes)
         from models_rbac import Tenant
@@ -311,174 +379,49 @@ async def lifespan(app: FastAPI):
         for inst in mcp_instances:
             print(f"  - Instance {inst.id}: {inst.phone_number} ({inst.status}, type={inst.instance_type})")
 
-        # Start a watcher for each instance
-        for instance in mcp_instances:
+        container_manager = MCPContainerManager()
+        reconciled_tenants = set()
+        for inst in mcp_instances:
             try:
-                print(f"🔄 Processing instance {instance.id} ({instance.instance_type})...")
+                container_manager.reconcile_instance(inst, session)
+                reconciled_tenants.add(inst.tenant_id)
+            except Exception as reconcile_error:
+                logging.warning(f"Failed to reconcile MCP instance {inst.id}: {reconcile_error}")
 
-                # Check if messages DB exists
-                if not os.path.exists(instance.messages_db_path):
-                    print(f"❌ Messages DB not found for instance {instance.id}: {instance.messages_db_path}")
-                    continue
+        for tenant_id in reconciled_tenants:
+            try:
+                linked = backfill_unambiguous_whatsapp_bindings(session, tenant_id)
+                if linked:
+                    session.commit()
+                    print(f"🔗 Backfilled WhatsApp bindings for tenant {tenant_id}: {linked} agent(s)")
+            except Exception as binding_error:
+                session.rollback()
+                logging.warning(f"Failed to backfill WhatsApp bindings for tenant {tenant_id}: {binding_error}")
 
-                print(f"✅ Messages DB exists for instance {instance.id}")
-
-                # Get config for this instance
-                config = session.query(Config).first()
-                if not config:
-                    logging.warning(f"No config found, skipping instance {instance.id}")
-                    continue
-
-                # Parse JSON fields
-                contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
-                group_keywords = json_lib.loads(config.group_keywords) if config.group_keywords else []
-
-                # Initialize CachedContactService (reuse existing if available)
-                from agent.contact_service_cached import CachedContactService
-                if not hasattr(app.state, 'contact_service'):
-                    contact_service = CachedContactService(session)
-                    app.state.contact_service = contact_service
-                else:
-                    contact_service = app.state.contact_service
-
-                # Collect group filters from active agents for this tenant
-                all_group_filters = set(config.group_filters or [])
-                active_agents = session.query(Agent).filter(
-                    Agent.is_active == True,
-                    Agent.tenant_id == instance.tenant_id
-                ).all()
-
-                for agent in active_agents:
-                    if agent.trigger_group_filters:
-                        agent_filters = json_lib.loads(agent.trigger_group_filters) if isinstance(agent.trigger_group_filters, str) else agent.trigger_group_filters
-                        if agent_filters:
-                            all_group_filters.update(agent_filters)
-
-                # Create message filter
-                # SAFETY FIX: Force dm_auto_mode=False for QA/User Phone instance (Instance 25 or matching phone)
-                # This ensures the bot never auto-replies to DMs on the user's personal phone, even if global setting is ON.
-                print(f"📋 Checking instance {instance.id} (phone: {instance.phone_number})")
-                # Check if this is a QA/testing instance using env var
-                qa_phone = os.getenv('QA_PHONE_NUMBER', '')
-                is_qa_instance = (str(instance.id) == "25" or (qa_phone and qa_phone in str(instance.phone_number)))
-                effective_dm_mode = False if is_qa_instance else config.dm_auto_mode
-
-                if is_qa_instance:
-                    print(f"🔒 ENFORCING SAFE MODE (dm_auto_mode=False) for QA/User instance {instance.id}")
-                else:
-                    print(f"Normal mode for instance {instance.id} (dm_auto_mode={effective_dm_mode})")
-
-                message_filter = MessageFilter(
-                    group_filters=list(all_group_filters),
-                    number_filters=config.number_filters or [],
-                    agent_number=config.agent_number,
-                    dm_auto_mode=effective_dm_mode,
-                    agent_phone_number=instance.phone_number,  # Use instance phone number
-                    agent_name=config.agent_name,
-                    group_keywords=group_keywords,
-                    contact_service=contact_service,
-                    db_session=session
-                )
-
-                # Create config dict
-                # Note: enabled_tools and enable_google_search have been deprecated - using Skills system instead
-                config_dict = {
-                    "model_provider": config.model_provider,
-                    "model_name": config.model_name,
-                    "system_prompt": config.system_prompt,
-                    "memory_size": config.memory_size,
-                    "contact_mappings": contact_mappings,
-                    "maintenance_mode": config.maintenance_mode,
-                    "maintenance_message": config.maintenance_message,
-                    "context_message_count": config.context_message_count,
-                    "context_char_limit": config.context_char_limit,
-                    "enable_semantic_search": getattr(config, "enable_semantic_search", False),
-                    "semantic_search_results": getattr(config, "semantic_search_results", 5),
-                    "semantic_similarity_threshold": getattr(config, "semantic_similarity_threshold", 0.3)
-                }
-
-                # CRITICAL SAFETY CHECK: Only create agent router for AGENT instances
-                # TESTER instances should NEVER have an agent router - they are for QA/testing only
-                if instance.instance_type == "tester":
-                    print(f"⚠️  SKIPPING watcher for TESTER instance {instance.id} - tester instances should NOT process messages with agent")
-                    continue
-
-                print(f"🚀 Creating watcher for AGENT instance {instance.id}...")
-
-                # Create MCP reader - prefer HTTP API over SQLite to bypass Docker filesystem sync issues
-                # The API reader fetches messages directly from the MCP container's HTTP endpoint,
-                # which is more reliable than reading from bind-mounted SQLite files on Docker Desktop macOS
-                from mcp_reader.api_reader import MCPAPIReader
-                from mcp_reader.sqlite_reader import MCPDatabaseReader
-
-                # Phase Security-1: Pass API secret for authentication
-                api_reader = MCPAPIReader(
-                    instance.mcp_api_url,
-                    contact_mappings=contact_mappings,
-                    api_secret=instance.api_secret
-                )
-
-                # Check if API is available, fallback to SQLite if not
-                print(f"🔍 Checking API availability for instance {instance.id}: {instance.mcp_api_url}")
-                if api_reader.is_available():
-                    mcp_reader = api_reader
-                    print(f"📡 Using HTTP API reader for instance {instance.id} (bypassing filesystem sync)")
-                else:
-                    mcp_reader = MCPDatabaseReader(instance.messages_db_path, contact_mappings=contact_mappings)
-                    print(f"⚠️  Using SQLite reader for instance {instance.id} (API not available)")
-
-                # Create agent router (only for agent instances)
-                # Phase 10: Pass mcp_instance_id for channel-based agent filtering
-                instance_agent_router = AgentRouter(session, config_dict, mcp_reader=mcp_reader, mcp_instance_id=instance.id)
-
-                # Determine starting timestamp to prevent message replay
-                # For NEW instances (created within last 5 minutes), use creation time to skip history sync
-                # For EXISTING instances, use None to continue from DB timestamp
-                from datetime import datetime, timedelta
-                starting_timestamp = None
-                if instance.created_at:
-                    age_minutes = (datetime.utcnow() - instance.created_at).total_seconds() / 60
-                    if age_minutes < 5:
-                        # New instance - skip messages older than creation time
-                        starting_timestamp = instance.created_at.strftime("%Y-%m-%d %H:%M:%S+00:00")
-                        logging.info(f"🆕 Instance {instance.id} is new ({age_minutes:.1f}min old), will skip history sync messages")
-
-                # Create watcher (only for agent instances) with the selected reader
-                delay_seconds = getattr(config, "whatsapp_conversation_delay_seconds", None)
-                if delay_seconds is None:
-                    delay_seconds = settings.WHATSAPP_CONVERSATION_DELAY_SECONDS
-
-                instance_watcher = MCPWatcher(
-                    reader=mcp_reader,  # Pass the reader directly (API or SQLite)
-                    message_filter=message_filter,
-                    on_message_callback=instance_agent_router.route_message,
-                    poll_interval_ms=settings.POLL_INTERVAL_MS,
-                    contact_mappings=contact_mappings,
-                    db_session=session,
-                    starting_timestamp=starting_timestamp,
-                    whatsapp_conversation_delay_seconds=delay_seconds
-                )
-
-                # Start watcher task
-                print(f"▶️  Starting watcher task for instance {instance.id}...")
-                instance_watcher_task = asyncio.create_task(instance_watcher.start())
-
-                # Store watcher and task
-                watchers[instance.id] = instance_watcher
-                watcher_tasks[instance.id] = instance_watcher_task
-
-                print(f"✅ MCP Watcher started for AGENT instance {instance.id} (tenant: {instance.tenant_id}, port: {instance.mcp_port})")
-
-            except Exception as instance_error:
-                logging.error(f"Error starting watcher for instance {instance.id}: {instance_error}", exc_info=True)
-
-        # Store watchers in app.state for management
         app.state.watchers = watchers
         app.state.watcher_tasks = watcher_tasks
 
         # Initialize WatcherManager for dynamic watcher lifecycle
         from services.watcher_manager import WatcherManager
         app.state.watcher_manager = WatcherManager(app.state)
+
+        # Start a watcher for each instance through the same code path used for
+        # dynamic instance creation/restarts. This keeps startup behavior aligned
+        # with runtime behavior and avoids stale SQLite-path gating.
+        for instance in mcp_instances:
+            try:
+                print(f"🔄 Processing instance {instance.id} ({instance.instance_type})...")
+                if instance.instance_type == "tester":
+                    print(f"⚠️  SKIPPING watcher for TESTER instance {instance.id} - tester instances should NOT process messages with agent")
+                    continue
+
+                started = await app.state.watcher_manager.start_watcher_for_instance(instance.id, session)
+                if started:
+                    print(f"✅ MCP Watcher started for AGENT instance {instance.id} (tenant: {instance.tenant_id}, port: {instance.mcp_port})")
+                else:
+                    print(f"⚠️  Watcher not started for instance {instance.id} (already running or waiting on MCP readiness)")
+            except Exception as instance_error:
+                logging.error(f"Error starting watcher for instance {instance.id}: {instance_error}", exc_info=True)
 
         print(f"🎯 Total watchers started: {len(watchers)}")
         print(f"📋 Watcher IDs: {list(watchers.keys())}")
@@ -489,6 +432,7 @@ async def lifespan(app: FastAPI):
 
     # Start MCP Health Monitor Service (auto-recovery for keepalive timeouts)
     mcp_health_monitor = None
+    container_manager = None
     try:
         # Initialize container manager for health checks and restarts
         container_manager = MCPContainerManager()
@@ -512,6 +456,42 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error starting MCP Health Monitor: {e}", exc_info=True)
         # Non-fatal - app can run without health monitor
+
+    # v0.6.0 Item 38: Start Channel Health Service (circuit breakers for all channels)
+    try:
+        from services.channel_health_service import ChannelHealthService
+        from services.channel_alert_dispatcher import ChannelAlertDispatcher
+        from services.watcher_activity_service import WatcherActivityService
+        import settings as app_settings
+
+        if getattr(app_settings, 'CHANNEL_HEALTH_ENABLED', True):
+            alert_dispatcher = ChannelAlertDispatcher(get_db_session=SessionLocal)
+            channel_health_service = ChannelHealthService(
+                get_db_session=SessionLocal,
+                container_manager=container_manager if container_manager else MCPContainerManager(),
+                watcher_activity_service=WatcherActivityService.get_instance() if hasattr(WatcherActivityService, 'get_instance') else None,
+                alert_dispatcher=alert_dispatcher
+            )
+
+            # Wire MCPHealthMonitor recovery callback to notify ChannelHealthService
+            if mcp_health_monitor and hasattr(mcp_health_monitor, 'on_recovery_triggered'):
+                original_callback = mcp_health_monitor.on_recovery_triggered
+                def combined_callback(instance_id, reason):
+                    if original_callback:
+                        original_callback(instance_id, reason)
+                    logging.info(f"🔄 Auto-recovery triggered for MCP instance {instance_id}: {reason}")
+                    channel_health_service.on_external_recovery("whatsapp", instance_id)
+                mcp_health_monitor.on_recovery_triggered = combined_callback
+
+            await channel_health_service.start()
+            app.state.channel_health_service = channel_health_service
+            logging.info("🏥 Channel Health Service started (circuit breakers enabled for all channels)")
+        else:
+            logging.info("Channel Health Service disabled via TSN_CHANNEL_HEALTH_ENABLED")
+
+    except Exception as e:
+        logging.error(f"Error starting Channel Health Service: {e}", exc_info=True)
+        # Non-fatal
 
     # Phase 10.1.1: Initialize Telegram Watcher Manager
     try:
@@ -619,8 +599,12 @@ async def lifespan(app: FastAPI):
                     contact_mappings = json_lib.loads(config.contact_mappings) if config.contact_mappings else {}
 
                     # Initialize CachedContactService
+                    # V060-CHN-006: tenant_id is required or contact lookups fail closed
                     from agent.contact_service_cached import CachedContactService
-                    contact_service = CachedContactService(request_session)
+                    contact_service = CachedContactService(
+                        request_session,
+                        tenant_id=(bot_instance.tenant_id if bot_instance else None)
+                    )
 
                     # Create config dict
                     config_dict = {
@@ -643,7 +627,8 @@ async def lifespan(app: FastAPI):
                         request_session,
                         config_dict,
                         mcp_reader=None,
-                        telegram_instance_id=telegram_instance_id
+                        telegram_instance_id=telegram_instance_id,
+                        tenant_id=bot_instance.tenant_id,  # V060-CHN-006
                     )
 
                     # Route message
@@ -690,6 +675,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error initializing Telegram Watcher Manager: {e}", exc_info=True)
 
+    # V060-CHN-002: Initialize Slack Socket Mode Manager
+    try:
+        from services.slack_socket_mode_manager import SlackSocketModeManager
+        slack_socket_manager = SlackSocketModeManager(db_session_factory=SessionLocal)
+        app.state.slack_socket_mode_manager = slack_socket_manager
+        await slack_socket_manager.start_all()
+        logging.info("Slack Socket Mode Manager initialized")
+    except Exception as e:
+        logging.error(f"Error initializing Slack Socket Mode Manager: {e}", exc_info=True)
+
     # Start scheduler worker (Phase 6.4) for scheduled_event table
     try:
         start_scheduler_worker(engine, poll_interval_seconds=10)
@@ -702,7 +697,9 @@ async def lifespan(app: FastAPI):
         start_oauth_refresh_worker(
             engine,
             poll_interval_minutes=settings.OAUTH_REFRESH_POLL_MINUTES,
-            refresh_threshold_hours=settings.OAUTH_REFRESH_THRESHOLD_HOURS
+            refresh_threshold_hours=settings.OAUTH_REFRESH_THRESHOLD_HOURS,
+            max_retries=settings.OAUTH_REFRESH_MAX_RETRIES,
+            retry_delay=settings.OAUTH_REFRESH_RETRY_DELAY,
         )
         logging.info(
             "OAuth Token Refresh Worker started (polling every %s min, threshold %s h)",
@@ -742,6 +739,86 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error starting Beacon Connection Service: {e}", exc_info=True)
 
+    # Message Queue Worker (async message processing)
+    try:
+        await start_queue_worker(engine, poll_interval_ms=500)
+        logging.info("Message Queue Worker started (polling every 500ms)")
+    except Exception as e:
+        logging.error(f"Error starting Message Queue Worker: {e}", exc_info=True)
+
+    # v0.6.0: Start Audit Retention Worker (purges expired audit events daily)
+    try:
+        from services.audit_retention_worker import start_audit_retention_worker
+        start_audit_retention_worker(engine, poll_interval_hours=24)
+        logging.info("Audit Retention Worker started (purging every 24h)")
+    except Exception as e:
+        logging.error(f"Error starting Audit Retention Worker: {e}", exc_info=True)
+
+    # Syslog Forwarder Worker (streams audit events to external syslog servers)
+    try:
+        from services.syslog_forwarder import start_syslog_forwarder
+        start_syslog_forwarder(engine, queue_size=10000, batch_size=50, poll_interval_ms=200)
+        logging.info("Syslog Forwarder Worker started")
+    except Exception as e:
+        logging.error(f"Error starting Syslog Forwarder Worker: {e}", exc_info=True)
+
+    # v0.6.0 Remote Access (Cloudflare Tunnel): initialize the singleton
+    # service and, if config.enabled + config.autostart, fire-and-forget
+    # autostart. Failures here must never block app startup.
+    try:
+        from services.cloudflare_tunnel_service import get_cloudflare_tunnel_service
+        TunnelSession = sessionmaker(bind=engine)
+        tunnel_service = get_cloudflare_tunnel_service(TunnelSession)
+        app.state.tunnel_service = tunnel_service
+        logging.info(
+            "Cloudflare tunnel service initialized (binary=%s)",
+            tunnel_service._cloudflared_path or "not found",
+        )
+        if await tunnel_service.should_autostart():
+            asyncio.create_task(tunnel_service.start_autostart())
+            logging.info("Cloudflare tunnel autostart requested")
+    except Exception as e:
+        logging.error(f"Error initializing Cloudflare tunnel service: {e}", exc_info=True)
+
+    # Phase 22.4: Auto-connect active MCP servers on startup
+    async def _auto_connect_mcp_servers():
+        await asyncio.sleep(5)  # Wait for full startup
+        try:
+            from hub.mcp.connection_manager import MCPConnectionManager
+            from models import MCPServerConfig
+            manager = MCPConnectionManager.get_instance()
+            AutoConnectSession = sessionmaker(bind=engine)
+            db = AutoConnectSession()
+            try:
+                servers = db.query(MCPServerConfig).filter(
+                    MCPServerConfig.is_active == True
+                ).all()
+                connected = 0
+                for server in servers:
+                    try:
+                        await manager.get_or_connect(server.id, db)
+                        logging.info(f"Auto-connected MCP server: {server.server_name} (id={server.id})")
+                        connected += 1
+                    except Exception as e:
+                        logging.warning(f"Failed to auto-connect MCP server {server.server_name}: {e}")
+                if servers:
+                    logging.info(f"MCP auto-connect: {connected}/{len(servers)} servers connected")
+            finally:
+                db.close()
+        except Exception as e:
+            logging.error(f"MCP auto-connect failed: {e}", exc_info=True)
+
+    asyncio.create_task(_auto_connect_mcp_servers())
+
+    # v0.6.0 G3-A: Start MCP Server Periodic Health Check Service
+    try:
+        from services.mcp_server_health_service import MCPServerHealthCheckService
+        app.state.mcp_server_health_service = MCPServerHealthCheckService(engine)
+        await app.state.mcp_server_health_service.start()
+        logging.info("MCP Server Health Check Service started (interval=180s)")
+    except Exception as e:
+        logging.error(f"Error starting MCP Server Health Check Service: {e}", exc_info=True)
+
     yield
 
     # Shutdown
@@ -780,6 +857,22 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logging.error(f"Error stopping Telegram Watcher Manager: {e}", exc_info=True)
 
+    # V060-CHN-002: Stop Slack Socket Mode Manager
+    if hasattr(app.state, 'slack_socket_mode_manager'):
+        try:
+            await app.state.slack_socket_mode_manager.stop_all()
+            logging.info("Slack Socket Mode Manager stopped")
+        except Exception as e:
+            logging.error(f"Error stopping Slack Socket Mode Manager: {e}", exc_info=True)
+
+    # v0.6.0 Item 38: Stop Channel Health Service
+    if hasattr(app.state, 'channel_health_service'):
+        try:
+            await app.state.channel_health_service.stop()
+            logging.info("🏥 Channel Health Service stopped")
+        except Exception as e:
+            logging.error(f"Error stopping Channel Health Service: {e}", exc_info=True)
+
     # Stop MCP Health Monitor Service
     if hasattr(app.state, 'mcp_health_monitor'):
         try:
@@ -787,6 +880,14 @@ async def lifespan(app: FastAPI):
             logging.info("🏥 MCP Health Monitor Service stopped")
         except Exception as e:
             logging.error(f"Error stopping MCP Health Monitor: {e}", exc_info=True)
+
+    # v0.6.0 G3-A: Stop MCP Server Health Check Service
+    if hasattr(app.state, 'mcp_server_health_service'):
+        try:
+            await app.state.mcp_server_health_service.stop()
+            logging.info("MCP Server Health Check Service stopped")
+        except Exception as e:
+            logging.error(f"Error stopping MCP Server Health Check Service: {e}", exc_info=True)
 
     # Phase 18.4: Stop Beacon Connection Service
     try:
@@ -826,11 +927,93 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error stopping stale flow cleanup service: {e}", exc_info=True)
 
+    # Stop Message Queue Worker
+    try:
+        await stop_queue_worker()
+        logging.info("Message Queue Worker stopped")
+    except Exception as e:
+        logging.error(f"Error stopping Message Queue Worker: {e}", exc_info=True)
+
+    # Stop Audit Retention Worker
+    try:
+        from services.audit_retention_worker import stop_audit_retention_worker
+        stop_audit_retention_worker()
+        logging.info("Audit Retention Worker stopped")
+    except Exception as e:
+        logging.error(f"Error stopping Audit Retention Worker: {e}", exc_info=True)
+
+    # Stop Syslog Forwarder Worker
+    try:
+        from services.syslog_forwarder import stop_syslog_forwarder
+        stop_syslog_forwarder()
+        logging.info("Syslog Forwarder Worker stopped")
+    except Exception as e:
+        logging.error(f"Error stopping Syslog Forwarder Worker: {e}", exc_info=True)
+
+    # v0.6.0 Remote Access: stop cloudflared subprocess cleanly so SIGTERM
+    # propagates before the DB engine is disposed.
+    try:
+        if hasattr(app.state, "tunnel_service") and app.state.tunnel_service is not None:
+            await app.state.tunnel_service.shutdown()
+            logging.info("Cloudflare tunnel service stopped")
+    except Exception as e:
+        logging.error(f"Error stopping Cloudflare tunnel service: {e}", exc_info=True)
+
     session.close()
     logging.info("Application shutdown")
 
 # Create app
-app = FastAPI(title="Agentic WhatsApp Bot", lifespan=lifespan)
+app = FastAPI(
+    title="Tsushin Platform API",
+    version="1.0.0",
+    description="""
+Multi-tenant AI agent platform with flows, hub integrations, and studio builder.
+
+## Authentication
+
+The Public API v1 (`/api/v1/`) supports two authentication methods:
+
+- **OAuth2 Client Credentials**: Exchange `client_id` and `client_secret` at
+  `POST /api/v1/oauth/token` for a short-lived JWT bearer token (1 hour).
+- **API Key**: Pass the raw client secret directly via the `X-API-Key` header
+  (prefix: `tsn_cs_`). No token exchange required.
+
+## Rate Limiting
+
+All `/api/v1/` endpoints (except `/api/v1/oauth/token`) are rate-limited per API client.
+Default: **60 requests/minute** (configurable per client). The OAuth token endpoint
+has a separate per-IP limit of **10 requests/minute**.
+
+Response headers on every v1 request:
+- `X-RateLimit-Limit` — Maximum requests per minute
+- `X-RateLimit-Remaining` — Remaining quota in the current window
+- `X-Request-Id` — Unique request ID for debugging
+- `X-API-Version` — API version (`v1`)
+
+When rate-limited, the API returns **HTTP 429** with a `Retry-After: 60` header.
+
+## Pagination
+
+List endpoints use page-based pagination:
+- `page` (1-based, default 1) and `per_page` (default 20, max 100)
+- Response envelope: `{"data": [...], "meta": {"total": N, "page": 1, "per_page": 20}}`
+
+## Error Format
+
+Errors return a JSON body with `detail` (string or object) and the appropriate HTTP status code.
+OAuth errors follow the RFC 6749 format: `{"error": "...", "error_description": "..."}`.
+""".strip(),
+    openapi_tags=[
+        {"name": "OAuth", "description": "OAuth2 client credentials token exchange"},
+        {"name": "Agents API", "description": "Agent CRUD and configuration management"},
+        {"name": "Chat API", "description": "Synchronous and asynchronous chat with agents"},
+        {"name": "Flows API", "description": "Flow definition CRUD, step management, execution, and run monitoring"},
+        {"name": "Hub API", "description": "Provider-agnostic hub integrations (Asana, Gmail, Calendar)"},
+        {"name": "Studio API", "description": "Agent Studio builder data and atomic save"},
+        {"name": "Resources API", "description": "Read-only listings for skills, tools, personas, and presets"},
+    ],
+    lifespan=lifespan,
+)
 
 # MED-004 FIX: Initialize rate limiter
 # Rate limits: login (5/min), signup (3/hr), password reset (3/hr)
@@ -838,16 +1021,92 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS - Allow all origins for development
-# Using wildcard for simplicity - credentials sent via Authorization header
+# CORS - Configurable origins via TSN_CORS_ORIGINS env var
+# Default: "*" (reflect requesting origin) for backward compatibility / development
+# Production: set TSN_CORS_ORIGINS=https://app.example.com,https://admin.example.com
+# SEC-005: credentials=True is required for httpOnly cookie auth
+_cors_origins_str = os.getenv("TSN_CORS_ORIGINS", "*")
+_cors_origin_regex = None
+if _cors_origins_str.strip() == "*":
+    # SEC-005 / CORS FIX: Use origin reflection instead of literal "*" wildcard.
+    # Literal "*" with credentials=True is rejected by browsers.
+    # allow_origin_regex=".*" reflects the requesting origin with credentials support.
+    _cors_origins = []
+    _cors_origin_regex = ".*"
+    _cors_allow_credentials = True
+else:
+    _cors_origins = [origin.strip() for origin in _cors_origins_str.split(",") if origin.strip()]
+    _cors_origin_regex = None
+    _cors_allow_credentials = True  # Safe to allow credentials with explicit origins
+
+# v0.6.0 Remote Access: append the configured Cloudflare Tunnel hostname to
+# the allow list so cross-origin API integrations that target the public URL
+# work even when TSN_CORS_ORIGINS is pinned to localhost. Same-origin browser
+# traffic (UI loaded from the tunnel hostname calling /api on the same
+# hostname) does not require CORS, but explicit origins here protect
+# external API consumers. Best-effort; silently skipped if the
+# remote_access_config table does not yet exist (fresh install pre-migration).
+if _cors_origins:
+    _cors_bootstrap = None
+    try:
+        from sqlalchemy import create_engine as _cors_engine, text as _cors_text
+        _cors_bootstrap_url = os.getenv("DATABASE_URL", "")
+        if _cors_bootstrap_url:
+            # Engine creation must be inside the try/finally so a failure
+            # here (rather than only during .connect()) still releases the
+            # connection pool properly.
+            _cors_bootstrap = _cors_engine(_cors_bootstrap_url)
+            with _cors_bootstrap.connect() as _cors_conn:
+                _cors_row = _cors_conn.execute(
+                    _cors_text(
+                        "SELECT tunnel_hostname FROM remote_access_config WHERE id = 1"
+                    )
+                ).first()
+                if _cors_row and _cors_row[0]:
+                    _cors_tunnel_origin = f"https://{str(_cors_row[0]).strip().lower()}"
+                    if _cors_tunnel_origin not in _cors_origins:
+                        _cors_origins.append(_cors_tunnel_origin)
+                        logger.info(
+                            f"CORS: added tunnel hostname origin {_cors_tunnel_origin}"
+                        )
+    except Exception as _cors_exc:
+        logger.debug(
+            f"CORS tunnel-hostname bootstrap skipped (table may not exist yet): {_cors_exc}"
+        )
+    finally:
+        if _cors_bootstrap is not None:
+            _cors_bootstrap.dispose()
+
+logger.info(f"CORS origins: {_cors_origins or 'reflect-all'} (credentials={_cors_allow_credentials})")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,  # Must be False when using wildcard
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_origin_regex=_cors_origin_regex,
+    allow_credentials=_cors_allow_credentials,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Requested-With"],
     max_age=86400,  # Cache preflight for 24 hours
 )
+
+# Proxy headers — reads X-Forwarded-For/Proto from reverse proxy (Caddy/Nginx)
+# Ensures get_remote_address returns real client IP for rate limiting behind proxy.
+# No-op when running without a proxy.
+# BUG-074 FIX: Use configurable trusted hosts instead of wildcard
+_trusted_proxy_hosts = os.environ.get("TSN_TRUSTED_PROXY_HOSTS", "127.0.0.1,::1")
+_trusted_hosts_list = [h.strip() for h in _trusted_proxy_hosts.split(",") if h.strip()]
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_hosts_list)
+
+# Public API v1: Rate limiting middleware
+app.add_middleware(ApiV1RateLimitMiddleware)
+
+# Request ID middleware — generates a UUID per request for log correlation
+from services.logging_service import RequestIdMiddleware
+app.add_middleware(RequestIdMiddleware)
+
+# Prometheus metrics middleware — tracks request count and duration
+from services.metrics_service import PrometheusMiddleware
+app.add_middleware(PrometheusMiddleware)
 
 
 # Security headers middleware
@@ -868,7 +1127,34 @@ async def add_security_headers(request: Request, call_next):
     # Content Security Policy - restrictive but allows API usage
     # Note: Adjust 'self' and add specific domains as needed for production
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' wss: https:; frame-ancestors 'none'"
+    if os.getenv("TSN_ENABLE_HSTS", "").lower() in ("1", "true", "yes"):
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     return response
+
+# CORS headers for exception handlers — must match the middleware config above
+def _cors_headers_for_request(request: Request) -> dict:
+    """Build CORS headers consistent with the configured origins."""
+    origin = request.headers.get("origin", "")
+    if _cors_origin_regex:
+        # Reflect requesting origin (SEC-005: supports credentials with any origin)
+        if origin:
+            return {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, X-API-Key, X-Requested-With",
+            }
+        return {}
+    # Only reflect the origin if it's in the allowed list
+    if origin in _cors_origins:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-API-Key, X-Requested-With",
+        }
+    # Origin not allowed — omit CORS headers entirely
+    return {}
 
 # Custom exception handlers to ensure CORS headers are always present
 # This fixes issues where HTTPException responses don't include CORS headers
@@ -878,24 +1164,23 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
+        headers=_cors_headers_for_request(request),
     )
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors with CORS headers"""
+    # Sanitize errors to ensure JSON-serializable (ctx may contain non-serializable objects)
+    errors = []
+    for err in exc.errors():
+        sanitized = {k: v for k, v in err.items() if k != "ctx"}
+        if "ctx" in err and isinstance(err["ctx"], dict):
+            sanitized["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
+        errors.append(sanitized)
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
+        content={"detail": errors},
+        headers=_cors_headers_for_request(request),
     )
 
 @app.exception_handler(Exception)
@@ -905,11 +1190,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
+        headers=_cors_headers_for_request(request),
     )
 
 # Include routers
@@ -936,12 +1217,14 @@ app.include_router(cache_router)  # Phase 6.11.3 - Cache Management API
 app.include_router(analytics_router)  # Phase 7.2 - Token Analytics
 app.include_router(auth_router)  # Phase 7.6.3 - Authentication
 app.include_router(agents_protected_router)  # Phase 7.6.4 - Protected Agents API (Example)
+app.include_router(agent_builder_router)  # Phase I - Agent Builder Batch Endpoints
 app.include_router(mcp_instances_router)  # Phase 8 - MCP Instance Management
 app.include_router(playground_router)  # Playground Feature
 app.include_router(projects_router)  # Phase 14.4: Projects
 app.include_router(commands_router)  # Phase 16: Slash Commands
 app.include_router(user_contact_mapping_router)  # Playground - User Contact Mapping
 app.include_router(tenants_router)  # Phase 7.9 - Tenant Management
+app.include_router(tenant_settings_router)  # v0.6.0 - Tenant self-service settings (public_base_url)
 app.include_router(team_router)  # Phase 7.9 - Team Management
 app.include_router(plans_router)  # Plans Management
 app.include_router(sso_config_router)  # SSO Configuration
@@ -950,27 +1233,180 @@ app.include_router(toolbox_router)  # Toolbox Container Management (Custom Tools
 app.include_router(skill_integrations_router, prefix="/api")  # Skill Integrations (Provider Configuration)
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
+app.include_router(webhook_inbound_router)  # v0.6.0: Webhook-as-Channel (public, HMAC-gated)
+app.include_router(webhook_instances_router)  # v0.6.0: Webhook-as-Channel (tenant-scoped CRUD)
+# v0.6.0 Item 38: Channel Health Monitor
+try:
+    from api.routes_channel_health import router as channel_health_router
+    app.include_router(channel_health_router)
+except ImportError:
+    logging.warning("Channel health routes not available")
 app.include_router(system_ai_router)  # Phase 17: System AI Configuration
+app.include_router(integrations_router)  # Integration Test Connection
 app.include_router(sentinel_router, prefix="/api")  # Phase 20: Sentinel Security Agent
 app.include_router(sentinel_exceptions_router, prefix="/api")  # Phase 20 Enhancement: Sentinel Exceptions
+app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel Security Profiles
+app.include_router(provider_instances_router, prefix="/api", tags=["Provider Instances"])  # Phase 21: Provider Instance Management
+app.include_router(vector_stores_router, prefix="/api", tags=["Vector Stores"])  # v0.6.0: Vector Store Instance Management
+app.include_router(custom_skills_router, prefix="/api", tags=["Custom Skills"])  # Phase 22: Custom Skills Foundation
+app.include_router(mcp_servers_router, prefix="/api", tags=["MCP Servers"])  # Phase 22.4: MCP Server Integration
+app.include_router(services_router)  # Hub Local Services (Kokoro TTS container management)
+app.include_router(queue_router)  # Message Queue System
+app.include_router(api_clients_router)  # Public API v1: Client Management (UI-facing)
+app.include_router(audit_router)  # v0.6.0: Tenant-Scoped Audit Logs
+app.include_router(agent_comm_router, prefix="/api")  # v0.6.0 Item 15: Agent-to-Agent Communication
+app.include_router(syslog_config_router)  # v0.6.0: Syslog Forwarding Configuration
+app.include_router(remote_access_router)  # v0.6.0: Remote Access (Cloudflare Tunnel)
+app.include_router(v1_router)  # Public API v1: All /api/v1/ endpoints
+app.include_router(discord_router)  # Phase 23: Discord Bot Integration (BUG-311, BUG-313)
+app.include_router(slack_router)  # Phase 23: Slack Workspace Integration (BUG-312)
+app.include_router(channel_webhooks_router)  # Phase 23: Channel Inbound Webhooks (Discord interactions, Slack events)
+
+
+def _build_v1_openapi_schema():
+    """Build a public-only OpenAPI schema for SDK generation and docs."""
+    return get_openapi(
+        title="Tsushin Public API v1",
+        version="1.0.0",
+        description="Public API v1 only. Use this schema for SDK generation.",
+        routes=[
+            route
+            for route in app.routes
+            if getattr(route, "path", "").startswith("/api/v1/")
+        ],
+    )
+
+
+@app.get("/api/v1/openapi.json", include_in_schema=False)
+def get_v1_openapi():
+    """Serve a dedicated Public API v1 schema without legacy/internal routes."""
+    if not getattr(app.state, "v1_openapi_schema", None):
+        app.state.v1_openapi_schema = _build_v1_openapi_schema()
+    return JSONResponse(app.state.v1_openapi_schema)
+
+
+@app.get("/api/v1/docs", include_in_schema=False)
+def get_v1_docs():
+    """Serve Swagger UI for the dedicated Public API v1 schema."""
+    return get_swagger_ui_html(
+        openapi_url="/api/v1/openapi.json",
+        title="Tsushin Public API v1 Docs",
+    )
+
+# Prometheus metrics endpoint (unauthenticated — scrape target)
+from services.metrics_service import metrics_endpoint
+app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
 
 # Phase 6.11.2: WebSocket endpoint for real-time updates
+# BUG-310: Added JWT authentication and tenant-scoped connection tracking
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time updates"""
-    await ws_manager.connect(websocket)
+    """
+    WebSocket endpoint for real-time updates.
+
+    BUG-310: Requires JWT authentication. Supports two auth modes:
+    1. Query param: /ws?token=<jwt> (legacy, logged as warning)
+    2. First-message auth: send {"type": "auth", "token": "<jwt>"} after connect (preferred)
+
+    Unauthenticated connections are rejected with close code 4001.
+    Connections are scoped to the tenant extracted from the JWT.
+    """
+    import asyncio as _asyncio
+    import json as _json
+    from auth_utils import decode_access_token
+
+    tenant_id = None
+    user_id = None
+
     try:
+        # Accept connection first (required by FastAPI before we can send close frames)
+        await websocket.accept()
+
+        # Check for token in query params (legacy) or wait for first-message auth (secure)
+        query_params = dict(websocket.query_params)
+        token = query_params.get("token")
+
+        if token:
+            logger.warning("WebSocket /ws using legacy query param auth (insecure) - please update client")
+        else:
+            # Secure mode: wait for auth message with token
+            try:
+                auth_data = await _asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+                auth_message = _json.loads(auth_data)
+
+                if auth_message.get("type") != "auth":
+                    logger.error(f"WebSocket /ws rejected: first message must be auth, got: {auth_message.get('type')}")
+                    await websocket.close(code=4001, reason="First message must be auth type")
+                    return
+
+                token = auth_message.get("token")
+                if not token:
+                    logger.error("WebSocket /ws rejected: auth message missing token")
+                    await websocket.close(code=4001, reason="Missing token in auth message")
+                    return
+
+            except _asyncio.TimeoutError:
+                logger.error("WebSocket /ws rejected: auth timeout (10s)")
+                await websocket.close(code=4001, reason="Authentication timeout")
+                return
+            except _json.JSONDecodeError:
+                logger.error("WebSocket /ws rejected: invalid auth message format")
+                await websocket.close(code=4001, reason="Invalid auth message format")
+                return
+
+        # Validate JWT token
+        if not token:
+            logger.error("WebSocket /ws rejected: no authentication token provided")
+            await websocket.close(code=4001, reason="Missing authentication token")
+            return
+
+        payload = decode_access_token(token)
+        if not payload:
+            logger.error("WebSocket /ws rejected: invalid or expired token")
+            await websocket.close(code=4003, reason="Invalid or expired token")
+            return
+
+        user_id = payload.get("sub") or payload.get("user_id")
+        tenant_id = payload.get("tenant_id")
+
+        if not user_id:
+            logger.error(f"WebSocket /ws rejected: no user_id in token payload")
+            await websocket.close(code=4002, reason="Invalid token payload - missing user_id")
+            return
+
+        if not tenant_id:
+            logger.error(f"WebSocket /ws rejected: no tenant_id in token payload for user {user_id}")
+            await websocket.close(code=4002, reason="Invalid token payload - missing tenant_id")
+            return
+
+        user_id = int(user_id) if isinstance(user_id, str) else user_id
+        logger.info(f"WebSocket /ws authenticated: user={user_id}, tenant={tenant_id}")
+
+        # Register with manager (already accepted above, so skip accept in connect)
+        # Manually add to tracking structures instead of calling connect() which calls accept()
+        ws_manager.active_connections.append(websocket)
+        if tenant_id not in ws_manager.tenant_ws_connections:
+            ws_manager.tenant_ws_connections[tenant_id] = []
+        ws_manager.tenant_ws_connections[tenant_id].append(websocket)
+        ws_manager._ws_tenant_map[id(websocket)] = tenant_id
+        if user_id not in ws_manager.user_connections:
+            ws_manager.user_connections[user_id] = []
+        ws_manager.user_connections[user_id].append(websocket)
+
+        # Send auth success confirmation
+        await websocket.send_json({"type": "auth_success", "user_id": user_id, "tenant_id": tenant_id})
+
         # Keep connection alive and handle heartbeats
         while True:
             data = await websocket.receive_text()
-            # Echo back heartbeat
             if data.strip() == "ping":
                 await websocket.send_text("pong")
+
     except WebSocketDisconnect:
-        ws_manager.disconnect(websocket)
+        ws_manager.disconnect(websocket, user_id)
     except Exception as e:
-        logger.error(f"WebSocket error: {e}", exc_info=True)
-        ws_manager.disconnect(websocket)
+        logger.error(f"WebSocket /ws error: {e}", exc_info=True)
+        ws_manager.disconnect(websocket, user_id)
 
 # Phase 14.9: WebSocket endpoint for Playground streaming v4
 # Phase SEC-002: Fixed token exposure in query parameters (HIGH-001)
@@ -997,19 +1433,26 @@ async def playground_websocket_endpoint(websocket: WebSocket, db: Session = Depe
         await websocket.accept()
         logger.info("WebSocket connection accepted, waiting for auth message...")
 
-        # HIGH-001 FIX: Support both first-message auth (secure) and query param auth (legacy)
-        # New clients send token in first message; old clients may still use query params
-        query_params = dict(websocket.query_params)
-        token = query_params.get("token")
+        # SEC-005: Support cookie auth (primary), first-message auth, and query param auth (legacy)
+        token = None
 
-        if token:
-            # Legacy mode: token in query params (will be deprecated)
-            logger.warning("WebSocket using legacy query param auth (insecure) - please update client")
-        else:
-            # Secure mode: wait for auth message with token
+        # Priority 1: httpOnly cookie (sent automatically with WS upgrade)
+        cookie_token = websocket.cookies.get("tsushin_session")
+        if cookie_token:
+            token = cookie_token
+            logger.info("WebSocket auth via httpOnly cookie")
+
+        # Priority 2: Query param (legacy, deprecated)
+        if not token:
+            query_params = dict(websocket.query_params)
+            token = query_params.get("token")
+            if token:
+                logger.warning("WebSocket using legacy query param auth (insecure) - please update client")
+
+        # Priority 3: First-message auth (only if no cookie/query param token)
+        if not token:
             logger.info("Waiting for auth message...")
             try:
-                # Wait for first message (should be auth)
                 auth_data = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
                 auth_message = json.loads(auth_data)
 
