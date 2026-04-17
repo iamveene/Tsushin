@@ -18,14 +18,23 @@ depends_on = None
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 def upgrade():
-    op.add_column(
-        "tenant",
-        sa.Column("public_base_url", sa.String(length=512), nullable=True),
-    )
+    bind = op.get_bind()
+    insp = inspect(bind)
+    cols = {c["name"] for c in insp.get_columns("tenant")}
+    if "public_base_url" not in cols:
+        op.add_column(
+            "tenant",
+            sa.Column("public_base_url", sa.String(length=512), nullable=True),
+        )
 
 
 def downgrade():
-    op.drop_column("tenant", "public_base_url")
+    bind = op.get_bind()
+    insp = inspect(bind)
+    cols = {c["name"] for c in insp.get_columns("tenant")}
+    if "public_base_url" in cols:
+        op.drop_column("tenant", "public_base_url")

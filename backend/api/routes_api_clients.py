@@ -34,6 +34,15 @@ class ApiClientCreateRequest(BaseModel):
     rate_limit_rpm: int = Field(default=60, ge=1, le=600)
     expires_at: Optional[datetime] = None
     custom_scopes: Optional[List[str]] = None
+    scopes: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Shorthand. A single-element list whose value is a known role "
+            "name resolves to role=<that_name>. Any other non-empty list "
+            "resolves to role='custom' with custom_scopes=<list>. Ignored "
+            "if role or custom_scopes are set explicitly."
+        ),
+    )
 
 
 class ApiClientUpdateRequest(BaseModel):
@@ -43,6 +52,10 @@ class ApiClientUpdateRequest(BaseModel):
     rate_limit_rpm: Optional[int] = Field(None, ge=1, le=600)
     expires_at: Optional[datetime] = None
     custom_scopes: Optional[List[str]] = None
+    scopes: Optional[List[str]] = Field(
+        default=None,
+        description="Same shorthand semantics as POST /api/clients.",
+    )
 
 
 class ApiClientResponse(BaseModel):
@@ -134,6 +147,36 @@ async def list_api_clients(
     return [_client_to_response(c) for c in clients]
 
 
+def _resolve_scopes_shorthand(
+    scopes: Optional[List[str]],
+    role: Optional[str],
+    custom_scopes: Optional[List[str]],
+    role_field_is_default: bool,
+) -> tuple[Optional[str], Optional[List[str]]]:
+    """BUG-581: honor the `scopes` shorthand on /api/clients requests.
+
+    Single-element list whose value is a known role name → role=that_name.
+    Any other non-empty list → role='custom' + custom_scopes=list.
+    If the caller explicitly set role or custom_scopes, `scopes` is ignored.
+
+    Returns (resolved_role, resolved_custom_scopes). Raises ValueError for
+    an obviously invalid shorthand so the route can surface a 400.
+    """
+    if not scopes:
+        return role, custom_scopes
+    explicit_role_set = role is not None and not role_field_is_default
+    if explicit_role_set or custom_scopes is not None:
+        return role, custom_scopes
+    if len(scopes) == 1 and scopes[0] in VALID_ROLES:
+        return scopes[0], custom_scopes
+    if any(not isinstance(s, str) or not s for s in scopes):
+        raise ValueError(
+            "scopes must be a list of permission strings or a single known role name "
+            f"(one of {sorted(VALID_ROLES)})."
+        )
+    return "custom", list(scopes)
+
+
 @router.post("/api/clients", response_model=ApiClientCreateResponse, status_code=201)
 async def create_api_client(
     request: ApiClientCreateRequest,
@@ -148,6 +191,20 @@ async def create_api_client(
     if not ctx.tenant_id:
         raise HTTPException(status_code=400, detail="API clients require a tenant-scoped user")
 
+    # BUG-581: resolve `scopes` shorthand into role/custom_scopes before handing
+    # off to the service layer, so single-element [role_name] → role and
+    # multi-element arrays → role='custom' + custom_scopes. Explicit role or
+    # custom_scopes in the payload override the shorthand.
+    try:
+        resolved_role, resolved_custom_scopes = _resolve_scopes_shorthand(
+            request.scopes,
+            request.role,
+            request.custom_scopes,
+            role_field_is_default=(request.role == "api_agent_only"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     # BUG-070 FIX: Pass creator permissions for escalation check
     creator_perms = None
     if not current_user.is_global_admin:
@@ -160,11 +217,11 @@ async def create_api_client(
             tenant_id=ctx.tenant_id,
             name=request.name,
             description=request.description,
-            role=request.role,
+            role=resolved_role,
             rate_limit_rpm=request.rate_limit_rpm,
             created_by=current_user.id,
             expires_at=request.expires_at,
-            custom_scopes=request.custom_scopes,
+            custom_scopes=resolved_custom_scopes,
             creator_permissions=creator_perms,
         )
     except ValueError as e:
@@ -205,39 +262,48 @@ async def update_api_client(
     service = ApiClientService(db)
     client = _load_client_or_404(client_id, service, ctx)
 
+    # BUG-581: resolve `scopes` shorthand. On PUT, `role` default is None, so
+    # any non-None role is treated as explicit.
+    try:
+        resolved_role, resolved_custom_scopes = _resolve_scopes_shorthand(
+            request.scopes,
+            request.role,
+            request.custom_scopes,
+            role_field_is_default=(request.role is None),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Load updater permissions once — reused by the api_owner escalation gate
+    # and the service-layer scope check.
+    updater_perms = None
+    if not current_user.is_global_admin:
+        from auth_service import AuthService
+        updater_perms = AuthService(db).get_user_permissions(current_user.id)
+
     # BUG-SEC-008 FIX: Explicit api_owner role escalation check
     # Non-global-admin callers must already hold api_owner role on an existing
     # client to grant api_owner to another client.  The scope-level check below
     # catches most cases, but an explicit role gate prevents edge-case bypasses.
-    if request.role == "api_owner" and not current_user.is_global_admin:
-        from auth_service import AuthService
-        auth_svc = AuthService(db)
-        caller_perms = auth_svc.get_user_permissions(current_user.id)
+    if resolved_role == "api_owner" and not current_user.is_global_admin:
         # api_owner includes audit.read — if caller lacks it, reject immediately
         api_owner_scopes = set(API_ROLE_SCOPES.get("api_owner", []))
-        missing = api_owner_scopes - set(caller_perms)
+        missing = api_owner_scopes - set(updater_perms or [])
         if missing:
             raise HTTPException(
                 status_code=403,
                 detail="Privilege escalation denied: cannot upgrade client to api_owner without holding equivalent permissions",
             )
 
-    # Pass updater permissions for scope-level escalation check
-    updater_perms = None
-    if not current_user.is_global_admin:
-        from auth_service import AuthService
-        auth_svc = AuthService(db)
-        updater_perms = auth_svc.get_user_permissions(current_user.id)
-
     try:
         updated = service.update_client(
             client,
             name=request.name,
             description=request.description,
-            role=request.role,
+            role=resolved_role,
             rate_limit_rpm=request.rate_limit_rpm,
             expires_at=request.expires_at,
-            custom_scopes=request.custom_scopes,
+            custom_scopes=resolved_custom_scopes,
             updater_permissions=updater_perms,
         )
     except ValueError as e:

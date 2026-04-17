@@ -710,16 +710,15 @@ async def test_provider_connection_raw(
 
     # Vertex AI raw test: validate credentials via OAuth token refresh (fast, no model call needed)
     if vendor == "vertex_ai":
-        ec = data.extra_config or {}
-        project_id = ec.get("project_id", "")
-        region = ec.get("region", "us-east5")
-        sa_email = ec.get("sa_email", "")
-        private_key_raw = api_key or ""
+        from utils.vertex_config import normalise_vertex_config, VERTEX_CONFIG_ERROR
+        project_id, region, sa_email, private_key_raw = normalise_vertex_config(
+            api_key, data.extra_config
+        )
 
         if not project_id or not sa_email or not private_key_raw:
             return TestConnectionResponse(
                 success=False,
-                message="Vertex AI requires project_id, service_account_email, and private_key in the form fields.",
+                message=VERTEX_CONFIG_ERROR,
             )
 
         start_time = time.time()
