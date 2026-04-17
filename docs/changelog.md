@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### macOS v0.6.0 Fresh-Install Full Regression (2026-04-16)
+
+Autonomous end-to-end regression on a clean `git clone --branch v0.6.0` running under an isolated `tsushin-fresh` stack (ports 8091/3091). The local production stack was stopped and later restored bit-for-bit; volume `tsushin-postgres-data` was never touched. Coverage: installer idempotency, setup wizard, LLM provider onboarding (Anthropic / OpenAI / Gemini / Ollama all healthy; Vertex deferred), auto-provisioned Qdrant vector store, memory recall, knowledge-base upload, Sentinel prompt-injection detection, sandboxed-tool execution (`dig` command), custom skills, A2A permissioning, API v1 OAuth2 + sync chat, programmatic flow creation, full UI sweep of Watcher / Studio / Hub / Flows / Playground / Core (0 console errors when accessed via same-origin LAN IP), WhatsApp QR onboarding for both agent + tester instances, and a full WhatsApp round-trip (`Hi Tsushin` → `Hello!` and `/tool dig lookup domain=example.com` → rendered dig output back on the tester phone). 21 feature rows exercised; 34/35 admin + tenant API endpoints returned 2xx.
+
+Seven new bugs were filed (BUG-575 through BUG-581) — all open, queued for the v0.6.2 remediation sweep. See `BUGS.md` for full detail.
+
+- **BUG-575** (Critical) — Alembic migration `0034_add_tenant_public_base_url.py` is non-idempotent; blocks `python3 install.py --defaults --http` on a pristine v0.6.0 clone (`DuplicateColumn` on `tenant.public_base_url`). Patched inline during this run so the rest of the matrix could execute; a proper fix needs to land in `develop` before the next release tag.
+- **BUG-576** (High) — Cloudflare named-tunnel feature cannot start on a fresh install: `docker-compose.yml` ships no Caddy/NGINX proxy service, but `cloudflare_tunnel_service.py` hard-refuses any `target_url` other than `http://<stack>-proxy:80`.
+- **BUG-577** (Medium) — Vertex AI test-connection error message names fields (`service_account_email`) that the code does not actually read (expects `extra_config.sa_email`, `extra_config.region`, raw PEM in `api_key`); onboarding stalls for users who follow the error verbatim.
+- **BUG-578** (Low) — `CLAUDE.md` documents 7-char dev passwords (`test123` / `admin123`) but the setup wizard enforces an 8-char minimum, breaking copy-paste onboarding.
+- **BUG-579** (High, resolved in v0.6.1) — Installer auto-detects the host LAN IP and bakes it into `NEXT_PUBLIC_API_URL`; browsers that open `http://localhost:3091` then hit cross-origin 401s on every API call because the session cookie was set on the LAN-IP origin. Already fixed in v0.6.1 by the same-origin Next rewrites (BUG-570); kept on record against v0.6.0-tag users.
+- **BUG-580** (Medium) — Every entry from `GET /api/flows/templates` returns `required_params: []`, but `/instantiate` surfaces required fields one at a time (`name`, `agent_id`, `recipient`, …), making programmatic instantiation a guessing game.
+- **BUG-581** (Medium) — `POST /api/clients` silently discards the requested `scopes` array and always assigns the `api_agent_only` role; `api_owner` capability cannot be provisioned through the API itself.
+
+Environment fully restored at end of run — `docker ps` matches the pre-flight snapshot (backend, frontend, postgres, docker-proxy, proxy, agent + tester MCP containers, toolbox, qdrant-vs all running). No commits to release artifacts in this session; documentation-only change.
+
 ## v0.6.1 (2026-04-16)
 
 Post-install bug sweep. Nine bugs surfaced by a clean `python3 install.py --defaults --http` run on commit `5bf7b03` of `develop`, grouped into four remediation phases and validated end-to-end in real Chrome before ship.
