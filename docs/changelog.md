@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Onboarding wizard — v0.6.0 "What's New" showcase (2026-04-17)
+
+The fresh-install onboarding tour now opens with four showcase pages covering the features shipped in v0.6.0 before the existing Watcher → Studio → Hub → Channels → Flows → Playground walkthrough begins. `TOTAL_STEPS` moved from 8 → 12; the auto-start trigger, localStorage keys, and user-guide coordination are unchanged so existing users who already completed the tour are **not** re-prompted (they can relaunch from the `?` button in the header).
+
+- **Step 2 — Expanded AI Providers.** Vertex AI, Grok (xAI), Groq, and ElevenLabs alongside the existing Anthropic/OpenAI/Gemini/Ollama line-up. Action button deep-links to `/hub?tab=ai-providers`.
+- **Step 3 — New Channels.** Slack (5-step wizard), Discord (6-step wizard), and generic Webhooks join WhatsApp/Telegram as first-class channels. Action button opens `/hub?tab=communication`.
+- **Step 4 — Custom Skills & MCP Servers.** Tenant-scoped Python/markdown skill packs and sandboxed MCP tool bundles. Action button opens `/agents/custom-skills`.
+- **Step 5 — A2A & Long-Term Memory.** Agent-to-Agent permissioning + the auto-provisioned Qdrant vector store wired in by BUG-586. Action button opens `/hub?tab=vector-stores`.
+
+Files: [frontend/components/OnboardingWizard.tsx](frontend/components/OnboardingWizard.tsx) (four new `TourStep` entries inserted between the Welcome step and the Watcher step, plus renumbered `// Step N` comments on the seven remaining steps) and [frontend/contexts/OnboardingContext.tsx](frontend/contexts/OnboardingContext.tsx) (`TOTAL_STEPS = 12` with a v0.6.0 comment alongside the existing BUG-319 note). `docs/documentation.md` "Setup Wizard" entry 5 updated to reflect the new 12-step structure and enumerate the showcase pages.
+
 ### Bug-Fix Sprint (2026-04-17) — BUG-582 to BUG-587 resolved
 
 All six findings from the same-day dual-stack fresh-install audit were remediated end-to-end on `develop`. Per-bug verification (curl + SQL + simulated installer run) passed and regression smoke tests (health, readiness, OAuth2, v1 sync chat, sandboxed-tool `/tool dig`, UI playground `/help`) came back clean with zero backend ERROR/CRITICAL/Traceback post-rebuild (only a pre-existing `Qdrant (q1) connection failed` that was already present and correctly falls back to ChromaDB — unrelated to this sprint).
