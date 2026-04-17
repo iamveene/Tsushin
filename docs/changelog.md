@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### macOS v0.6.0 Dual-Stack UI-First Fresh-Install Regression (2026-04-17) — 6 new findings (BUG-582 to BUG-587)
+
+Second consecutive audit against `develop @ 6d0ad48` (the v0.6.0 release line). Original production stack stopped via `docker compose stop` + `docker stop` on dynamic MCP/toolbox containers so WhatsApp session state + all 24 `tsushin-*` volumes were preserved. Fresh install provisioned into an isolated `TSN_STACK_NAME=tsushin-fresh` stack on alternate ports 8091/3091; installer still crashes against the default stack name whenever `tsushin-postgres-data` already exists (BUG-582). Original stack fully restored at end of run — fingerprint matches pre-flight snapshot byte-for-byte and WhatsApp agent session auto-reconnected without a QR loop.
+
+Validated this pass: 5 LLM/search providers configured + 4 LIVE `POST /test-connection` (Gemini / Anthropic / OpenAI / Vertex AI 1.3–2.5 s), auto-provisioned default Qdrant VS, playground chat round-trip with Gemini response, Sentinel prompt-injection + memory-poisoning both triggered (threat_score=0.9, `action=allowed` in detect-only mode), `/tool dig lookup domain=example.com` returned correct A-records, API client creation → OAuth2 token → X-API-Key `/api/v1/agents/{id}/chat` sync chat OK, Cloudflare tunnel orchestration (cloudflared live PID + public URL edge resolves), MCP agent + tester containers provisioned with QR generation in < 30 s. WhatsApp round-trip scan-and-send skipped (autonomous run; previously covered by BUG-575..581 sprint against same codebase).
+
+All six new bugs **open**, queued for the next remediation sweep. Full detail in `BUGS.md`.
+
+- **BUG-582** (Critical) — Fresh installer fails with `FATAL: password authentication failed for user "tsushin"` on stack `tsushin` when the postgres volume already exists from a prior install. BUG-566's password-preservation fix only reads the same directory's `.env`, not cross-worktree state. Work-around: set `TSN_STACK_NAME=tsushin-fresh` + `COMPOSE_PROJECT_NAME=tsushin-fresh` + alt ports in generated `.env`.
+- **BUG-583** (Medium) — `/help` slash command only lists `/list, /enter, /exit, /help`. `/tool`, `/inject`, `/skill`, `/agent`, `/thread`, `/bookmark` are implemented and functional but invisible to new users.
+- **BUG-584** (Medium) — `/inject secret_code=alpha-bravo-9 then what is the secret_code?` parses to `No "secret_code?" executions found` — argument parser fuses trailing punctuation into the key and treats the natural-language suffix as a separate command lookup.
+- **BUG-585** (Medium) — `POST /api/custom-skills` with `instruction` field returns `201` but persists `instructions_md: null` and `script_content: null`. Field name mismatch silently drops payload; `Config.extra` not `forbid`.
+- **BUG-586** (High) — Seeded agents have `vector_store_instance_id=NULL` despite `vector_store_mode='override'` — the auto-provisioned default Qdrant VS is not wired to Tsushin/Kokoro/etc. Long-term memory dead out-of-the-box for every first-time user.
+- **BUG-587** (Medium) — `POST /api/flows` with `steps: [...]` returns `201` with `node_count: 0`. `FlowCreate` schema doesn't declare `steps`/`nodes`, so the array is silently dropped.
+
+Environment fully reverted at end of run — `docker ps | grep tsushin` matches the pre-flight fingerprint; 24 `tsushin-*` volumes unchanged; WhatsApp agent MCP reports `✅ Connected to WhatsApp` + keepalive on startup (no QR re-auth required).
+
 ### Bug-Fix Sprint (2026-04-16) — BUG-575 to BUG-581 resolved
 
 Seven bugs surfaced by the same-day fresh-install regression were remediated and validated under a full regression sweep on the restored production stack. Zero backend errors during the run; Cloudflare tunnel now starts cleanly and `https://tsushin.archsec.io` serves the app end-to-end through the new Caddy reverse proxy.
