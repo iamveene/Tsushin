@@ -88,6 +88,16 @@ class FlowTemplate:
                 }
                 for p in self.params_schema
             ],
+            "required_params": [
+                {
+                    "name": p.key,
+                    "type": p.type,
+                    "label": p.label,
+                    "description": p.help or p.label,
+                }
+                for p in self.params_schema
+                if p.required
+            ],
         }
 
 

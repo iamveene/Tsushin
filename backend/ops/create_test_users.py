@@ -49,10 +49,13 @@ def create_test_users(db: Session):
         return False
 
     # Test users data
+    # BUG-578: passwords must be >=8 chars to satisfy the setup wizard's
+    # password policy; fresh-install users that copy-paste from docs used to
+    # hit "Password must be at least 8 characters" on the first owner created.
     test_users = [
         {
             "email": "test@example.com",
-            "password": "test123",
+            "password": "test1234",
             "full_name": "Test Owner",
             "tenant_id": tenant.id,
             "is_global_admin": False,
@@ -60,7 +63,7 @@ def create_test_users(db: Session):
         },
         {
             "email": "testadmin@example.com",
-            "password": "admin123",
+            "password": "admin1234",
             "full_name": "Test Admin",
             "tenant_id": None,  # Global admin has no tenant
             "is_global_admin": True,
@@ -68,7 +71,7 @@ def create_test_users(db: Session):
         },
         {
             "email": "member@example.com",
-            "password": "member123",
+            "password": "member1234",
             "full_name": "Test Member",
             "tenant_id": tenant.id,
             "is_global_admin": False,
@@ -124,9 +127,9 @@ def create_test_users(db: Session):
     if created_count > 0:
         logger.info(f"\n✓ Successfully created {created_count} test user(s)")
         logger.info("\nTest Credentials:")
-        logger.info("  test@example.com / test123 (Tenant Owner)")
-        logger.info("  testadmin@example.com / admin123 (Global Admin)")
-        logger.info("  member@example.com / member123 (Member)")
+        logger.info("  test@example.com / test1234 (Tenant Owner)")
+        logger.info("  testadmin@example.com / admin1234 (Global Admin)")
+        logger.info("  member@example.com / member1234 (Member)")
     else:
         logger.info("\nAll test users already exist")
 
