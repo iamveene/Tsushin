@@ -122,6 +122,10 @@ class MCPServerHealthCheckService:
                 healthy, len(servers), checked,
             )
         finally:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             db.close()
 
     # ------------------------------------------------------------------

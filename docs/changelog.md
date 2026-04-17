@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### QueuePool exhaustion hardening — BUG-588 resolved (2026-04-17)
+
+Eliminated a long-standing `QueuePool limit of size 20 overflow 30 reached, connection timed out` backend deadlock that wedged every request after ~3 h of uptime. Root cause: SQLAlchemy 2.0 `autobegin` starts an implicit transaction on the first SELECT; if the request path never commits/rolls back, the connection returns to the pool in `idle in transaction` state because `pool_reset_on_return='rollback'` only fires on checkin — and every `def get_db()` duplicate in the per-router modules built a fresh `sessionmaker` on each call, extending the Session object's lifetime enough to keep the connection pinned. In real traffic the backend eventually exhausted all 50 slots and every `/api/auth/me` hung → the frontend sat on "Loading Tsushin..." indefinitely for any browser with an auth cookie (incognito worked because no cookie → fast 401 → no DB lookup).
+
+Fix applied at three layers:
+
+1. **Architectural (one root-cause change).** `backend/db.py` now caches a single module-level `_global_session_factory` inside `set_global_engine()` instead of rebuilding a `sessionmaker` per-call. `get_db()` always runs `try: db.rollback(); except: pass` in `finally` before `db.close()` so the implicit transaction ends cleanly. A new `session_scope()` context manager (commits on clean exit, rolls back on exception, always closes) is now the canonical helper for background tasks and non-request code paths.
+2. **Per-router safety-net.** The 28 `backend/api/routes_*.py` modules that define their own local `def get_db()` copy received the same rollback-before-close guard, so even routers that don't migrate to the global dependency yet are protected.
+3. **Background-service safety-net.** `channel_health_service._check_all_instances()` and `mcp_server_health_service._check_all_servers()` both now rollback before `close()` in their finally blocks — prevents the health-loop itself from contributing to the leak it's supposed to detect.
+
+Verified: pool stays at `(active,1) (idle,20) (idle in transaction,≤1)` under 25-parallel load, zero `QueuePool` errors for 10+ min post-rebuild, `/api/health` + `/api/readiness` + OAuth2 + v1 agent/skill/tool/persona/tone-preset sweeps all 200, `/tool dig` sandboxed tool returns correct DNS records, WhatsApp tester→bot round-trip confirmed, browser normal-mode UI renders past the loading splash in <2s (previously stuck indefinitely). Files: [backend/db.py](backend/db.py), [backend/services/channel_health_service.py](backend/services/channel_health_service.py), [backend/services/mcp_server_health_service.py](backend/services/mcp_server_health_service.py), plus 28 router modules under [backend/api/](backend/api/). Documented as BUG-588 in [BUGS.md](BUGS.md).
+
 ### Onboarding wizard — v0.6.0 "What's New" showcase (2026-04-17)
 
 The fresh-install onboarding tour now opens with four showcase pages covering the features shipped in v0.6.0 before the existing Watcher → Studio → Hub → Channels → Flows → Playground walkthrough begins. `TOTAL_STEPS` moved from 8 → 12; the auto-start trigger, localStorage keys, and user-guide coordination are unchanged so existing users who already completed the tour are **not** re-prompted (they can relaunch from the `?` button in the header). Each showcase page was written from a live inventory of the v0.6.0 codebase so the copy names the *actual* capabilities (providers, transports, auth modes, vector-store vendors, memory types, etc.) rather than a reductive summary.
