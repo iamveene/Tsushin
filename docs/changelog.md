@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### v0.6.2 Bug-Fix Sprint (2026-04-16) — BUG-575 to BUG-581 resolved
+### Bug-Fix Sprint (2026-04-16) — BUG-575 to BUG-581 resolved
 
 Seven bugs surfaced by the same-day fresh-install regression were remediated and validated under a full regression sweep on the restored production stack. Zero backend errors during the run; Cloudflare tunnel now starts cleanly and `https://tsushin.archsec.io` serves the app end-to-end through the new Caddy reverse proxy.
 
@@ -25,7 +25,7 @@ Seven bugs surfaced by the same-day fresh-install regression were remediated and
 
 Autonomous end-to-end regression on a clean `git clone --branch v0.6.0` running under an isolated `tsushin-fresh` stack (ports 8091/3091). The local production stack was stopped and later restored bit-for-bit; volume `tsushin-postgres-data` was never touched. Coverage: installer idempotency, setup wizard, LLM provider onboarding (Anthropic / OpenAI / Gemini / Ollama all healthy; Vertex deferred), auto-provisioned Qdrant vector store, memory recall, knowledge-base upload, Sentinel prompt-injection detection, sandboxed-tool execution (`dig` command), custom skills, A2A permissioning, API v1 OAuth2 + sync chat, programmatic flow creation, full UI sweep of Watcher / Studio / Hub / Flows / Playground / Core (0 console errors when accessed via same-origin LAN IP), WhatsApp QR onboarding for both agent + tester instances, and a full WhatsApp round-trip (`Hi Tsushin` → `Hello!` and `/tool dig lookup domain=example.com` → rendered dig output back on the tester phone). 21 feature rows exercised; 34/35 admin + tenant API endpoints returned 2xx.
 
-Seven new bugs were filed (BUG-575 through BUG-581) — all open, queued for the v0.6.2 remediation sweep. See `BUGS.md` for full detail.
+Seven new bugs were filed (BUG-575 through BUG-581) — all open, queued for the next remediation sweep. See `BUGS.md` for full detail.
 
 - **BUG-575** (Critical) — Alembic migration `0034_add_tenant_public_base_url.py` is non-idempotent; blocks `python3 install.py --defaults --http` on a pristine v0.6.0 clone (`DuplicateColumn` on `tenant.public_base_url`). Patched inline during this run so the rest of the matrix could execute; a proper fix needs to land in `develop` before the next release tag.
 - **BUG-576** (High) — Cloudflare named-tunnel feature cannot start on a fresh install: `docker-compose.yml` ships no Caddy/NGINX proxy service, but `cloudflare_tunnel_service.py` hard-refuses any `target_url` other than `http://<stack>-proxy:80`.
