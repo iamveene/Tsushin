@@ -211,6 +211,7 @@ def event_to_response(event: ScheduledEvent) -> EventResponseSchema:
 # Generic Event Endpoints
 # ============================================================================
 
+@router.get("", response_model=List[EventResponseSchema], dependencies=[Depends(require_permission("scheduler.read"))], include_in_schema=False)
 @router.get("/", response_model=List[EventResponseSchema], dependencies=[Depends(require_permission("scheduler.read"))])
 def list_events(
     event_type: Optional[str] = Query(None, description="Filter by event type"),
@@ -284,6 +285,7 @@ def list_events(
         raise HTTPException(status_code=500, detail="Scheduler operation failed")
 
 
+@router.post("", response_model=EventResponseSchema, dependencies=[Depends(require_permission("scheduler.create"))], include_in_schema=False)
 @router.post("/", response_model=EventResponseSchema, dependencies=[Depends(require_permission("scheduler.create"))])
 def create_event(
     event: EventCreateSchema,

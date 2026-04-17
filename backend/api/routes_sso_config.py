@@ -139,6 +139,7 @@ async def get_platform_sso_status(
     )
 
 
+@router.get("", response_model=Optional[SSOConfigResponse], include_in_schema=False)
 @router.get("/", response_model=Optional[SSOConfigResponse])
 async def get_sso_config(
     current_user: User = Depends(get_current_user_required),
@@ -181,6 +182,7 @@ async def get_sso_config(
     return config_to_response(config, db)
 
 
+@router.put("", response_model=SSOConfigResponse, include_in_schema=False)
 @router.put("/", response_model=SSOConfigResponse)
 async def update_sso_config(
     request: SSOConfigUpdate,

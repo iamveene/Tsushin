@@ -644,6 +644,7 @@ async def setup_wizard(
             "grok": "grok-3-mini",
             "deepseek": "deepseek-chat",
             "openrouter": "google/gemini-2.5-flash",
+            "ollama": "llama3.2:latest",
         }
         vendor_labels = {
             "gemini": "Google Gemini",
@@ -653,6 +654,7 @@ async def setup_wizard(
             "grok": "Grok (xAI)",
             "deepseek": "DeepSeek",
             "openrouter": "OpenRouter",
+            "ollama": "Ollama (Local)",
         }
         provider_key_map = {
             "gemini": setup_request.gemini_api_key,
@@ -679,6 +681,7 @@ async def setup_wizard(
 
         primary_vendor = setup_request.primary_provider or (configured_providers[0] if configured_providers else "gemini")
         model_provider = primary_vendor if configured_providers else "gemini"
+        ollama_model_name = None
 
         def _selected_model_for_vendor(vendor: str) -> str:
             requested_models = setup_request.provider_models or {}
@@ -692,10 +695,9 @@ async def setup_wizard(
         # Step 3b: Create ProviderInstances for configured providers and auto-assign System AI
         first_provider_instance = None
         provider_instances_created = {}
+        from services.provider_instance_service import ProviderInstanceService
+        from models import Config as ConfigModel
         if configured_providers:
-            from services.provider_instance_service import ProviderInstanceService
-            from models import Config as ConfigModel
-
             for vendor in configured_providers:
                 model_name = _selected_model_for_vendor(vendor)
                 instance_name = (
@@ -732,13 +734,61 @@ async def setup_wizard(
                     f"Setup wizard: Auto-assigned System AI → instance={first_provider_instance.id}, "
                     f"vendor={primary_vendor}, model={primary_model}"
                 )
+        else:
+            # Fresh installs stay usable without a cloud API key when the local
+            # Ollama daemon is already available on the host.
+            try:
+                from services.model_discovery_service import ModelDiscoveryService
+
+                ollama_instance = ProviderInstanceService.ensure_ollama_instance(tenant.id, db)
+                discovered_models = await ModelDiscoveryService.discover_models(ollama_instance, db)
+                preferred_models = ["llama3.2:latest", "llama3.2"]
+                ollama_model_name = next(
+                    (model for model in preferred_models if model in discovered_models),
+                    discovered_models[0] if discovered_models else None,
+                )
+
+                if ollama_model_name:
+                    ollama_instance.available_models = discovered_models
+                    if not ollama_instance.is_default:
+                        ollama_instance.is_default = True
+                    db.commit()
+                    db.refresh(ollama_instance)
+
+                    primary_vendor = "ollama"
+                    model_provider = "ollama"
+                    first_provider_instance = ollama_instance
+                    provider_instances_created["ollama"] = ollama_instance.id
+
+                    config_row = db.query(ConfigModel).first()
+                    if config_row:
+                        config_row.system_ai_provider_instance_id = ollama_instance.id
+                        config_row.system_ai_provider = "ollama"
+                        config_row.system_ai_model = ollama_model_name
+                        db.commit()
+                        logger.info(
+                            "Setup wizard: Auto-assigned System AI → "
+                            f"instance={ollama_instance.id}, vendor=ollama, model={ollama_model_name}"
+                        )
+
+                    logger.info(
+                        "Setup wizard: No cloud provider configured, using local Ollama "
+                        f"model '{ollama_model_name}' for seeded defaults"
+                    )
+                else:
+                    logger.info(
+                        "Setup wizard: No cloud provider configured and no Ollama models "
+                        "were discovered; leaving seeded defaults on Gemini"
+                    )
+            except Exception as e:
+                logger.warning(f"Setup wizard: Failed to auto-configure local Ollama: {e}")
 
         # Step 4: Create default agents if requested
         agents_created = []
         if setup_request.create_default_agents:
             from services.agent_seeding import seed_default_agents
 
-            model_name = _selected_model_for_vendor(model_provider)
+            model_name = ollama_model_name if model_provider == "ollama" and ollama_model_name else _selected_model_for_vendor(model_provider)
 
             agents = seed_default_agents(
                 tenant_id=tenant.id,
@@ -774,6 +824,7 @@ async def setup_wizard(
                 "grok": "grok-3-mini",
                 "deepseek": "deepseek-chat",
                 "openrouter": "google/gemini-2.5-flash",
+                "ollama": ollama_model_name or _selected_model_for_vendor("ollama"),
             }
             sentinel_config = SentinelConfig(
                 tenant_id=tenant.id,
