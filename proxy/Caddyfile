@@ -1,0 +1,19 @@
+:80 {
+	# Backend API + WebSocket — prefix preserved, no rewrite
+	handle /api/* {
+		reverse_proxy backend:8081
+	}
+	handle /ws/* {
+		reverse_proxy backend:8081
+	}
+
+	# Frontend (Next.js)
+	handle {
+		reverse_proxy frontend:3030
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

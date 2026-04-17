@@ -92,17 +92,21 @@ class AIClient:
                     if api_key:
                         self.ollama_api_key = api_key
                 elif instance.vendor == "vertex_ai":
-                    # Vertex AI instance: api_key stores the PEM private key
-                    # Project ID, region, SA email read from instance.extra_config first,
-                    # then fall back to tenant-level api_key_service (DB only)
-                    inst_extra = instance.extra_config or {}
-                    vertex_private_key = api_key or get_api_key('vertex_ai', db, tenant_id=tenant_id) or ""
-                    vertex_project_id = inst_extra.get('project_id') or get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
-                    vertex_region = inst_extra.get('region') or get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
-                    vertex_sa_email = inst_extra.get('sa_email') or get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
+                    # Vertex AI instance: api_key holds either the raw PEM private key
+                    # OR the full service-account JSON blob. normalise_vertex_config
+                    # accepts both shapes and both field-name conventions
+                    # (sa_email vs service_account_email, region vs location).
+                    from utils.vertex_config import normalise_vertex_config, VERTEX_CONFIG_ERROR
+                    raw_api_key = api_key or get_api_key('vertex_ai', db, tenant_id=tenant_id) or ""
+                    vertex_project_id, vertex_region, vertex_sa_email, vertex_private_key = (
+                        normalise_vertex_config(raw_api_key, instance.extra_config)
+                    )
+                    vertex_project_id = vertex_project_id or get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
+                    vertex_region = vertex_region or get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
+                    vertex_sa_email = vertex_sa_email or get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
 
                     if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
-                        raise ValueError("Vertex AI instance requires project_id, service_account_email, and private_key.")
+                        raise ValueError(VERTEX_CONFIG_ERROR)
 
                     self.vertex_project_id = vertex_project_id
                     self.vertex_region = vertex_region
@@ -270,24 +274,23 @@ class AIClient:
             )
             self.logger.info(f"Initialized DeepSeek client with model: {model_name}")
         elif self.provider == "vertex_ai":
-            # Vertex AI uses service account credentials, not a simple API key
-            # All config from DB only — no env var fallback
-            vertex_private_key = api_key or ""
-            vertex_project_id = ""
-            vertex_region = "us-east5"
-            vertex_sa_email = ""
+            # Vertex AI uses service account credentials, not a simple API key.
+            # api_key may be a raw PEM private key OR a full SA JSON blob; the
+            # helper normalises both shapes and the sa_email/service_account_email
+            # and region/location aliases.
+            from utils.vertex_config import normalise_vertex_config, VERTEX_CONFIG_ERROR
+            vertex_project_id, vertex_region, vertex_sa_email, vertex_private_key = (
+                normalise_vertex_config(api_key, None)
+            )
 
             if db:
                 vertex_private_key = vertex_private_key or get_api_key('vertex_ai', db, tenant_id=tenant_id) or ""
-                vertex_project_id = get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
-                vertex_region = get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
-                vertex_sa_email = get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
+                vertex_project_id = vertex_project_id or get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
+                vertex_region = vertex_region or get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
+                vertex_sa_email = vertex_sa_email or get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
 
             if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
-                raise ValueError(
-                    "Vertex AI requires project_id, service_account_email, and private_key. "
-                    "Configure via Hub → Integrations or set VERTEX_AI_* environment variables."
-                )
+                raise ValueError(VERTEX_CONFIG_ERROR)
 
             # Store config for use in API calls (private key not stored — only needed for credential init)
             self.vertex_project_id = vertex_project_id

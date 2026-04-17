@@ -1,6 +1,7 @@
 # ============================================================================
 # Tsushin SSL/HTTPS Override
-# Adds Caddy reverse proxy for TLS termination.
+# Overlays TLS termination + public port publishing on top of the base
+# Caddy `proxy` service defined in `docker-compose.yml`.
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.ssl.yml up -d --build
@@ -12,30 +13,24 @@
 services:
   # ==========================================================================
   # Caddy Reverse Proxy — SSL Termination
+  # Replaces the base service's HTTP-only Caddyfile with the stack-scoped
+  # TLS-enabled one, opens 80/443 externally, and mounts cert/state volumes.
   # ==========================================================================
   proxy:
-    image: caddy:2-alpine
-    container_name: ${TSN_STACK_NAME:-tsushin}-proxy
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
-    volumes:
+    volumes: !override
       - ./caddy/${TSN_STACK_NAME:-tsushin}/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/${TSN_STACK_NAME:-tsushin}/certs:/etc/caddy/certs:ro
       - caddy-data:/data
       - caddy-config:/config
-    depends_on:
-      - backend
-      - frontend
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "caddy", "version"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
-    networks:
-      - tsushin-network
 
 volumes:
   caddy-data:
