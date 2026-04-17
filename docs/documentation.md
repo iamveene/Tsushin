@@ -3275,6 +3275,8 @@ Shell-Beacon agent (separate binary installed on endpoints, not the server):
 | `TSUSHIN_API_KEY` | Beacon auth key. | `shell_beacon/config.py:175` |
 | `TSUSHIN_POLL_INTERVAL` / `TSUSHIN_SHELL` / `TSUSHIN_TIMEOUT` / `TSUSHIN_WORKING_DIR` / `TSUSHIN_LOG_LEVEL` / `TSUSHIN_LOG_FILE` / `TSUSHIN_AUTO_UPDATE` | Beacon config. | `shell_beacon/config.py:179-197` |
 
+**Fresh-install note — self-signed HTTPS and Shell Beacons.** The beacon uses normal TLS verification through Python `requests`; it does not automatically bypass trust failures the way a browser automation session can. If `TSUSHIN_SERVER_URL` points at an installer-generated self-signed HTTPS endpoint, the beacon host must trust that certificate (or trust the issuing CA) before registration/check-in will work. For same-host QA smoke tests only, point the beacon at local HTTP such as `http://127.0.0.1:8081/api/shell` instead of the public self-signed URL.
+
 ---
 
 ## 30. Appendix B: Permission Scopes

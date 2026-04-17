@@ -7,19 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### UI-first fresh-install v0.6.0 audit (2026-04-17)
+### Ubuntu VM fresh-install audit — docs and bug-log update only (2026-04-17)
 
-Ran a disposable-clone regression audit against the exact `v0.6.0` tag from `.private/installations/fresh-install-v060-20260417-181029/tsushin`, using both browser automation and direct API probes while preserving and later restoring the original local stack. Coverage included setup, provider onboarding, vector stores and memory wiring, knowledge-base flows, Sentinel/MemGuard checks, Playground chat/image/direct-agent paths, A2A activity and graph glow, MCP server linkage, custom skills, slash commands including `/inject`, Shell Command Center, image generation/analysis, API-client auth flows, programmatic and agentic flows, runtime WhatsApp QR generation, and named Remote Access.
+Completed an audit-only regression pass against a fresh Ubuntu 24.04 VM install of `develop` using the interactive installer, self-signed HTTPS on `https://10-211-55-5.sslip.io`, browser automation, direct API checks, and a generated API v1 client. The install path itself succeeded, `/setup` completed normally, hosted-provider setup passed for Gemini/OpenAI/Anthropic/Vertex plus Brave/Tavily/SerpAPI, and the audit confirmed working baseline behavior for API v1 auth/chat, vector-store auto-provisioning, isolated/shared memory, knowledge-base retrieval, A2A communication, Watcher Security, Watcher A2A Comms, and the Shell Command Center UI.
 
-New findings from the audit were recorded locally as `BUG-589` through `BUG-593`:
+The session produced tracker/playbook updates only; no product code changed. New findings were recorded in the internal bug tracker as BUG-589 through BUG-596: Tavily runtime search mismatch, two broken shipped flow templates, `/api/v2/agents/` returning 500, webhook queue contract/provider-instance regressions, shell-beacon self-signed TLS failure, and Graph View rendering `WhatsApp Unassigned` on a zero-instance install. The run also reconfirmed open BUG-538 (`tsushin-toolbox:base` still missing on fresh install), which surfaced in-browser as `GET /api/toolbox/status` returning 500 and continued to block script skills, MCP stdio flows, and sandboxed tool execution.
 
-- Remote Access can report the named tunnel as `running` while the public hostname still returns Cloudflare `502`.
-- Flow tool nodes parse `tool_name` as an integer tool id and fail at runtime.
-- The WhatsApp guided setup declares `WhatsApp Connected!` before QR authentication is complete.
-- Playground image generations lose `image_url` after persistence, so reopened threads show no image.
-- Fresh installs seed Shellboy without the Shell skill enabled.
-
-Older exact-tag regressions were also revalidated but not re-filed because they were already tracked on `develop`, including the migration `0034` duplicate-column blocker, HTTP-mode proxy prerequisites, and the seeded-agent vector-store wiring issue. The final WhatsApp message round-trip was skipped at user request after QR generation for both runtime instances was confirmed. Audit evidence was captured under `.private/qa/fresh-install-v060-20260417-181029/`.
+Updated the internal deployment test playbook to cover self-signed HTTPS first-run installs, runtime-vs-Hub provider checks, Graph negative assertions, webhook dead-letter inspection, shell-beacon TLS behavior, flow-template execution, generated-client verification, and protected API v2 smokes. Added a durable operator note to [docs/documentation.md](docs/documentation.md) explaining that shell beacons do not bypass TLS validation on self-signed HTTPS installs and therefore require trusted certificates or a local HTTP-only smoke path for QA.
 
 ### QueuePool exhaustion hardening — BUG-588 resolved (2026-04-17)
 
