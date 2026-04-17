@@ -237,8 +237,8 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
 3. The wizard automatically creates **ProviderInstance** records for each supported provider key entered during setup. The selected primary provider is also assigned as the **System AI** — no manual post-setup Hub provisioning is required for the providers entered in the wizard.
 4. At completion, the wizard reveals an auto-generated **global admin** email/password pair. Record these credentials before leaving the completion screen; they are required for `/system/*` validation and system-level administration.
-5. On first login an **onboarding tour** (8 steps) walks through all platform areas: Watcher, Studio, Hub, Channels, Flows, Playground, Security, and a final setup checklist.
-6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp/Telegram) via the Hub to enable agent messaging.
+5. On first login an **onboarding tour** (12 steps) auto-opens. Steps 1 and 6–12 walk through platform areas (Welcome → Watcher → Studio → Hub → Channels → Flows → Playground → You're All Set). Steps 2–5 are a **"What's New in v0.6.0"** showcase covering (2) the expanded AI provider catalogue — Vertex AI, Grok, Groq, ElevenLabs — (3) the new Slack / Discord / Webhook channels, (4) Custom Skills & MCP Servers, and (5) A2A agent-to-agent permissioning plus external vector stores for long-term memory. Each showcase step includes a one-click deep-link to the relevant Hub tab or sub-page.
+6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp, Telegram, Slack, Discord, or a generic Webhook) via the Hub to enable agent messaging.
 7. The **User Guide** is accessible anytime via the **?** button in the header.
 
 **LLM provider keys are configured per-tenant through the Hub UI — not in environment variables.** This enables multi-tenant isolation. Source: `README.md:398`.

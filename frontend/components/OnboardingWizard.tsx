@@ -9,10 +9,12 @@
  *
  * BUG-319: Removed step 9 (Setup Checklist) — it duplicated GettingStartedChecklist.
  *           Replaced with a "You're all set" message pointing to the checklist.
- * BUG-321: Step 5 action button launches WhatsApp wizard directly (not just /hub nav).
- * BUG-323: Step 5 navigates to /hub?tab=communication, not /hub.
+ * BUG-321: Channels step action button launches WhatsApp wizard directly (not just /hub nav).
+ * BUG-323: Channels step navigates to /hub?tab=communication, not /hub.
  * BUG-325: "Open User Guide" action button disabled when User Guide is already open.
  * BUG-334: Escape and Close button call dismissTour() which persists to localStorage immediately.
+ * v0.6.0 showcase: Steps 2-5 highlight what's new — expanded AI providers, new channels,
+ *           custom skills/MCP, and A2A + long-term memory (vector stores). Total steps: 12.
  */
 
 import React, { useEffect, useCallback } from 'react'
@@ -96,7 +98,75 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 2
+      // Step 2 — v0.6.0 showcase: Expanded AI providers
+      title: "What's New in v0.6.0 — Expanded AI Providers",
+      targetSelector: null,
+      content: 'Tsushin v0.6.0 adds four new AI providers alongside Anthropic, OpenAI, Gemini, and Ollama. Add any combination in the Hub, then pick a model per-agent in the Studio. Credentials are stored encrypted; failover and model-pricing controls apply to the new providers too.',
+      highlightFeatures: [
+        'Vertex AI — Google Cloud SA JSON or raw PEM, region-aware',
+        'Grok (xAI) — connect with an xAI API key',
+        'Groq — ultra-low-latency Llama / Mixtral inference',
+        'ElevenLabs — voice synthesis for audio-enabled agents',
+        'Live "Test Connection" before you save the instance'
+      ],
+      actionButton: {
+        label: 'Open Hub → AI Providers',
+        action: () => router.push('/hub?tab=ai-providers')
+      }
+    },
+    {
+      // Step 3 — v0.6.0 showcase: New communication channels
+      title: "What's New in v0.6.0 — Slack, Discord & Webhooks",
+      targetSelector: null,
+      content: 'WhatsApp and Telegram are joined by three new first-class channels. Each has its own guided setup wizard — point an agent at a channel and it receives/sends messages with full Sentinel protection, skill routing, and flow triggers applied.',
+      highlightFeatures: [
+        'Slack — 5-step wizard: app install, bot token, signing secret, event subscription',
+        'Discord — 6-step wizard: bot token, guild config, slash-command registration',
+        'Webhooks — generic inbound/outbound HTTP endpoint for any custom service',
+        'Per-channel agent routing (same agent can serve multiple channels)',
+        'All channels share the same conversation log in Watcher'
+      ],
+      actionButton: {
+        label: 'Open Hub → Communication',
+        action: () => router.push('/hub?tab=communication')
+      }
+    },
+    {
+      // Step 4 — v0.6.0 showcase: Custom Skills & MCP Servers
+      title: "What's New in v0.6.0 — Custom Skills & MCP Servers",
+      targetSelector: null,
+      content: 'Extend any agent with your own capabilities. Custom Skills are tenant-scoped Python/markdown instruction packs; MCP Servers plug in full tool bundles over the Model Context Protocol. Both run sandboxed per tenant and are assignable per-agent.',
+      highlightFeatures: [
+        'Custom Skills — write instructions (markdown) or Python handlers, assign to agents',
+        'MCP Servers — install third-party or bring-your-own MCP bundles tenant-side',
+        'Sandboxed execution with audit logs for every tool invocation',
+        'Works with the built-in sandboxed tool runner (e.g. /tool dig lookup)',
+        'Version, enable/disable, and scope each skill without redeploying'
+      ],
+      actionButton: {
+        label: 'Open Custom Skills',
+        action: () => router.push('/agents/custom-skills')
+      }
+    },
+    {
+      // Step 5 — v0.6.0 showcase: A2A + Long-term Memory via Vector Stores
+      title: "What's New in v0.6.0 — A2A & Long-Term Memory",
+      targetSelector: null,
+      content: 'Agents can now talk to each other and remember across conversations. A2A (Agent-to-Agent) permissioning lets one agent delegate to another under explicit ACLs; external Vector Stores (Qdrant, auto-provisioned on fresh installs) give every agent durable long-term memory that survives restarts and tenant scaling.',
+      highlightFeatures: [
+        'A2A permissioning — whitelist which agents may call which others',
+        'Default Qdrant vector store auto-provisioned on fresh installs',
+        'Per-agent memory override — pick a dedicated VS for sensitive agents',
+        'Semantic recall is automatic during message handling — no code changes',
+        'Vector stores sit alongside the short-term conversation context window'
+      ],
+      actionButton: {
+        label: 'Open Vector Stores',
+        action: () => router.push('/hub?tab=vector-stores')
+      }
+    },
+    {
+      // Step 6
       title: 'Watcher - Real-Time Monitoring',
       targetSelector: 'nav a[href="/"]',
       content: 'The Watcher dashboard provides real-time visibility into all conversations across your agents and channels. Monitor message streams, track agent activity, and gain insights into user interactions.',
@@ -108,7 +178,7 @@ export default function OnboardingWizard() {
       ]
     },
     {
-      // Step 3
+      // Step 7
       title: 'Studio - Agent Management',
       targetSelector: 'a[href="/agents"]',
       content: 'The Studio is where you create, configure, and manage your AI agents. Define agent personalities, assign skills, and control how agents interact with users.',
@@ -124,7 +194,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 4
+      // Step 8
       title: 'Hub - AI Providers & System AI',
       targetSelector: 'a[href="/hub"]',
       content: 'The Hub centralizes all your external integrations. Your primary AI provider was automatically set as the System AI during setup — this powers intent classification, skill routing, and other system operations. You can add more providers or change the System AI here at any time.',
@@ -140,7 +210,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 5 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
+      // Step 9 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
       title: 'Communication Channels (Required)',
       targetSelector: 'a[href="/hub"]',
       content: 'To receive and respond to messages, you must connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Without a channel, agents can only be tested in the Playground.',
@@ -156,7 +226,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 6
+      // Step 10
       title: 'Flows - Automation & Scheduling',
       targetSelector: 'a[href="/flows"]',
       content: 'Flows enable you to create automated workflows, scheduled tasks, and multi-step agent orchestrations. Build complex automation without code.',
@@ -172,7 +242,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 7
+      // Step 11
       title: 'Playground - Safe Testing Environment',
       targetSelector: 'a[href="/playground"]',
       content: 'The Playground is your safe space to test agents, experiment with prompts, and validate configurations before connecting real channels.',
@@ -188,7 +258,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 8 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
+      // Step 12 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
       // Points users to the Getting Started Checklist on the dashboard instead of duplicating it.
       title: "You're All Set!",
       targetSelector: null,
