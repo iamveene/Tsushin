@@ -226,17 +226,24 @@ async def send_chat_message(
                 )
                 return PlaygroundChatResponse(
                     status="success",
-                    message=result.get("response", "No projects found."),
+                    # BUG-583: service returns key "message", not "response".
+                    message=result.get("message", "No projects found."),
                     agent_name=agent_name,
                     timestamp=datetime.utcnow().isoformat() + "Z"
                 )
             elif command_type == "help":
+                # BUG-583: Only "project help" (and pt-BR "ajuda do projeto")
+                # routes through the project-command help template. Generic
+                # `/help` now falls through to the SlashCommandService below,
+                # which enumerates the full slash-command registry.
+                # Bug-fix: dict key is "message" not "response" — the old
+                # `.get("response", ...)` fallback always fired.
                 result = await command_service.execute_help(
                     response_template=response_template
                 )
                 return PlaygroundChatResponse(
                     status="success",
-                    message=result.get("response", "Available commands: /list, /enter, /exit, /help"),
+                    message=result.get("message", "Project commands help unavailable."),
                     agent_name=agent_name,
                     timestamp=datetime.utcnow().isoformat() + "Z"
                 )

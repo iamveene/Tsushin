@@ -9,10 +9,12 @@
  *
  * BUG-319: Removed step 9 (Setup Checklist) — it duplicated GettingStartedChecklist.
  *           Replaced with a "You're all set" message pointing to the checklist.
- * BUG-321: Step 5 action button launches WhatsApp wizard directly (not just /hub nav).
- * BUG-323: Step 5 navigates to /hub?tab=communication, not /hub.
+ * BUG-321: Channels step action button launches WhatsApp wizard directly (not just /hub nav).
+ * BUG-323: Channels step navigates to /hub?tab=communication, not /hub.
  * BUG-325: "Open User Guide" action button disabled when User Guide is already open.
  * BUG-334: Escape and Close button call dismissTour() which persists to localStorage immediately.
+ * v0.6.0 showcase: Steps 2-5 highlight what's new — expanded AI providers, new channels,
+ *           custom skills/MCP, and A2A + long-term memory (vector stores). Total steps: 12.
  */
 
 import React, { useEffect, useCallback } from 'react'
@@ -96,7 +98,86 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 2
+      // Step 2 — v0.6.0 showcase: Expanded AI providers
+      title: "What's New in v0.6.0 — Nine AI Providers, One Hub",
+      targetSelector: null,
+      content: 'Tsushin v0.6.0 speaks to nine LLM providers and three TTS engines out of the box. Each provider supports multiple instances per tenant (think: two OpenAI orgs, three Ollama servers) with per-instance base URLs, encrypted keys, live Test Connection, automatic model discovery, and a full ProviderConnectionAudit trail. A dedicated System AI routes intent classification and skill selection independently of your per-agent model choice, and model-pricing tables keep cost tracking honest across vendors.',
+      highlightFeatures: [
+        'Text LLMs: Anthropic, OpenAI, Google Gemini, Vertex AI (multi-publisher — Google + Claude + Mistral), Groq, Grok (xAI), DeepSeek, OpenRouter, and self-hosted Ollama',
+        'Voice / TTS: OpenAI TTS (MP3/opus/aac/flac/wav), Kokoro (free, open-source, PTBR + multilingual), and ElevenLabs',
+        'Multi-instance per vendor — run multiple endpoints in parallel for failover, A/B, or region routing',
+        'Separate System AI for intent classification & skill routing — pick a cheaper/faster model than your agents use',
+        'Tenant-scoped Fernet-encrypted credentials, SSRF-validated URLs, model discovery, and full connection audit log',
+        'Per-model pricing tables drive the Billing dashboard across every provider'
+      ],
+      actionButton: {
+        label: 'Open Hub → AI Providers',
+        action: () => router.push('/hub?tab=ai-providers')
+      }
+    },
+    {
+      // Step 3 — v0.6.0 showcase: New communication channels
+      title: "What's New in v0.6.0 — Slack, Discord, Webhooks & More",
+      targetSelector: null,
+      content: 'Tsushin now speaks six channels through a unified adapter layer. The router normalises every inbound message into the same shape so agents, skills, flows, and Sentinel behave identically whether the message came from WhatsApp, a Slack thread, a Discord guild, or your own service via a signed webhook. Each channel has its own guided setup wizard, per-instance health + circuit breakers, and per-agent routing via enabled_channels.',
+      highlightFeatures: [
+        'WhatsApp — MCP Docker container per instance, QR-code auth, circuit breaker + failover',
+        'Telegram — bot-token polling or webhook, encrypted credentials, health checks',
+        'Slack — Socket Mode or HTTP Events, bot + app tokens, DM allowlist, per-channel config',
+        'Discord — Gateway + REST, Ed25519 interaction verification, guild/channel ACL matrix',
+        'Webhooks — HMAC-signed bidirectional HTTP, timestamp replay guard, IP allowlist, rate limit',
+        'Playground — built-in internal WebSocket channel for safe testing',
+        'Per-agent enabled_channels routing, group/number filters, dm_auto_mode, and Sentinel inline on every channel',
+        'Cloudflare Tunnel remote access gives inbound channels a public HTTPS URL with zero port-forwarding'
+      ],
+      actionButton: {
+        label: 'Open Hub → Communication',
+        action: () => router.push('/hub?tab=communication')
+      }
+    },
+    {
+      // Step 4 — v0.6.0 showcase: Custom Skills & MCP Servers
+      title: "What's New in v0.6.0 — Custom Skills & MCP Servers",
+      targetSelector: null,
+      content: 'Three ways to extend any agent: write a markdown-only Instruction skill (no code), drop in a Python / Bash / Node Script that runs inside the sandboxed Toolbox container, or wire an external MCP Server over SSE, HTTP-streamable, or stdio. Every skill is semantically versioned, Sentinel-scanned before it goes live, timeout-bounded, and fully auditable — and the same machinery powers the built-in /tool runner (dig, nmap, and friends) you can invoke directly from any channel.',
+      highlightFeatures: [
+        'Instruction skills — pure markdown with template substitution, zero code, shipped in seconds',
+        'Script skills — Python / Bash / Node.js in the sandboxed Toolbox container with JSON in/out and per-skill timeout',
+        'MCP Server skills — SSE, HTTP-streamable, or stdio transports with bearer / custom-header / API-key auth',
+        'Execution modes: tool (LLM-callable), hybrid (keyword + LLM), passive (response post-processor), instruction (static)',
+        'Semantic versioning, Sentinel security scan (pending → clean / rejected), trust levels (system / verified / untrusted)',
+        'Tool discovery namespaces MCP tools as {server}__{tool} with per-server health history',
+        'Per-tenant isolation — custom skills, MCP containers, and tool executions never leak across tenants',
+        'Sandboxed /tool runner ships ready-to-use: /tool dig lookup, /tool nmap quick_scan, and more'
+      ],
+      actionButton: {
+        label: 'Open Custom Skills',
+        action: () => router.push('/agents/custom-skills')
+      }
+    },
+    {
+      // Step 5 — v0.6.0 showcase: A2A + Long-term Memory via Vector Stores
+      title: "What's New in v0.6.0 — A2A & Long-Term Memory",
+      targetSelector: null,
+      content: 'Agents in v0.6.0 can talk to each other and remember across conversations. A2A (Agent-to-Agent) turns any agent into a callable teammate — ask questions, list accessible peers, or delegate an entire task with a configurable depth guard. Long-term memory is backed by four pluggable vector stores; Qdrant and MongoDB are auto-provisioned locally in Docker on fresh installs, while MongoDB Atlas and Pinecone are one connection string away. Every recall is scored, decayed, and MMR-reranked — all without a line of code from you.',
+      highlightFeatures: [
+        'A2A skill: ask / list_agents / delegate — same-tenant discovery, per-call timeouts, infinite-loop depth guard',
+        'Four vector store vendors: Qdrant (local Docker or cloud), MongoDB (local Docker or Atlas with $vectorSearch), Pinecone (BYO), ChromaDB (built-in fallback)',
+        'Auto-provisioned in Docker on fresh installs — Qdrant + MongoDB both get containers, volumes, and dynamic ports',
+        'OKG memory types — fact, episodic, semantic, procedural, belief — with MemGuard blocking + full audit log',
+        'SharedMemory pool with explicit accessible_to ACL (empty = all agents; listed = allowlist), topic categorisation',
+        'Semantic recall with configurable top-k + similarity threshold, MMR reranking (lambda 0.5), exponential temporal decay (~69-day half-life)',
+        'Memory isolation modes — isolated (per-agent), shared (cross-agent), channel_isolated (per-channel)',
+        'Knowledge Base document ingestion — PDF, DOCX, TXT, CSV, JSON — chunked, embedded, and indexed per agent',
+        'Per-agent override — assign a dedicated vector store for sensitive agents without disturbing the default'
+      ],
+      actionButton: {
+        label: 'Open Vector Stores',
+        action: () => router.push('/hub?tab=vector-stores')
+      }
+    },
+    {
+      // Step 6
       title: 'Watcher - Real-Time Monitoring',
       targetSelector: 'nav a[href="/"]',
       content: 'The Watcher dashboard provides real-time visibility into all conversations across your agents and channels. Monitor message streams, track agent activity, and gain insights into user interactions.',
@@ -108,7 +189,7 @@ export default function OnboardingWizard() {
       ]
     },
     {
-      // Step 3
+      // Step 7
       title: 'Studio - Agent Management',
       targetSelector: 'a[href="/agents"]',
       content: 'The Studio is where you create, configure, and manage your AI agents. Define agent personalities, assign skills, and control how agents interact with users.',
@@ -124,7 +205,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 4
+      // Step 8
       title: 'Hub - AI Providers & System AI',
       targetSelector: 'a[href="/hub"]',
       content: 'The Hub centralizes all your external integrations. Your primary AI provider was automatically set as the System AI during setup — this powers intent classification, skill routing, and other system operations. You can add more providers or change the System AI here at any time.',
@@ -140,7 +221,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 5 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
+      // Step 9 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
       title: 'Communication Channels (Required)',
       targetSelector: 'a[href="/hub"]',
       content: 'To receive and respond to messages, you must connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Without a channel, agents can only be tested in the Playground.',
@@ -156,7 +237,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 6
+      // Step 10
       title: 'Flows - Automation & Scheduling',
       targetSelector: 'a[href="/flows"]',
       content: 'Flows enable you to create automated workflows, scheduled tasks, and multi-step agent orchestrations. Build complex automation without code.',
@@ -172,7 +253,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 7
+      // Step 11
       title: 'Playground - Safe Testing Environment',
       targetSelector: 'a[href="/playground"]',
       content: 'The Playground is your safe space to test agents, experiment with prompts, and validate configurations before connecting real channels.',
@@ -188,7 +269,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 8 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
+      // Step 12 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
       // Points users to the Getting Started Checklist on the dashboard instead of duplicating it.
       title: "You're All Set!",
       targetSelector: null,

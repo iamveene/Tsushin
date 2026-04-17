@@ -40,6 +40,10 @@ def get_db():
     try:
         yield db
     finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         db.close()
 
 
@@ -215,6 +219,7 @@ def get_persona(
     return to_persona_response(persona, db)
 
 
+@router.post("", response_model=PersonaResponse, include_in_schema=False)
 @router.post("/", response_model=PersonaResponse)
 def create_persona(
     persona_data: PersonaCreate,

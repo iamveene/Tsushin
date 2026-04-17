@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from sqlalchemy.orm import Session
 
 from agent.skills.base import SkillResult
@@ -52,18 +52,33 @@ def get_db():
     try:
         yield db
     finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         db.close()
 
 
 # ==================== Pydantic Schemas ====================
 
 class CustomSkillCreate(BaseModel):
+    # BUG-585: `extra="forbid"` so unknown fields surface as 422 instead of
+    # being silently dropped. Historically `POST /api/custom-skills` with the
+    # wrong field name (`instruction` vs `instructions_md`) accepted the
+    # payload and persisted an empty skill. The `instruction` alias is also
+    # accepted below so the common misspelling produces a usable record.
+    class Config:
+        extra = "forbid"
+
     name: str
     description: Optional[str] = None
     icon: Optional[str] = None
     skill_type_variant: str = Field(default="instruction")
     execution_mode: str = Field(default="tool")
-    instructions_md: Optional[str] = None
+    instructions_md: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("instructions_md", "instruction"),
+    )
     script_content: Optional[str] = None
     script_entrypoint: Optional[str] = None
     script_language: Optional[str] = None  # python|bash|nodejs
@@ -79,12 +94,19 @@ class CustomSkillCreate(BaseModel):
 
 
 class CustomSkillUpdate(BaseModel):
+    # BUG-585: see CustomSkillCreate note above.
+    class Config:
+        extra = "forbid"
+
     name: Optional[str] = None
     description: Optional[str] = None
     icon: Optional[str] = None
     skill_type_variant: Optional[str] = None
     execution_mode: Optional[str] = None
-    instructions_md: Optional[str] = None
+    instructions_md: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("instructions_md", "instruction"),
+    )
     script_content: Optional[str] = None
     script_entrypoint: Optional[str] = None
     script_language: Optional[str] = None

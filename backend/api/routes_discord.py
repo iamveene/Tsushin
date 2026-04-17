@@ -127,6 +127,7 @@ def _to_response(integration: DiscordIntegration) -> DiscordIntegrationResponse:
 # API Endpoints
 # ============================================================================
 
+@router.post("", response_model=DiscordIntegrationResponse, include_in_schema=False)
 @router.post("/", response_model=DiscordIntegrationResponse)
 async def create_discord_integration(
     data: DiscordIntegrationCreate,
@@ -175,6 +176,7 @@ async def create_discord_integration(
         raise HTTPException(status_code=500, detail=f"Failed to create Discord integration: {str(e)}")
 
 
+@router.get("", response_model=List[DiscordIntegrationResponse], include_in_schema=False)
 @router.get("/", response_model=List[DiscordIntegrationResponse])
 async def list_discord_integrations(
     current_user: User = Depends(get_current_user_required),

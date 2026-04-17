@@ -71,13 +71,26 @@ def get_db():
     try:
         yield db
     finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         db.close()
 
 
 # ============= LEGACY PYDANTIC SCHEMAS (backward compat) =============
 
 class FlowDefinitionCreate(BaseModel):
-    """Legacy schema - use FlowCreate for new code"""
+    """
+    Legacy schema — use FlowCreate (via POST /api/flows/create) for new code.
+
+    BUG-587: `extra="forbid"` so unknown fields like `steps` or `trigger_type`
+    surface a clear 422 instead of being silently dropped. Callers sending
+    `steps` should use the v2 endpoint `POST /api/flows/create`.
+    """
+    class Config:
+        extra = "forbid"
+
     name: str
     description: Optional[str] = None
     is_active: bool = True
@@ -87,6 +100,9 @@ class FlowDefinitionCreate(BaseModel):
 
 class FlowDefinitionUpdate(BaseModel):
     """Legacy schema - use FlowUpdate for new code"""
+    class Config:
+        extra = "forbid"
+
     name: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None

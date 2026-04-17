@@ -1427,17 +1427,41 @@ Type `/help all` to see syntax for all commands.
                 "message": f"🧹 **Cleared {count} injected tool output{'s' if count != 1 else ''}.**\n\nThe injection buffer has been emptied."
             }
 
-        # Determine what to inject
+        # BUG-584: Only the FIRST whitespace-delimited token is an /inject
+        # argument. Previously the parser iterated every token and let later
+        # tokens overwrite earlier ones — so `/inject secret_code=alpha-bravo-9
+        # then what is the secret_code?` ended up treating `secret_code?` as
+        # the tool name. Trailing text is ignored by the command itself;
+        # users who want follow-up prose should send a second message.
         execution_id = None
         tool_name = None
 
-        for part in args_parts:
-            if part.isdigit():
-                execution_id = int(part)
-            elif part.startswith("#") and part[1:].isdigit():
-                execution_id = int(part[1:])
+        if args_parts:
+            first = args_parts[0]
+
+            # Friendly guard: `/inject` replays a recorded tool execution —
+            # it does NOT set context variables. If the user typed a
+            # `key=value` token (a common misconception), explain it.
+            if "=" in first:
+                return {
+                    "status": "error",
+                    "action": "inject_error",
+                    "message": (
+                        "❌ **`/inject` does not set context variables.**\n\n"
+                        "It replays a previous tool execution's output into the "
+                        "next turn. Usage:\n"
+                        "• `/inject list` — show available executions\n"
+                        "• `/inject <id>` — inject a specific execution\n"
+                        "• `/inject <tool_name>` — inject the latest run of a tool"
+                    ),
+                }
+
+            if first.isdigit():
+                execution_id = int(first)
+            elif first.startswith("#") and first[1:].isdigit():
+                execution_id = int(first[1:])
             else:
-                tool_name = part.lower()
+                tool_name = first.lower()
 
         # Get the execution
         if execution_id:

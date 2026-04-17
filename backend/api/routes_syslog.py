@@ -191,6 +191,7 @@ def _config_to_response(config: TenantSyslogConfig) -> SyslogConfigResponse:
 # Endpoints
 # ============================================================================
 
+@router.get("", response_model=SyslogConfigResponse, include_in_schema=False)
 @router.get("/", response_model=SyslogConfigResponse)
 async def get_syslog_config(
     current_user: User = Depends(require_permission("org.settings.read")),
@@ -209,6 +210,7 @@ async def get_syslog_config(
     return _config_to_response(config)
 
 
+@router.put("", response_model=SyslogConfigResponse, include_in_schema=False)
 @router.put("/", response_model=SyslogConfigResponse)
 async def update_syslog_config(
     update: SyslogConfigUpdate,

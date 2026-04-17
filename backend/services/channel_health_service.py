@@ -182,6 +182,10 @@ class ChannelHealthService:
                 logger.debug(f"Discord integration not available: {e}")
 
         finally:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             db.close()
 
     async def _check_whatsapp_instance(self, instance: WhatsAppMCPInstance, db: Session):

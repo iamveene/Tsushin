@@ -13,6 +13,8 @@
  *           Uses a ref + event listener to avoid stale closure race conditions.
  * BUG-318: WhatsApp wizard auto-launch chain removed from here entirely.
  * BUG-319: TOTAL_STEPS reduced from 9 to 8 (step 9 duplicated GettingStartedChecklist).
+ * v0.6.0:    TOTAL_STEPS raised from 8 to 12 — added four "What's New" showcase pages
+ *            (expanded AI providers, new channels, custom skills/MCP, A2A + long-term memory).
  */
 
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react'
@@ -43,7 +45,8 @@ interface OnboardingContextType {
 const OnboardingContext = createContext<OnboardingContextType | undefined>(undefined)
 
 // BUG-319: Reduced from 9 to 8 (step 9 "Setup Checklist" removed — it duplicated GettingStartedChecklist)
-const TOTAL_STEPS = 8
+// v0.6.0: Raised to 12 — added four "What's New in v0.6.0" showcase pages at the start
+const TOTAL_STEPS = 12
 const LEGACY_STORAGE_KEY = 'tsushin_onboarding_completed'
 const STARTED_KEY_PREFIX = 'tsushin_onboarding_started'
 

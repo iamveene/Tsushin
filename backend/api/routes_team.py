@@ -151,6 +151,7 @@ def invitation_to_response(invitation: UserInvitation, db: Session, include_link
 # ==============================================================================
 
 
+@router.get("", response_model=TeamListResponse, include_in_schema=False)
 @router.get("/", response_model=TeamListResponse)
 async def list_team_members(
     page: int = Query(1, ge=1),

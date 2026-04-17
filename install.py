@@ -216,6 +216,10 @@ class TsushinInstaller:
         # --no-cache (because NEXT_PUBLIC_API_URL changed and Next.js bakes
         # that value into the static build at image-build time).
         self._force_frontend_rebuild = False
+        # Tracks whether generate_env_file() preserved a POSTGRES_PASSWORD
+        # from an existing .env. If False and the postgres volume already
+        # exists, the installer would crash with FATAL auth — BUG-582.
+        self._preserved_existing_postgres_password = False
 
     @staticmethod
     def _normalize_ssl_mode(value: str) -> str:
@@ -1331,6 +1335,8 @@ class TsushinInstaller:
         jwt_secret = previous_env_vars.get('JWT_SECRET_KEY') or secrets.token_urlsafe(32)
         asana_encryption_key = previous_env_vars.get('ASANA_ENCRYPTION_KEY') or Fernet.generate_key().decode()
 
+        self._preserved_existing_postgres_password = bool(previous_env_vars.get('POSTGRES_PASSWORD'))
+
         if previous_env_vars.get('POSTGRES_PASSWORD'):
             print_info("Preserved existing POSTGRES_PASSWORD from .env")
         if previous_env_vars.get('JWT_SECRET_KEY'):
@@ -1470,9 +1476,79 @@ KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
             print_warning(f"Could not create backup: {e}")
             return None
 
+    def _check_postgres_volume_collision(self) -> None:
+        """
+        Abort if a Postgres named volume already exists whose password we
+        cannot match (BUG-582).
+
+        BUG-566 preserves POSTGRES_PASSWORD from an existing .env so that
+        re-running the installer against the same data volume works. That
+        preservation is scoped to the working directory's .env — it does
+        NOT cross worktrees, clean clones, or machines. If a developer
+        clones this repo into a new directory while the original tsushin
+        stack's named volume (`<stack>-postgres-data`) still exists on
+        the host, the fresh installer generates a brand-new password and
+        `docker compose up` then crashes the backend with FATAL auth.
+
+        This guard detects that case and surfaces clear remediation paths
+        before any Docker action is taken. Non-destructive — we never
+        remove the volume on the user's behalf.
+        """
+        stack_name = (self.config.get('TSN_STACK_NAME') or 'tsushin').strip() or 'tsushin'
+        volume_name = f"{stack_name}-postgres-data"
+
+        try:
+            result = subprocess.run(
+                ["docker", "volume", "inspect", volume_name],
+                capture_output=True,
+                text=True,
+            )
+        except Exception as e:
+            print_warning(f"Could not inspect postgres volume '{volume_name}': {e}")
+            return
+
+        volume_exists = result.returncode == 0
+        if not volume_exists:
+            return
+
+        if self._preserved_existing_postgres_password:
+            # BUG-566 path — password was preserved from an existing .env,
+            # so the volume and the .env agree. Proceed silently.
+            return
+
+        print_error(
+            f"Postgres volume '{volume_name}' already exists from a previous "
+            f"install, but this run generated a fresh POSTGRES_PASSWORD that "
+            f"will not match the data on that volume."
+        )
+        print_info("Without this check, the backend would crash-loop with "
+                   "'FATAL: password authentication failed for user \"tsushin\"' "
+                   "immediately after compose up.")
+        print_info("")
+        print_info("Choose one of the following:")
+        print_info(f"  (a) Copy the original .env into this directory so "
+                   f"POSTGRES_PASSWORD is preserved (recommended when you want "
+                   f"to keep your data).")
+        print_info(f"  (b) Isolate this install by setting a different stack "
+                   f"name BEFORE running the installer, e.g.:")
+        print_info(f"        export TSN_STACK_NAME=tsushin-dev")
+        print_info(f"        export COMPOSE_PROJECT_NAME=tsushin-dev")
+        print_info(f"        python3 install.py --defaults --http --port 8091 "
+                   f"--frontend-port 3091")
+        print_info(f"  (c) Destroy the existing volume to start fresh "
+                   f"(WARNING: permanent data loss — back up first with "
+                   f"'bash backend/scripts/backup_db.sh'):")
+        print_info(f"        docker volume rm {volume_name}")
+        print_info("")
+        sys.exit(1)
+
     def run_docker_compose(self):
         """Run docker-compose up --build -d"""
         print_header("Deploying Docker Containers")
+
+        # BUG-582: refuse to proceed if an existing postgres volume would
+        # collide with the freshly-generated password.
+        self._check_postgres_volume_collision()
 
         # Ensure the external network exists (required before docker-compose up)
         try:

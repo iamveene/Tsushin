@@ -1412,7 +1412,10 @@ def seed_project_command_patterns(session):
             "tenant_id": "_system",
             "command_type": "help",
             "language_code": "en",
-            "pattern": r"^(?:/help|project help)$",
+            # BUG-583: `/help` now falls through to the central SlashCommandService
+            # so the user sees the full registry. Only the bare phrase
+            # "project help" still returns project-specific help.
+            "pattern": r"^project help$",
             "response_template": """📚 Project Commands:
 • "enter project [name]" - Enter a project
 • "exit project" - Leave current project
@@ -1425,7 +1428,8 @@ def seed_project_command_patterns(session):
             "tenant_id": "_system",
             "command_type": "help",
             "language_code": "pt",
-            "pattern": r"^(?:/ajuda|ajuda do projeto)$",
+            # BUG-583: ver nota acima em 'help/en'.
+            "pattern": r"^ajuda do projeto$",
             "response_template": """📚 Comandos de Projeto:
 • "entrar projeto [nome]" - Entrar em um projeto
 • "sair do projeto" - Sair do projeto atual
@@ -1436,28 +1440,42 @@ def seed_project_command_patterns(session):
         },
     ]
 
-    existing = {
-        (item.tenant_id, item.command_type, item.language_code)
+    existing_rows = {
+        (item.tenant_id, item.command_type, item.language_code): item
         for item in session.query(ProjectCommandPattern).filter(
             ProjectCommandPattern.tenant_id == "_system"
         ).all()
     }
 
     inserted = 0
+    updated = 0
     for pattern_data in patterns_data:
         key = (
             pattern_data["tenant_id"],
             pattern_data["command_type"],
             pattern_data["language_code"],
         )
-        if key in existing:
+        existing_row = existing_rows.get(key)
+        if existing_row is None:
+            session.add(ProjectCommandPattern(**pattern_data))
+            inserted += 1
             continue
-        session.add(ProjectCommandPattern(**pattern_data))
-        inserted += 1
 
-    if inserted:
+        # BUG-583 drift fix: if the seeded pattern text diverges from what's
+        # in the DB, overwrite it. Prior installs shipped `/help` in the
+        # regex for command_type='help'; we need that to drop off on restart.
+        if existing_row.pattern != pattern_data["pattern"]:
+            existing_row.pattern = pattern_data["pattern"]
+            existing_row.response_template = pattern_data["response_template"]
+            existing_row.is_active = pattern_data["is_active"]
+            updated += 1
+
+    if inserted or updated:
         session.commit()
-        print(f"[Projects] Seeded {inserted} new project command patterns")
+        if inserted:
+            print(f"[Projects] Seeded {inserted} new project command patterns")
+        if updated:
+            print(f"[Projects] Updated {updated} project command patterns whose regex drifted")
     else:
         print(f"[Projects] All {len(patterns_data)} project command patterns already present")
 
@@ -1634,12 +1652,14 @@ def get_session(engine):
 
 # Global engine for FastAPI dependency injection
 _global_engine = None
+_global_session_factory: "sessionmaker | None" = None
 
 
 def set_global_engine(engine):
     """Set the global engine for FastAPI dependencies"""
-    global _global_engine
+    global _global_engine, _global_session_factory
     _global_engine = engine
+    _global_session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
 def get_global_engine():
@@ -1647,21 +1667,50 @@ def get_global_engine():
     return _global_engine
 
 
-def get_db():
-    """
-    FastAPI dependency for database sessions
+def get_session_factory():
+    """Return the module-level sessionmaker (raises if engine not initialised)."""
+    if _global_session_factory is None:
+        raise RuntimeError("Database engine not initialized. Call set_global_engine first.")
+    return _global_session_factory
 
-    Usage:
-        @app.get("/api/endpoint")
-        def endpoint(db: Session = Depends(get_db)):
-            # Use db here
+
+def get_db():
+    """FastAPI dependency for database sessions.
+
+    Always rolls back on exit to guarantee the underlying connection returns to
+    the pool in a clean state (prevents 'idle in transaction' leaks when a
+    request hits the implicit autobegin path but never commits/rollbacks).
     """
-    if _global_engine is None:
+    if _global_session_factory is None:
         raise RuntimeError("Database engine not initialized. Call set_global_engine first.")
 
-    SessionLocal = sessionmaker(bind=_global_engine)
-    db = SessionLocal()
+    db = _global_session_factory()
     try:
         yield db
+    finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        db.close()
+
+
+@contextmanager
+def session_scope():
+    """Context manager for background tasks / non-request code paths.
+
+    Commits on clean exit, rolls back on exception, and always closes.
+    Uses the module-level sessionmaker (no per-call sessionmaker creation —
+    fixes the BUG-355-class pool-exhaustion pattern for any future call site).
+    """
+    if _global_session_factory is None:
+        raise RuntimeError("Database engine not initialized. Call set_global_engine first.")
+    db = _global_session_factory()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

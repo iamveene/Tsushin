@@ -53,8 +53,12 @@ class ProjectCommandService:
             (r"^(?:/adicionar\s+ao\s+projeto|adicionar ao projeto)$", {"language_code": "pt", "response_template": '📎 Documento "{filename}" adicionado ao projeto ({chunks} chunks processados).', "pattern_str": r"^(?:/adicionar\s+ao\s+projeto|adicionar ao projeto)$"}),
         ],
         "help": [
-            (r"^(?:/help|project help)$", {"language_code": "en", "response_template": None, "pattern_str": r"^(?:/help|project help)$"}),
-            (r"^(?:/ajuda|ajuda do projeto)$", {"language_code": "pt", "response_template": None, "pattern_str": r"^(?:/ajuda|ajuda do projeto)$"}),
+            # BUG-583: Removed `/help` alias. Generic `/help` must fall through
+            # to the central SlashCommandService so it enumerates all
+            # registered commands (not just the project-command subset).
+            # `project help` / `projeto ajuda` still return the project-specific help.
+            (r"^project help$", {"language_code": "en", "response_template": None, "pattern_str": r"^project help$"}),
+            (r"^ajuda do projeto$", {"language_code": "pt", "response_template": None, "pattern_str": r"^ajuda do projeto$"}),
         ],
         "info": [
             (r"^/project\s+info$", {"language_code": "en", "response_template": None, "pattern_str": r"^/project\s+info$"}),

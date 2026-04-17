@@ -76,6 +76,10 @@ def get_db():
     try:
         yield db
     finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         db.close()
 
 
@@ -306,6 +310,7 @@ class ContactResponse(BaseModel):
 
 
 # Routes
+@router.get("", response_model=List[ContactResponse], include_in_schema=False)
 @router.get("/", response_model=List[ContactResponse])
 def list_contacts(
     active_only: bool = False,
@@ -347,6 +352,7 @@ def get_contact(
     return enrich_contact_with_user_info(db, contact)
 
 
+@router.post("", response_model=ContactResponse, status_code=201, include_in_schema=False)
 @router.post("/", response_model=ContactResponse, status_code=201)
 def create_contact(
     contact: ContactCreate,
