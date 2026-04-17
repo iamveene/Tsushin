@@ -99,15 +99,16 @@ export default function OnboardingWizard() {
     },
     {
       // Step 2 — v0.6.0 showcase: Expanded AI providers
-      title: "What's New in v0.6.0 — Expanded AI Providers",
+      title: "What's New in v0.6.0 — Nine AI Providers, One Hub",
       targetSelector: null,
-      content: 'Tsushin v0.6.0 adds four new AI providers alongside Anthropic, OpenAI, Gemini, and Ollama. Add any combination in the Hub, then pick a model per-agent in the Studio. Credentials are stored encrypted; failover and model-pricing controls apply to the new providers too.',
+      content: 'Tsushin v0.6.0 speaks to nine LLM providers and three TTS engines out of the box. Each provider supports multiple instances per tenant (think: two OpenAI orgs, three Ollama servers) with per-instance base URLs, encrypted keys, live Test Connection, automatic model discovery, and a full ProviderConnectionAudit trail. A dedicated System AI routes intent classification and skill selection independently of your per-agent model choice, and model-pricing tables keep cost tracking honest across vendors.',
       highlightFeatures: [
-        'Vertex AI — Google Cloud SA JSON or raw PEM, region-aware',
-        'Grok (xAI) — connect with an xAI API key',
-        'Groq — ultra-low-latency Llama / Mixtral inference',
-        'ElevenLabs — voice synthesis for audio-enabled agents',
-        'Live "Test Connection" before you save the instance'
+        'Text LLMs: Anthropic, OpenAI, Google Gemini, Vertex AI (multi-publisher — Google + Claude + Mistral), Groq, Grok (xAI), DeepSeek, OpenRouter, and self-hosted Ollama',
+        'Voice / TTS: OpenAI TTS (MP3/opus/aac/flac/wav), Kokoro (free, open-source, PTBR + multilingual), and ElevenLabs',
+        'Multi-instance per vendor — run multiple endpoints in parallel for failover, A/B, or region routing',
+        'Separate System AI for intent classification & skill routing — pick a cheaper/faster model than your agents use',
+        'Tenant-scoped Fernet-encrypted credentials, SSRF-validated URLs, model discovery, and full connection audit log',
+        'Per-model pricing tables drive the Billing dashboard across every provider'
       ],
       actionButton: {
         label: 'Open Hub → AI Providers',
@@ -116,15 +117,18 @@ export default function OnboardingWizard() {
     },
     {
       // Step 3 — v0.6.0 showcase: New communication channels
-      title: "What's New in v0.6.0 — Slack, Discord & Webhooks",
+      title: "What's New in v0.6.0 — Slack, Discord, Webhooks & More",
       targetSelector: null,
-      content: 'WhatsApp and Telegram are joined by three new first-class channels. Each has its own guided setup wizard — point an agent at a channel and it receives/sends messages with full Sentinel protection, skill routing, and flow triggers applied.',
+      content: 'Tsushin now speaks six channels through a unified adapter layer. The router normalises every inbound message into the same shape so agents, skills, flows, and Sentinel behave identically whether the message came from WhatsApp, a Slack thread, a Discord guild, or your own service via a signed webhook. Each channel has its own guided setup wizard, per-instance health + circuit breakers, and per-agent routing via enabled_channels.',
       highlightFeatures: [
-        'Slack — 5-step wizard: app install, bot token, signing secret, event subscription',
-        'Discord — 6-step wizard: bot token, guild config, slash-command registration',
-        'Webhooks — generic inbound/outbound HTTP endpoint for any custom service',
-        'Per-channel agent routing (same agent can serve multiple channels)',
-        'All channels share the same conversation log in Watcher'
+        'WhatsApp — MCP Docker container per instance, QR-code auth, circuit breaker + failover',
+        'Telegram — bot-token polling or webhook, encrypted credentials, health checks',
+        'Slack — Socket Mode or HTTP Events, bot + app tokens, DM allowlist, per-channel config',
+        'Discord — Gateway + REST, Ed25519 interaction verification, guild/channel ACL matrix',
+        'Webhooks — HMAC-signed bidirectional HTTP, timestamp replay guard, IP allowlist, rate limit',
+        'Playground — built-in internal WebSocket channel for safe testing',
+        'Per-agent enabled_channels routing, group/number filters, dm_auto_mode, and Sentinel inline on every channel',
+        'Cloudflare Tunnel remote access gives inbound channels a public HTTPS URL with zero port-forwarding'
       ],
       actionButton: {
         label: 'Open Hub → Communication',
@@ -135,13 +139,16 @@ export default function OnboardingWizard() {
       // Step 4 — v0.6.0 showcase: Custom Skills & MCP Servers
       title: "What's New in v0.6.0 — Custom Skills & MCP Servers",
       targetSelector: null,
-      content: 'Extend any agent with your own capabilities. Custom Skills are tenant-scoped Python/markdown instruction packs; MCP Servers plug in full tool bundles over the Model Context Protocol. Both run sandboxed per tenant and are assignable per-agent.',
+      content: 'Three ways to extend any agent: write a markdown-only Instruction skill (no code), drop in a Python / Bash / Node Script that runs inside the sandboxed Toolbox container, or wire an external MCP Server over SSE, HTTP-streamable, or stdio. Every skill is semantically versioned, Sentinel-scanned before it goes live, timeout-bounded, and fully auditable — and the same machinery powers the built-in /tool runner (dig, nmap, and friends) you can invoke directly from any channel.',
       highlightFeatures: [
-        'Custom Skills — write instructions (markdown) or Python handlers, assign to agents',
-        'MCP Servers — install third-party or bring-your-own MCP bundles tenant-side',
-        'Sandboxed execution with audit logs for every tool invocation',
-        'Works with the built-in sandboxed tool runner (e.g. /tool dig lookup)',
-        'Version, enable/disable, and scope each skill without redeploying'
+        'Instruction skills — pure markdown with template substitution, zero code, shipped in seconds',
+        'Script skills — Python / Bash / Node.js in the sandboxed Toolbox container with JSON in/out and per-skill timeout',
+        'MCP Server skills — SSE, HTTP-streamable, or stdio transports with bearer / custom-header / API-key auth',
+        'Execution modes: tool (LLM-callable), hybrid (keyword + LLM), passive (response post-processor), instruction (static)',
+        'Semantic versioning, Sentinel security scan (pending → clean / rejected), trust levels (system / verified / untrusted)',
+        'Tool discovery namespaces MCP tools as {server}__{tool} with per-server health history',
+        'Per-tenant isolation — custom skills, MCP containers, and tool executions never leak across tenants',
+        'Sandboxed /tool runner ships ready-to-use: /tool dig lookup, /tool nmap quick_scan, and more'
       ],
       actionButton: {
         label: 'Open Custom Skills',
@@ -152,13 +159,17 @@ export default function OnboardingWizard() {
       // Step 5 — v0.6.0 showcase: A2A + Long-term Memory via Vector Stores
       title: "What's New in v0.6.0 — A2A & Long-Term Memory",
       targetSelector: null,
-      content: 'Agents can now talk to each other and remember across conversations. A2A (Agent-to-Agent) permissioning lets one agent delegate to another under explicit ACLs; external Vector Stores (Qdrant, auto-provisioned on fresh installs) give every agent durable long-term memory that survives restarts and tenant scaling.',
+      content: 'Agents in v0.6.0 can talk to each other and remember across conversations. A2A (Agent-to-Agent) turns any agent into a callable teammate — ask questions, list accessible peers, or delegate an entire task with a configurable depth guard. Long-term memory is backed by four pluggable vector stores; Qdrant and MongoDB are auto-provisioned locally in Docker on fresh installs, while MongoDB Atlas and Pinecone are one connection string away. Every recall is scored, decayed, and MMR-reranked — all without a line of code from you.',
       highlightFeatures: [
-        'A2A permissioning — whitelist which agents may call which others',
-        'Default Qdrant vector store auto-provisioned on fresh installs',
-        'Per-agent memory override — pick a dedicated VS for sensitive agents',
-        'Semantic recall is automatic during message handling — no code changes',
-        'Vector stores sit alongside the short-term conversation context window'
+        'A2A skill: ask / list_agents / delegate — same-tenant discovery, per-call timeouts, infinite-loop depth guard',
+        'Four vector store vendors: Qdrant (local Docker or cloud), MongoDB (local Docker or Atlas with $vectorSearch), Pinecone (BYO), ChromaDB (built-in fallback)',
+        'Auto-provisioned in Docker on fresh installs — Qdrant + MongoDB both get containers, volumes, and dynamic ports',
+        'OKG memory types — fact, episodic, semantic, procedural, belief — with MemGuard blocking + full audit log',
+        'SharedMemory pool with explicit accessible_to ACL (empty = all agents; listed = allowlist), topic categorisation',
+        'Semantic recall with configurable top-k + similarity threshold, MMR reranking (lambda 0.5), exponential temporal decay (~69-day half-life)',
+        'Memory isolation modes — isolated (per-agent), shared (cross-agent), channel_isolated (per-channel)',
+        'Knowledge Base document ingestion — PDF, DOCX, TXT, CSV, JSON — chunked, embedded, and indexed per agent',
+        'Per-agent override — assign a dedicated vector store for sensitive agents without disturbing the default'
       ],
       actionButton: {
         label: 'Open Vector Stores',
