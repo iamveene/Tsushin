@@ -1404,7 +1404,7 @@ The wizard can also be launched manually from the Hub Communication tab or auto-
 **Graph + Studio consistency:** Graph View consumes `resolved_whatsapp_integration_id`, `whatsapp_binding_status`, and `whatsapp_binding_source` from `/api/v2/agents/graph-preview`. This allows Graph to show:
 - solid edge for explicit binding
 - dashed edge for resolved-default binding
-- `WhatsApp Unassigned` warning node when the channel is enabled but ambiguous/unassigned
+- `WhatsApp Unassigned` warning node when the channel is enabled but ambiguous/unassigned — **suppressed on a truly fresh tenant** (zero WhatsApp instances *and* no agent carrying a stale `whatsapp_integration_id` pointing at a missing instance). The warning still surfaces when a real stale explicit binding exists so operators see the drift signal without first-run noise.
 
 **Getting Started Checklist:** The Watcher dashboard displays a "Getting Started" widget tracking 5 setup milestones: Configure Agent, Connect Channel, Add Contacts, Test in Playground, Create Flow. It auto-hides when all items are complete and can be dismissed.
 

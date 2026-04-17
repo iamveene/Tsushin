@@ -98,6 +98,7 @@ export default function GraphViewTab() {
   const {
     processingAgents,
     activeChannels,
+    processingAgentChannels,
     recentSkillUse,
     recentKbUse,
     fadingAgents,
@@ -115,10 +116,12 @@ export default function GraphViewTab() {
   const activityState = useMemo(() => {
     if (viewType !== 'agents') return undefined
     return {
-      processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels,
+      processingAgents, activeChannels, processingAgentChannels,
+      recentSkillUse, recentKbUse, fadingAgents, fadingChannels,
       activeA2ASessions, fadingA2ASessions, agentA2ADepths,
     }
-  }, [viewType, processingAgents, activeChannels, recentSkillUse, recentKbUse, fadingAgents, fadingChannels,
+  }, [viewType, processingAgents, activeChannels, processingAgentChannels,
+      recentSkillUse, recentKbUse, fadingAgents, fadingChannels,
       activeA2ASessions, fadingA2ASessions, agentA2ADepths])
 
   // Global refresh integration - listen for refresh events from header button

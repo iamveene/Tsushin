@@ -44,6 +44,9 @@ export interface GraphCanvasRef {
 export interface ActivityState {
   processingAgents: Set<number>
   activeChannels: Set<string>
+  // Map<agentId, channelType> for agents currently processing — pairs the
+  // in-flight channel→agent edge without lighting siblings.
+  processingAgentChannels?: Map<number, string>
   recentSkillUse: Map<number, { skillType: string; skillName: string; timestamp: number }>
   recentKbUse: Map<number, { docCount: number; chunkCount: number; timestamp: number }>
   fadingAgents: Set<number>
@@ -94,7 +97,7 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
   ) {
     const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
     const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
-    const { fitView } = useReactFlow()
+    const { fitView, getNodes } = useReactFlow()
     const { runLayout } = useAutoLayout(layoutOptions)
     const prevNodesLengthRef = useRef(initialNodes.length)
 
@@ -1000,6 +1003,23 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
 
       // Phase 8b: Update edges for active chain glow
       // Edges connecting active nodes glow with color matching the target node type
+      // Build a lookup of skill-node-id → skillType so we can scope skill-edge glow
+      // to the specific skill the agent actually invoked (not every skill it owns).
+      const skillTypeByNodeId = new Map<string, string>()
+      getNodes().forEach(n => {
+        if (n.data.type === 'skill') {
+          const sd = n.data as SkillNodeData
+          skillTypeByNodeId.set(n.id, sd.skillType)
+        }
+      })
+      // Match the skill-node's skillType to the recent-use skillType, accounting for
+      // the "flows"/"scheduler" alias the node-level logic already handles.
+      const skillTypesMatch = (nodeType: string | undefined, usedType: string | undefined) => {
+        if (!nodeType || !usedType) return false
+        if (nodeType === usedType) return true
+        if (usedType === 'flows' && nodeType === 'scheduler') return true
+        return false
+      }
       setEdges(prev => prev.map(edge => {
         // Skip security view edges (they have custom styles)
         if (edge.id.includes('security')) return edge
@@ -1029,21 +1049,39 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
         }
 
         // Channel → Agent edges (cyan glow)
+        // Only light the one channel the responding agent is actually on.
         const channelType = getChannelType(source)
         const targetAgentId = getAgentId(target)
         if (channelType && targetAgentId !== null) {
-          const isActive = activityState.activeChannels.has(channelType) || activityState.processingAgents.has(targetAgentId)
-          const isFading = activityState.fadingChannels.has(channelType) || activityState.fadingAgents.has(targetAgentId)
-          if (isActive && !isFading) className = 'edge-active-cyan'
-          else if (isFading) className = 'edge-fading-cyan'
+          const activeOnThisChannel =
+            activityState.processingAgentChannels?.get(targetAgentId) === channelType
+          const fadingOnThisChannel =
+            activityState.fadingChannels.has(channelType) &&
+            activityState.fadingAgents.has(targetAgentId)
+          if (activeOnThisChannel && !fadingOnThisChannel) className = 'edge-active-cyan'
+          else if (fadingOnThisChannel) className = 'edge-fading-cyan'
         }
 
         // Agent → child edges
+        // Scope skill-edge glow to the specific skill invoked (skill-{agentId}-{skillId}),
+        // not every skill the agent owns. Category edges (skill-category-…) are handled below.
         const sourceAgentId = getAgentId(source)
         if (sourceAgentId !== null && (activityState.processingAgents.has(sourceAgentId) || activityState.fadingAgents.has(sourceAgentId))) {
           const isFading = activityState.fadingAgents.has(sourceAgentId)
-          if (target.startsWith('skill-category-') || (target.startsWith('skill-') && !target.startsWith('skill-provider-'))) {
-            className = isFading ? 'edge-fading-teal' : 'edge-active-teal'
+          const skillUse = activityState.recentSkillUse.get(sourceAgentId)
+          if (target.startsWith('skill-') && !target.startsWith('skill-provider-') && !target.startsWith('skill-category-')) {
+            const targetSkillType = skillTypeByNodeId.get(target)
+            if (skillTypesMatch(targetSkillType, skillUse?.skillType)) {
+              className = isFading ? 'edge-fading-teal' : 'edge-active-teal'
+            }
+          } else if (target.startsWith('skill-category-')) {
+            // Agent → Category edge glows only when a skill in that category is in use
+            // (matches the existing skill-category node isActive logic, which already does
+            //  the category-level match). Treat any recent skill use as a hit; the child
+            //  skill edge below narrows it to the exact invocation.
+            if (skillUse) {
+              className = isFading ? 'edge-fading-teal' : 'edge-active-teal'
+            }
           } else if (target.startsWith('knowledge-summary-')) {
             const hasKbUse = activityState.recentKbUse.has(sourceAgentId)
             if (hasKbUse) className = isFading ? 'edge-fading-violet' : 'edge-active-violet'
@@ -1051,19 +1089,23 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
           }
         }
 
-        // Category → Skill edges (teal glow when agent has active skill)
-        if (source.startsWith('skill-category-')) {
+        // Category → Skill edges (teal glow only when the target skill matches the recent use)
+        if (source.startsWith('skill-category-') && target.startsWith('skill-') && !target.startsWith('skill-provider-')) {
           const agentId = getParentAgentId(source)
-          if (agentId !== null && activityState.recentSkillUse.has(agentId)) {
+          const skillUse = agentId !== null ? activityState.recentSkillUse.get(agentId) : undefined
+          const targetSkillType = skillTypeByNodeId.get(target)
+          if (agentId !== null && skillTypesMatch(targetSkillType, skillUse?.skillType)) {
             const isFading = activityState.fadingAgents.has(agentId)
             className = isFading ? 'edge-fading-teal' : 'edge-active-teal'
           }
         }
 
-        // Skill → Provider edges (teal glow when skill is active)
+        // Skill → Provider edges (teal glow only when the source skill matches the recent use)
         if (source.match(/^skill-\d+-\d+$/) && target.startsWith('skill-provider-')) {
           const agentId = getParentAgentId(source)
-          if (agentId !== null && activityState.recentSkillUse.has(agentId)) {
+          const skillUse = agentId !== null ? activityState.recentSkillUse.get(agentId) : undefined
+          const sourceSkillType = skillTypeByNodeId.get(source)
+          if (agentId !== null && skillTypesMatch(sourceSkillType, skillUse?.skillType)) {
             const isFading = activityState.fadingAgents.has(agentId)
             className = isFading ? 'edge-fading-teal' : 'edge-active-teal'
           }
@@ -1096,7 +1138,7 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
         }
         return edge
       }))
-    }, [activityState, setNodes, setEdges])
+    }, [activityState, setNodes, setEdges, getNodes])
 
     // Fit view when autoFit is toggled on
     useEffect(() => {
