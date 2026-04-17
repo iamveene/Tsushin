@@ -15,7 +15,7 @@ Seven bugs surfaced by the same-day fresh-install regression were remediated and
 - **BUG-576 — Caddy reverse proxy shipped in base compose.** New `proxy` service (caddy:2-alpine, container `${TSN_STACK_NAME:-tsushin}-proxy`) added to `docker-compose.yml` with `depends_on` on backend+frontend healthy and a wget-based healthcheck. New `proxy/Caddyfile` routes `/api/*` + `/ws/*` → `backend:8081` and everything else → `frontend:3030` using `handle` matchers (no prefix-stripping/rewrite round-trip). `docker-compose.ssl.yml` slimmed to an SSL overlay only — `volumes: !override` replaces the Caddyfile/certs mount set cleanly so no duplicate `/etc/caddy/Caddyfile` mount points. Cloudflare named-tunnel `POST /api/admin/remote-access/start` now resolves `http://<stack>-proxy:80` and the live public URL responds 200.
 - **BUG-577 — Vertex AI field normaliser.** New `backend/utils/vertex_config.py` exposes `normalise_vertex_config(api_key, extra_config)` + `VERTEX_CONFIG_ERROR`. Accepts `api_key` as either raw PEM or a full service-account JSON blob (extracting `private_key`/`client_email`/`project_id` from the JSON) and accepts both `sa_email`/`service_account_email` and `region`/`location` aliases in `extra_config`. Both call sites in `backend/agent/ai_client.py` (instance + flat-config path) and the test-connection branch in `backend/api/routes_provider_instances.py` use the helper + shared error constant. Error message now names the actual accepted fields.
 - **BUG-578 — 8-char dev credentials everywhere.** `backend/ops/create_test_users.py` seeds `test1234` / `admin1234` / `member1234`. All test fixtures (`test_api_v1_e2e.py`, `test_new_providers.py`, `test_auth_security_fixes.py`) and all pushed docs (`.claude/agents/qa-tester.md`, `methodology/METHODOLOGY.md`, `methodology/commands/fire_{,_full_}regression.md`, `deployment-test-playbook.md`) updated to match the setup wizard's own 8-char minimum.
-- **BUG-579 — Cross-origin cookie.** Resolved by the BUG-570 same-origin rewrite that shipped in v0.6.1; re-verified on this sprint's post-fix stack via the public tunnel URL (0 console errors, clean login round-trip).
+- **BUG-579 — Cross-origin cookie.** Resolved by the BUG-570 same-origin rewrite (see the Post-Install Bug Sweep entry above); re-verified on this sprint's post-fix stack via the public tunnel URL (0 console errors, clean login round-trip).
 - **BUG-580 — Flow templates `required_params` populated.** `backend/services/flow_template_seeding.py` `FlowTemplate.to_summary()` now emits a `required_params` array derived from the subset of `params_schema` where `required=True`, listing `{name, type, label, description}` for each. Single source of truth — the same `params_schema` still drives `_validate_template_params`, so metadata and validation cannot drift.
 - **BUG-581 — `POST /api/clients` scopes shorthand honored.** `backend/api/routes_api_clients.py` request schemas gain an optional `scopes: List[str]` field. New `_resolve_scopes_shorthand(...)` helper: single-element list containing a known role → `role=<that_name>`; multi-element list → `role="custom"` + `custom_scopes=<list>`; invalid shorthand → HTTP 400. Explicit `role`/`custom_scopes` override the shorthand. Existing service-layer escalation guard still enforces "you cannot grant scopes you don't hold". Update path now fetches `AuthService.get_user_permissions` once instead of twice.
 
@@ -31,15 +31,15 @@ Seven new bugs were filed (BUG-575 through BUG-581) — all open, queued for the
 - **BUG-576** (High) — Cloudflare named-tunnel feature cannot start on a fresh install: `docker-compose.yml` ships no Caddy/NGINX proxy service, but `cloudflare_tunnel_service.py` hard-refuses any `target_url` other than `http://<stack>-proxy:80`.
 - **BUG-577** (Medium) — Vertex AI test-connection error message names fields (`service_account_email`) that the code does not actually read (expects `extra_config.sa_email`, `extra_config.region`, raw PEM in `api_key`); onboarding stalls for users who follow the error verbatim.
 - **BUG-578** (Low) — `CLAUDE.md` documents 7-char dev passwords (`test123` / `admin123`) but the setup wizard enforces an 8-char minimum, breaking copy-paste onboarding.
-- **BUG-579** (High, resolved in v0.6.1) — Installer auto-detects the host LAN IP and bakes it into `NEXT_PUBLIC_API_URL`; browsers that open `http://localhost:3091` then hit cross-origin 401s on every API call because the session cookie was set on the LAN-IP origin. Already fixed in v0.6.1 by the same-origin Next rewrites (BUG-570); kept on record against v0.6.0-tag users.
+- **BUG-579** (High, resolved) — Installer auto-detects the host LAN IP and bakes it into `NEXT_PUBLIC_API_URL`; browsers that open `http://localhost:3091` then hit cross-origin 401s on every API call because the session cookie was set on the LAN-IP origin. Already fixed by the same-origin Next rewrites under BUG-570 (see the Post-Install Bug Sweep entry below); kept on record against the shipped v0.6.0 tag.
 - **BUG-580** (Medium) — Every entry from `GET /api/flows/templates` returns `required_params: []`, but `/instantiate` surfaces required fields one at a time (`name`, `agent_id`, `recipient`, …), making programmatic instantiation a guessing game.
 - **BUG-581** (Medium) — `POST /api/clients` silently discards the requested `scopes` array and always assigns the `api_agent_only` role; `api_owner` capability cannot be provisioned through the API itself.
 
 Environment fully restored at end of run — `docker ps` matches the pre-flight snapshot (backend, frontend, postgres, docker-proxy, proxy, agent + tester MCP containers, toolbox, qdrant-vs all running). No commits to release artifacts in this session; documentation-only change.
 
-## v0.6.1 (2026-04-16)
+### Post-Install Bug Sweep (2026-04-16)
 
-Post-install bug sweep. Nine bugs surfaced by a clean `python3 install.py --defaults --http` run on commit `5bf7b03` of `develop`, grouped into four remediation phases and validated end-to-end in real Chrome before ship.
+Nine bugs surfaced by a clean `python3 install.py --defaults --http` run on commit `5bf7b03` of `develop`, grouped into four remediation phases and validated end-to-end in real Chrome before ship.
 
 ### Backend — installer idempotency, missing migrations, search observability
 
@@ -1333,7 +1333,7 @@ Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, group
 - **Tenant binding validation**: `routes_agents.py` create/update handlers validate that the supplied `webhook_integration_id` resolves to a WebhookIntegration in the caller's tenant before persisting the FK, closing a cross-tenant binding gap.
 - **Emergency stop integration**: webhook inbound endpoint honors `Config.emergency_stop` and returns 503 at ingress (before enqueueing) when the global stop is active. Circuit breaker queuing in `AgentRouter` also maps `webhook_instance_id` for deferred-message tenant/agent resolution.
 
-#### Live Provider Model Discovery (v0.6.1)
+#### Live Provider Model Discovery
 - **Self-updating model dropdowns**: `/setup` and the provider-instance modal now auto-refresh their model lists against the provider's real `/models` endpoint whenever a user pastes an API key — no more hand-maintained Gemini/OpenAI/etc. lists going stale when Google or OpenAI ship new models.
 - **New endpoint** `POST /api/provider-instances/discover-models-raw`: accepts `{vendor, api_key, base_url?}`, performs a single outbound request to the provider, returns the live model list. API key is used once and never stored.
 - **Gemini live discovery**: backend calls Google's `/v1beta/models` with pagination, filters to `generateContent`-capable models, strips the `models/` prefix. Works on both saved instances (Auto-detect button) and pre-save (as the user types their key).
@@ -1342,7 +1342,7 @@ Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, group
 - **Refreshed Gemini static fallback**: added Gemini 3.x preview IDs (`gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`) and 2.5 stable (`gemini-2.5-flash-lite`) for the "no key entered yet" case.
 - **Datalist UX**: instance-modal model input now uses a `<datalist>` bound to the current vendor, so users get vendor-specific autocomplete while retaining free-text entry for custom IDs.
 
-#### Flows Bulk Actions & Page Size Selector (v0.6.1)
+#### Flows Bulk Actions & Page Size Selector
 - **Bulk actions bar**: Multi-select flows to Enable, Disable, or Delete them in bulk. Bar appears above the table when rows are selected with selection count and Clear selection link.
 - **Page size selector**: Per-page dropdown (10/25/50/100) added to the pagination footer, replacing the hardcoded 25-per-page limit. Changing page size resets to page 1 and clears any selection.
 - **Force-delete fallback**: Bulk delete detects flows with existing runs and prompts once to force-delete the affected set.
