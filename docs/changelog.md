@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### UI-first fresh-install v0.6.0 audit (2026-04-17)
+
+Ran a disposable-clone regression audit against the exact `v0.6.0` tag from `.private/installations/fresh-install-v060-20260417-181029/tsushin`, using both browser automation and direct API probes while preserving and later restoring the original local stack. Coverage included setup, provider onboarding, vector stores and memory wiring, knowledge-base flows, Sentinel/MemGuard checks, Playground chat/image/direct-agent paths, A2A activity and graph glow, MCP server linkage, custom skills, slash commands including `/inject`, Shell Command Center, image generation/analysis, API-client auth flows, programmatic and agentic flows, runtime WhatsApp QR generation, and named Remote Access.
+
+New findings from the audit were recorded locally as `BUG-589` through `BUG-593`:
+
+- Remote Access can report the named tunnel as `running` while the public hostname still returns Cloudflare `502`.
+- Flow tool nodes parse `tool_name` as an integer tool id and fail at runtime.
+- The WhatsApp guided setup declares `WhatsApp Connected!` before QR authentication is complete.
+- Playground image generations lose `image_url` after persistence, so reopened threads show no image.
+- Fresh installs seed Shellboy without the Shell skill enabled.
+
+Older exact-tag regressions were also revalidated but not re-filed because they were already tracked on `develop`, including the migration `0034` duplicate-column blocker, HTTP-mode proxy prerequisites, and the seeded-agent vector-store wiring issue. The final WhatsApp message round-trip was skipped at user request after QR generation for both runtime instances was confirmed. Audit evidence was captured under `.private/qa/fresh-install-v060-20260417-181029/`.
+
 ### QueuePool exhaustion hardening — BUG-588 resolved (2026-04-17)
 
 Eliminated a long-standing `QueuePool limit of size 20 overflow 30 reached, connection timed out` backend deadlock that wedged every request after ~3 h of uptime. Root cause: SQLAlchemy 2.0 `autobegin` starts an implicit transaction on the first SELECT; if the request path never commits/rolls back, the connection returns to the pool in `idle in transaction` state because `pool_reset_on_return='rollback'` only fires on checkin — and every `def get_db()` duplicate in the per-router modules built a fresh `sessionmaker` on each call, extending the Session object's lifetime enough to keep the connection pinned. In real traffic the backend eventually exhausted all 50 slots and every `/api/auth/me` hung → the frontend sat on "Loading Tsushin..." indefinitely for any browser with an auth cookie (incognito worked because no cookie → fast 401 → no DB lookup).
