@@ -136,6 +136,7 @@ def _validate_channel_type(channel_type: str):
 # Endpoints
 # ============================================================================
 
+@router.get("", response_model=ChannelHealthListResponse, include_in_schema=False)
 @router.get("/", response_model=ChannelHealthListResponse)
 async def list_channel_health(
     request: Request,

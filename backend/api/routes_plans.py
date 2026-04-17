@@ -159,6 +159,7 @@ def plan_to_response(plan: SubscriptionPlan, db: Session, include_tenant_count: 
 
 # Public Endpoints
 
+@router.get("", response_model=PlanListResponse, include_in_schema=False)
 @router.get("/", response_model=PlanListResponse)
 async def list_plans(
     include_private: bool = Query(False, description="Include private plans (admin only)"),
@@ -278,6 +279,7 @@ async def get_plan(
 
 # Admin Endpoints (Global Admin Only)
 
+@router.post("", response_model=PlanResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 @router.post("/", response_model=PlanResponse, status_code=status.HTTP_201_CREATED)
 async def create_plan(
     request: PlanCreate,

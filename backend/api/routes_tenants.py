@@ -152,6 +152,7 @@ def tenant_to_response(tenant: Tenant, db: Session) -> TenantResponse:
 
 # Endpoints
 
+@router.get("", response_model=TenantListResponse, include_in_schema=False)
 @router.get("/", response_model=TenantListResponse)
 async def list_tenants(
     page: int = Query(1, ge=1),
@@ -203,6 +204,7 @@ async def list_tenants(
     )
 
 
+@router.post("", response_model=TenantResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 @router.post("/", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
 async def create_tenant(
     request: TenantCreate,

@@ -271,6 +271,7 @@ async def logout_tester(
         logger.error(f"Failed to reset tester auth: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to reset tester auth. Check server logs for details.")
 
+@router.post("", response_model=MCPInstanceResponse, include_in_schema=False)
 @router.post("/", response_model=MCPInstanceResponse)
 async def create_mcp_instance(
     data: MCPInstanceCreate,
@@ -377,6 +378,7 @@ async def create_mcp_instance(
         raise HTTPException(status_code=500, detail="Failed to create MCP instance. Check server logs for details.")
 
 
+@router.get("", response_model=List[MCPInstanceResponse], include_in_schema=False)
 @router.get("/", response_model=List[MCPInstanceResponse])
 async def list_mcp_instances(
     current_user: User = Depends(get_current_user_required),

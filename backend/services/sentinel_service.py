@@ -1053,10 +1053,27 @@ class SentinelService:
             )
         except Exception as e:
             self.logger.error(f"LLM call failed: {e}", exc_info=True)
-            # BUG-LOG-020 FIX: Fail-CLOSED on LLM errors — block content when
-            # security analysis cannot complete.  A fail-open path would let
-            # malicious input bypass Sentinel whenever the LLM is unreachable.
             response_time_ms = int((time.time() - start_time) * 1000)
+            # Respect non-blocking modes during availability failures. Fresh
+            # installs seed Sentinel in detect_only mode, so analysis outages
+            # should not block user flows there.
+            if detection_mode != "block":
+                self.logger.warning(
+                    f"LLM unavailable for {detection_type} analysis while Sentinel "
+                    f"is in {detection_mode} mode; allowing content"
+                )
+                return SentinelAnalysisResult(
+                    is_threat_detected=False,
+                    threat_score=0.0,
+                    threat_reason=f"Security analysis unavailable (LLM error: {type(e).__name__}).",
+                    action="allowed",
+                    detection_type=detection_type,
+                    analysis_type=analysis_type,
+                    cached=False,
+                    response_time_ms=response_time_ms,
+                )
+
+            # BUG-LOG-020 FIX: Fail-CLOSED on LLM errors in blocking mode.
             blocked_result = SentinelAnalysisResult(
                 is_threat_detected=True,
                 threat_score=1.0,
@@ -1327,9 +1344,24 @@ class SentinelService:
             )
         except Exception as e:
             self.logger.error(f"Unified LLM call failed: {e}", exc_info=True)
-            # BUG-LOG-020 FIX: Fail-CLOSED on LLM errors — block content when
-            # security analysis cannot complete.
             response_time_ms = int((time.time() - start_time) * 1000)
+            if detection_mode != "block":
+                self.logger.warning(
+                    "Unified Sentinel analysis unavailable while Sentinel is in "
+                    f"{detection_mode} mode; allowing content"
+                )
+                return SentinelAnalysisResult(
+                    is_threat_detected=False,
+                    threat_score=0.0,
+                    threat_reason=f"Security analysis unavailable (LLM error: {type(e).__name__}).",
+                    action="allowed",
+                    detection_type="none",
+                    analysis_type=analysis_type,
+                    cached=False,
+                    response_time_ms=response_time_ms,
+                )
+
+            # BUG-LOG-020 FIX: Fail-CLOSED on LLM errors in blocking mode.
             blocked_result = SentinelAnalysisResult(
                 is_threat_detected=True,
                 threat_score=1.0,

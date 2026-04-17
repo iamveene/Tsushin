@@ -5,6 +5,13 @@ import { isPublicPath } from '@/lib/public-paths'
 export function middleware(request: NextRequest) {
   const { nextUrl } = request
 
+  // Same-origin API/WebSocket calls must flow through to the backend rewrite
+  // layer untouched. Auth and setup gating for those routes belongs to the
+  // backend, not the frontend edge middleware.
+  if (nextUrl.pathname.startsWith('/api') || nextUrl.pathname.startsWith('/ws')) {
+    return NextResponse.next()
+  }
+
   // Redirect /login to /auth/login (or straight to / if already authenticated)
   if (nextUrl.pathname === '/login') {
     const hasSession = request.cookies.has('tsushin_session')
@@ -78,10 +85,11 @@ export function middleware(request: NextRequest) {
 export const config = {
   /*
    * Match all routes except:
+   * - api / ws       (proxied to backend; middleware must not intercept)
    * - _next/static  (static assets)
    * - _next/image   (image optimizer)
    * - favicon.ico
    * - public files  (images, icons, etc.)
    */
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webp|woff2?|ttf|eot|otf|css|js|json)$).*)'],
+  matcher: ['/((?!api|ws|_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webp|woff2?|ttf|eot|otf|css|js|json)$).*)'],
 }

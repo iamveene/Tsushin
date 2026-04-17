@@ -32,6 +32,38 @@ function resolveApiUrl(): string {
 const API_URL = resolveApiUrl()
 
 /**
+ * Browser-side API calls must stay same-origin so they use the frontend
+ * rewrite layer (`/api/*` and `/ws/*`) instead of trying to reach an
+ * internal Docker hostname like `backend:8081`.
+ */
+function normalizeBrowserApiUrl(url: string): string {
+  if (typeof window === 'undefined') {
+    return url
+  }
+
+  try {
+    const resolved = new URL(url, window.location.origin)
+    const isBackendRoute =
+      resolved.pathname === '/api' ||
+      resolved.pathname.startsWith('/api/') ||
+      resolved.pathname === '/ws' ||
+      resolved.pathname.startsWith('/ws/')
+
+    if (isBackendRoute && resolved.origin !== window.location.origin) {
+      return `${resolved.pathname}${resolved.search}${resolved.hash}`
+    }
+  } catch {
+    // Keep the original URL when parsing fails; fetch() will surface any error.
+  }
+
+  return url
+}
+
+function browserSafeFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  return fetch(normalizeBrowserApiUrl(url), options)
+}
+
+/**
  * Helper function to handle API response errors with user-friendly messages
  */
 async function handleApiError(res: Response, defaultMessage: string): Promise<never> {
@@ -94,7 +126,7 @@ export function authenticatedFetch(url: string, options: RequestInit = {}): Prom
     headers.set('Content-Type', 'application/json')
   }
 
-  return fetch(url, {
+  return browserSafeFetch(url, {
     ...options,
     headers,
     credentials: 'include',  // SEC-005: Send httpOnly session cookie automatically
@@ -5475,7 +5507,7 @@ export const api = {
 
   // Invitation acceptance (public endpoints)
   async getInvitationInfo(token: string): Promise<InvitationInfo> {
-    const res = await fetch(`${API_URL}/api/auth/invitation/${token}`)
+    const res = await browserSafeFetch(`${API_URL}/api/auth/invitation/${token}`)
     if (!res.ok) {
       const error = await res.json().catch(() => ({ detail: 'Invalid invitation' }))
       throw new Error(error.detail || 'Invalid invitation')
@@ -5498,7 +5530,7 @@ export const api = {
     }
   }> {
     // SEC-005: credentials: 'include' ensures browser stores the httpOnly cookie from response
-    const res = await fetch(`${API_URL}/api/auth/invitation/${token}/accept`, {
+    const res = await browserSafeFetch(`${API_URL}/api/auth/invitation/${token}/accept`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -5519,7 +5551,7 @@ export const api = {
     const params = new URLSearchParams()
     if (tenantSlug) params.append('tenant_slug', tenantSlug)
 
-    const res = await fetch(`${API_URL}/api/auth/google/status?${params}`)
+    const res = await browserSafeFetch(`${API_URL}/api/auth/google/status?${params}`)
     if (!res.ok) await handleApiError(res, 'Failed to get SSO status')
     return res.json()
   },
@@ -6812,7 +6844,7 @@ export const api = {
 
   async getPredefinedModels(): Promise<Record<string, string[]>> {
     // Public endpoint — no auth required (static suggestions data).
-    const res = await fetch(`${API_URL}/api/provider-instances/predefined-models`)
+    const res = await browserSafeFetch(`${API_URL}/api/provider-instances/predefined-models`)
     if (!res.ok) return {}
     const data = await res.json()
     return data.models || {}
@@ -7234,7 +7266,7 @@ export const api = {
 
   async getSetupStatus(): Promise<{ needs_setup: boolean }> {
     try {
-      const res = await fetch(`${API_URL}/api/auth/setup-status`)
+      const res = await browserSafeFetch(`${API_URL}/api/auth/setup-status`)
       if (!res.ok) return { needs_setup: false }
       return res.json()
     } catch {
@@ -7321,7 +7353,7 @@ export const api = {
     default_model?: string
   }): Promise<any> {
     // SEC-005: credentials: 'include' ensures browser stores the httpOnly cookie from response
-    const res = await fetch(`${API_URL}/api/auth/setup-wizard`, {
+    const res = await browserSafeFetch(`${API_URL}/api/auth/setup-wizard`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',

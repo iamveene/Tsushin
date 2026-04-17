@@ -128,6 +128,7 @@ def user_to_response(user: User, db: Session) -> GlobalUserResponse:
     )
 
 
+@router.get("", response_model=GlobalUserListResponse, include_in_schema=False)
 @router.get("/", response_model=GlobalUserListResponse)
 async def list_users(
     search: Optional[str] = Query(None, description="Search by email or name"),
@@ -281,6 +282,7 @@ async def get_user(
     return user_to_response(user, db)
 
 
+@router.post("", response_model=GlobalUserResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 @router.post("/", response_model=GlobalUserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
     request: UserCreate,

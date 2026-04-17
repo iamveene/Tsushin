@@ -185,6 +185,7 @@ def _to_response(integration: SlackIntegration) -> SlackIntegrationResponse:
 # API Endpoints
 # ============================================================================
 
+@router.post("", response_model=SlackIntegrationResponse, include_in_schema=False)
 @router.post("/", response_model=SlackIntegrationResponse)
 async def create_slack_integration(
     data: SlackIntegrationCreate,
@@ -253,6 +254,7 @@ async def create_slack_integration(
         raise HTTPException(status_code=500, detail=f"Failed to create Slack integration: {str(e)}")
 
 
+@router.get("", response_model=List[SlackIntegrationResponse], include_in_schema=False)
 @router.get("/", response_model=List[SlackIntegrationResponse])
 async def list_slack_integrations(
     current_user: User = Depends(get_current_user_required),

@@ -153,6 +153,7 @@ class SandboxedToolExecutionResponse(BaseModel):
 # Custom Tools CRUD
 # ============================================================================
 
+@router.get("/custom-tools", response_model=List[SandboxedToolResponse], include_in_schema=False)
 @router.get("/custom-tools/", response_model=List[SandboxedToolResponse])
 def list_sandboxed_tools(
     db: Session = Depends(get_db),
@@ -184,6 +185,7 @@ def get_sandboxed_tool(
     return tool
 
 
+@router.post("/custom-tools", response_model=SandboxedToolResponse, include_in_schema=False)
 @router.post("/custom-tools/", response_model=SandboxedToolResponse)
 def create_sandboxed_tool(
     tool: SandboxedToolCreate,
@@ -306,6 +308,7 @@ def list_tool_commands(
     return commands
 
 
+@router.post("/custom-tools/commands", response_model=SandboxedToolCommandResponse, include_in_schema=False)
 @router.post("/custom-tools/commands/", response_model=SandboxedToolCommandResponse)
 def create_tool_command(
     command: SandboxedToolCommandCreate,
@@ -382,6 +385,7 @@ def list_command_parameters(
     return parameters
 
 
+@router.post("/custom-tools/parameters", response_model=SandboxedToolParameterResponse, include_in_schema=False)
 @router.post("/custom-tools/parameters/", response_model=SandboxedToolParameterResponse)
 def create_command_parameter(
     parameter: SandboxedToolParameterCreate,
@@ -443,6 +447,7 @@ def delete_command_parameter(
 # Execution
 # ============================================================================
 
+@router.post("/custom-tools/execute", response_model=SandboxedToolExecutionResponse, include_in_schema=False)
 @router.post("/custom-tools/execute/", response_model=SandboxedToolExecutionResponse)
 async def execute_sandboxed_tool(
     request: SandboxedToolExecuteRequest,
@@ -483,6 +488,7 @@ async def execute_sandboxed_tool(
         raise HTTPException(status_code=500, detail="Execution failed. Check server logs for details.")
 
 
+@router.get("/custom-tools/executions", response_model=List[SandboxedToolExecutionResponse], include_in_schema=False)
 @router.get("/custom-tools/executions/", response_model=List[SandboxedToolExecutionResponse])
 def list_executions(
     tool_id: Optional[int] = None,

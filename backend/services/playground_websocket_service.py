@@ -187,13 +187,20 @@ class PlaygroundWebSocketService:
                     if accumulated_response:
                         try:
                             from agent.ai_client import AIClient
+                            from services.system_ai_config import get_system_ai_config
                             sender_key = f"playground_u{self.user_id}_a{agent_id}_t{thread_id}"
                             agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+                            system_provider, system_model, system_provider_instance_id = get_system_ai_config(self.db)
                             ai_client = AIClient(
-                                provider="gemini",
-                                model_name="gemini-2.5-flash-lite",
+                                provider=(agent.model_provider if agent and agent.model_provider else system_provider),
+                                model_name=(agent.model_name if agent and agent.model_name else system_model),
                                 db=self.db,
                                 tenant_id=agent.tenant_id if agent else None,
+                                provider_instance_id=(
+                                    agent.provider_instance_id
+                                    if agent and agent.provider_instance_id
+                                    else system_provider_instance_id
+                                ),
                             )
                             await self.playground_service._invoke_post_response_hooks(
                                 agent_id=agent_id,

@@ -58,6 +58,7 @@ class TelegramHealthResponse(BaseModel):
 
 
 # API Endpoints
+@router.post("", response_model=TelegramInstanceResponse, include_in_schema=False)
 @router.post("/", response_model=TelegramInstanceResponse)
 async def create_telegram_instance(
     data: TelegramInstanceCreate,
@@ -115,6 +116,7 @@ async def create_telegram_instance(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("", response_model=List[TelegramInstanceResponse], include_in_schema=False)
 @router.get("/", response_model=List[TelegramInstanceResponse])
 async def list_telegram_instances(
     current_user: User = Depends(get_current_user_required),
