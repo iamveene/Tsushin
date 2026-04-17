@@ -210,6 +210,14 @@ When a chain file is supplied, the installer concatenates `cert + chain` into th
 
 For a remote Ubuntu VM, use the normal user flow: clone the repo on the VM, install Docker plus Docker Compose v2, and run `python3 install.py` from the repository root on that VM. For remote HTTP installs, the installer's final success output uses the public host/IP you entered rather than `localhost`.
 
+For the Parallels audit VM workflow (`parallels@10.211.55.5`), the repository now includes a helper sync script:
+
+```bash
+bash deploy-to-vm.sh
+```
+
+The script verifies SSH connectivity, checks remote Docker plus Compose, ensures `requests` and `cryptography` are available on the VM, and rsyncs the repository to `~/tsushin` with the usual large/local-only paths excluded (`.git/`, `.private/`, `backend/data/`, `frontend/.next/`, `node_modules/`, logs, backups, and `.env`). After the sync, SSH to the VM and run `sudo python3 install.py` from `~/tsushin`.
+
 The installer automatically:
 
 1. Installs `requests` and `cryptography` via pip.
@@ -234,6 +242,8 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 7. The **User Guide** is accessible anytime via the **?** button in the header.
 
 **LLM provider keys are configured per-tenant through the Hub UI — not in environment variables.** This enables multi-tenant isolation. Source: `README.md:398`.
+
+The fresh-install regression checklist used on the Ubuntu VM is maintained as an internal deployment playbook. The current checklist covers 13 first-run cases: infrastructure health, tenant/global-admin login, Watcher, Studio, Playground basic chat, Memory Inspector, Flows, Hub, all 15 Settings routes, the 4 System admin routes, conditional Browser Automation, and final log review.
 
 For remote Ubuntu VM installs that use a host-level Ollama daemon, start with `http://host.docker.internal:11434` inside Tsushin. If the Docker engine on that host does not resolve `host.docker.internal`, use the container bridge gateway instead (for example `http://172.18.0.1:11434`) and re-test the provider instance from the Hub.
 
