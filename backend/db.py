@@ -1412,7 +1412,10 @@ def seed_project_command_patterns(session):
             "tenant_id": "_system",
             "command_type": "help",
             "language_code": "en",
-            "pattern": r"^(?:/help|project help)$",
+            # BUG-583: `/help` now falls through to the central SlashCommandService
+            # so the user sees the full registry. Only the bare phrase
+            # "project help" still returns project-specific help.
+            "pattern": r"^project help$",
             "response_template": """📚 Project Commands:
 • "enter project [name]" - Enter a project
 • "exit project" - Leave current project
@@ -1425,7 +1428,8 @@ def seed_project_command_patterns(session):
             "tenant_id": "_system",
             "command_type": "help",
             "language_code": "pt",
-            "pattern": r"^(?:/ajuda|ajuda do projeto)$",
+            # BUG-583: ver nota acima em 'help/en'.
+            "pattern": r"^ajuda do projeto$",
             "response_template": """📚 Comandos de Projeto:
 • "entrar projeto [nome]" - Entrar em um projeto
 • "sair do projeto" - Sair do projeto atual
@@ -1436,28 +1440,42 @@ def seed_project_command_patterns(session):
         },
     ]
 
-    existing = {
-        (item.tenant_id, item.command_type, item.language_code)
+    existing_rows = {
+        (item.tenant_id, item.command_type, item.language_code): item
         for item in session.query(ProjectCommandPattern).filter(
             ProjectCommandPattern.tenant_id == "_system"
         ).all()
     }
 
     inserted = 0
+    updated = 0
     for pattern_data in patterns_data:
         key = (
             pattern_data["tenant_id"],
             pattern_data["command_type"],
             pattern_data["language_code"],
         )
-        if key in existing:
+        existing_row = existing_rows.get(key)
+        if existing_row is None:
+            session.add(ProjectCommandPattern(**pattern_data))
+            inserted += 1
             continue
-        session.add(ProjectCommandPattern(**pattern_data))
-        inserted += 1
 
-    if inserted:
+        # BUG-583 drift fix: if the seeded pattern text diverges from what's
+        # in the DB, overwrite it. Prior installs shipped `/help` in the
+        # regex for command_type='help'; we need that to drop off on restart.
+        if existing_row.pattern != pattern_data["pattern"]:
+            existing_row.pattern = pattern_data["pattern"]
+            existing_row.response_template = pattern_data["response_template"]
+            existing_row.is_active = pattern_data["is_active"]
+            updated += 1
+
+    if inserted or updated:
         session.commit()
-        print(f"[Projects] Seeded {inserted} new project command patterns")
+        if inserted:
+            print(f"[Projects] Seeded {inserted} new project command patterns")
+        if updated:
+            print(f"[Projects] Updated {updated} project command patterns whose regex drifted")
     else:
         print(f"[Projects] All {len(patterns_data)} project command patterns already present")
 

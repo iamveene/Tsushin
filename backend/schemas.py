@@ -370,7 +370,15 @@ class FlowStepResponse(BaseModel):
 
 # --- Flow Schemas ---
 class FlowCreate(BaseModel):
-    """Create a new flow with steps"""
+    """Create a new flow with steps.
+
+    BUG-587: `extra="forbid"` so typos or wrong field names (e.g.
+    `trigger_type` instead of `execution_method`) surface as 422 rather
+    than being silently dropped.
+    """
+    class Config:
+        extra = "forbid"
+
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
 
@@ -392,6 +400,9 @@ class FlowCreate(BaseModel):
 
 class FlowUpdate(BaseModel):
     """Update an existing flow"""
+    class Config:
+        extra = "forbid"
+
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = None
 

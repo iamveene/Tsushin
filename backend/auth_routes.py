@@ -889,6 +889,39 @@ async def setup_wizard(
                     default_vector_store_instance.id,
                     tenant.id,
                 )
+
+            # BUG-586: Wire the tenant's seeded agents to the freshly-provisioned
+            # default vector store. Without this step, every agent is created
+            # with `vector_store_mode='override'` but `vector_store_instance_id
+            # IS NULL`, which silently disables long-term memory. Runs only when
+            # provisioning succeeded cleanly (no warning) — we don't want to
+            # link agents to a VS whose health is uncertain.
+            if default_vector_store_instance is not None and agents_created and not vector_store_warning:
+                try:
+                    from models import Agent as AgentModel
+                    tenant_agents = (
+                        db.query(AgentModel)
+                        .filter(
+                            AgentModel.tenant_id == tenant.id,
+                            AgentModel.vector_store_instance_id.is_(None),
+                        )
+                        .all()
+                    )
+                    for agent_obj in tenant_agents:
+                        agent_obj.vector_store_instance_id = default_vector_store_instance.id
+                    db.commit()
+                    logger.info(
+                        "Setup wizard: Linked %d seeded agents to default vector store %s",
+                        len(tenant_agents),
+                        default_vector_store_instance.id,
+                    )
+                except Exception as link_exc:
+                    db.rollback()
+                    logger.warning(
+                        "Setup wizard: Failed to link seeded agents to default vector store: %s",
+                        link_exc,
+                        exc_info=True,
+                    )
         except Exception as e:
             warning = (
                 "Default vector store could not be created during setup. "
