@@ -239,6 +239,17 @@ async def lifespan(app: FastAPI):
 
     logging.info("Database initialized")
 
+    async def _prewarm_embedding_models() -> None:
+        """Warm the default embedder off the request path."""
+        try:
+            from agent.memory.embedding_service import get_shared_embedding_service
+            await asyncio.to_thread(get_shared_embedding_service, "all-MiniLM-L6-v2")
+            logging.info("Embedding model prewarmed successfully")
+        except Exception as e:
+            logging.warning(f"Embedding prewarm skipped: {e}")
+
+    asyncio.create_task(_prewarm_embedding_models())
+
     # Migration: Ensure sandboxed_tools skill exists for agents with tool assignments
     try:
         MigrationSession = sessionmaker(bind=engine)

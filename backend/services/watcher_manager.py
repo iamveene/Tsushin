@@ -216,11 +216,12 @@ class WatcherManager:
             delay_seconds = config.whatsapp_conversation_delay_seconds
             if delay_seconds is None:
                 delay_seconds = settings.WHATSAPP_CONVERSATION_DELAY_SECONDS
+            poll_interval_ms = min(settings.POLL_INTERVAL_MS, 1000)
             watcher = MCPWatcher(
                 reader=mcp_reader,  # Pass the reader directly instead of db_path
                 message_filter=message_filter,
                 on_message_callback=agent_router.route_message,
-                poll_interval_ms=settings.POLL_INTERVAL_MS,
+                poll_interval_ms=poll_interval_ms,
                 contact_mappings=contact_mappings,
                 db_session=db,
                 starting_timestamp=starting_timestamp,

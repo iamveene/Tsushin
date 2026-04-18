@@ -2470,20 +2470,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                 use_contact_mapping=True  # Item 10: Enable contact-based memory
             )
 
-            # Task 3: Call post_response_hook for knowledge_sharing skill
-            await self._invoke_post_response_hooks(
-                agent_id=agent_id,
-                user_message=message_text,
-                agent_response=result['answer'],
-                context={
-                    "sender_key": sender_key,
-                    "sender_name": sender_name,
-                    "is_group": is_group,
-                    "chat_id": chat_id
-                },
-                ai_client=temp_agent_service.ai_client
-            )
-
         # Save agent run
         self._save_agent_run(
             sender_key=sender_key,
@@ -2515,45 +2501,56 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             )
 
             recipient = message.get("chat_id", "")  # Use chat_id for reply
+            channel = message.get("channel", "whatsapp")
 
             # Phase 7.3: Check if agent has TTS skill enabled
             # Skip TTS for agent-switch confirmations — these should always be text
             _tool_used = result.get("tool_used") or ""
             _skip_tts = _tool_used in ("skill:switch_agent",)
+            incoming_media_type = (message.get("media_type") or "").lower()
+            # WhatsApp text replies should stay on the fast path by default.
+            # Keep TTS available for non-WhatsApp channels and voice-centric
+            # interactions where the inbound message was itself audio.
+            _tts_supported_for_message = (
+                channel != "whatsapp" or incoming_media_type == "audio"
+            )
             audio_path = None
             try:
-                tts_skill_config = await self.skill_manager.get_skill_config(
-                    db=self.db,
-                    agent_id=agent_id,
-                    skill_type="audio_tts"
-                )
-
-                # Note: Use 'is not None' because empty config {} is valid but falsy
-                if tts_skill_config is not None and not _skip_tts:
-                    self.logger.info("TTS skill enabled for this agent, converting response to audio")
-
-                    # Get TTS skill instance
-                    from agent.skills.audio_tts_skill import AudioTTSSkill
-                    tts_skill = AudioTTSSkill(token_tracker=self.token_tracker)
-                    # TTS-001 Fix: Set db_session so provider can access API keys from database
-                    tts_skill.set_db_session(self.db)
-
-                    # Process response through TTS
-                    tts_result = await tts_skill.process_response(
-                        response_text=formatted_response,
-                        config=tts_skill_config,
+                if _tts_supported_for_message and not _skip_tts:
+                    tts_skill_config = await self.skill_manager.get_skill_config(
+                        db=self.db,
                         agent_id=agent_id,
-                        sender_key=sender_key,
-                        message_id=message.get("id"),
-                        tenant_id=agent_tenant_id
+                        skill_type="audio_tts"
                     )
 
-                    if tts_result.success and tts_result.metadata.get("audio_path"):
-                        audio_path = tts_result.metadata["audio_path"]
-                        self.logger.info(f"TTS audio generated: {audio_path}")
-                    else:
-                        self.logger.warning(f"TTS generation failed: {tts_result.output}")
-                        # Fall back to text response
+                    # Note: Use 'is not None' because empty config {} is valid but falsy
+                    if tts_skill_config is not None:
+                        self.logger.info("TTS skill enabled for this agent, converting response to audio")
+
+                        # Get TTS skill instance
+                        from agent.skills.audio_tts_skill import AudioTTSSkill
+                        tts_skill = AudioTTSSkill(token_tracker=self.token_tracker)
+                        # TTS-001 Fix: Set db_session so provider can access API keys from database
+                        tts_skill.set_db_session(self.db)
+
+                        # Process response through TTS
+                        tts_result = await tts_skill.process_response(
+                            response_text=formatted_response,
+                            config=tts_skill_config,
+                            agent_id=agent_id,
+                            sender_key=sender_key,
+                            message_id=message.get("id"),
+                            tenant_id=agent_tenant_id
+                        )
+
+                        if tts_result.success and tts_result.metadata.get("audio_path"):
+                            audio_path = tts_result.metadata["audio_path"]
+                            self.logger.info(f"TTS audio generated: {audio_path}")
+                        else:
+                            self.logger.warning(f"TTS generation failed: {tts_result.output}")
+                            # Fall back to text response
+                elif channel == "whatsapp" and not _skip_tts:
+                    self.logger.info("Skipping TTS for WhatsApp text response to keep latency low")
 
             except Exception as tts_error:
                 self.logger.error(f"Error processing TTS: {tts_error}", exc_info=True)
@@ -2561,8 +2558,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
 
             # Send response (audio or text)
             # Phase 10.1.1: Detect channel and send via appropriate method
-            channel = message.get("channel", "whatsapp")
-
             # CRITICAL FIX 2026-01-18: Strip agent identity prefix BEFORE sending (normal message path)
             formatted_response = re.sub(r"^@?\w+:\s*", "", formatted_response, flags=re.IGNORECASE).strip()
 
@@ -2623,6 +2618,25 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         self.logger.info(f"Cleaned up temporary audio file: {audio_path}")
                 except Exception as cleanup_error:
                     self.logger.warning(f"Failed to clean up audio file: {cleanup_error}")
+
+            # Passive post-response hooks can be AI-heavy (e.g. knowledge
+            # extraction). Run them only after the user-facing reply is already
+            # out, so they don't add to WhatsApp response latency.
+            try:
+                await self._invoke_post_response_hooks(
+                    agent_id=agent_id,
+                    user_message=message_text,
+                    agent_response=result['answer'],
+                    context={
+                        "sender_key": sender_key,
+                        "sender_name": sender_name,
+                        "is_group": is_group,
+                        "chat_id": chat_id
+                    },
+                    ai_client=temp_agent_service.ai_client
+                )
+            except Exception as hook_error:
+                self.logger.error(f"Error running deferred post_response_hooks: {hook_error}", exc_info=True)
 
         # Phase 8: Emit activity end event for watcher graph view (non-blocking)
         emit_agent_processing_async(
