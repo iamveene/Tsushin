@@ -1,0 +1,17 @@
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Tsushin Search"
+
+search:
+  safe_search: 1
+  autocomplete: "duckduckgo"
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "tsushin-searxng-local-secret-change-me"
+  limiter: false
+  image_proxy: false

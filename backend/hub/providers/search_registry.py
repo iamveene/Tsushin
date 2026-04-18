@@ -289,6 +289,22 @@ class SearchProviderRegistry:
         except ImportError as e:
             logger.warning(f"Could not import SerpApiSearchProvider: {e}")
 
+        # Register SearXNG provider (self-hosted)
+        try:
+            from .searxng_search_provider import SearXNGSearchProvider
+            cls.register_provider(
+                "searxng",
+                SearXNGSearchProvider,
+                {
+                    "requires_api_key": False,
+                    "is_default": False,
+                    "status": "available",
+                    "description": "Self-hosted open-source metasearch"
+                }
+            )
+        except ImportError as e:
+            logger.warning(f"Could not import SearXNGSearchProvider: {e}")
+
         cls._initialized = True
         logger.info(f"Initialized {len(cls._providers)} Search provider(s)")
 
