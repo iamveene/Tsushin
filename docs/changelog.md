@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Public Ingress Resolver — unified tenant-facing ingress URL (2026-04-18)
+
+**Problem.** Three features each solved "what public HTTPS URL reaches this backend?" differently: `tenant.public_base_url` was a free-text string (no validation, no reachability check); the global Remote Access tunnel exposed its live `public_url` only to global admins; and `WebhookSetupModal` used `window.location.origin` at copy time, silently breaking when admins browsed via LAN IP. A running platform tunnel never benefited the features that needed it, and a tenant admin could paste any string into `public_base_url` with no guardrails.
+
+**Added.**
+- **`GET /api/tenant/me/public-ingress`** — authoritative resolver for tenant-facing callers. Returns `{url, source, warning, override_url}` where `source ∈ {override, tunnel, dev, none}`. Precedence: tenant override (when format-valid) > platform tunnel (when running) > `TSN_DEV_PUBLIC_BASE_URL` env (dev escape hatch) > none. Decoupled from the login-entitlement flag `tenant.remote_access_enabled` — ingress and login gating are now separate concerns. [`backend/services/public_ingress_resolver.py`](backend/services/public_ingress_resolver.py), [`backend/api/routes_tenant_settings.py`](backend/api/routes_tenant_settings.py).
+- **Stricter `PATCH /api/tenant/me/settings` validation.** `http://` rejected unless `TSN_DEV_PUBLIC_BASE_URL` is set (dev flag); `user:pass@host` credential-laced URLs rejected explicitly; hostname must be a public FQDN (`localhost` / single-label rejected); DNS pre-resolution via async `loop.getaddrinfo` with a 2s timeout catches typos at save time instead of letting Slack/Discord deliveries fail silently later. Audit log entry added on every mutation via `log_tenant_event(..., TenantAuditActions.SETTINGS_UPDATE, ...)` with URL credentials scrubbed before logging (defense-in-depth).
+- **`TSN_DEV_PUBLIC_BASE_URL` env var** for local dev without a Cloudflare tunnel. Process-start only. Wired through `docker-compose.yml`.
+
+**Changed.**
+- **`PublicBaseUrlCard`** renamed to **"Ingress Override (Advanced)"** and demoted to a collapsible `<details>` inside a status card. Always shows the currently-resolved URL and its source ("via platform tunnel" / "tenant override" / "dev environment"), with an amber banner and auto-expanded override input when `source === 'none'`. Resolver warnings (invalid stored override) surfaced inline. [`frontend/components/PublicBaseUrlCard.tsx`](frontend/components/PublicBaseUrlCard.tsx).
+- **`SlackSetupWizard` + `DiscordSetupWizard`** now call `api.getMyPublicIngress()` instead of reading `tenant.public_base_url` directly. Both render a small source badge next to the detected URL. HTTP-mode banners point the user at the override card or Remote Access depending on the failure mode. [`frontend/components/SlackSetupWizard.tsx`](frontend/components/SlackSetupWizard.tsx), [`frontend/components/DiscordSetupWizard.tsx`](frontend/components/DiscordSetupWizard.tsx).
+- **Webhook channel.** `frontend/app/hub/page.tsx` fetches the resolver-provided URL once and feeds both the inline "Inbound:" copy button (previously concatenated `window.location.origin`) and `WebhookSetupModal`'s `apiBase` prop.
+
+**No schema / migration changes.** Existing tenants with an override preserve it automatically (`source=override`). Only new writes are subject to the stricter validation.
+
+**Verification.** End-to-end on `develop`: resolver returns correct source in all precedence branches; PATCH rejects `http://` outside dev mode, credential-laced URLs, non-FQDN hostnames, and unresolvable DNS, while accepting valid `https://` URLs. UI verified via Playwright: Ingress Override card, Slack HTTP wizard, Discord welcome step, Webhook setup modal all render the resolver's URL and source badge.
+
 ### UI Recovery & Local Auth Stability (2026-04-18)
 
 - **Stale-session recovery login:** frontend auth bootstrap now times out `GET /api/auth/me` after 8s and hard-redirects to `/auth/login?force=1&reason=session-recovery` instead of leaving protected routes stuck on `Loading Tsushin...`. The login page shows a recovery banner and performs a best-effort logout without blocking sign-in. [`frontend/contexts/AuthContext.tsx`](frontend/contexts/AuthContext.tsx), [`frontend/app/auth/login/page.tsx`](frontend/app/auth/login/page.tsx), [`frontend/lib/client.ts`](frontend/lib/client.ts), [`frontend/middleware.ts`](frontend/middleware.ts)

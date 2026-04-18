@@ -1464,6 +1464,40 @@ Capability flags (`adapter.py:19-25`):
 7. **Assign to an agent** — on the agent's Channels tab, set `telegram_integration_id`.
 8. **Test** — message the bot on Telegram; it should respond via the assigned agent.
 
+### 15.2a Public Ingress Resolver
+
+**Source:** `backend/services/public_ingress_resolver.py`, `backend/api/routes_tenant_settings.py`, `frontend/components/PublicBaseUrlCard.tsx`.
+
+Slack HTTP Events, Discord Interactions, and Webhook-as-Channel all need a public HTTPS URL that reaches this backend. Three mechanisms could provide one, and before v0.6.1 they were inconsistent. The resolver unifies them.
+
+**Endpoint (tenant-facing):**
+```
+GET /api/tenant/me/public-ingress
+→ { "url": "https://...", "source": "override"|"tunnel"|"dev"|"none",
+    "warning": null|string, "override_url": null|string }
+```
+
+**Precedence (first match wins):**
+
+1. **`override`** — `tenant.public_base_url` (the Ingress Override card in Hub → Communication). Set and format-valid ⇒ this wins. Set but invalid ⇒ `source=override`, `url=null`, `warning` explains the problem (so the UI can surface the stored-but-broken state instead of silently falling through).
+2. **`tunnel`** — the global Remote Access tunnel (`/system/remote-access`) is running and has a `public_url`. **Intentionally decoupled from the `remote_access_enabled` login gate**: a tenant can receive webhooks via the shared tunnel path even when tunnel-based login is disabled for their users.
+3. **`dev`** — `TSN_DEV_PUBLIC_BASE_URL` environment variable on the backend. Dev escape hatch only; must not be set in production.
+4. **`none`** — no ingress; the UI shows a call-to-action banner.
+
+**Validation on `PATCH /api/tenant/me/settings`:**
+- Requires `https://` in production (`http://` allowed only when `TSN_DEV_PUBLIC_BASE_URL` is set).
+- Rejects credential-laced URLs (`user:pass@host`).
+- Requires a public FQDN (`localhost` and single-label hostnames rejected).
+- DNS pre-resolution (async, 2 s timeout) — typos are caught at save time.
+- Every write logged via `log_tenant_event(..., TenantAuditActions.SETTINGS_UPDATE, ...)` with userinfo scrubbed from logged old/new values.
+
+**Consumers.** `SlackSetupWizard`, `DiscordSetupWizard`, `WebhookSetupModal`, and the inline "Inbound:" copy button on the Webhook card in Hub all call `api.getMyPublicIngress()` and render a source badge ("via platform tunnel", "tenant override", "dev environment"). The **PublicBaseUrlCard** (renamed "Ingress Override (Advanced)") always displays the currently-resolved URL and its source, with a collapsible override input that auto-expands when `source === 'none'`.
+
+**Operator guidance:**
+- **SaaS deployments:** enable Remote Access globally and toggle `remote_access_enabled` per tenant for login; Slack/Discord webhooks work for every tenant without additional setup. Override is for exceptions (branded domains, corporate proxies).
+- **Self-hosted without a tunnel:** set `TSN_DEV_PUBLIC_BASE_URL` or use the tenant override. Both work.
+- **Local dev:** `TSN_DEV_PUBLIC_BASE_URL=https://<your-tunnel>.trycloudflare.com docker-compose up -d --build backend` — no tenant override needed, no global tunnel config needed.
+
 ### 15.3 Slack
 
 **Source:** `backend/channels/slack/adapter.py`
@@ -1501,7 +1535,7 @@ Capability flags (`adapter.py:20-26`):
    - For **Socket Mode** (recommended): enable Socket Mode under Settings, then generate an **App-Level Token** with the `connections:write` scope (you'll get an `xapp-...` token).
    - For **HTTP Events API**: the Tsushin UI will show you the exact Request URL after you save the integration — paste that into Event Subscriptions → Request URL. Also copy the Signing Secret and App ID from Basic Information.
 2. **Install the app** to your workspace — copy the `xoxb-` bot token from OAuth & Permissions.
-3. (HTTP mode only) Configure your tenant's **Public Base URL** in Hub → Communication first — this is the publicly-reachable HTTPS URL Slack will POST to. Socket Mode does not need this.
+3. (HTTP mode only) Ensure a **Public Ingress** is available for this tenant — either the global Remote Access tunnel (enabled via `/system/remote-access`) or an **Ingress Override** set in Hub → Communication. See §15.2a for how the resolver picks between them. Socket Mode does not need a public ingress.
 4. Navigate to **Hub → Channels → Slack** in the UI.
 5. Click **Connect Workspace** — paste the bot token plus the App-Level Token (Socket Mode) or the App ID + Signing Secret (HTTP mode). The modal will preview the exact webhook URL for HTTP mode.
 6. Set `dm_policy` — `open` to accept all DMs, `allowlist` to restrict to specific channels, or `disabled`.
@@ -1543,7 +1577,7 @@ Capability flags (`adapter.py:27-33`):
 
 **E2E setup — Discord channel:**
 
-1. Configure your tenant's **Public Base URL** in Hub → Communication first. Discord requires a publicly-reachable HTTPS URL for the Interactions endpoint — there is no Socket Mode equivalent. For local dev, run `cloudflared tunnel --url http://localhost:8081` and paste the resulting `https://*.trycloudflare.com` URL.
+1. Ensure this tenant has a **Public Ingress** — either the platform-managed Remote Access tunnel (global admin enables it in `/system/remote-access`) or an **Ingress Override** set in Hub → Communication. See §15.2a. Discord requires a publicly-reachable HTTPS URL for the Interactions endpoint — there is no Socket Mode equivalent. For local dev without a tunnel, set `TSN_DEV_PUBLIC_BASE_URL` in the backend environment and restart the container.
 2. **Create a Discord Application** at [discord.com/developers](https://discord.com/developers/applications).
 3. On **General Information**: copy the **Application ID** and the **Public Key** (64-character hex Ed25519). Both are required by Tsushin.
 4. Under **Bot**: reset and copy the bot token; enable **Message Content Intent** under Privileged Gateway Intents.

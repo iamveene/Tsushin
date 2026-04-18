@@ -17,9 +17,10 @@ the frontend. See services/public_ingress_resolver.py for precedence details.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import socket
 from typing import Literal, Optional
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
@@ -85,13 +86,21 @@ class TenantSelfSettingsUpdate(BaseModel):
         if " " in v or "\t" in v:
             raise ValueError("public_base_url must not contain whitespace")
 
-        # Pull the host portion out and require at least one dot so we reject
-        # things like "https://localhost" or "https://example" — the ingress
-        # URL must be resolvable from the public internet.
+        # Extract the authority portion after the scheme.
         try:
-            host_part = v.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
+            authority = v.split("://", 1)[1].split("/", 1)[0]
         except Exception:
             raise ValueError("public_base_url is malformed")
+
+        # Reject URLs carrying embedded credentials — Slack/Discord webhook
+        # deliveries would POST to the URL verbatim, so credentials in the URL
+        # would be transmitted on every webhook and logged by intermediaries.
+        if "@" in authority:
+            raise ValueError(
+                "public_base_url must not contain embedded credentials (user:pass@host)"
+            )
+
+        host_part = authority.split(":", 1)[0]
         if not host_part or "." not in host_part:
             raise ValueError(
                 "public_base_url hostname must be a fully-qualified domain "
@@ -125,12 +134,15 @@ def _load_tenant(db: Session, current_user: User) -> Tenant:
     return tenant
 
 
-def _dns_check(url: str, timeout_s: float = 2.0) -> Optional[str]:
+async def _dns_check(url: str, timeout_s: float = 2.0) -> Optional[str]:
     """Resolve the URL's hostname with a bounded timeout.
 
     Returns None on success, or a human-readable error message on failure.
     The tenant override is rejected on DNS failure so we catch typos at save
     time rather than letting Slack/Discord deliveries fail silently later.
+
+    Uses asyncio's loop.getaddrinfo to avoid the process-global race that
+    `socket.setdefaulttimeout` would create under concurrent PATCH requests.
     """
     try:
         host = url.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
@@ -139,19 +151,38 @@ def _dns_check(url: str, timeout_s: float = 2.0) -> Optional[str]:
     if not host:
         return "Could not parse hostname"
 
-    old_default = socket.getdefaulttimeout()
+    loop = asyncio.get_running_loop()
     try:
-        socket.setdefaulttimeout(timeout_s)
-        socket.getaddrinfo(host, None)
-    except socket.gaierror as exc:
-        return f"DNS resolution failed for {host}: {exc}"
-    except socket.timeout:
+        await asyncio.wait_for(loop.getaddrinfo(host, None), timeout=timeout_s)
+    except asyncio.TimeoutError:
         return f"DNS resolution timed out for {host}"
+    except OSError as exc:
+        return f"DNS resolution failed for {host}: {exc}"
     except Exception as exc:  # pragma: no cover
         return f"DNS resolution error for {host}: {exc}"
-    finally:
-        socket.setdefaulttimeout(old_default)
     return None
+
+
+def _scrub_url_credentials(url: Optional[str]) -> Optional[str]:
+    """Strip userinfo (user:password@) from a URL before logging.
+
+    The `public_base_url` field is user-supplied free-text. If a tenant admin
+    accidentally (or deliberately) pasted a URL with embedded credentials,
+    we do not want to persist that into the audit trail.
+    """
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+        if parsed.username or parsed.password:
+            # Reconstruct netloc without userinfo
+            host = parsed.hostname or ""
+            if parsed.port:
+                host = f"{host}:{parsed.port}"
+            return urlunparse(parsed._replace(netloc=host))
+    except Exception:
+        pass
+    return url
 
 
 # --- Endpoints ---
@@ -190,7 +221,7 @@ async def update_my_tenant_settings(
         old_value = tenant.public_base_url
 
         if new_value is not None:
-            err = _dns_check(new_value)
+            err = await _dns_check(new_value)
             if err is not None:
                 raise HTTPException(status_code=422, detail=err)
 
@@ -208,8 +239,8 @@ async def update_my_tenant_settings(
             tenant.id,
             {
                 "field": "public_base_url",
-                "old_value": old_value,
-                "new_value": new_value,
+                "old_value": _scrub_url_credentials(old_value),
+                "new_value": _scrub_url_credentials(new_value),
             },
             request,
         )

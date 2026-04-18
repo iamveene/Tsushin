@@ -27,9 +27,15 @@ Design notes:
     is cheap; DNS resolution is the caller's responsibility (done at write
     time in routes_tenant_settings._dns_check).
   - Reading `_state.public_url` on the tunnel singleton without the asyncio
-    lock is safe under the service's --workers 1 deployment (see
+    lock is safe *only* under the service's --workers 1 deployment (see
     cloudflare_tunnel_service.py:25-27). CPython's GIL makes the pointer
-    read atomic and `_state` is rebound as a whole snapshot under the lock.
+    read atomic and `_state` is rebound as a whole snapshot under the lock,
+    so a reader sees either the previous or the new complete snapshot — no
+    torn fields. Under --workers N each worker has its own singleton with
+    an independent state; the resolver in a non-owner worker would read
+    whatever that worker's last cached snapshot was, which is a separate
+    (pre-existing) correctness problem the feature inherits but does not
+    cause.
   - If the override URL fails format validation, we keep source="override"
     and emit a `warning` rather than silently falling through — see
     reviewer feedback (silent demotion hides misconfiguration).
