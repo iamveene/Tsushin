@@ -2025,7 +2025,14 @@ export default function HubPage() {
   ) => {
     const apiKey = getApiKeyForService(item.value)
     const isComingSoon = item.status === 'coming_soon'
-    const hasInstanceKey = type === 'ai' && providerInstances.some(i => i.vendor === item.value && i.api_key_configured)
+    const configuredInstance = type === 'ai'
+      ? (
+        providerInstances.find(i => i.vendor === item.value && i.is_active && i.api_key_configured && i.is_default)
+        || providerInstances.find(i => i.vendor === item.value && i.is_active && i.api_key_configured)
+      )
+      : null
+    const hasInstanceKey = Boolean(configuredInstance)
+    const configuredViaInstance = !apiKey && hasInstanceKey
     const ItemIcon = item.Icon
 
     return (
@@ -2044,6 +2051,11 @@ export default function HubPage() {
               {hasInstanceKey && apiKey && (
                 <span className="text-[10px] text-amber-400/80">Fallback — instance key takes priority</span>
               )}
+              {configuredViaInstance && (
+                <span className="text-[10px] text-teal-400/80">
+                  Configured via instance: {configuredInstance?.instance_name}
+                </span>
+              )}
             </div>
           </div>
           {isComingSoon ? (
@@ -2051,8 +2063,8 @@ export default function HubPage() {
               Coming Soon
             </span>
           ) : (
-            <span className={apiKey?.is_active ? 'badge badge-success' : 'badge badge-neutral'}>
-              {apiKey ? (apiKey.is_active ? 'Active' : 'Inactive') : 'Not configured'}
+            <span className={(apiKey?.is_active || configuredViaInstance) ? 'badge badge-success' : 'badge badge-neutral'}>
+              {apiKey ? (apiKey.is_active ? 'Active' : 'Inactive') : (configuredViaInstance ? 'Instance configured' : 'Not configured')}
             </span>
           )}
         </div>
@@ -2060,6 +2072,12 @@ export default function HubPage() {
         {!isComingSoon && apiKey && (
           <div className="text-sm text-tsushin-slate mb-4">
             <p className="font-mono text-xs text-tsushin-accent">{apiKey.api_key_preview}</p>
+          </div>
+        )}
+        {!isComingSoon && !apiKey && configuredInstance && (
+          <div className="text-sm text-tsushin-slate mb-4">
+            <p className="text-xs text-tsushin-slate">Using instance <span className="font-medium text-white">{configuredInstance.instance_name}</span></p>
+            <p className="font-mono text-xs text-tsushin-accent">{configuredInstance.api_key_preview}</p>
           </div>
         )}
         {!isComingSoon && (
@@ -2084,7 +2102,7 @@ export default function HubPage() {
                 onClick={() => item.value === 'vertex_ai' ? setShowVertexAiModal(true) : openAddApiKeyModal(item.value)}
                 className="w-full btn-secondary py-2 text-sm"
               >
-                Configure
+                {configuredViaInstance ? 'Configure Fallback' : 'Configure'}
               </button>
             )}
           </div>
