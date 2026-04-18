@@ -1,6 +1,7 @@
+import asyncio
 import logging
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -100,6 +101,12 @@ class AgentRouter:
         # V060-CHN-031: Stash inbound Slack thread_ts so _send_message auto-threads
         # outbound replies into the original message's thread. Set in route_message.
         self._inbound_slack_thread_ts: Optional[str] = None
+
+        # PR18 follow-up: Hold strong references to fire-and-forget post-response
+        # hook tasks. Without this, asyncio may GC the task before it finishes
+        # (Python docs explicitly warn about this) and we'd lose the knowledge
+        # extraction work silently. The done-callback discards the ref.
+        self._pending_post_response_tasks: Set[asyncio.Task] = set()
 
         # Phase 6.11.3: Initialize CachedContactService for faster lookups
         # V060-CHN-006: Pass tenant_id to prevent cross-tenant contact leakage.
@@ -339,6 +346,15 @@ class AgentRouter:
                 )
                 return
 
+            if not contact.tenant_id:
+                self.logger.warning(
+                    f"[LID AUTO-LINK] Skipping alias write for contact id={contact.id} "
+                    f"('{contact.friendly_name}') sender_id={sender_id}: "
+                    f"contact.tenant_id is missing (legacy row). "
+                    f"Refusing to write orphaned channel_mapping under 'default'."
+                )
+                return
+
             from services.contact_channel_mapping_service import ContactChannelMappingService
             mapping_service = ContactChannelMappingService(self.db)
             mapping_service.add_channel_mapping(
@@ -349,7 +365,7 @@ class AgentRouter:
                     "discovered_from": "router_name_match",
                     "legacy_whatsapp_id": contact.whatsapp_id,
                 },
-                tenant_id=contact.tenant_id or "default",
+                tenant_id=contact.tenant_id,
             )
             self.logger.info(
                 f"[LID AUTO-LINK] Added WhatsApp alias {sender_id} for contact "
@@ -1982,7 +1998,6 @@ class AgentRouter:
 
                     # Cleanup temporary file after sending (with delay for upload)
                     try:
-                        import asyncio
                         await asyncio.sleep(3)  # Wait for upload to complete
                         if os.path.exists(media_path):
                             os.unlink(media_path)
@@ -2580,7 +2595,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
 
                     # Cleanup temporary file after sending (with delay for upload)
                     try:
-                        import asyncio
                         await asyncio.sleep(3)  # Wait for upload to complete
                         if os.path.exists(media_path):
                             os.unlink(media_path)
@@ -2609,7 +2623,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             # WhatsApp MCP needs time to fully upload the audio file
             if audio_path:
                 try:
-                    import asyncio
                     # VOICE-003 Fix: Configurable cleanup delay (default 5 seconds)
                     cleanup_delay = float(os.getenv("TTS_CLEANUP_DELAY_SECONDS", "5"))
                     await asyncio.sleep(cleanup_delay)
@@ -2620,23 +2633,45 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                     self.logger.warning(f"Failed to clean up audio file: {cleanup_error}")
 
             # Passive post-response hooks can be AI-heavy (e.g. knowledge
-            # extraction). Run them only after the user-facing reply is already
-            # out, so they don't add to WhatsApp response latency.
+            # extraction). Fire them as a background task so the coroutine
+            # returns immediately after the user-facing reply is sent — this
+            # is what actually delivers the "4-5s WhatsApp response" target
+            # that PR #18 aimed for. Awaiting inline would still block on the
+            # hook's own LLM calls.
             try:
-                await self._invoke_post_response_hooks(
-                    agent_id=agent_id,
-                    user_message=message_text,
-                    agent_response=result['answer'],
-                    context={
-                        "sender_key": sender_key,
-                        "sender_name": sender_name,
-                        "is_group": is_group,
-                        "chat_id": chat_id
-                    },
-                    ai_client=temp_agent_service.ai_client
+                hook_task = asyncio.create_task(
+                    self._invoke_post_response_hooks(
+                        agent_id=agent_id,
+                        user_message=message_text,
+                        agent_response=result['answer'],
+                        context={
+                            "sender_key": sender_key,
+                            "sender_name": sender_name,
+                            "is_group": is_group,
+                            "chat_id": chat_id
+                        },
+                        ai_client=temp_agent_service.ai_client
+                    )
                 )
+                # Hold a strong ref so asyncio doesn't GC the task mid-flight,
+                # and log any exception so we don't get a silent
+                # "Task exception was never retrieved" RuntimeError.
+                self._pending_post_response_tasks.add(hook_task)
+
+                def _on_post_response_done(task: asyncio.Task) -> None:
+                    self._pending_post_response_tasks.discard(task)
+                    if not task.cancelled():
+                        exc = task.exception()
+                        if exc is not None:
+                            self.logger.error(
+                                "Error running deferred post_response_hooks: %s",
+                                exc,
+                                exc_info=exc,
+                            )
+
+                hook_task.add_done_callback(_on_post_response_done)
             except Exception as hook_error:
-                self.logger.error(f"Error running deferred post_response_hooks: {hook_error}", exc_info=True)
+                self.logger.error(f"Error scheduling deferred post_response_hooks: {hook_error}", exc_info=True)
 
         # Phase 8: Emit activity end event for watcher graph view (non-blocking)
         emit_agent_processing_async(
@@ -2807,7 +2842,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
 
         # Phase 6.11.2 + BUG-310: Broadcast agent run completion via tenant-scoped WebSocket
         try:
-            import asyncio
             from app import app
             if hasattr(app.state, 'ws_manager'):
                 # BUG-310: Resolve tenant_id so broadcast only reaches the owning tenant

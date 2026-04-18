@@ -193,6 +193,15 @@ class WhatsAppIDDiscovery:
                 )
                 return contact
 
+            if not contact.tenant_id:
+                logger_instance.warning(
+                    f"[AUTO-DISCOVERY] Skipping alias write for contact id={contact.id} "
+                    f"('{contact.friendly_name}') sender_whatsapp_id={sender_whatsapp_id}: "
+                    f"contact.tenant_id is missing (legacy row). "
+                    f"Refusing to write orphaned channel_mapping under 'default'."
+                )
+                return contact
+
             mapping_service = ContactChannelMappingService(db)
             mapping_service.add_channel_mapping(
                 contact_id=contact.id,
@@ -202,7 +211,7 @@ class WhatsAppIDDiscovery:
                     "discovered_from": "whatsapp_id_discovery",
                     "legacy_whatsapp_id": contact.whatsapp_id,
                 },
-                tenant_id=contact.tenant_id or "default",
+                tenant_id=contact.tenant_id,
             )
             logger_instance.info(
                 f"🔗 AUTO-DISCOVERY: Added WhatsApp alias {sender_whatsapp_id} "
