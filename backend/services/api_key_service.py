@@ -186,6 +186,28 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
                 if key:
                     logger.info(f" Using provider instance key for {service} (instance: {instance.instance_name})")
                     return key
+
+            # UX fallback: if the tenant has exactly one active instance with a
+            # key for this vendor, use it even when the user forgot to mark it
+            # as default. This avoids confusing "not configured" behavior when
+            # an instance clearly exists and is the only candidate.
+            active_instances = db.query(ProviderInstance).filter(
+                ProviderInstance.vendor == service,
+                ProviderInstance.tenant_id == tenant_id,
+                ProviderInstance.is_active == True,
+                ProviderInstance.api_key_encrypted.isnot(None)
+            ).all()
+            if len(active_instances) == 1:
+                only_instance = active_instances[0]
+                key = _decrypt_provider_instance_key(
+                    only_instance.api_key_encrypted, tenant_id, db
+                )
+                if key:
+                    logger.info(
+                        f" Using the only active provider instance key for {service} "
+                        f"(instance: {only_instance.instance_name})"
+                    )
+                    return key
         except Exception as e:
             logger.warning(f"Failed to load provider instance key for {service}: {e}")
 
