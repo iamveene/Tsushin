@@ -15,6 +15,7 @@ from datetime import datetime
 import httpx
 import os
 import logging
+from urllib.parse import urlparse
 
 from models import ApiKey, GoogleFlightsIntegration, HubIntegration
 from models_rbac import User
@@ -86,6 +87,7 @@ SUPPORTED_SERVICES = {
     'deepseek': 'DeepSeek',
     'elevenlabs': 'ElevenLabs (TTS)',
     'brave_search': 'Brave Search API',
+    'searxng': 'SearXNG Base URL',
     'amadeus': 'Amadeus (Flight Search)',
     'google_flights': 'Google Flights (SerpApi)',
     'serpapi': 'SerpAPI (Google Search)',
@@ -97,10 +99,19 @@ SUPPORTED_SERVICES = {
 }
 
 
-def mask_api_key(key: str) -> str:
+def mask_api_key(key: str, service: Optional[str] = None) -> str:
     """Mask API key for display (show first 4 and last 4 chars)"""
     if not key:
         return '***'
+    if service == 'searxng':
+        try:
+            parsed = urlparse(key)
+            if parsed.scheme and parsed.netloc:
+                suffix = parsed.path.rstrip('/')
+                suffix = suffix if suffix else ''
+                return f"{parsed.scheme}://{parsed.netloc}{suffix}"
+        except Exception:
+            pass
     if len(key) <= 8:
         return '***'
     return f"{key[:4]}...{key[-4:]}"
@@ -146,7 +157,7 @@ def to_api_key_response(k: ApiKey, db: Session) -> ApiKeyResponse:
     return ApiKeyResponse(
         id=k.id,
         service=k.service,
-        api_key_preview=mask_api_key(decrypted_key) if decrypted_key else '***',
+        api_key_preview=mask_api_key(decrypted_key, k.service) if decrypted_key else '***',
         is_active=k.is_active,
         tenant_id=k.tenant_id,
         created_at=k.created_at,
@@ -295,6 +306,14 @@ def create_or_update_api_key(
             detail=f"Unsupported service. Must be one of: {', '.join(SUPPORTED_SERVICES.keys())}"
         )
 
+    if data.service == "searxng":
+        from utils.ssrf_validator import SSRFValidationError, validate_url
+
+        try:
+            data.api_key = validate_url(data.api_key.strip(), allow_private=True).rstrip("/")
+        except SSRFValidationError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid SearXNG URL: {e}")
+
     # Encrypt the API key
     encrypted_key = _encrypt_api_key_for_storage(data.api_key, data.service, ctx.tenant_id, db)
     if not encrypted_key:
@@ -376,6 +395,14 @@ def update_api_key(
 
     plaintext_key_for_sync = None
     if data.api_key is not None:
+        if service == "searxng":
+            from utils.ssrf_validator import SSRFValidationError, validate_url
+
+            try:
+                data.api_key = validate_url(data.api_key.strip(), allow_private=True).rstrip("/")
+            except SSRFValidationError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid SearXNG URL: {e}")
+
         # Encrypt the new key
         encrypted_key = _encrypt_api_key_for_storage(data.api_key, service, key.tenant_id, db)
         if not encrypted_key:
