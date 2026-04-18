@@ -262,7 +262,13 @@ class AgentRouter:
         try:
             from services.whatsapp_id_discovery import WhatsAppIDDiscovery
             discovery = WhatsAppIDDiscovery(time_window_minutes=60)
-            return discovery.auto_link_contact(self.db, sender_normalized, self.logger)
+            return discovery.auto_link_contact(
+                self.db,
+                sender_normalized,
+                self.logger,
+                tenant_id=tenant_id,
+                chat_name=message.get("chat_name") or message.get("sender_name"),
+            )
         except Exception:
             return None
 
@@ -277,17 +283,35 @@ class AgentRouter:
             return
         if contact.whatsapp_id and contact.whatsapp_id == sender_id:
             return
-        if not contact.whatsapp_id:
-            contact.whatsapp_id = sender_id
-            try:
+        try:
+            if not contact.whatsapp_id:
+                contact.whatsapp_id = sender_id
                 self.db.commit()
                 self.logger.info(
                     f"[LID AUTO-LINK] Linked WhatsApp LID {sender_id} to contact "
                     f"'{contact.friendly_name}' (phone: {contact.phone_number})"
                 )
-            except Exception as e:
-                self.db.rollback()
-                self.logger.warning(f"[LID AUTO-LINK] Failed to save: {e}")
+                return
+
+            from services.contact_channel_mapping_service import ContactChannelMappingService
+            mapping_service = ContactChannelMappingService(self.db)
+            mapping_service.add_channel_mapping(
+                contact_id=contact.id,
+                channel_type="whatsapp",
+                channel_identifier=sender_id,
+                channel_metadata={
+                    "discovered_from": "router_name_match",
+                    "legacy_whatsapp_id": contact.whatsapp_id,
+                },
+                tenant_id=contact.tenant_id or "default",
+            )
+            self.logger.info(
+                f"[LID AUTO-LINK] Added WhatsApp alias {sender_id} for contact "
+                f"'{contact.friendly_name}'"
+            )
+        except Exception as e:
+            self.db.rollback()
+            self.logger.warning(f"[LID AUTO-LINK] Failed to save: {e}")
 
     def get_agent_config(self, agent: Agent) -> Dict:
         """
