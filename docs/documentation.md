@@ -1865,7 +1865,53 @@ Source: `frontend/app/playground/page.tsx:98-232`, `backend/services/playground_
 
 Backend WebSocket handler: `backend/services/playground_websocket_service.py`. Fallback to HTTP polling when WS disabled.
 
-### 18.6 Async Queuing & Dead-Letter Retry
+### 18.6 Playground Mini (floating quick-test bubble)
+
+A compact companion to the full Playground, mounted globally in `frontend/app/layout.tsx` so it appears on **every authenticated page** (Watcher, Studio, Hub, Flows, Core, Settings, System). Intended for the "I just want to fire one prompt to check this agent without leaving this page" case that comes up constantly while exploring the Watcher Graph view, editing a Flow, or comparing dashboards.
+
+**Surface and placement.** Implemented under `frontend/components/playground/mini/`: `PlaygroundMini.tsx` (top-level FAB + panel wrapper), `PlaygroundMiniPanel.tsx` (the visible card), `MiniHeader.tsx`, `MiniMessageList.tsx`, `MiniStreamingMessage.tsx`, `MiniComposer.tsx`, and the `usePlaygroundMini.ts` data hook. The FAB is a 56×56 circle pinned to `bottom-6 right-6 z-[70]` with `data-testid="playground-mini"`. The panel opens to 380×560 on desktop (mobile: `inset-x-4 bottom-4 top-16`) with the `animate-scale-in` keyframe. `role="dialog"` `aria-modal="false"` — the page stays interactive behind it. Route-gated: hidden on `/playground`, `/auth/*`, `/setup`.
+
+**Controls.**
+- Agent dropdown — populated from `GET /api/playground/agents`. Switching clears the active thread and re-scopes the thread list.
+- Project dropdown — `(No project)` plus all non-archived projects from `GET /api/projects`. Selecting a project uses its name as the `folder` filter on `GET /api/playground/threads` and as the `folder` value when creating a new thread, matching the full Playground's `/enter <project>` convention.
+- Thread selector — lists threads for the current agent+project. Switching fetches messages via `GET /api/playground/threads/:id`.
+- "+" new-thread button — calls `POST /api/playground/threads` synchronously so the new thread has an id before the first send; focus moves to the composer.
+- Expand — builds `/playground?agent=<id>&thread=<id>&project=<id>`, navigates via `router.push`, and closes the panel. See handover below.
+- Close — closes the panel; focus returns to the FAB.
+
+**Composer.** Auto-grow textarea capped at 4 visible rows. `Enter = send`, `Shift+Enter = newline`, `Ctrl/Cmd+Enter = send`, `Alt+Enter` ignored. Disabled while a send is in flight.
+
+**Markdown.** Assistant messages are rendered through `react-markdown` + `remark-gfm` with a `.mini-markdown` stylesheet in `frontend/app/globals.css` (compact p / h1–h4 / strong / em / a / ul / ol / blockquote / code / pre / table / hr styles tuned for the tight bubble). Links open in a new tab with `rel="noopener noreferrer"`. User messages render as plain text to preserve user-typed formatting. Empty assistant content shows `…`.
+
+**Send path.** `POST /api/playground/chat?sync=true` — the Mini intentionally does **not** open a second WebSocket connection (the full Playground already manages the `/ws/playground` stream; running two WS consumers from the same tab would race `thread_created` / `done` events). A pending indicator (three pulsing dots in `MiniStreamingMessage`) shows while the HTTP call is in flight. On success, the assistant reply is appended. On failure, the optimistic user bubble is rolled back and an error surfaces inside the bubble.
+
+**Expand handover.** The critical promise of the Mini is that the conversation carries over to the full Playground intact. The handover is consumed inside `frontend/app/playground/page.tsx`:
+- `selectedAgentId` is seeded from `window.location.search` via a **lazy `useState` initializer** — this runs at mount, before `loadAgents()` can default-pick an agent, so `?agent=<id>` wins the race.
+- `initializeThreads` (the effect that fires when `selectedAgentId` changes) reads `window.location.search` directly (not via `useSearchParams`) and looks up `?thread=<id>` in the freshly fetched agent's thread list. On hit, it selects the thread, triggers `handleThreadSelect` to pull the messages, and strips the URL with `window.history.replaceState(null, '', '/playground')` (not `router.replace`, which would remount the page and wipe the consumption state).
+- A module-local `lastConsumedHandoverThreadRef` de-dupes repeat consumption within one session so `initializeThreads` firing twice for the same agent doesn't re-select. Expanding again with a different thread still works.
+- If the URL's `?agent=<id>` is not in the tenant's agent list (stale copy-paste, deleted agent, cross-tenant URL leak), `loadAgents` falls back to the tenant's default agent to prevent foreign-agent writes.
+
+**Persistence.** Selection state (`isOpen`, `selectedAgentId`, `selectedProjectId`, `activeThreadId`) is persisted to `sessionStorage` keyed by `tsushin:playground-mini:v1:<userId>` (`frontend/lib/playgroundMiniSessionStore.ts`). Messages are **not** persisted — they re-fetch from `api.getThread(activeThreadId)` on panel open, which re-validates tenant ownership on every call. `AuthContext.logout()` clears the per-user key (and `clearAll()` on missing userId) so a second user on the same tab starts fresh. `hasLoadedOnceRef` inside the hook is also reset when the active user changes.
+
+**Multi-tenant safety.** No new backend endpoints, no new auth paths. All data operations go through the same tenant-scoped `/api/playground/*` and `/api/projects` routes the full Playground uses. `X-Tenant-Id` enforcement on the backend and the httpOnly session cookie are the authoritative guards; the Mini is a pure UI wrapper on top of them.
+
+**Keyboard shortcuts.**
+- `Ctrl/Cmd + Shift + L` — toggle panel. Ignored when any `[role="dialog"][aria-modal="true"]` is visible so Modal/Setup/WhatsApp-wizard dialogs don't compete for the keybind.
+- `Escape` — close the panel when focus is inside it; restores focus to the FAB.
+
+**Onboarding tour integration.** `frontend/contexts/OnboardingContext.tsx` bumped `TOTAL_STEPS` from 12 to 13. `frontend/components/OnboardingWizard.tsx` added a new step ("New: Playground Mini") targeting `[data-testid="playground-mini"]`. When the step becomes active, the wizard applies both the generic `.tour-highlight` outline and the new `.playground-mini-tour-glow` keyframe — a 1.4s × 3-iterations box-shadow pulse using `tsushin-accent` + `tsushin-indigo` designed to be strong enough to grab attention without being jarring. The step's "Open Playground Mini" action button dispatches `tsushin:playground-mini:open`, which the FAB listens for, opens the panel, and re-triggers the glow. A MutationObserver on the FAB watches for `.tour-highlight` so the glow also fires if the user relaunches the tour from the header `?` button. If the user is on an excluded route (`/playground`, `/auth/*`, `/setup`) when they click the step's action, the wizard first navigates home via `router.push('/')` before dispatching the event.
+
+**Files of record:**
+- `frontend/components/playground/mini/` (all 7 files under this folder)
+- `frontend/lib/playgroundMiniSessionStore.ts`
+- `frontend/app/layout.tsx` (mount)
+- `frontend/app/playground/page.tsx` (handover)
+- `frontend/components/OnboardingWizard.tsx` (tour step)
+- `frontend/contexts/OnboardingContext.tsx` (`TOTAL_STEPS = 13`)
+- `frontend/app/globals.css` (`.playground-mini-tour-glow`, `.mini-markdown`)
+- `frontend/contexts/AuthContext.tsx` (`logout()` clears sessionStorage)
+
+### 18.7 Async Queuing & Dead-Letter Retry
 
 Service layer: `backend/services/message_queue_service.py`, `backend/services/queue_worker.py`.
 

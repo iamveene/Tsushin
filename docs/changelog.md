@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Playground Mini — floating quick-test bubble on every page (2026-04-17)
+
+**Added: Playground Mini** — a compact floating chat bubble available on every authenticated page (Watcher, Studio, Hub, Flows, Core, Settings, System) so operators can fire a quick test against any agent without leaving their current page. Particularly useful while exploring the Watcher Graph view, editing a Flow, or inspecting a dashboard, where the friction of a full page switch used to discourage mid-task validation.
+
+**Surface area & UX:**
+- Circular FAB in the bottom-right (bottom-6 right-6, z-[70]) on every authenticated page. Route-gated: hidden on `/playground`, `/auth/*`, `/setup` so the full Playground is never duplicated.
+- Expands to a 380×560 panel (mobile: inset-x-4 bottom-4 top-16) with `animate-scale-in`. `role="dialog"` `aria-modal="false"` (non-blocking — the page behind stays interactive).
+- Header packs: agent dropdown, project dropdown (`(No project)` + all non-archived projects — selecting a project scopes the thread list to that `folder`), thread selector, new-thread ("+"), expand-to-full-Playground, close.
+- Composer: auto-grow textarea (up to 4 rows). Enter = send, Shift+Enter = newline, Ctrl/Cmd+Enter = send. Disabled during in-flight.
+- Assistant messages render through `react-markdown` + `remark-gfm` with a dedicated `.mini-markdown` stylesheet (compact p/h1–h4/strong/em/a/ul/ol/blockquote/code/pre/table/hr styles tuned for the tight bubble). User messages remain plain-text to preserve input.
+- Pending state: three pulsing `tsushin-accent` dots in an assistant-style bubble while `sendMessage` is in-flight (sync HTTP — no WS state machine in the Mini, avoids a second always-on WebSocket connection from every page).
+- Global hotkey: **Ctrl/Cmd + Shift + L** toggles the Mini (ignored when any `[role="dialog"][aria-modal="true"]` is focused). ESC closes the panel when focus is inside it and returns focus to the FAB.
+
+**Expand handover — conversation carries over intact.** Clicking the expand icon navigates the user to `/playground?thread=<id>&agent=<id>&project=<id>`. The full Playground consumes those params on mount and lands the user on the exact same thread with the same messages already rendered, then strips the query string via `window.history.replaceState` without a React remount so future navigation works normally. Multiple iterations were required to get this right:
+- Initial implementation used `router.replace('/playground', { scroll: false })` which invalidated the segment cache and remounted the page, wiping the `pendingThreadFromUrlRef` and causing the wrong (empty) thread to be auto-selected. Replaced with `window.history.replaceState(null, '', '/playground')` which updates the URL bar without triggering React.
+- Second race: `loadAgents()`' default-agent auto-pick fired before the URL-sync effect populated the pending thread, so `initializeThreads` ran for the wrong agent. Fixed by seeding `selectedAgentId` from `window.location.search` via a lazy `useState` initializer at mount — beats `loadAgents()` by one render.
+- Third race: the pending-thread consumption was split across two effects (`useSearchParams` + `[threads]`), so the ref could be null when `initializeThreads` checked it. Consolidated the claim inside `initializeThreads` itself: it reads `window.location.search` directly (not via `useSearchParams`), looks up the thread in the just-fetched `agentThreads`, selects it, strips the URL, and bails out before the empty-thread auto-pick / auto-create logic. A module-local `lastConsumedHandoverThreadRef` de-dupes repeat consumption within one session while still allowing a later expand with a different thread to work.
+
+**Multi-tenant safety.** All data operations reuse the existing tenant-scoped endpoints (`GET /api/playground/agents`, `GET /api/projects`, `GET/POST /api/playground/threads`, `GET /api/playground/threads/:id`, `POST /api/playground/chat?sync=true`) — no new backend, no new auth paths. Selection state is persisted in sessionStorage keyed by userId (`tsushin:playground-mini:v1:<userId>`), and `AuthContext.logout()` clears it. Messages are never persisted client-side: they re-fetch from `api.getThread(activeThreadId)` on panel mount, which re-validates tenant ownership on every call.
+
+**Thread auto-creation before send.** The first message sent when no thread is active creates a thread synchronously via `api.createThread(...)` before the chat POST, so the handover URL always has a valid `?thread=<id>` to deep-link into.
+
+**Onboarding tour integration.** Bumped `TOTAL_STEPS` from 12 → 13. Added a new tour step 12 ("New: Playground Mini") targeting `[data-testid="playground-mini"]`. When the step becomes active the wizard applies the existing `.tour-highlight` class AND the new `.playground-mini-tour-glow` keyframe — a 1.4s × 3-iterations strong box-shadow pulse using `tsushin-accent` + `tsushin-indigo` that draws the eye to the FAB. The step's "Open Playground Mini" action dispatches `tsushin:playground-mini:open`, which `PlaygroundMini` listens for and re-applies the glow to the open panel. A MutationObserver on the FAB watches for the wizard's `.tour-highlight` toggle and triggers the glow automatically, so it also lights up if the wizard is relaunched from the header `?` button and advanced back to the Mini step. If the user happens to be on an excluded route (`/playground`, `/auth/*`, `/setup`) when they click the step's action button, the wizard first `router.push('/')` before dispatching the open event so the Mini actually renders.
+
+**Files added:**
+- [frontend/components/playground/mini/PlaygroundMini.tsx](frontend/components/playground/mini/PlaygroundMini.tsx)
+- [frontend/components/playground/mini/PlaygroundMiniPanel.tsx](frontend/components/playground/mini/PlaygroundMiniPanel.tsx)
+- [frontend/components/playground/mini/MiniHeader.tsx](frontend/components/playground/mini/MiniHeader.tsx)
+- [frontend/components/playground/mini/MiniMessageList.tsx](frontend/components/playground/mini/MiniMessageList.tsx)
+- [frontend/components/playground/mini/MiniStreamingMessage.tsx](frontend/components/playground/mini/MiniStreamingMessage.tsx)
+- [frontend/components/playground/mini/MiniComposer.tsx](frontend/components/playground/mini/MiniComposer.tsx)
+- [frontend/components/playground/mini/usePlaygroundMini.ts](frontend/components/playground/mini/usePlaygroundMini.ts)
+- [frontend/lib/playgroundMiniSessionStore.ts](frontend/lib/playgroundMiniSessionStore.ts)
+
+**Files modified:**
+- [frontend/app/layout.tsx](frontend/app/layout.tsx) — mount `<PlaygroundMini />` beside `<ToastContainer />` inside `ToastProvider`.
+- [frontend/app/playground/page.tsx](frontend/app/playground/page.tsx) — URL-seeded `selectedAgentId`, handover consumption inside `initializeThreads`, de-dupe ref, `history.replaceState` URL strip.
+- [frontend/components/OnboardingWizard.tsx](frontend/components/OnboardingWizard.tsx) — new step 12 "New: Playground Mini" with action button dispatching `tsushin:playground-mini:open`.
+- [frontend/contexts/OnboardingContext.tsx](frontend/contexts/OnboardingContext.tsx) — `TOTAL_STEPS: 12 → 13`.
+- [frontend/app/globals.css](frontend/app/globals.css) — `.playground-mini-tour-glow` keyframe + `.mini-markdown` typography block.
+- [frontend/contexts/AuthContext.tsx](frontend/contexts/AuthContext.tsx) — `logout()` clears Playground Mini sessionStorage.
+
+**Verification:** Full E2E via Playwright against `https://localhost` covered 16 scenarios — FAB visibility scoping, open/close + animation, hotkey toggle with modal guard, ESC close + focus restoration, agent switch refreshes thread list, project switch filters threads by folder, new-thread button focuses composer, send/receive round-trip with thread auto-rename, markdown rendering (real `<ul><li><strong><code>` elements in the DOM — not raw Markdown text), expand handover preserves thread+messages on both cold URL navigation AND client-side `router.push` from the Mini, URL stripped post-consumption, no stray `POST /api/playground/threads` during handover, persistence across `/flows` navigation + hard refresh, second handover during the same session, zero frontend/backend errors, and the wizard glow trigger via both the active-step detection and the `tsushin:playground-mini:open` event. Non-audio agents only (Tsushin, Gemini1) per the QA spec. The only console noise is the pre-existing Playground WebSocket reconnect event (unrelated).
+
+No backend changes. No schema changes. No new dependencies — `react-markdown` and `remark-gfm` were already in `frontend/package.json`.
+
+### Flows — Create-from-Template modal: surface load errors (2026-04-17)
+
+The "Create Flow from Template" modal previously rendered the same empty-state message ("No templates available.") whether the backend returned an empty list or the fetch failed (401, 403, 5xx, network). The `.catch` handler wrote the failure to `submitError`, but that state was only rendered inside the `preview` step, so on the initial `pick` step any failure was silently indistinguishable from an empty catalog. [frontend/components/flows/CreateFromTemplateModal.tsx](frontend/components/flows/CreateFromTemplateModal.tsx) now renders a red error banner in the `pick` step when `submitError` is set, and gates the "No templates available." message on `!submitError` so the two conditions are visually distinct.
+
+No backend changes — flow templates remain a code-defined catalog in [backend/services/flow_template_seeding.py](backend/services/flow_template_seeding.py) (7 templates) exposed via `GET /api/flows/templates` and are not DB-seeded by design.
+
 ### Watcher Graph — BUG-596 fix + live-activity edge-glow scoping (2026-04-17)
 
 **BUG-596 resolved.** `transformBatchToAgentsGraphData()` in [frontend/components/watcher/graph/hooks/useGraphData.ts](frontend/components/watcher/graph/hooks/useGraphData.ts) now gates the synthetic "WhatsApp Unassigned" placeholder behind `showWhatsAppUnassignedPlaceholder = tenantHasWhatsAppInstances || hasStaleWhatsAppBinding`. On a truly fresh tenant (zero WhatsApp instances, no stale `whatsapp_integration_id` pointing at a missing instance) the placeholder node and its dotted amber edges are suppressed. The placeholder still surfaces as a warning signal when a real stale binding exists. The gate wraps both the edge push and the node creation for defense-in-depth.

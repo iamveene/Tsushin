@@ -46,7 +46,8 @@ const OnboardingContext = createContext<OnboardingContextType | undefined>(undef
 
 // BUG-319: Reduced from 9 to 8 (step 9 "Setup Checklist" removed — it duplicated GettingStartedChecklist)
 // v0.6.0: Raised to 12 — added four "What's New in v0.6.0" showcase pages at the start
-const TOTAL_STEPS = 12
+// v0.6.0 (Playground Mini): Raised to 13 — added a step highlighting the new floating Playground Mini bubble.
+const TOTAL_STEPS = 13
 const LEGACY_STORAGE_KEY = 'tsushin_onboarding_completed'
 const STARTED_KEY_PREFIX = 'tsushin_onboarding_started'
 

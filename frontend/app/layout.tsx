@@ -9,6 +9,7 @@ import LayoutContent from '@/components/LayoutContent'
 import OnboardingWizard from '@/components/OnboardingWizard'
 import WhatsAppSetupWizard from '@/components/whatsapp-wizard/WhatsAppSetupWizard'
 import ToastContainer from '@/components/ui/ToastContainer'
+import PlaygroundMini from '@/components/playground/mini/PlaygroundMini'
 
 // Primary body font - clean and modern
 const dmSans = DM_Sans({
@@ -58,6 +59,7 @@ export default function RootLayout({
                 <LayoutContent>{children}</LayoutContent>
                 <OnboardingWizard />
                 <WhatsAppSetupWizard />
+                <PlaygroundMini />
                 <ToastContainer />
               </ToastProvider>
             </WhatsAppWizardProvider>

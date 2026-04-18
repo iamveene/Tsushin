@@ -269,7 +269,29 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 12 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
+      // Step 12 — v0.6.0: Playground Mini floating bubble
+      title: 'New: Playground Mini',
+      targetSelector: '[data-testid="playground-mini"]',
+      content: 'Test any agent from any page without leaving. Pick an agent, project, or thread, fire a quick message — then hit Expand if you want to continue in the full Playground. The conversation carries over intact.',
+      highlightFeatures: [
+        'Available on every authenticated page (hidden only inside the full Playground)',
+        'Quick agent + project + thread switcher',
+        'Expand-to-Playground handover preserves your conversation',
+        'Toggle anywhere with Ctrl/Cmd + Shift + L'
+      ],
+      actionButton: {
+        label: 'Open Playground Mini',
+        action: () => {
+          // If we're on the full Playground, bounce to home so the Mini renders.
+          if (typeof window !== 'undefined' && window.location.pathname.startsWith('/playground')) {
+            router.push('/')
+          }
+          window.dispatchEvent(new CustomEvent('tsushin:playground-mini:open'))
+        }
+      }
+    },
+    {
+      // Step 13 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
       // Points users to the Getting Started Checklist on the dashboard instead of duplicating it.
       title: "You're All Set!",
       targetSelector: null,
