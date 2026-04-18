@@ -122,7 +122,7 @@ class StartRequest(BaseModel):
 
 class TunnelStatusOut(BaseModel):
     state: Literal[
-        "stopped", "starting", "running", "stopping",
+        "stopped", "starting", "verifying", "running", "stopping",
         "crashed", "error", "unavailable",
     ]
     mode: Optional[Literal["quick", "named"]] = None

@@ -220,7 +220,7 @@ Communication style:
 - Security-conscious
 - Clear command confirmation
 - Detailed result reporting""",
-            "skills": [],  # Uses Beacon service directly
+            "skills": [],  # Shell skill is attached post-seed (enabled) by shell_skill_seeding — see BUG-593
             "channels": ["playground", "whatsapp"],
             "trigger_dm_enabled": False,  # Mention-only for security
             "trigger_group_filters": [],

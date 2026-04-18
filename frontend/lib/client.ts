@@ -7447,7 +7447,7 @@ export const api = {
 // v0.6.0 Remote Access — TypeScript types
 // ============================================================================
 export type RemoteAccessState =
-  | 'stopped' | 'starting' | 'running' | 'stopping'
+  | 'stopped' | 'starting' | 'verifying' | 'running' | 'stopping'
   | 'crashed' | 'error' | 'unavailable'
 export type RemoteAccessMode = 'quick' | 'named'
 export type RemoteAccessProtocol = 'auto' | 'http2' | 'quic'
