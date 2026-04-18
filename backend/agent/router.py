@@ -214,15 +214,31 @@ class AgentRouter:
         """Resolve a DM sender using raw IDs, chat metadata, and WhatsApp auto-linking."""
         sender_normalized = sender.split("@")[0].lstrip("+")
 
+        phone_candidates = []
+        digits = "".join(ch for ch in sender_normalized if ch.isdigit())
+        for candidate in [sender_normalized, digits]:
+            if candidate and candidate not in phone_candidates:
+                phone_candidates.append(candidate)
+        if digits.startswith("55") and len(digits) > 11:
+            stripped = digits[2:]
+            if stripped not in phone_candidates:
+                phone_candidates.append(stripped)
+        elif digits and len(digits) in (10, 11):
+            with_country = f"55{digits}"
+            if with_country not in phone_candidates:
+                phone_candidates.append(with_country)
+
         if self.contact_service:
             contact = self.contact_service.identify_sender(sender)
             if contact:
+                self._auto_link_whatsapp_lid(contact, sender_normalized)
                 return contact
 
             chat_id = message.get("chat_id", "")
             if chat_id and chat_id != sender:
                 contact = self.contact_service.identify_sender(chat_id)
                 if contact:
+                    self._auto_link_whatsapp_lid(contact, sender_normalized)
                     return contact
 
         names_to_try = []
@@ -232,6 +248,36 @@ class AgentRouter:
                 names_to_try.append(candidate)
 
         tenant_id = self.tenant_id
+
+        # Before falling back to name-based heuristics, try a direct phone match
+        # that tolerates country-code differences (e.g. 2799... vs 55279...).
+        try:
+            base_query = self.db.query(Contact).filter(Contact.is_active == True)
+            if tenant_id:
+                base_query = base_query.filter(Contact.tenant_id == tenant_id)
+
+            phone_filters = []
+            for candidate in phone_candidates:
+                phone_filters.extend([
+                    Contact.phone_number == candidate,
+                    Contact.phone_number == f"+{candidate}",
+                    Contact.phone_number.like(f"%{candidate}"),
+                    Contact.whatsapp_id == candidate,
+                ])
+
+            phone_matches = base_query.filter(or_(*phone_filters)).all() if phone_filters else []
+            unique_matches = {contact.id: contact for contact in phone_matches}
+            if len(unique_matches) == 1:
+                contact = next(iter(unique_matches.values()))
+                self.logger.info(
+                    f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
+                    f"to contact '{contact.friendly_name}' via normalized phone match"
+                )
+                self._auto_link_whatsapp_lid(contact, sender_normalized)
+                return contact
+        except Exception as e:
+            self.logger.debug(f"[DM RESOLUTION] Phone fallback failed: {e}")
+
         for candidate in names_to_try:
             base_query = self.db.query(Contact).filter(Contact.is_active == True)
             if tenant_id:

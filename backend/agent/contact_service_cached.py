@@ -124,6 +124,22 @@ class CachedContactService:
         if normalized_full and normalized_full not in candidates:
             candidates.append(normalized_full)
 
+        digit_candidates = []
+        for candidate in list(candidates):
+            digits = "".join(ch for ch in candidate if ch.isdigit())
+            if digits and digits not in candidates and digits not in digit_candidates:
+                digit_candidates.append(digits)
+            if digits.startswith("55") and len(digits) > 11:
+                stripped = digits[2:]
+                if stripped not in candidates and stripped not in digit_candidates:
+                    digit_candidates.append(stripped)
+            elif digits and len(digits) in (10, 11):
+                with_country = f"55{digits}"
+                if with_country not in candidates and with_country not in digit_candidates:
+                    digit_candidates.append(with_country)
+
+        candidates.extend(digit_candidates)
+
         return candidates
 
     def _fetch_from_db(self, identifier: str) -> Optional[Contact]:
@@ -141,11 +157,18 @@ class CachedContactService:
             )
             return None
 
+        phone_variants = [identifier]
+        if identifier and identifier.isdigit():
+            phone_variants.append(f"+{identifier}")
+
         contact = self.db.query(Contact).filter(
             Contact.tenant_id == self.tenant_id,
-            (Contact.phone_number == identifier) |
-            (Contact.whatsapp_id == identifier) |
-            (Contact.telegram_id == identifier)  # Phase 10.1.1
+            or_(
+                Contact.phone_number.in_(phone_variants),
+                Contact.phone_number.like(f"%{identifier}"),
+                Contact.whatsapp_id == identifier,
+                Contact.telegram_id == identifier,  # Phase 10.1.1
+            )
         ).first()
 
         if contact:
