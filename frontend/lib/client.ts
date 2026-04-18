@@ -63,6 +63,13 @@ function browserSafeFetch(url: string, options: RequestInit = {}): Promise<Respo
   return fetch(normalizeBrowserApiUrl(url), options)
 }
 
+function isAbortError(error: unknown): boolean {
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
+    return error.name === 'AbortError'
+  }
+  return error instanceof Error && error.name === 'AbortError'
+}
+
 /**
  * Helper function to handle API response errors with user-friendly messages
  */
@@ -4323,7 +4330,7 @@ export const api = {
     return res.json()
   },
 
-  async getCurrentUser(): Promise<{
+  async getCurrentUser(options?: { timeoutMs?: number }): Promise<{
     id: number
     email: string
     full_name: string
@@ -4336,9 +4343,34 @@ export const api = {
     last_login_at: string | null
   }> {
     // SEC-005 Phase 3: Auth via httpOnly cookie only — no token param needed
-    const res = await authenticatedFetch(`${API_URL}/api/auth/me`)
-    if (!res.ok) await handleApiError(res, 'Failed to fetch current user')
-    return res.json()
+    const controller = new AbortController()
+    const timeoutMs = options?.timeoutMs
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    let didTimeout = false
+
+    if (timeoutMs && timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        didTimeout = true
+        controller.abort()
+      }, timeoutMs)
+    }
+
+    try {
+      const res = await authenticatedFetch(`${API_URL}/api/auth/me`, {
+        signal: controller.signal,
+      })
+      if (!res.ok) await handleApiError(res, 'Failed to fetch current user')
+      return res.json()
+    } catch (error) {
+      if (didTimeout || (timeoutMs && isAbortError(error))) {
+        throw new Error(`Authentication bootstrap timed out after ${timeoutMs}ms`)
+      }
+      throw error
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+      }
+    }
   },
 
   async requestPasswordReset(email: string): Promise<{ message: string }> {

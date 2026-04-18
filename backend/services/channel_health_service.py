@@ -16,6 +16,7 @@ Integrates with:
 import asyncio
 import logging
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, List, Tuple
 
@@ -127,60 +128,12 @@ class ChannelHealthService:
 
             await asyncio.sleep(self.CHECK_INTERVAL_SECONDS)
 
-    async def _check_all_instances(self):
-        """Query DB for active WhatsApp, Telegram, Slack, and Discord instances, probe each."""
+    @contextmanager
+    def _db_session_scope(self):
+        """Provide a short-lived DB session for monitor-side persistence work."""
         db = self.get_db_session()
         try:
-            # WhatsApp instances
-            wa_instances = db.query(WhatsAppMCPInstance).filter(
-                WhatsAppMCPInstance.status.in_(["running", "starting", "authenticated"])
-            ).all()
-            for inst in wa_instances:
-                try:
-                    await self._check_whatsapp_instance(inst, db)
-                except Exception as e:
-                    logger.error(f"Error checking WhatsApp instance {inst.id}: {e}", exc_info=True)
-
-            # Telegram instances
-            tg_instances = db.query(TelegramBotInstance).filter(
-                TelegramBotInstance.status.in_(["active"])
-            ).all()
-            for inst in tg_instances:
-                try:
-                    await self._check_telegram_instance(inst, db)
-                except Exception as e:
-                    logger.error(f"Error checking Telegram instance {inst.id}: {e}", exc_info=True)
-
-            # Slack instances
-            try:
-                from models import SlackIntegration
-                slack_instances = db.query(SlackIntegration).filter(
-                    SlackIntegration.is_active == True,
-                    SlackIntegration.status.in_(["connected"])
-                ).all()
-                for inst in slack_instances:
-                    try:
-                        await self._check_slack_instance(inst, db)
-                    except Exception as e:
-                        logger.error(f"Error checking Slack instance {inst.id}: {e}", exc_info=True)
-            except Exception as e:
-                logger.debug(f"Slack integration not available: {e}")
-
-            # Discord instances
-            try:
-                from models import DiscordIntegration
-                discord_instances = db.query(DiscordIntegration).filter(
-                    DiscordIntegration.is_active == True,
-                    DiscordIntegration.status.in_(["connected"])
-                ).all()
-                for inst in discord_instances:
-                    try:
-                        await self._check_discord_instance(inst, db)
-                    except Exception as e:
-                        logger.error(f"Error checking Discord instance {inst.id}: {e}", exc_info=True)
-            except Exception as e:
-                logger.debug(f"Discord integration not available: {e}")
-
+            yield db
         finally:
             try:
                 db.rollback()
@@ -188,7 +141,91 @@ class ChannelHealthService:
                 pass
             db.close()
 
-    async def _check_whatsapp_instance(self, instance: WhatsAppMCPInstance, db: Session):
+    def _list_instances(self, model_cls, *filters):
+        """Load and detach instances so probes do not hold DB sessions open."""
+        with self._db_session_scope() as db:
+            query = db.query(model_cls)
+            if filters:
+                query = query.filter(*filters)
+            instances = query.all()
+            for instance in instances:
+                try:
+                    db.expunge(instance)
+                except Exception:
+                    pass
+            return instances
+
+    def _get_instance(self, model_cls, instance_id: int, tenant_id: str):
+        """Load and detach a single instance for manual probes."""
+        with self._db_session_scope() as db:
+            instance = db.query(model_cls).filter(
+                model_cls.id == instance_id,
+                model_cls.tenant_id == tenant_id,
+            ).first()
+            if instance:
+                try:
+                    db.expunge(instance)
+                except Exception:
+                    pass
+            return instance
+
+    async def _check_all_instances(self):
+        """Query DB for active WhatsApp, Telegram, Slack, and Discord instances, probe each."""
+        # WhatsApp instances
+        wa_instances = self._list_instances(
+            WhatsAppMCPInstance,
+            WhatsAppMCPInstance.status.in_(["running", "starting", "authenticated"]),
+        )
+        for inst in wa_instances:
+            try:
+                await self._check_whatsapp_instance(inst)
+            except Exception as e:
+                logger.error(f"Error checking WhatsApp instance {inst.id}: {e}", exc_info=True)
+
+        # Telegram instances
+        tg_instances = self._list_instances(
+            TelegramBotInstance,
+            TelegramBotInstance.status.in_(["active"]),
+        )
+        for inst in tg_instances:
+            try:
+                await self._check_telegram_instance(inst)
+            except Exception as e:
+                logger.error(f"Error checking Telegram instance {inst.id}: {e}", exc_info=True)
+
+        # Slack instances
+        try:
+            from models import SlackIntegration
+            slack_instances = self._list_instances(
+                SlackIntegration,
+                SlackIntegration.is_active == True,
+                SlackIntegration.status.in_(["connected"]),
+            )
+            for inst in slack_instances:
+                try:
+                    await self._check_slack_instance(inst)
+                except Exception as e:
+                    logger.error(f"Error checking Slack instance {inst.id}: {e}", exc_info=True)
+        except Exception as e:
+            logger.debug(f"Slack integration not available: {e}")
+
+        # Discord instances
+        try:
+            from models import DiscordIntegration
+            discord_instances = self._list_instances(
+                DiscordIntegration,
+                DiscordIntegration.is_active == True,
+                DiscordIntegration.status.in_(["connected"]),
+            )
+            for inst in discord_instances:
+                try:
+                    await self._check_discord_instance(inst)
+                except Exception as e:
+                    logger.error(f"Error checking Discord instance {inst.id}: {e}", exc_info=True)
+        except Exception as e:
+            logger.debug(f"Discord integration not available: {e}")
+
+    async def _check_whatsapp_instance(self, instance: WhatsAppMCPInstance):
         """Delegate to container_manager.health_check(), map to success/failure."""
         if not self.container_manager:
             return
@@ -230,7 +267,7 @@ class ChannelHealthService:
             if transition:
                 await self._handle_transition(
                     cb, channel_type, instance.id, instance.tenant_id,
-                    transition[0], transition[1], detail, health_status, latency_ms, db
+                    transition[0], transition[1], detail, health_status, latency_ms
                 )
 
         except Exception as e:
@@ -244,10 +281,10 @@ class ChannelHealthService:
             if transition:
                 await self._handle_transition(
                     cb, channel_type, instance.id, instance.tenant_id,
-                    transition[0], transition[1], str(e), "unhealthy", latency_ms, db
+                    transition[0], transition[1], str(e), "unhealthy", latency_ms
                 )
 
-    async def _check_telegram_instance(self, instance: TelegramBotInstance, db: Session):
+    async def _check_telegram_instance(self, instance: TelegramBotInstance):
         """Check Telegram bot health via Bot API getMe()."""
         channel_type = "telegram"
         cb = self._get_or_create_cb(channel_type, instance.id)
@@ -259,14 +296,14 @@ class ChannelHealthService:
         start_time = time.monotonic()
         try:
             # Decrypt bot token
-            token = self._decrypt_telegram_token(instance, db)
+            token = self._decrypt_telegram_token(instance)
             if not token:
                 transition = cb.record_failure("token_decryption_failed")
                 if transition:
                     await self._handle_transition(
                         cb, channel_type, instance.id, instance.tenant_id,
                         transition[0], transition[1], "Token decryption failed",
-                        "unhealthy", 0, db
+                        "unhealthy", 0
                     )
                 return
 
@@ -302,7 +339,7 @@ class ChannelHealthService:
                 if transition:
                     await self._handle_transition(
                         cb, channel_type, instance.id, instance.tenant_id,
-                        transition[0], transition[1], detail, health_status, latency_ms, db
+                        transition[0], transition[1], detail, health_status, latency_ms
                     )
 
         except Exception as e:
@@ -316,10 +353,10 @@ class ChannelHealthService:
             if transition:
                 await self._handle_transition(
                     cb, channel_type, instance.id, instance.tenant_id,
-                    transition[0], transition[1], str(e), "unhealthy", latency_ms, db
+                    transition[0], transition[1], str(e), "unhealthy", latency_ms
                 )
 
-    async def _check_slack_instance(self, instance, db: Session):
+    async def _check_slack_instance(self, instance):
         """Check Slack bot health via auth.test API."""
         channel_type = "slack"
         cb = self._get_or_create_cb(channel_type, instance.id)
@@ -331,14 +368,14 @@ class ChannelHealthService:
         start_time = time.monotonic()
         try:
             # Decrypt token
-            token = self._decrypt_slack_token(instance, db)
+            token = self._decrypt_slack_token(instance)
             if not token:
                 transition = cb.record_failure("token_decryption_failed")
                 if transition:
                     await self._handle_transition(
                         cb, channel_type, instance.id, instance.tenant_id,
                         transition[0], transition[1], "Token decryption failed",
-                        "unhealthy", 0, db
+                        "unhealthy", 0
                     )
                 return
 
@@ -367,7 +404,7 @@ class ChannelHealthService:
             if transition:
                 await self._handle_transition(
                     cb, channel_type, instance.id, instance.tenant_id,
-                    transition[0], transition[1], detail, health_status, latency_ms, db
+                    transition[0], transition[1], detail, health_status, latency_ms
                 )
 
         except Exception as e:
@@ -381,10 +418,10 @@ class ChannelHealthService:
             if transition:
                 await self._handle_transition(
                     cb, channel_type, instance.id, instance.tenant_id,
-                    transition[0], transition[1], str(e), "unhealthy", latency_ms, db
+                    transition[0], transition[1], str(e), "unhealthy", latency_ms
                 )
 
-    async def _check_discord_instance(self, instance, db: Session):
+    async def _check_discord_instance(self, instance):
         """Check Discord bot health via /users/@me endpoint."""
         channel_type = "discord"
         cb = self._get_or_create_cb(channel_type, instance.id)
@@ -396,14 +433,14 @@ class ChannelHealthService:
         start_time = time.monotonic()
         try:
             # Decrypt token
-            token = self._decrypt_discord_token(instance, db)
+            token = self._decrypt_discord_token(instance)
             if not token:
                 transition = cb.record_failure("token_decryption_failed")
                 if transition:
                     await self._handle_transition(
                         cb, channel_type, instance.id, instance.tenant_id,
                         transition[0], transition[1], "Token decryption failed",
-                        "unhealthy", 0, db
+                        "unhealthy", 0
                     )
                 return
 
@@ -433,7 +470,7 @@ class ChannelHealthService:
                 if transition:
                     await self._handle_transition(
                         cb, channel_type, instance.id, instance.tenant_id,
-                        transition[0], transition[1], detail, health_status, latency_ms, db
+                        transition[0], transition[1], detail, health_status, latency_ms
                     )
             finally:
                 await adapter.stop()  # Close aiohttp session
@@ -449,60 +486,63 @@ class ChannelHealthService:
             if transition:
                 await self._handle_transition(
                     cb, channel_type, instance.id, instance.tenant_id,
-                    transition[0], transition[1], str(e), "unhealthy", latency_ms, db
+                    transition[0], transition[1], str(e), "unhealthy", latency_ms
                 )
 
     # =========================================================================
     # Token Decryption Helpers
     # =========================================================================
 
-    def _decrypt_telegram_token(self, instance: TelegramBotInstance, db: Session) -> Optional[str]:
+    def _decrypt_telegram_token(self, instance: TelegramBotInstance) -> Optional[str]:
         """Decrypt Telegram bot token using per-workspace Fernet encryption."""
         try:
             from services.encryption_key_service import get_telegram_encryption_key
             from hub.security import TokenEncryption
 
-            encryption_key = get_telegram_encryption_key(db)
-            if not encryption_key:
-                logger.error("Telegram encryption key not available")
-                return None
+            with self._db_session_scope() as db:
+                encryption_key = get_telegram_encryption_key(db)
+                if not encryption_key:
+                    logger.error("Telegram encryption key not available")
+                    return None
 
-            encryption = TokenEncryption(encryption_key.encode())
-            return encryption.decrypt(instance.bot_token_encrypted, instance.tenant_id)
+                encryption = TokenEncryption(encryption_key.encode())
+                return encryption.decrypt(instance.bot_token_encrypted, instance.tenant_id)
         except Exception as e:
             logger.error(f"Failed to decrypt Telegram token for instance {instance.id}: {e}")
             return None
 
-    def _decrypt_slack_token(self, instance, db: Session) -> Optional[str]:
+    def _decrypt_slack_token(self, instance) -> Optional[str]:
         """Decrypt Slack bot token using per-workspace Fernet encryption."""
         try:
             from services.encryption_key_service import get_slack_encryption_key
             from hub.security import TokenEncryption
 
-            encryption_key = get_slack_encryption_key(db)
-            if not encryption_key:
-                logger.error("Slack encryption key not available")
-                return None
+            with self._db_session_scope() as db:
+                encryption_key = get_slack_encryption_key(db)
+                if not encryption_key:
+                    logger.error("Slack encryption key not available")
+                    return None
 
-            encryption = TokenEncryption(encryption_key.encode())
-            return encryption.decrypt(instance.bot_token_encrypted, instance.tenant_id)
+                encryption = TokenEncryption(encryption_key.encode())
+                return encryption.decrypt(instance.bot_token_encrypted, instance.tenant_id)
         except Exception as e:
             logger.error(f"Failed to decrypt Slack token for instance {instance.id}: {e}")
             return None
 
-    def _decrypt_discord_token(self, instance, db: Session) -> Optional[str]:
+    def _decrypt_discord_token(self, instance) -> Optional[str]:
         """Decrypt Discord bot token using per-workspace Fernet encryption."""
         try:
             from services.encryption_key_service import get_discord_encryption_key
             from hub.security import TokenEncryption
 
-            encryption_key = get_discord_encryption_key(db)
-            if not encryption_key:
-                logger.error("Discord encryption key not available")
-                return None
+            with self._db_session_scope() as db:
+                encryption_key = get_discord_encryption_key(db)
+                if not encryption_key:
+                    logger.error("Discord encryption key not available")
+                    return None
 
-            encryption = TokenEncryption(encryption_key.encode())
-            return encryption.decrypt(instance.bot_token_encrypted, instance.tenant_id)
+                encryption = TokenEncryption(encryption_key.encode())
+                return encryption.decrypt(instance.bot_token_encrypted, instance.tenant_id)
         except Exception as e:
             logger.error(f"Failed to decrypt Discord token for instance {instance.id}: {e}")
             return None
@@ -535,7 +575,6 @@ class ChannelHealthService:
         detail: str,
         health_status: str,
         latency_ms: float,
-        db: Session,
     ):
         """Persist state, write audit event, emit WebSocket, dispatch alert."""
         logger.info(
@@ -778,59 +817,43 @@ class ChannelHealthService:
 
     async def manual_probe(self, channel_type: str, instance_id: int, tenant_id: str) -> Dict[str, Any]:
         """Execute a manual health probe for a specific instance. Returns probe result."""
-        db = self.get_db_session()
-        try:
-            if channel_type == "whatsapp":
-                instance = db.query(WhatsAppMCPInstance).filter(
-                    WhatsAppMCPInstance.id == instance_id,
-                    WhatsAppMCPInstance.tenant_id == tenant_id,
-                ).first()
-                if not instance:
-                    return {"error": "Instance not found"}
-                await self._check_whatsapp_instance(instance, db)
+        if channel_type == "whatsapp":
+            instance = self._get_instance(WhatsAppMCPInstance, instance_id, tenant_id)
+            if not instance:
+                return {"error": "Instance not found"}
+            await self._check_whatsapp_instance(instance)
 
-            elif channel_type == "telegram":
-                instance = db.query(TelegramBotInstance).filter(
-                    TelegramBotInstance.id == instance_id,
-                    TelegramBotInstance.tenant_id == tenant_id,
-                ).first()
-                if not instance:
-                    return {"error": "Instance not found"}
-                await self._check_telegram_instance(instance, db)
+        elif channel_type == "telegram":
+            instance = self._get_instance(TelegramBotInstance, instance_id, tenant_id)
+            if not instance:
+                return {"error": "Instance not found"}
+            await self._check_telegram_instance(instance)
 
-            elif channel_type == "slack":
-                from models import SlackIntegration
-                instance = db.query(SlackIntegration).filter(
-                    SlackIntegration.id == instance_id,
-                    SlackIntegration.tenant_id == tenant_id,
-                ).first()
-                if not instance:
-                    return {"error": "Instance not found"}
-                await self._check_slack_instance(instance, db)
+        elif channel_type == "slack":
+            from models import SlackIntegration
+            instance = self._get_instance(SlackIntegration, instance_id, tenant_id)
+            if not instance:
+                return {"error": "Instance not found"}
+            await self._check_slack_instance(instance)
 
-            elif channel_type == "discord":
-                from models import DiscordIntegration
-                instance = db.query(DiscordIntegration).filter(
-                    DiscordIntegration.id == instance_id,
-                    DiscordIntegration.tenant_id == tenant_id,
-                ).first()
-                if not instance:
-                    return {"error": "Instance not found"}
-                await self._check_discord_instance(instance, db)
+        elif channel_type == "discord":
+            from models import DiscordIntegration
+            instance = self._get_instance(DiscordIntegration, instance_id, tenant_id)
+            if not instance:
+                return {"error": "Instance not found"}
+            await self._check_discord_instance(instance)
 
-            else:
-                return {"error": f"Unknown channel type: {channel_type}"}
+        else:
+            return {"error": f"Unknown channel type: {channel_type}"}
 
-            # Return current CB state after probe
-            cb = self._circuit_breakers.get((channel_type, instance_id))
-            return {
-                "channel_type": channel_type,
-                "instance_id": instance_id,
-                "circuit_breaker": cb.to_dict() if cb else CircuitBreaker().to_dict(),
-                "probed": True,
-            }
-        finally:
-            db.close()
+        # Return current CB state after probe
+        cb = self._circuit_breakers.get((channel_type, instance_id))
+        return {
+            "channel_type": channel_type,
+            "instance_id": instance_id,
+            "circuit_breaker": cb.to_dict() if cb else CircuitBreaker().to_dict(),
+            "probed": True,
+        }
 
     def reset_circuit_breaker(self, channel_type: str, instance_id: int) -> Dict[str, Any]:
         """Reset circuit breaker to CLOSED state (admin override)."""

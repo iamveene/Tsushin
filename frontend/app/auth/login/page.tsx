@@ -47,6 +47,9 @@ function LoginContent() {
   const [loading, setLoading] = useState(false)
   const [googleSSOEnabled, setGoogleSSOEnabled] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
+  const forceLogin = searchParams.get('force') === '1'
+  const recoveryReason = searchParams.get('reason')
+  const isSessionRecovery = recoveryReason === 'session-recovery'
 
   // Redirect to /setup if system needs initial setup
   useEffect(() => {
@@ -75,6 +78,17 @@ function LoginContent() {
       setError(decodeURIComponent(errorParam))
     }
   }, [searchParams])
+
+  useEffect(() => {
+    if (!isSessionRecovery || !forceLogin) {
+      return
+    }
+
+    api.logout().catch(() => {
+      // The backend may be the exact reason we landed here. Keep the login
+      // page usable even when the cookie-clearing request fails.
+    })
+  }, [forceLogin, isSessionRecovery])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -131,6 +145,14 @@ function LoginContent() {
         {/* Login Form */}
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           <div className="bg-tsushin-surface border border-tsushin-border rounded-2xl shadow-elevated p-8 space-y-6">
+            {isSessionRecovery && (
+              <div className="bg-amber-500/10 border border-amber-400/30 rounded-md p-3">
+                <p className="text-sm text-amber-200">
+                  Your previous session could not be validated. Sign in again to continue.
+                </p>
+              </div>
+            )}
+
             {error && (
               <div className="bg-tsushin-vermilion/10 border border-tsushin-vermilion/30 rounded-md p-3">
                 <p className="text-sm text-tsushin-vermilion">{error}</p>

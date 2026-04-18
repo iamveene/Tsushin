@@ -1411,7 +1411,7 @@ async def websocket_endpoint(websocket: WebSocket):
 # Phase 14.9: WebSocket endpoint for Playground streaming v4
 # Phase SEC-002: Fixed token exposure in query parameters (HIGH-001)
 @app.websocket("/ws/playground")
-async def playground_websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)):
+async def playground_websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for Playground real-time streaming.
 
@@ -1420,8 +1420,6 @@ async def playground_websocket_endpoint(websocket: WebSocket, db: Session = Depe
     Security: Token is sent in first message after connection (not in URL query params)
     to prevent exposure in browser history, server logs, and referrer headers.
     """
-    from fastapi import Query
-    from auth_service import AuthService
     from services.playground_websocket_service import PlaygroundWebSocketService
     import json
 
@@ -1521,69 +1519,64 @@ async def playground_websocket_endpoint(websocket: WebSocket, db: Session = Depe
         # Send connection confirmation
         await websocket.send_json({"type": "connected", "user_id": user_id})
 
-        # Initialize service - use global engine variable
+        # Initialize service - use short-lived DB sessions per Playground
+        # message instead of holding one open for the full WebSocket lifetime.
         from sqlalchemy.orm import sessionmaker
         global engine
-        SessionLocal = sessionmaker(bind=engine)
-        db = SessionLocal()
+        SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+        ws_service = PlaygroundWebSocketService(SessionLocal, user_id)
 
-        try:
-            ws_service = PlaygroundWebSocketService(db, user_id)
+        # Handle incoming messages
+        while True:
+            data = await websocket.receive_text()
 
-            # Handle incoming messages
-            while True:
-                data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+                message_type = message.get("type")
 
-                try:
-                    message = json.loads(data)
-                    message_type = message.get("type")
+                if message_type == "ping":
+                    # Heartbeat
+                    await websocket.send_json({"type": "pong"})
 
-                    if message_type == "ping":
-                        # Heartbeat
-                        await websocket.send_json({"type": "pong"})
+                elif message_type == "chat":
+                    # Stream chat response
+                    agent_id = message.get("agent_id")
+                    thread_id = message.get("thread_id")
+                    user_message = message.get("message")
 
-                    elif message_type == "chat":
-                        # Stream chat response
-                        agent_id = message.get("agent_id")
-                        thread_id = message.get("thread_id")
-                        user_message = message.get("message")
-
-                        if not agent_id or not user_message:
-                            await websocket.send_json({
-                                "type": "error",
-                                "error": "Missing agent_id or message"
-                            })
-                            continue
-
-                        # Process and stream response
-                        async for chunk in ws_service.process_streaming_message(
-                            agent_id=agent_id,
-                            thread_id=thread_id,
-                            message=user_message,
-                            websocket=websocket
-                        ):
-                            await websocket.send_json(chunk)
-
-                    else:
+                    if not agent_id or not user_message:
                         await websocket.send_json({
                             "type": "error",
-                            "error": f"Unknown message type: {message_type}"
+                            "error": "Missing agent_id or message"
                         })
+                        continue
 
-                except json.JSONDecodeError:
+                    # Process and stream response
+                    async for chunk in ws_service.process_streaming_message(
+                        agent_id=agent_id,
+                        thread_id=thread_id,
+                        message=user_message,
+                        websocket=websocket
+                    ):
+                        await websocket.send_json(chunk)
+
+                else:
                     await websocket.send_json({
                         "type": "error",
-                        "error": "Invalid JSON message"
-                    })
-                except Exception as msg_error:
-                    logger.error(f"Error processing WebSocket message: {msg_error}", exc_info=True)
-                    await websocket.send_json({
-                        "type": "error",
-                        "error": str(msg_error)
+                        "error": f"Unknown message type: {message_type}"
                     })
 
-        finally:
-            db.close()
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "error": "Invalid JSON message"
+                })
+            except Exception as msg_error:
+                logger.error(f"Error processing WebSocket message: {msg_error}", exc_info=True)
+                await websocket.send_json({
+                    "type": "error",
+                    "error": str(msg_error)
+                })
 
     except WebSocketDisconnect:
         logger.info(f"Playground WebSocket disconnected for user {user_id}")
