@@ -26,7 +26,7 @@ import {
   EyeOffIcon,
   SlackIcon,
 } from '@/components/ui/icons'
-import { api, type SlackIntegrationCreate } from '@/lib/client'
+import { api, type SlackIntegrationCreate, type PublicIngressSource } from '@/lib/client'
 
 interface Props {
   isOpen: boolean
@@ -134,6 +134,8 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
   const [showApp, setShowApp] = useState(false)
   const [showSec, setShowSec] = useState(false)
   const [publicBaseUrl, setPublicBaseUrl] = useState<string | null>(null)
+  const [ingressSource, setIngressSource] = useState<PublicIngressSource>('none')
+  const [ingressWarning, setIngressWarning] = useState<string | null>(null)
   const [doneIntegrationId, setDoneIntegrationId] = useState<number | null>(null)
 
   // Reset when reopened
@@ -147,11 +149,27 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
       setAppId('')
       setDmPolicy('allowlist')
       setDoneIntegrationId(null)
-      api.getMyTenantSettings()
-        .then(s => setPublicBaseUrl(s.public_base_url))
-        .catch(() => setPublicBaseUrl(null))
+      // v0.6.1 — resolver replaces direct tenant.public_base_url read so the
+      // wizard shows the platform tunnel URL when no tenant override is set.
+      api.getMyPublicIngress()
+        .then(info => {
+          setPublicBaseUrl(info.url)
+          setIngressSource(info.source)
+          setIngressWarning(info.warning)
+        })
+        .catch(() => {
+          setPublicBaseUrl(null)
+          setIngressSource('none')
+          setIngressWarning(null)
+        })
     }
   }, [isOpen])
+
+  const sourceBadge =
+    ingressSource === 'tunnel' ? 'via platform tunnel'
+    : ingressSource === 'override' ? 'tenant override'
+    : ingressSource === 'dev' ? 'dev environment'
+    : null
 
   const totalSteps = 5
   const stepTitles = useMemo(
@@ -244,10 +262,18 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
           <p className="text-xs text-amber-200 flex items-start gap-2">
             <AlertTriangleIcon size={14} className="mt-0.5 flex-shrink-0" />
             <span>
-              HTTP mode needs your tenant's <strong>Public Base URL</strong> set in Hub → Communication first. For local dev:{' '}
-              <code className="bg-amber-900/40 px-1 rounded">cloudflared tunnel --url http://localhost:8081</code>
+              {ingressWarning ? (
+                <>Tenant override is set but invalid: {ingressWarning}. Fix it in Hub → Communication, or ask your admin to enable Remote Access.</>
+              ) : (
+                <>No public ingress configured. Ask a global admin to enable Remote Access for this tenant, or set an <strong>Ingress Override</strong> in Hub → Communication.</>
+              )}
             </span>
           </p>
+        </div>
+      )}
+      {mode === 'http' && publicBaseUrl && sourceBadge && (
+        <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 rounded text-xs text-emerald-200">
+          Using <code className="bg-emerald-900/40 px-1 rounded">{publicBaseUrl}</code> ({sourceBadge})
         </div>
       )}
 

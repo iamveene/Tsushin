@@ -1892,6 +1892,20 @@ export interface TenantSelfSettings {
   public_base_url: string | null
 }
 
+// v0.6.1 Public Ingress Resolver — authoritative public URL for this tenant.
+// `source` indicates where the resolver picked the URL from (tenant override,
+// platform Cloudflare tunnel, dev env var, or none). `override_url` echoes
+// the raw tenant.public_base_url regardless of which source wins, so the
+// override card can render its input correctly.
+export type PublicIngressSource = 'override' | 'tunnel' | 'dev' | 'none'
+
+export interface PublicIngressInfo {
+  url: string | null
+  source: PublicIngressSource
+  warning: string | null
+  override_url: string | null
+}
+
 // Playground Feature
 export interface PlaygroundAgentInfo {
   id: number
@@ -4789,6 +4803,16 @@ export const api = {
       body: JSON.stringify(data),
     })
     if (!res.ok) await handleApiError(res, 'Failed to update tenant settings')
+    return res.json()
+  },
+
+  // v0.6.1 Public Ingress Resolver — authoritative public URL for the caller's
+  // tenant. Consumers (Slack/Discord wizards, WebhookSetupModal, PublicBaseUrlCard)
+  // should use this rather than reading tenant.public_base_url directly or
+  // inferring a URL from window.location.origin.
+  async getMyPublicIngress(): Promise<PublicIngressInfo> {
+    const res = await authenticatedFetch(`${API_URL}/api/tenant/me/public-ingress`)
+    if (!res.ok) await handleApiError(res, 'Failed to resolve public ingress')
     return res.json()
   },
 

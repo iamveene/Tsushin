@@ -115,7 +115,11 @@ class GoogleSSOService:
             GoogleOAuthCredentials.tenant_id == tenant_id
         ).first()
 
-    def get_oauth_credentials(self, tenant_id: Optional[str] = None) -> Tuple[str, str, str]:
+    def get_oauth_credentials(
+        self,
+        tenant_id: Optional[str] = None,
+        redirect_uri: Optional[str] = None,
+    ) -> Tuple[str, str, str]:
         """
         Get OAuth credentials for authentication.
 
@@ -131,6 +135,8 @@ class GoogleSSOService:
         Raises:
             GoogleSSOError: If no credentials are configured
         """
+        redirect_uri = redirect_uri or settings.GOOGLE_SSO_REDIRECT_URI
+
         # Try tenant-specific credentials first (from centralized GoogleOAuthCredentials)
         if tenant_id:
             google_creds = self.get_google_credentials(tenant_id)
@@ -150,7 +156,7 @@ class GoogleSSOService:
                 return (
                     google_creds.client_id,
                     client_secret,
-                    settings.GOOGLE_SSO_REDIRECT_URI
+                    redirect_uri,
                 )
 
         # Fall back to platform-wide credentials
@@ -158,7 +164,7 @@ class GoogleSSOService:
             return (
                 settings.GOOGLE_SSO_CLIENT_ID,
                 settings.GOOGLE_SSO_CLIENT_SECRET,
-                settings.GOOGLE_SSO_REDIRECT_URI
+                redirect_uri,
             )
 
         raise GoogleSSOError(
@@ -171,6 +177,7 @@ class GoogleSSOService:
         tenant_slug: Optional[str] = None,
         redirect_after: str = "/",
         invitation_token: Optional[str] = None,
+        redirect_uri: Optional[str] = None,
     ) -> str:
         """
         Generate Google OAuth authorization URL.
@@ -215,7 +222,10 @@ class GoogleSSOService:
                         tenant_slug = tenant.slug
 
         # Get OAuth credentials
-        client_id, _, redirect_uri = self.get_oauth_credentials(tenant_id)
+        client_id, _, resolved_redirect_uri = self.get_oauth_credentials(
+            tenant_id,
+            redirect_uri=redirect_uri,
+        )
 
         # HIGH-004 FIX: Generate state token using database-backed state manager
         # This ensures state persists across server restarts and works in multi-instance deployments
@@ -234,7 +244,7 @@ class GoogleSSOService:
         # Build authorization URL
         params = {
             "client_id": client_id,
-            "redirect_uri": redirect_uri,
+            "redirect_uri": resolved_redirect_uri,
             "response_type": "code",
             "scope": " ".join(self.SCOPES),
             "state": state,
@@ -290,7 +300,12 @@ class GoogleSSOService:
         except ValueError as e:
             raise GoogleSSOError(str(e))
 
-    async def exchange_code_for_tokens(self, code: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    async def exchange_code_for_tokens(
+        self,
+        code: str,
+        tenant_id: Optional[str] = None,
+        redirect_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Exchange authorization code for tokens.
 
@@ -301,7 +316,10 @@ class GoogleSSOService:
         Returns:
             Token response from Google
         """
-        client_id, client_secret, redirect_uri = self.get_oauth_credentials(tenant_id)
+        client_id, client_secret, resolved_redirect_uri = self.get_oauth_credentials(
+            tenant_id,
+            redirect_uri=redirect_uri,
+        )
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -311,7 +329,7 @@ class GoogleSSOService:
                     "client_secret": client_secret,
                     "code": code,
                     "grant_type": "authorization_code",
-                    "redirect_uri": redirect_uri,
+                    "redirect_uri": resolved_redirect_uri,
                 },
             )
 
@@ -524,6 +542,7 @@ class GoogleSSOService:
         self,
         code: str,
         state: str,
+        redirect_uri: Optional[str] = None,
     ) -> Tuple[User, str, str]:
         """
         Complete Google SSO authentication.
@@ -542,7 +561,11 @@ class GoogleSSOService:
         invitation_token = state_data.get("invitation_token")
 
         # Exchange code for tokens
-        tokens = await self.exchange_code_for_tokens(code, tenant_id)
+        tokens = await self.exchange_code_for_tokens(
+            code,
+            tenant_id,
+            redirect_uri=redirect_uri,
+        )
         access_token = tokens.get("access_token")
 
         if not access_token:

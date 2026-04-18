@@ -17,7 +17,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
 // V060-CHN-002: SlackSetupModal/DiscordSetupModal replaced by guided wizards.
@@ -311,6 +311,10 @@ export default function HubPage() {
   const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])
   const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
   const [webhookSaving, setWebhookSaving] = useState(false)
+
+  // v0.6.1: resolved public ingress info — authoritative source for inbound
+  // webhook URL display (replaces window.location.origin fallback).
+  const [publicIngress, setPublicIngress] = useState<PublicIngressInfo | null>(null)
   const [discordTestLoading, setDiscordTestLoading] = useState<number | null>(null)
 
   // Vertex AI configuration state
@@ -482,6 +486,7 @@ export default function HubPage() {
         loadSlackIntegrations()  // v0.6.0
         loadDiscordIntegrations()  // v0.6.0
         loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
+        loadPublicIngress()  // v0.6.1: resolver-backed inbound URL
       }
       if (activeTab === 'mcp-servers') {
         loadMcpServers()  // Phase 26
@@ -656,6 +661,7 @@ export default function HubPage() {
         loadSlackIntegrations(),  // v0.6.0
         loadDiscordIntegrations(),  // v0.6.0
         loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
+        loadPublicIngress(),  // v0.6.1: resolver-backed inbound URL
         fetchToolboxStatus(),
         loadGoogleCredentials(),
         loadSystemConfig(),
@@ -1748,6 +1754,18 @@ export default function HubPage() {
       setWebhookIntegrations(data)
     } catch (err) {
       console.error('Failed to load webhook integrations:', err)
+    }
+  }, [])
+
+  // v0.6.1: fetch the resolver-computed public ingress URL so all inbound-URL
+  // displays (webhook cards, setup modal) share the same authoritative value.
+  const loadPublicIngress = useCallback(async () => {
+    try {
+      const info = await api.getMyPublicIngress()
+      setPublicIngress(info)
+    } catch (err) {
+      console.error('Failed to resolve public ingress:', err)
+      setPublicIngress(null)
     }
   }, [])
 
@@ -3353,7 +3371,7 @@ export default function HubPage() {
                               <code className="text-cyan-300 text-xs bg-gray-900 px-1 rounded truncate">{integration.inbound_url}</code>
                               <button
                                 type="button"
-                                onClick={() => navigator.clipboard.writeText(window.location.origin + integration.inbound_url)}
+                                onClick={() => navigator.clipboard.writeText((publicIngress?.url || window.location.origin) + integration.inbound_url)}
                                 title="Copy URL"
                                 className="text-gray-500 hover:text-cyan-400 ml-auto shrink-0"
                               >
@@ -4841,7 +4859,7 @@ export default function HubPage() {
         onClose={() => setShowWebhookSetupModal(false)}
         onSubmit={handleCreateWebhookIntegration}
         saving={webhookSaving}
-        apiBase={typeof window !== 'undefined' ? window.location.origin : ''}
+        apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
       />
 
       {/* v0.6.0: Vector Store Config Modal */}

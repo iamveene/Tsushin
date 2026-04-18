@@ -464,7 +464,13 @@ All authentication endpoints live under `/api/auth/` (`backend/auth_routes.py:69
 
 * Name: `tsushin_session`
 * `httpOnly=true`, `SameSite=Lax`, `max_age=86400` (24 h, matches JWT expiry)
-* `secure` flag is set when `TSN_SSL_MODE` is anything other than `""`, `off`, `none`, `disabled`.
+* `secure` flag follows the effective request scheme when the backend can see it, so local HTTP and local HTTPS entrypoints can coexist.
+* Google SSO callback URLs are resolved from the incoming request origin. When local self-signed HTTPS is enabled, loopback HTTP entrypoints such as `http://127.0.0.1:3030` hand off Google SSO to the configured HTTPS callback (`https://localhost/api/auth/google/callback`) so the same Google OAuth client works on both local origins.
+
+**Local auth recovery / pool guardrails (2026-04-18):**
+
+* Auth bootstrap now fails closed into `/auth/login?force=1&reason=session-recovery` instead of leaving protected routes stuck on `Loading Tsushin...` when `/api/auth/me` hangs or times out.
+* Backend PostgreSQL connections set `idle_in_transaction_session_timeout` from `TSN_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` (default `15000`) to keep stale browser tabs or leaked request paths from saturating the pool long enough to break login or Google SSO.
 
 ### 6.2 Multi-tenancy model
 
