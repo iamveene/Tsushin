@@ -75,7 +75,7 @@ SUPERVISOR_MAX_ATTEMPTS = len(SUPERVISOR_BACKOFFS)
 
 TunnelModeName = Literal["quick", "named"]
 TunnelStateName = Literal[
-    "stopped", "starting", "running", "stopping",
+    "stopped", "starting", "verifying", "running", "stopping",
     "crashed", "error", "unavailable",
 ]
 
@@ -418,11 +418,39 @@ class CloudflareTunnelService:
                     "Named tunnel failed readiness probe "
                     "(no HA connections in 15s)"
                 )
+            # BUG-589: Even with HA connections up, the named hostname can
+            # still return Cloudflare 502 if ingress/target is broken.
+            # Verify end-to-end before declaring "running".
+            hostname = loaded.tunnel_hostname
+            public_url = f"https://{hostname}" if hostname else None
+            if hostname:
+                async with self._lock:
+                    self._state.state = "verifying"
+                    self._state.public_url = public_url
+                    self._state.message = (
+                        f"Verifying public hostname {hostname} is serving "
+                        "the app"
+                    )
+                    self._state.updated_at = datetime.now(timezone.utc)
+                public_ok, last_status = await self._probe_public_url(
+                    hostname, timeout=30.0
+                )
+                if not public_ok:
+                    status_hint = (
+                        f" (last HTTP status: {last_status})"
+                        if last_status is not None
+                        else ""
+                    )
+                    err_msg = (
+                        f"Named tunnel started but public hostname "
+                        f"{hostname} is not serving the app{status_hint}"
+                    )
+                    self._persist(last_error=err_msg)
+                    await self.stop()
+                    raise RuntimeError(err_msg)
             async with self._lock:
                 self._state.state = "running"
-                self._state.public_url = (
-                    f"https://{loaded.tunnel_hostname}" if loaded.tunnel_hostname else None
-                )
+                self._state.public_url = public_url
                 self._state.message = "Cloudflare named tunnel is running"
                 self._state.updated_at = datetime.now(timezone.utc)
 
@@ -652,6 +680,33 @@ class CloudflareTunnelService:
                 pass
             await asyncio.sleep(0.25)
         return False
+
+    async def _probe_public_url(
+        self, hostname: str, timeout: float = 30.0
+    ) -> tuple[bool, Optional[int]]:
+        # BUG-589: `_probe_metrics()` only confirms the local cloudflared has a
+        # connection to Cloudflare's edge. A misconfigured ingress or a dead
+        # target still surfaces as a 5xx (typically 502) on the public URL.
+        # We must verify the public hostname actually serves the app before
+        # declaring the tunnel "running".
+        probe_url = f"https://{hostname.strip('/')}/api/health"
+        deadline = asyncio.get_running_loop().time() + timeout
+        last_status: Optional[int] = None
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=5.0, follow_redirects=True
+                ) as client:
+                    resp = await client.get(probe_url)
+                    last_status = resp.status_code
+                    if 200 <= resp.status_code < 500:
+                        return True, resp.status_code
+            except Exception as exc:
+                logger.debug(
+                    "Public URL probe error for %s: %s", probe_url, exc
+                )
+            await asyncio.sleep(2.0)
+        return False, last_status
 
     # ----- Supervisor -----
 

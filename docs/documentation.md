@@ -2398,7 +2398,7 @@ Remote Access exposes the whole Tsushin instance through a single Cloudflare Tun
 
 Key properties:
 - `cloudflared` runs as a supervised Python subprocess inside `tsushin-backend` (not a separate compose sidecar). A supervisor task restarts it up to 3 times with 5s/15s/30s backoff before giving up and marking `status=error`.
-- Readiness is confirmed by polling `cloudflared`'s Prometheus metrics endpoint for a `cloudflared_tunnel_ha_connections > 0` line — named mode no longer relies on a race-condition-prone sleep.
+- Readiness for **named** mode is a two-stage check (BUG-589): (1) poll `cloudflared`'s Prometheus metrics endpoint for `cloudflared_tunnel_ha_connections > 0` — proves the local subprocess has an edge connection — then (2) run a retrying `HEAD https://<tunnel_hostname>/api/health` probe (up to ~30 s, 2 s between attempts) to prove the **public hostname actually serves the app end-to-end**. Only after both pass does the snapshot transition to `state="running"`. Between stages the state is `state="verifying"` with a `"Verifying public hostname <host> is serving the app"` message. If the public probe never succeeds, the tunnel is stopped and the admin sees the real error (e.g. last HTTP status `502`) instead of a false green "running" badge. Quick-mode readiness continues to rely on `public_url` appearing on stdout.
 - Cloudflare terminates TLS at the edge. The tunnel forwards plain HTTP to the local Caddy proxy on port 80, which then routes `/api/*` and `/ws/*` to the backend and everything else to the frontend. This is why `install.py` generates a `:80` site block in every SSL mode; without it, tunnel requests would bypass Caddy's `/api` routing and the frontend's API calls would 502.
 - The tunnel token is encrypted at rest with a dedicated Fernet key (`config.remote_access_encryption_key`), which itself is wrapped with `TSN_MASTER_KEY` (SEC-006 envelope pattern). The plaintext token is never logged, never returned in any API response, and only surfaced as the boolean `tunnel_token_configured` in the GET config endpoint.
 - Optimistic concurrency on config writes: the PUT endpoint takes an `expected_updated_at` and returns HTTP 409 if the stored `updated_at` has moved since the admin last read it.
@@ -2481,7 +2481,8 @@ The Status card polls `GET /api/admin/remote-access/status` every 5 seconds whil
 |---|---|
 | `stopped` | Subprocess is not running. Default state after boot if autostart is off. |
 | `starting` | Subprocess is launching; readiness probe hasn't confirmed yet. |
-| `running` | Subprocess is up and connected to the Cloudflare edge (≥1 HA connection). |
+| `verifying` | (Named mode, BUG-589) Local cloudflared has ≥1 HA connection, now probing `HEAD https://<tunnel_hostname>/api/health` to confirm the public hostname actually serves the app. |
+| `running` | Subprocess is up, Cloudflare edge has ≥1 HA connection, AND the public hostname probe returned a non-5xx response. |
 | `stopping` | Graceful stop in progress (SIGTERM → 10s → SIGKILL → 5s ladder). |
 | `crashed` | Subprocess exited unexpectedly; supervisor may be about to restart. |
 | `error` | Supervisor gave up after 3 restart attempts — manual intervention required. |
@@ -2489,6 +2490,7 @@ The Status card polls `GET /api/admin/remote-access/status` every 5 seconds whil
 
 Common errors surfaced in `last_error`:
 - **"Named tunnel failed readiness probe (no HA connections in 15s)"** — the tunnel token is wrong, the hostname isn't bound to any route, or outbound QUIC/HTTPS is blocked by your firewall. Double-check the token and the Cloudflare Dashboard route.
+- **"Named tunnel started but public hostname `<host>` is not serving the app (last HTTP status: 502)"** — BUG-589. Cloudflared is connected to the edge but the ingress rule points at the wrong target or the target container is down. Check the route's Service URL in the Cloudflare Dashboard (it should be `http://tsushin-proxy:80`, not `frontend:3030`), and confirm `tsushin-proxy` is healthy (`docker ps --filter name=tsushin-proxy`).
 - **"Quick tunnel timed out waiting for URL"** — cloudflared couldn't reach the `trycloudflare.com` edge. Network / egress issue.
 - **"Supervisor gave up after 3 restart attempts"** — cloudflared keeps crashing. Check `docker logs tsushin-backend | grep cloudflared` for the underlying error; typical causes: invalid token, revoked route, stale DNS record.
 

@@ -30,12 +30,35 @@ export default function StepCreateInstance() {
     api.getMCPInstances().then(setExistingInstances).catch(() => {})
   }, [])
 
-  // If we already have an instance from a previous wizard run, check if authenticated
+  // If we already have an instance from a previous wizard run, re-verify
+  // health before flipping into the success state. BUG-591: previously we
+  // trusted `state.stepsCompleted[2]` alone, but that flag could be set by
+  // `setInstanceData()` before the QR was ever scanned, causing the UI to
+  // flash "WhatsApp Connected!" on the creation step.
   useEffect(() => {
-    if (state.createdInstance && state.stepsCompleted[2]) {
-      setAuthenticated(true)
-      setInstanceId(state.createdInstance.id)
-    }
+    if (!state.createdInstance) return
+    const cachedInstanceId = state.createdInstance.id
+    setInstanceId(cachedInstanceId)
+    if (!state.stepsCompleted[2]) return
+    let cancelled = false
+    api.getMCPHealth(cachedInstanceId).then(health => {
+      if (cancelled) return
+      if (health.authenticated) {
+        setAuthenticated(true)
+      } else {
+        // Health says not authenticated — fall back to the QR scan UI.
+        setAuthenticated(false)
+        startPolling(cachedInstanceId)
+      }
+    }).catch(() => {
+      if (cancelled) return
+      // Health endpoint unavailable — resume polling instead of flashing
+      // a false success.
+      setAuthenticated(false)
+      startPolling(cachedInstanceId)
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.createdInstance, state.stepsCompleted])
 
   // QR polling
