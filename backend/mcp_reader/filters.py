@@ -167,7 +167,13 @@ class MessageFilter:
         try:
             from services.whatsapp_id_discovery import WhatsAppIDDiscovery
             discovery = WhatsAppIDDiscovery(time_window_minutes=60)
-            return discovery.auto_link_contact(self.db_session, sender_normalized, self.logger)
+            return discovery.auto_link_contact(
+                self.db_session,
+                sender_normalized,
+                self.logger,
+                tenant_id=tenant_id,
+                chat_name=message.get("chat_name") or message.get("sender_name"),
+            )
         except Exception:
             return None
 
