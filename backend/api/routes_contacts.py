@@ -601,8 +601,9 @@ def lookup_contact(
     if contact:
         return enrich_contact_with_user_info(db, contact)
 
-    # Try phone_number (normalize by removing + prefix)
-    normalized = identifier.lstrip("+")
+    # Try phone_number (normalize user-entered formatting, then strip + prefix)
+    normalized_phone = normalize_phone_number(identifier) or identifier
+    normalized = normalized_phone.lstrip("+")
     contact = base_query.filter(Contact.phone_number == normalized).first()
     if contact:
         return enrich_contact_with_user_info(db, contact)
