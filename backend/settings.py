@@ -66,6 +66,14 @@ APP_PORT = int(get_env("TSN_APP_PORT", "APP_PORT", "8081"))
 BACKEND_URL = get_env("TSN_BACKEND_URL", "BACKEND_URL", f"http://{APP_HOST}:{APP_PORT}")
 FRONTEND_URL = get_env("TSN_FRONTEND_URL", "FRONTEND_URL", "http://localhost:3030")
 
+# Public Ingress Resolver (v0.6.1) — developer escape hatch. When set, the
+# resolver uses this URL when no tenant override is configured and no
+# platform tunnel is running. Also flips the tenant-override validator into
+# dev mode so http:// overrides are accepted. MUST NOT be set in production.
+DEV_PUBLIC_BASE_URL: Optional[str] = (
+    get_env("TSN_DEV_PUBLIC_BASE_URL", "TSUSHIN_DEV_PUBLIC_BASE_URL", "") or None
+)
+
 # Google OAuth Configuration (for Gmail/Calendar integrations)
 GOOGLE_OAUTH_REDIRECT_URI = get_env(
     "TSN_GOOGLE_OAUTH_REDIRECT_URI",
@@ -86,6 +94,9 @@ GOOGLE_SSO_REDIRECT_URI = get_env(
 INTERNAL_DB_PATH = get_env("TSN_INTERNAL_DB_PATH", "INTERNAL_DB_PATH", "./data/agent.db")
 DATABASE_URL = get_env("DATABASE_URL", None, f"sqlite:///{INTERNAL_DB_PATH}")
 MCP_MESSAGES_DB_PATH = get_env("TSN_MCP_MESSAGES_DB_PATH", "MCP_MESSAGES_DB_PATH")
+DB_IDLE_IN_TRANSACTION_TIMEOUT_MS = int(
+    get_env("TSN_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS", None, "15000")
+)
 
 # Data Storage Paths (Phase 4.1 & 6.1)
 WORKSPACE_DIR = get_env("TSN_WORKSPACE_DIR", None, "./data/workspace")

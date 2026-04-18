@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### UI Recovery & Local Auth Stability (2026-04-18)
+
+- **Stale-session recovery login:** frontend auth bootstrap now times out `GET /api/auth/me` after 8s and hard-redirects to `/auth/login?force=1&reason=session-recovery` instead of leaving protected routes stuck on `Loading Tsushin...`. The login page shows a recovery banner and performs a best-effort logout without blocking sign-in. [`frontend/contexts/AuthContext.tsx`](frontend/contexts/AuthContext.tsx), [`frontend/app/auth/login/page.tsx`](frontend/app/auth/login/page.tsx), [`frontend/lib/client.ts`](frontend/lib/client.ts), [`frontend/middleware.ts`](frontend/middleware.ts)
+- **Local HTTP + HTTPS Google SSO parity:** auth cookies now derive the `Secure` flag from the actual request scheme, Google OAuth callback URLs are built from the request origin, and loopback HTTP entrypoints fall back to the configured local HTTPS callback when self-signed HTTPS is enabled. This keeps `https://localhost` Google SSO working and lets `http://127.0.0.1:3030` initiate the same flow without a separate Google redirect URI registration. Also removed a duplicate `TSN_SSL_MODE` compose env entry that blanked the backend SSL mode. [`backend/auth_routes.py`](backend/auth_routes.py), [`backend/auth_google.py`](backend/auth_google.py), [`docker-compose.yml`](docker-compose.yml), [`backend/tests/test_auth_security_fixes.py`](backend/tests/test_auth_security_fixes.py)
+- **Postgres pool guardrail for stale tabs:** backend Postgres connections now set `idle_in_transaction_session_timeout` (default `15000ms`) so leaked read transactions from stale browser tabs cannot pin the full pool long enough to break `/api/auth/me` or Google SSO. [`backend/db.py`](backend/db.py), [`backend/settings.py`](backend/settings.py), [`docker-compose.yml`](docker-compose.yml), [`backend/tests/test_db_connection_guards.py`](backend/tests/test_db_connection_guards.py)
+
 ### Bug-Fix Sprint — BUG-589 to BUG-593 (2026-04-18)
 
 Remediated the five `Open` findings from the 2026-04-17 UI-First Fresh-Install audit on `develop`:

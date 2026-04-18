@@ -161,7 +161,6 @@ services:
       - TSN_POLL_INTERVAL_MS=${TSN_POLL_INTERVAL_MS:-3000}
       - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-5/minute}
       - TSN_DISABLE_AUTH_RATE_LIMIT=${TSN_DISABLE_AUTH_RATE_LIMIT:-false}
-      - TSN_SSL_MODE=${TSN_SSL_MODE:-}
       # Docker socket proxy (BUG-135: no direct socket mount)
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
 
@@ -170,8 +169,13 @@ services:
       - TSN_FRONTEND_URL=${TSN_FRONTEND_URL:-http://localhost:3030}
       - TSN_GOOGLE_OAUTH_REDIRECT_URI=${TSN_GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8081/api/hub/google/oauth/callback}
 
+      # v0.6.1 Public Ingress Resolver — dev escape hatch for local setups without
+      # a Cloudflare tunnel. Leave empty in production.
+      - TSN_DEV_PUBLIC_BASE_URL=${TSN_DEV_PUBLIC_BASE_URL:-}
+
       # Database
       - DATABASE_URL=postgresql://tsushin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@${TSN_STACK_NAME:-tsushin}-postgres:5432/tsushin
+      - TSN_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS=${TSN_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS:-15000}
       # Legacy SQLite path (kept for MCP reader and rollback)
       - INTERNAL_DB_PATH=/app/data/agent.db
       - TSN_CHROMA_DIR=/app/data/chroma
