@@ -10,6 +10,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import { usePathname, useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 import { isPublicPath } from '@/lib/public-paths'
+import * as playgroundMiniStore from '@/lib/playgroundMiniSessionStore'
 
 // User type matching backend response
 interface User {
@@ -193,6 +194,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // SEC-005: Call logout endpoint — backend clears the httpOnly cookie
     api.logout().catch(console.error)
     _cleanupLegacyToken()
+    // Playground Mini: clear per-user sessionStorage so the next user on this tab
+    // doesn't momentarily inherit stale selection state from the outgoing user.
+    if (user?.id != null) {
+      playgroundMiniStore.clear(user.id)
+    } else {
+      playgroundMiniStore.clearAll()
+    }
     setUser(null)
     // BUG-544: Hard navigation to /auth/login. router.push() raced the
     // LayoutContent spinner branch (`if (loading || !user)` at

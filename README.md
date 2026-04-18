@@ -30,7 +30,7 @@
 - **Flows** — 4 flow types (conversation, notification, workflow, task) with immediate, scheduled, or recurring (cron) execution; 8 step types with template-variable interpolation.
 - **Sentinel security** — AI-powered detection of prompt injection, agent takeover, poisoning, shell malicious intent, memory poisoning (MemGuard), browser SSRF, and vector-store poisoning. Profiles with block / warn-only / detect-only / off modes.
 - **Studio** — visual agent builder, personas, contacts, projects (knowledge isolation), custom skills, and agent-to-agent communication.
-- **Playground** — real-time streaming chat, audio recording + Whisper transcription, document-only uploads, command palette, memory inspector, expert mode.
+- **Playground** — real-time streaming chat, audio recording + Whisper transcription, document-only uploads, command palette, memory inspector, expert mode. Plus **Playground Mini**, a floating quick-test bubble available on every authenticated page with markdown-rendered replies and a one-click expand-to-full-Playground handover that preserves the conversation.
 - **Watcher** — observability dashboard with conversations, flows, security events, channel health, billing, and a graph view.
 - **Public API v1** — OAuth2 client credentials + direct API key, rate-limited, 40+ endpoints (agents, chat, flows, hub, studio, resources).
 - **Multi-tenancy & RBAC** — 4 built-in roles (owner / admin / member / readonly), 47 permission scopes, per-tenant isolation, envelope-encrypted per-service keys.
