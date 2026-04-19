@@ -32,19 +32,31 @@ export default function WebhookSecretRevealModal({
   const isLocalhostUrl = /^https:\/\/localhost(?::\d+)?\b/.test(fullInboundUrl)
   const curlFlag = isLocalhostUrl ? '-sk' : '-s'
 
+  const apiBaseForPoll = apiBase || (typeof window !== 'undefined' ? window.location.origin : '')
   const testCommand = [
     `# Paste in a terminal with openssl + curl installed.`,
-    `# Signs a test payload with your secret and POSTs it to the inbound URL.`,
+    `# Signs a test payload and POSTs it to the inbound URL. Prints the enqueue response`,
+    `# (with queue_id) plus the agent's reply after a short delay.`,
     `SECRET='${secret}'`,
     `URL='${fullInboundUrl}'`,
     `TS=$(date +%s)`,
     `BODY='{"message":"Hello from Tsushin webhook test","sender_id":"curl-test","sender_name":"Curl"}'`,
     `SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')`,
-    `curl ${curlFlag} -X POST "$URL" \\`,
+    ``,
+    `# 1) Send the signed payload — returns {status:"queued",queue_id,poll_url}`,
+    `RESP=$(curl ${curlFlag} -X POST "$URL" \\`,
     `  -H "X-Tsushin-Signature: sha256=$SIG" \\`,
     `  -H "X-Tsushin-Timestamp: $TS" \\`,
     `  -H "Content-Type: application/json" \\`,
-    `  -d "$BODY"`,
+    `  -d "$BODY")`,
+    `echo "$RESP"`,
+    ``,
+    `# 2) Poll the agent's reply. The poll endpoint is under the Public API v1 and`,
+    `#    needs an API key with the \`agents.execute\` scope — create one in`,
+    `#    Hub \u2192 API Keys, then uncomment:`,
+    `# API_KEY='<paste-your-api-key>'`,
+    `# QID=$(echo "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin)['queue_id'])")`,
+    `# sleep 3 && curl ${curlFlag} -H "X-API-Key: $API_KEY" "${apiBaseForPoll}/api/v1/queue/$QID"`,
   ].join('\n')
 
   useEffect(() => {
@@ -178,10 +190,12 @@ export default function WebhookSecretRevealModal({
 {testCommand}
           </pre>
           <p className="mt-2 text-xs text-gray-500">
-            Needs <code className="text-gray-300">openssl</code> and <code className="text-gray-300">curl</code>. A successful test returns
-            <code className="bg-gray-900 px-1 mx-1 rounded text-cyan-300">{`{"status":"queued","queue_id":…,"poll_url":"/api/v1/queue/…"}`}</code>.
+            Needs <code className="text-gray-300">openssl</code> and <code className="text-gray-300">curl</code>. Step 1 returns
+            <code className="bg-gray-900 px-1 mx-1 rounded text-cyan-300">{`{"status":"queued","queue_id":…,"poll_url":"/api/v1/queue/…"}`}</code>
+            once the signature + timestamp are accepted. Step 2 retrieves the agent&apos;s reply once processing completes.
+            Open <strong className="text-gray-300">{'Watcher \u2192 Graph View'}</strong> in another tab to watch the channel node glow while the agent processes.
             {isLocalhostUrl && (
-              <> Uses <code className="text-gray-300">-k</code> because <code className="text-gray-300">localhost</code> is served with a self-signed cert; drop it in production.</>
+              <> The snippet uses <code className="text-gray-300">-k</code> because <code className="text-gray-300">localhost</code> is served with a self-signed cert; drop it in production.</>
             )}
           </p>
         </div>
