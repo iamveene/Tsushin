@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### QA — UI-First 4-Audit Regression Campaign (2026-04-19)
+
+- Coverage: Playground + Mini + Graph-Glow (A1 API harness + A2 browser), Flows (B1 API + B2 UI 20-shape matrix + 2 edit scenarios), Sentinel + MemGuard (C1 preflight + C2 browser matrix across Chroma × block/aggressive), Full-Stack multi-tenant UI + Ollama/Kokoro autoprov (D12 + D34-api), Ubuntu VM fresh install (HTTP + self-signed TLS, E1).
+- Outcome: 43 bugs filed (BUG-616..BUG-658). 1 Critical, 12 High, 12 Medium, 18 Low. Top findings: memory-poisoning persistence writing adversarial "IGNORE PREVIOUS INSTRUCTIONS" content as high-confidence long-term facts (BUG-642); Sentinel aggressive-level-3 regressing below block-level-1 on 3 attack families (BUG-644); Gate step data-binding returning literal `"null"` for `step_N.output` across 5 flow shapes (BUG-632); Ollama idle-DB-connection failures during long image pulls and CPU inference (BUG-649); platform Google SSO authorize URL leaking tenant client_id (BUG-647); self-signed Caddy TLS aborting SNI-less handshakes on IP-only hosts (BUG-653).
+- Evidence root: `output/playwright/full-regression-20260419/` (gitignored).
+- Playbook (reusable): `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md`.
+
 ### Agent Studio empty-canvas + stale-switch fix, fullscreen exit button, integration-disconnect leak fix (2026-04-19)
 
 Three fixes in the Studio/Hub areas surfaced by a UI regression pass.
