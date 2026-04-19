@@ -7,9 +7,15 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
 import { authenticatedFetch } from '@/lib/client'
+
+const GmailSetupWizard = dynamic(
+  () => import('@/components/integrations/GmailSetupWizard'),
+  { ssr: false },
+)
 
 interface GoogleCredentials {
   id: number
@@ -35,6 +41,9 @@ export default function IntegrationsSettingsPage() {
   const [showGoogleModal, setShowGoogleModal] = useState(false)
   const [googleClientId, setGoogleClientId] = useState('')
   const [googleClientSecret, setGoogleClientSecret] = useState('')
+
+  // Guided setup wizards
+  const [wizard, setWizard] = useState<'gmail' | 'calendar' | null>(null)
 
   const apiUrl = ''
 
@@ -224,7 +233,15 @@ export default function IntegrationsSettingsPage() {
                   </div>
                 </div>
                 {canEdit && (
-                  <div className="flex gap-3 pt-4">
+                  <div className="flex flex-wrap gap-3 pt-4">
+                    <button onClick={() => setWizard('gmail')}
+                      className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors">
+                      Set up Gmail →
+                    </button>
+                    <button disabled title="Guided Calendar setup coming in the next release"
+                      className="px-4 py-2 bg-blue-600/40 text-white/70 rounded-lg font-medium cursor-not-allowed">
+                      Set up Google Calendar (soon)
+                    </button>
                     <button onClick={() => { setGoogleClientId(googleCredentials?.client_id || ''); setGoogleClientSecret(''); setShowGoogleModal(true) }}
                       className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg font-medium transition-colors">
                       Update Credentials
@@ -248,10 +265,19 @@ export default function IntegrationsSettingsPage() {
                   Configure your Google Cloud OAuth credentials to enable Google Sign-In (SSO), Gmail integration, and Google Calendar features.
                 </p>
                 {canEdit && (
-                  <button onClick={() => setShowGoogleModal(true)}
-                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">
-                    Configure Google Integration
-                  </button>
+                  <>
+                    <button onClick={() => setShowGoogleModal(true)}
+                      className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">
+                      Configure Google Integration
+                    </button>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+                      Or jump straight into a guided setup:{' '}
+                      <button onClick={() => setWizard('gmail')} className="text-red-500 hover:text-red-600 underline">
+                        Gmail
+                      </button>{' '}·{' '}
+                      <span className="text-gray-500">Google Calendar (soon)</span>
+                    </p>
+                  </>
                 )}
               </div>
             )}
@@ -275,6 +301,16 @@ export default function IntegrationsSettingsPage() {
           </div>
         </div>
       </div>
+
+      <GmailSetupWizard
+        isOpen={wizard === 'gmail'}
+        onClose={() => setWizard(null)}
+        onComplete={() => {
+          fetchGoogleCredentials()
+          setSuccess('Gmail connected')
+          setTimeout(() => setSuccess(null), 3000)
+        }}
+      />
 
       {/* Google Modal */}
       {showGoogleModal && (
