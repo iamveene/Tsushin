@@ -252,6 +252,7 @@ const DEVELOPER_TOOLS: { value: string; label: string; Icon: React.FC<IconProps>
 
 const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
   { value: 'brave_search', label: 'Brave Search', Icon: SearchIcon, description: 'Privacy-focused web search API', status: 'available' },
+  { value: 'searxng', label: 'SearXNG', Icon: GlobeIcon, description: 'Self-hosted open-source metasearch', status: 'available' },
   { value: 'tavily', label: 'Tavily', Icon: GlobeIcon, description: 'AI-focused web search API', status: 'available' },
   { value: 'google_flights', label: 'SerpAPI (Google Services)', Icon: GlobeIcon, description: 'Unified SerpAPI key for Google Search, Google Flights, and other Google services', status: 'available' },
   { value: 'amadeus', label: 'Amadeus', Icon: PlaneIcon, description: 'Flight search API', status: 'available' },
@@ -1271,7 +1272,12 @@ export default function HubPage() {
 
   const saveAPIKey = async () => {
     if (!modalData.service || !modalData.api_key) {
-      toast.warning('Validation', 'Please select a service and provide the API key')
+      toast.warning(
+        'Validation',
+        modalData.service === 'searxng'
+          ? 'Please provide the SearXNG base URL'
+          : 'Please select a service and provide the API key'
+      )
       return
     }
 
@@ -3939,7 +3945,7 @@ export default function HubPage() {
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     These tools are automatically available to agents when the corresponding API keys are configured.
-                    Tools include: Web Search (Brave/Tavily/Google), Flight Search (Amadeus/Google), and Web Scraping.
+                    Tools include: Web Search (Brave/SearXNG/Tavily/Google), Flight Search (Amadeus/Google), and Web Scraping.
                   </p>
                 </div>
               </div>
@@ -4365,7 +4371,11 @@ export default function HubPage() {
         <Modal
           isOpen={showApiKeyModal}
           onClose={() => setShowApiKeyModal(false)}
-          title={editingKey ? 'Edit API Key' : 'Add API Key'}
+          title={
+            modalData.service === 'searxng'
+              ? (editingKey ? 'Edit SearXNG URL' : 'Add SearXNG URL')
+              : (editingKey ? 'Edit API Key' : 'Add API Key')
+          }
           footer={
             <div className="flex justify-end gap-3">
               <button
@@ -4408,14 +4418,25 @@ export default function HubPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">API Key</label>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                {modalData.service === 'searxng' ? 'Base URL' : 'API Key'}
+              </label>
               <input
-                type="password"
+                type={modalData.service === 'searxng' ? 'text' : 'password'}
                 value={modalData.api_key}
                 onChange={(e) => setModalData({ ...modalData, api_key: e.target.value })}
-                placeholder={editingKey ? 'Enter new key to update' : 'Enter API key'}
+                placeholder={
+                  modalData.service === 'searxng'
+                    ? 'https://your-searxng-instance.example.com'
+                    : (editingKey ? 'Enter new key to update' : 'Enter API key')
+                }
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white"
               />
+              {modalData.service === 'searxng' && (
+                <p className="text-xs text-tsushin-slate mt-2">
+                  Enter the base URL of your SearXNG instance. Tsushin will call `/search?format=json` on that host.
+                </p>
+              )}
             </div>
             <label className="flex items-center">
               <input

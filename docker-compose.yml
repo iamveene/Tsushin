@@ -259,6 +259,33 @@ services:
       - tsushin-network
 
   # ==========================================================================
+  # SearXNG - Self-hosted Web Search Provider
+  # ==========================================================================
+  searxng:
+    image: ghcr.io/searxng/searxng:latest
+    container_name: ${TSN_STACK_NAME:-tsushin}-searxng
+    labels:
+      tsushin.managed: "true"
+      tsushin.lifecycle: "compose"
+      tsushin.service: "searxng"
+    ports:
+      - "${SEARXNG_PORT:-8088}:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-cache:/var/cache/searxng
+    environment:
+      - SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/search?q=health&format=json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - tsushin-network
+
+  # ==========================================================================
   # Kokoro TTS Service - Free Text-to-Speech (Optional Profile)
   # ==========================================================================
   kokoro-tts:
@@ -323,6 +350,9 @@ volumes:
   # PostgreSQL persistent data — CRITICAL: contains all tenant data
   tsushin-postgres-data:
     name: ${TSN_STACK_NAME:-tsushin}-postgres-data
+  # SearXNG favicon and search cache
+  searxng-cache:
+    name: ${TSN_STACK_NAME:-tsushin}-searxng-cache
 
 # ==========================================================================
 # Optional: Additional volumes if you prefer Docker-managed volumes
