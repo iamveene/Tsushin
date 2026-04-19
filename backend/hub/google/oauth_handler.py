@@ -227,13 +227,26 @@ class GoogleOAuthHandler:
 
         return auth_url, state_token
 
-    async def handle_callback(self, code: str, state: str) -> Dict:
+    async def handle_callback(
+        self,
+        code: str,
+        state: str,
+        integration_type: Optional[str] = None,
+    ) -> Dict:
         """
         Handle OAuth callback with state validation and token exchange.
 
         Args:
             code: Authorization code from Google
             state: State token for CSRF validation
+            integration_type: "gmail" or "calendar". When the caller already knows
+                the type (it has the OAuthState record and can read the
+                ``integration_type`` prefix), pass it in explicitly. This is
+                required — wizard-driven OAuth does not provide a ``redirect_url``
+                and the type cannot be recovered from the state alone in that
+                case. If omitted, we fall back to parsing the ``redirect_url``
+                (legacy direct-redirect flow), and as a last resort raise
+                ``ValueError`` rather than silently defaulting to "calendar".
 
         Returns:
             Dict with integration details:
@@ -246,23 +259,34 @@ class GoogleOAuthHandler:
             }
 
         Raises:
-            ValueError: If state validation fails or token exchange fails
+            ValueError: If state validation fails, integration type cannot be
+                determined, or token exchange fails.
         """
         # Validate state token (CSRF protection)
         # State was created with integration_type prefix like "google_calendar"
         redirect_url = self.state_manager.validate_state(state, None)  # Don't check type, it's encoded
         logger.info("Google OAuth state validated successfully")
 
-        # Extract metadata from redirect_url
-        integration_type = "calendar"  # default
+        # Extract metadata from redirect_url (legacy path). The caller should
+        # pass integration_type explicitly; parsing redirect_url is only useful
+        # when the direct-redirect (non-popup) flow is used.
         display_name = None
 
         if redirect_url:
             from urllib.parse import urlparse, parse_qs
             parsed = urlparse(redirect_url)
             query_params = parse_qs(parsed.query)
-            integration_type = query_params.get('integration_type', ['calendar'])[0]
+            if integration_type is None:
+                integration_type = query_params.get('integration_type', [None])[0]
             display_name = query_params.get('display_name', [None])[0]
+
+        if integration_type not in ("gmail", "calendar"):
+            # Surface the misconfiguration instead of silently creating a
+            # calendar row for what was supposed to be a gmail OAuth.
+            raise ValueError(
+                "Google OAuth callback could not determine integration_type "
+                "(neither the state metadata nor the redirect_url carried it)."
+            )
 
         # Exchange code for tokens
         credentials = self._get_credentials()

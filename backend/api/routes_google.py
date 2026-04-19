@@ -562,9 +562,13 @@ async def oauth_callback(
                 detail="Tenant ID not found in OAuth state. Please try connecting again."
             )
 
-        # Handle callback
+        # Handle callback. The state record already told us which integration
+        # type this OAuth flow belongs to (google_gmail vs google_calendar);
+        # pass it through so the handler doesn't have to guess by parsing an
+        # optional redirect_url (which the wizard popup flow never sets, so
+        # gmail OAuth used to silently create calendar rows — BUG-Unreleased).
         handler = get_google_oauth_handler(db, tenant_id)
-        result = await handler.handle_callback(code, state)
+        result = await handler.handle_callback(code, state, integration_type=integration_type)
 
         # Redirect to success page
         frontend_url = settings.FRONTEND_URL

@@ -52,6 +52,20 @@ Slug is globally unique (not per-tenant) because the inbound route has no auth b
 - Signed inbound POST to `/api/webhooks/qa-ui-test/inbound` → 200 `{queue_id, poll_url}`; agent binding resolved; queue worker picked up the item.
 - Signed inbound POST to legacy numeric path `/api/webhooks/<id>/inbound` → HMAC accepted, agent lookup path identical (backward-compat confirmed).
 
+### Google OAuth handle_callback honors the real integration_type (2026-04-19)
+
+**Root-cause fix for a years-old latent bug surfaced by the wizard QA pass today.**
+
+`backend/hub/google/oauth_handler.py::handle_callback` was inferring `integration_type` by parsing the `redirect_url` query string and **defaulting to `"calendar"`** when it couldn't find one. The popup-driven wizard flow never sets a `redirect_url` (it uses the same tab via `window.open` and relies on a postMessage handoff), so **every wizard-initiated Gmail OAuth actually upserted the user's email into the Calendar integration table.** The frontend's success URL correctly said `type=gmail` because the outer `routes_google.py::oauth_callback` read the state prefix, but that value was never passed into the handler — two independent copies of "what type is this", and only one of them was right.
+
+Example: running the Gmail wizard for `mv@archsec.io` on the test tenant updated Calendar row `id=3` (it already existed, disconnected) and wrote a Gmail-scope OAuth token against it. The Gmail row `id=4` stayed `is_active=false, health_status=disconnected`, so the wizard's Step-3 list (which correctly filters disconnected rows) stayed empty — "wizard is stuck".
+
+**Fix.** `handle_callback` now accepts `integration_type: Optional[str]` and the outer `oauth_callback` at `backend/api/routes_google.py::527` passes it in explicitly (already parsed from the `OAuthState` prefix). The handler still falls back to parsing `redirect_url` for the legacy direct-redirect path, but if it still can't determine the type, it now raises `ValueError` instead of silently defaulting to calendar. Defense-in-depth: the caller knows, the handler verifies, no silent miscategorization.
+
+**Data cleanup.** Restored test-tenant Calendar row `id=3` to `is_active=false, health_status='disconnected'` and deleted the misrouted Gmail-scope `oauth_token` row (`id=1561, integration_id=3`) so it can't be used.
+
+**Verified.** `GET /api/hub/google/gmail/integrations` and `.../calendar/integrations` both return only their correctly-typed, non-disconnected rows. After the fix, re-running the Gmail wizard for `mv@archsec.io` should upsert Gmail row `id=4` (not Calendar).
+
 ### Gmail/Calendar OAuth popup auto-closes and hands off to the wizard (2026-04-19)
 
 Fixes a stuck-wizard UX in the Gmail / Calendar setup flow.

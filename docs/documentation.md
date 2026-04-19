@@ -2341,6 +2341,8 @@ Either caller page can subscribe to completion via `useGoogleWizardComplete(kind
 
 **OAuth popup handoff.** "Connect new account" opens the Google consent screen in a popup. After approval, Google redirects the popup to the backend OAuth callback, which in turn redirects to `/hub?integration=<kind>&status=success&id=<n>`. The Hub page detects it's loaded inside a popup (via `window.opener`) and, instead of rendering, posts a `{ source: 'tsushin-google-oauth', integration, integration_id, status }` message to the opener (same-origin) and calls `window.close()`. The wizard listens for that message in a `useEffect` gated on `isOpen`, stops its 3-second poll, re-fetches the integration list, and selects the new row. Popup-blocked fallback still works: a direct visit to `/hub?…` has no `window.opener`, so the page renders normally.
 
+**Integration type is carried through the callback.** `backend/hub/google/oauth_handler.py::handle_callback` receives `integration_type` as an explicit argument; the outer `backend/api/routes_google.py::oauth_callback` reads it from the `OAuthState.integration_type` prefix (`google_gmail` → `gmail`, `google_calendar` → `calendar`) and passes it in. The legacy fallback that parsed the type from the `redirect_url` query string is still there for the direct-redirect flow, but if neither source yields a valid type the handler raises `ValueError` rather than defaulting to calendar — the popup-driven wizard flow never sets a `redirect_url`, and silently defaulting used to cause gmail OAuth to upsert into the calendar integration tables.
+
 ### 21.5 Security & SSO (`frontend/app/settings/security/page.tsx`)
 
 Three sections:
