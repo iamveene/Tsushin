@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Webhook: reveal rotated secret + custom URI slug (2026-04-19)
+
+Two UX defects addressed in the v0.6.0 Webhook-as-a-Channel feature.
+
+**Bug fix — Rotate Secret now reveals the new plaintext.** Previously, `Rotate Secret` copied the new HMAC secret to the clipboard and flashed a masked-preview toast; if the clipboard write failed or the user dismissed the toast, the secret was gone forever (only the encrypted blob + 10-char preview are persisted by design). A new `WebhookSecretRevealModal` now opens with the full plaintext secret in a read-only input, a copy button, the inbound URL, signing instructions, and an amber "never shown again" warning. The same component is reused by the create flow.
+
+**Feature — custom inbound URI slug.** Webhook integrations now have a human-readable `slug` used in the inbound path: `/api/webhooks/<slug>/inbound`. The create modal exposes two modes:
+
+- **Auto** (default) — server generates `wh-{6-hex}` on create.
+- **Custom** — user types a slug. Live-validated against `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (3–64 chars, must start with a letter, lowercase, no consecutive/leading/trailing hyphens), checked against a reserved list (`inbound, rotate-secret, health, status, test, callback, docs, openapi, api, webhooks, admin, v1`), and checked for global uniqueness via a new `GET /api/webhook-integrations/slug-available?slug=…` endpoint. Red X + reason when invalid/taken, green check + "Available" when OK. The full inbound URL is previewed live.
+
+Slug is globally unique (not per-tenant) because the inbound route has no auth before the DB lookup — the slug is the identifier used to resolve the tenant.
+
+**Backward compatibility.** Existing integrations were backfilled to `slug = wh-{id}`. The inbound route still accepts numeric IDs via a `slug.isdigit()` fallback so every legacy URL (`/api/webhooks/123/inbound`) keeps working.
+
+**Touched files.**
+- Backend: `backend/models.py` (+slug column on `WebhookIntegration`), `backend/alembic/versions/0039_add_webhook_integration_slug.py` (new — nullable add + backfill + NOT NULL + unique index), `backend/api/routes_webhook_instances.py` (slug validation, auto-gen, `/slug-available` endpoint, CRUD updates, `inbound_url` now derives from slug), `backend/api/routes_webhook_inbound.py` (path param `int → str`, slug-first lookup with numeric fallback).
+- Frontend: `frontend/components/WebhookSecretRevealModal.tsx` (new), `frontend/components/WebhookSetupModal.tsx` (URI mode radio + debounced slug availability check + URL preview), `frontend/app/hub/page.tsx` (rotate handler now opens reveal modal instead of toast-copy), `frontend/lib/client.ts` (types + `checkWebhookSlugAvailable`).
+
+**Verified via UI regression (https://localhost):**
+- Rotate Secret on existing webhook → reveal modal shows full plaintext, inbound URL, copy buttons, auto-copy notice.
+- Create with Custom mode, slug `qa-ui-test` → green "Available", full URL preview, modal shows secret + URL ending `/qa-ui-test/inbound`.
+- Slug `inbound` → "Slug is reserved"; slug `qa-crm-test` (existing) → "Slug already in use" — both block Create.
+- Graph View renders webhook channel nodes per integration with their readable name (e.g., "Webhook QA UI Custom").
+
+**Verified via API:**
+- Signed inbound POST to `/api/webhooks/qa-ui-test/inbound` → 200 `{queue_id, poll_url}`; agent binding resolved; queue worker picked up the item.
+- Signed inbound POST to legacy numeric path `/api/webhooks/<id>/inbound` → HMAC accepted, agent lookup path identical (backward-compat confirmed).
+
 ### Unify Gmail / Google Calendar wizards across Settings and Hub (2026-04-19)
 
 Hub → Communication "Add Gmail Account" and Hub → Productivity "Add Calendar Account" now open the same multi-step `GmailSetupWizard` / `GoogleCalendarSetupWizard` already used on `/settings/integrations`, instead of doing a bare `window.location.href` OAuth redirect.

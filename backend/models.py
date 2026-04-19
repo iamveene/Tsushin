@@ -2997,6 +2997,10 @@ class WebhookIntegration(Base):
     tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=False, index=True)
     integration_name = Column(String(100), nullable=False)
 
+    # v0.7.1: human-readable slug used in inbound path. Globally unique.
+    # Auto mode: wh-{6-hex}. Custom mode: user-supplied, validated.
+    slug = Column(String(64), nullable=False, unique=True, index=True)
+
     # Inbound identity (HMAC key, encrypted with Fernet)
     api_secret_encrypted = Column(Text, nullable=False)
     api_secret_preview = Column(String(16), nullable=False)  # first 8 chars + "…" for UI

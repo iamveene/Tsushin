@@ -85,15 +85,19 @@ def _ip_in_allowlist(client_ip: str, allowlist_json: str) -> bool:
         return False
 
 
-@router.post("/api/webhooks/{webhook_id}/inbound")
+@router.post("/api/webhooks/{slug}/inbound")
 async def receive_webhook(
-    webhook_id: int,
+    slug: str,
     request: Request,
     x_tsushin_signature: Optional[str] = Header(None, alias="X-Tsushin-Signature"),
     x_tsushin_timestamp: Optional[str] = Header(None, alias="X-Tsushin-Timestamp"),
     db: Session = Depends(get_db),
 ):
     """Receive an HMAC-signed external webhook event and enqueue it for agent processing.
+
+    v0.7.1: path param is now a human-readable slug. Numeric-only slugs are
+    treated as a backward-compat fallback to the legacy ``/api/webhooks/{id}``
+    shape so every existing integration keeps working.
 
     Request requirements:
       • X-Tsushin-Signature: "sha256=<hex>" where hex = HMAC-SHA256(secret, timestamp + "." + raw_body)
@@ -103,10 +107,15 @@ async def receive_webhook(
         Optional fields: sender_id, sender_name, source_id, timestamp
     """
     integration: Optional[WebhookIntegration] = (
-        db.query(WebhookIntegration).filter_by(id=webhook_id).first()
+        db.query(WebhookIntegration).filter_by(slug=slug).first()
     )
+    if integration is None and slug.isdigit():
+        # Backward compatibility: legacy numeric-id URLs
+        integration = db.query(WebhookIntegration).filter_by(id=int(slug)).first()
     if integration is None or not integration.is_active or integration.status == "paused":
         _generic_403()
+
+    webhook_id = integration.id
 
     # v0.6.0: Honor global emergency stop at the ingress (avoid eating queue/LLM resources)
     try:
