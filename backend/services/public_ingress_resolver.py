@@ -141,6 +141,72 @@ def resolve_public_ingress(tenant: Tenant) -> IngressResult:
     return IngressResult(url=None, source="none")
 
 
+def resolve_invitation_base_url(
+    request,
+    tenant: Optional[Tenant] = None,
+) -> str:
+    """Build the absolute base URL for an invitation link.
+
+    Multi-tenant & ingress-aware. Precedence:
+      1. ``tenant.public_base_url`` — per-tenant override (skipped for
+         global-admin invites where ``tenant`` is ``None``).
+      2. Platform Cloudflare tunnel URL — covers the named-tunnel case
+         for both tenant and global-admin invites.
+      3. The incoming request's own origin (``scheme://host``) — covers
+         ``https://localhost`` QA, ``http://localhost:3030`` dev, and any
+         tunnel hostname the admin is actively using.
+      4. ``FRONTEND_URL`` env — last-resort fallback.
+
+    Always returns an origin-style string with no trailing slash. Never
+    raises — a best-effort last-resort string is returned so callers can
+    keep building the full invite URL without defensive branching.
+    """
+    if tenant is not None:
+        result = resolve_public_ingress(tenant)
+        if result.source == "override" and result.url:
+            return result.url.rstrip("/")
+        if result.source == "tunnel" and result.url:
+            return result.url.rstrip("/")
+    else:
+        tunnel_url = _peek_tunnel_url()
+        if tunnel_url:
+            return tunnel_url.rstrip("/")
+
+    req_origin = _request_origin(request)
+    if req_origin:
+        return req_origin
+
+    import os
+    env_url = os.getenv("FRONTEND_URL", "").rstrip("/")
+    if env_url:
+        return env_url
+    return "http://localhost:3030"
+
+
+def _request_origin(request) -> Optional[str]:
+    """Best-effort origin (scheme://host) from a FastAPI/Starlette Request.
+
+    Honors ``X-Forwarded-Proto`` / ``X-Forwarded-Host`` when the backend sits
+    behind the compose proxy or a tunnel — those headers are what preserve
+    the public-facing URL through the proxy chain. Falls back to the direct
+    ``url.scheme`` / ``host`` header for the non-proxied case.
+    """
+    if request is None:
+        return None
+    try:
+        headers = getattr(request, "headers", {}) or {}
+        forwarded_proto = headers.get("x-forwarded-proto")
+        forwarded_host = headers.get("x-forwarded-host") or headers.get("host")
+        scheme = (forwarded_proto.split(",")[0].strip() if forwarded_proto else None) or request.url.scheme
+        host = forwarded_host.split(",")[0].strip() if forwarded_host else request.url.netloc
+        if not scheme or not host:
+            return None
+        return f"{scheme}://{host}".rstrip("/")
+    except Exception as exc:
+        logger.debug("Could not derive request origin: %s", exc)
+        return None
+
+
 def _peek_tunnel_url() -> Optional[str]:
     """Read the current public_url from the global tunnel singleton, or None.
 

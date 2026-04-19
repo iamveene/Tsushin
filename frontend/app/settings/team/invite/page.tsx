@@ -17,10 +17,16 @@ import RoleBadge from '@/components/rbac/RoleBadge'
 export default function InviteUserPage() {
   const router = useRouter()
   const { user, hasPermission } = useAuth()
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    email: string
+    role: string
+    message: string
+    auth_provider: 'local' | 'google'
+  }>({
     email: '',
     role: 'member',
     message: '',
+    auth_provider: 'local',
   })
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
@@ -28,6 +34,7 @@ export default function InviteUserPage() {
   const [error, setError] = useState<string | null>(null)
   const [roles, setRoles] = useState<RoleInfo[]>([])
   const [loadingRoles, setLoadingRoles] = useState(true)
+  const [ssoConfigured, setSsoConfigured] = useState<boolean | null>(null)
 
   const canInvite = hasPermission('users.invite')
 
@@ -52,6 +59,20 @@ export default function InviteUserPage() {
     fetchRoles()
   }, [])
 
+  // Check whether Google SSO is actually usable for this tenant — we only want
+  // to enable the "Google SSO" radio if the invitee's accept flow will work.
+  useEffect(() => {
+    const fetchSSO = async () => {
+      try {
+        const status = await api.getGoogleSSOStatus()
+        setSsoConfigured(Boolean(status.enabled))
+      } catch {
+        setSsoConfigured(false)
+      }
+    }
+    fetchSSO()
+  }, [])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
@@ -62,17 +83,24 @@ export default function InviteUserPage() {
         email: formData.email,
         role: formData.role,
         message: formData.message || undefined,
+        auth_provider: formData.auth_provider,
       })
 
-      // Use the invitation link from the response
-      const baseUrl = window.location.origin
-      setInvitationLink(`${baseUrl}${response.invitation_link}`)
+      // Use the invitation link from the response. Backend now returns an
+      // absolute URL (tenant override / tunnel / request-origin aware) so
+      // the link is safe to reach under any ingress. Fall back to the
+      // current origin only for legacy relative responses.
+      const link = response.invitation_link || ''
+      const absoluteLink = /^https?:\/\//i.test(link)
+        ? link
+        : `${window.location.origin}${link.startsWith('/') ? link : `/${link}`}`
+      setInvitationLink(absoluteLink)
       setSuccess(true)
 
       // Reset form after 10 seconds
       setTimeout(() => {
         setSuccess(false)
-        setFormData({ email: '', role: 'member', message: '' })
+        setFormData({ email: '', role: 'member', message: '', auth_provider: 'local' })
         setInvitationLink('')
       }, 10000)
     } catch (err: any) {
@@ -213,6 +241,69 @@ export default function InviteUserPage() {
                 </p>
               </div>
             )}
+
+            {/* Auth Method */}
+            <div>
+              <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                Sign-in method
+              </label>
+              <div className="space-y-2">
+                <label className="flex items-start gap-3 p-3 border dark:border-gray-700 rounded-md cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <input
+                    type="radio"
+                    name="auth_provider"
+                    value="local"
+                    checked={formData.auth_provider === 'local'}
+                    onChange={() => setFormData({ ...formData, auth_provider: 'local' })}
+                    className="mt-1 text-blue-600 focus:ring-blue-500"
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                      Local password
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      User will create a password on accept.
+                    </div>
+                  </div>
+                </label>
+                <label
+                  className={`flex items-start gap-3 p-3 border dark:border-gray-700 rounded-md transition-colors ${
+                    ssoConfigured === false
+                      ? 'cursor-not-allowed opacity-60'
+                      : 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                  }`}
+                  title={ssoConfigured === false ? 'Google SSO is not configured for your organization. Configure it in Settings → Integrations.' : undefined}
+                >
+                  <input
+                    type="radio"
+                    name="auth_provider"
+                    value="google"
+                    disabled={ssoConfigured === false}
+                    checked={formData.auth_provider === 'google'}
+                    onChange={() => setFormData({ ...formData, auth_provider: 'google' })}
+                    className="mt-1 text-blue-600 focus:ring-blue-500"
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                      Google SSO
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      User must accept via Google with matching email.
+                    </div>
+                    {ssoConfigured === false && (
+                      <div className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                        Google SSO is not configured for your organization. Configure it in Settings → Integrations.
+                      </div>
+                    )}
+                    {ssoConfigured === true && formData.auth_provider === 'google' && (
+                      <div className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                        The invitee must sign in with the exact Google account email above.
+                      </div>
+                    )}
+                  </div>
+                </label>
+              </div>
+            </div>
 
             {/* Custom Message */}
             <div>

@@ -513,6 +513,54 @@ Full role → permission mapping is defined in `backend/migrations/add_rbac_tabl
 
 Every global-admin action is recorded in the `global_admin_audit_log` table (`models_rbac.py:217-230`).
 
+### 6.5 User Invitations (tenant + global scope)
+
+Invitations are the primary way to onboard both tenant-scoped users and platform-wide global admins. Stored in `user_invitation` (`backend/models_rbac.py:153-176`).
+
+| Field | Type | Notes |
+|---|---|---|
+| `tenant_id` | String(50), **nullable** | `NULL` for global-admin invites |
+| `role_id` | Integer, **nullable** | `NULL` for global-admin invites |
+| `is_global_admin` | Boolean NOT NULL default false | When true, acceptance creates `User.is_global_admin=true` with no `UserRole` row |
+| `auth_provider` | VARCHAR(16) NOT NULL default `'local'` | `local` (invitee sets a password) or `google` (invitee must accept via Google SSO; email must match) |
+| `invitation_token` | VARCHAR(255) unique | SHA-256 **hash** of the token; the raw token is sent by email and returned by the invite endpoint |
+| `expires_at` | Timestamp | 7 days by default |
+| `accepted_at` | Timestamp, nullable | Set on successful accept |
+
+**Invariants** (enforced both in ORM and via PostgreSQL CHECK constraints):
+- `ck_invitation_scope` — `(is_global_admin=TRUE AND tenant_id IS NULL AND role_id IS NULL)` XOR `(is_global_admin=FALSE AND tenant_id IS NOT NULL AND role_id IS NOT NULL)`.
+- `ck_invitation_auth_provider` — `auth_provider IN ('local', 'google')`.
+- Partial unique index `uq_invitation_tenant_email_pending ON (tenant_id, email) WHERE accepted_at IS NULL` — prevents duplicate pending invites while allowing re-invites after accept/cancel.
+
+**Endpoints.**
+
+| Caller | Method | Path | Notes |
+|---|---|---|---|
+| Tenant owner (users.invite) | POST | `/api/team/invite` | Tenant-scoped only; body accepts `auth_provider` |
+| Tenant owner | GET/DELETE/POST | `/api/team/invitations[/{id}][/resend]` | List / cancel / resend |
+| Global admin | POST | `/api/admin/invitations` | Body: `{email, tenant_id?, role?, is_global_admin, auth_provider, message?}`; returns the raw invitation link |
+| Global admin | GET | `/api/admin/invitations` | Filters: `is_global_admin`, `tenant_id`, `email_contains`, `page`, `page_size` |
+| Global admin | DELETE | `/api/admin/invitations/{id}` | Cancels a pending invite |
+| Unauthenticated | GET | `/api/auth/invitation/{token}` | Returns invite info for the accept page — nullable `tenant_name`/`role_display_name` for global-admin invites, plus `auth_provider` and `is_global_admin` |
+| Unauthenticated | POST | `/api/auth/invitation/{token}/accept` | Password-accept path. Rejects `auth_provider=google` invites with HTTP 400 |
+
+**Accept flow branching** (`backend/auth_routes.py:accept_invitation`, `backend/auth_google.py:find_or_create_user`):
+
+1. Token looked up by its SHA-256 hash; expired/accepted invites rejected.
+2. If `auth_provider=google` and the caller is using the password form → HTTP 400 "Must accept via Google SSO".
+3. If `is_global_admin=true` → create `User(tenant_id=NULL, is_global_admin=True, auth_provider='local'|'google')`; do **not** create a `UserRole` row.
+4. Else (tenant-scoped) → create `User(tenant_id=invitation.tenant_id, is_global_admin=False)` + `UserRole(role_id=invitation.role_id, tenant_id=invitation.tenant_id)`.
+5. For Google SSO accept: enforce `invitation.email == google.email` (case-insensitive); if an existing user with that email already exists and the invite is global-scope, reject — invitations cannot silently upgrade an existing account.
+
+**UI entry points.**
+- Tenant owner: `/settings/team/invite` — form with email / role / **Sign-in method** radio / message. The "Google SSO" radio is disabled (with a tooltip) when the tenant has no Google SSO configured.
+- Global admin: `/system/users` → **Invite User** button. Modal includes a role dropdown with **Global Admin** as one option; when selected, the tenant dropdown hides.
+- Invitee: `/auth/invite/[token]` — header/body adapt to global-admin invites and Google-only invites automatically.
+
+### 6.6 Global vs tenant Google SSO independence
+
+Platform-wide Google SSO is stored in the `global_sso_config` singleton (since 2026-04-18) and managed via `/api/admin/sso-config`. Per-tenant SSO remains in `TenantSSOConfig` + `GoogleOAuthCredentials`. See §22.3 for fields and the UI; see the credential-resolution order in that section. The two scopes are fully independent — changing one does not affect the other. Auto-provisioning of global admins is not enabled by default; global admins are created exclusively via invitation.
+
 ---
 
 
@@ -1498,6 +1546,8 @@ GET /api/tenant/me/public-ingress
 - **Self-hosted without a tunnel:** set `TSN_DEV_PUBLIC_BASE_URL` or use the tenant override. Both work.
 - **Local dev:** `TSN_DEV_PUBLIC_BASE_URL=https://<your-tunnel>.trycloudflare.com docker-compose up -d --build backend` — no tenant override needed, no global tunnel config needed.
 
+**Invitation-link consumer (since 2026-04-19):** the resolver backs `resolve_invitation_base_url(request, tenant)`, a multi-tenant-aware helper used by the tenant (`POST /api/team/invite`) and global-admin (`POST /api/admin/invitations`) invite endpoints plus the email service. Precedence for building the absolute invite URL: invitation's **own** `tenant.public_base_url` (never the calling admin's tenant) → platform tunnel → request origin (honoring `X-Forwarded-Proto` / `X-Forwarded-Host` so Cloudflare named-tunnel hostnames survive the Caddy proxy) → `FRONTEND_URL` env. This ensures the same link is portable across `https://localhost` QA, `http://localhost:3030` dev, branded tenant domains, and Cloudflare Tunnel — and safe under concurrent multi-tenant invites. Unit-tested via `backend/tests/test_invitation_link_portability.py` (9 cases).
+
 ### 15.3 Slack
 
 **Source:** `backend/channels/slack/adapter.py`
@@ -2396,9 +2446,28 @@ Backing service: `backend/services/audit_service.py` (global admin actions logge
 
 Global user directory — list all users across tenants, toggle `is_global_admin`, reset credentials, suspend accounts.
 
+**Invite User (since 2026-04-18).** Primary button next to the break-glass "+ Create User". Opens a modal with: email, role dropdown (includes **Global Admin** alongside Owner/Admin/Member/Read-Only), target **Organization** dropdown (hidden when role is Global Admin), **Auth method** radio (Local password / Google SSO), optional personal message. On submit the modal shows a copy-able invitation link. Backed by `POST /api/admin/invitations` (require_global_admin); see §6.5.
+
+**Pending Invitations.** A second section on the same page lists outstanding invites across all tenants with scope (Global vs tenant name), role, auth provider, invited-by, expiry, and a Cancel button. Powered by `GET /api/admin/invitations` + `DELETE /api/admin/invitations/{id}`.
+
 ### 22.3 Platform Integrations (`frontend/app/system/integrations/page.tsx`)
 
 Platform-level third-party credentials (keys that apply globally, not per-tenant). This is the global counterpart to §21.4.
+
+**Platform-wide Google SSO (since 2026-04-18).** This page now contains a first-class Google SSO configuration section backed by the `global_sso_config` singleton table and the `/api/admin/sso-config` endpoints. Fields:
+
+| Field | Purpose |
+|---|---|
+| `google_sso_enabled` | Master toggle for platform-scope SSO |
+| `google_client_id` | Platform OAuth 2.0 Client ID (visible) |
+| `google_client_secret` | Platform OAuth 2.0 Client Secret (Fernet-encrypted at rest, `sso_client_secret_global` identifier; never returned by default — pass `?include_secret=true`) |
+| `allowed_domains` | JSON array of domains the platform will accept Google sign-ins from |
+| `auto_provision_users` | **Disabled by default.** Creating global admins on first sign-in is an unsafe default — global admins must always be explicitly invited. This toggle is reserved for future use with a strict domain whitelist. |
+| `default_role_id` | Only consulted if `auto_provision_users=true`; shown conditionally in the UI |
+
+**Credential resolution order** (`backend/auth_google.py::get_oauth_credentials`): per-tenant `GoogleOAuthCredentials` (when a tenant context is present) → `GlobalSSOConfig` (when `google_sso_enabled=true` and credentials are complete) → env-var fallback (`GOOGLE_SSO_CLIENT_ID` / `GOOGLE_SSO_CLIENT_SECRET` in `backend/settings.py`). Global and tenant scopes are fully independent — updates at one scope do not affect the other.
+
+**Not a link-out.** Pre-2026-04-18 this route was a navigation overview that pointed to other system pages. It now renders real config UI for Google SSO in place (while keeping the overview nav cards for tenant/user/plan/remote-access).
 
 ### 22.4 Plans / Subscription Tiers (`frontend/app/system/plans/page.tsx`)
 

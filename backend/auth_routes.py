@@ -1254,12 +1254,14 @@ class InvitationAcceptRequest(BaseModel):
 
 class InvitationInfoResponse(BaseModel):
     email: str
-    tenant_name: str
-    role: str
-    role_display_name: str
+    tenant_name: Optional[str] = None
+    role: Optional[str] = None
+    role_display_name: Optional[str] = None
     inviter_name: str
     expires_at: str
     is_valid: bool
+    auth_provider: str = "local"
+    is_global_admin: bool = False
 
 
 @router.get("/invitation/{token}", response_model=InvitationInfoResponse)
@@ -1291,19 +1293,25 @@ async def get_invitation_info(token: str, db: Session = Depends(get_db)):
     # Check if expired
     is_valid = invitation.expires_at > datetime.utcnow()
 
-    # Get related data
-    tenant = db.query(Tenant).filter(Tenant.id == invitation.tenant_id).first()
-    role = db.query(Role).filter(Role.id == invitation.role_id).first()
+    # Get related data (tenant/role are null for global-admin invites)
+    tenant = None
+    role = None
+    if invitation.tenant_id:
+        tenant = db.query(Tenant).filter(Tenant.id == invitation.tenant_id).first()
+    if invitation.role_id:
+        role = db.query(Role).filter(Role.id == invitation.role_id).first()
     inviter = db.query(User).filter(User.id == invitation.invited_by).first()
 
     return InvitationInfoResponse(
         email=invitation.email,
-        tenant_name=tenant.name if tenant else "Unknown Organization",
-        role=role.name if role else "member",
-        role_display_name=role.display_name if role else "Member",
+        tenant_name=tenant.name if tenant else (None if invitation.is_global_admin else "Unknown Organization"),
+        role=role.name if role else (None if invitation.is_global_admin else "member"),
+        role_display_name=role.display_name if role else (None if invitation.is_global_admin else "Member"),
         inviter_name=inviter.full_name if inviter else "Unknown",
         expires_at=invitation.expires_at.isoformat(),
         is_valid=is_valid,
+        auth_provider=invitation.auth_provider or "local",
+        is_global_admin=bool(invitation.is_global_admin),
     )
 
 
@@ -1353,6 +1361,14 @@ async def accept_invitation(
             detail="Email is already registered"
         )
 
+    # Google-SSO invitations must be accepted via the Google OAuth flow so
+    # the user never picks a local password. See auth_google.find_or_create_user.
+    if (invitation.auth_provider or "local") == "google":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This invitation must be accepted via Google SSO",
+        )
+
     password_error = get_password_min_length_error(request.password)
     if password_error:
         raise HTTPException(
@@ -1360,37 +1376,40 @@ async def accept_invitation(
             detail=password_error
         )
 
-    # Create user
+    # Create user. Global-admin invites skip tenant/role assignment entirely.
     user = User(
-        tenant_id=invitation.tenant_id,
+        tenant_id=invitation.tenant_id,  # None for global-admin invites
         email=invitation.email,
         password_hash=hash_password(request.password),
         full_name=request.full_name,
-        is_global_admin=False,
+        is_global_admin=bool(invitation.is_global_admin),
         is_active=True,
         email_verified=True,  # Accepted via invitation
+        auth_provider="local",
     )
     db.add(user)
     db.flush()
 
-    # Assign role
-    user_role = UserRole(
-        user_id=user.id,
-        role_id=invitation.role_id,
-        tenant_id=invitation.tenant_id,
-        assigned_by=invitation.invited_by,
-    )
-    db.add(user_role)
+    role_name = "global_admin" if invitation.is_global_admin else "member"
+    if not invitation.is_global_admin:
+        # Assign tenant role (only for tenant-scoped invites)
+        user_role = UserRole(
+            user_id=user.id,
+            role_id=invitation.role_id,
+            tenant_id=invitation.tenant_id,
+            assigned_by=invitation.invited_by,
+        )
+        db.add(user_role)
+
+        # Get role name for token
+        role = db.query(Role).filter(Role.id == invitation.role_id).first()
+        role_name = role.name if role else "member"
 
     # Mark invitation as accepted
     invitation.accepted_at = datetime.utcnow()
 
     db.commit()
     db.refresh(user)
-
-    # Get role name for token
-    role = db.query(Role).filter(Role.id == invitation.role_id).first()
-    role_name = role.name if role else "member"
 
     # Generate access token
     pwd_ts = None
@@ -1454,6 +1473,23 @@ async def get_google_sso_status(
     When no tenant_slug is provided, checks if ANY tenant has SSO configured.
     """
     platform_configured = bool(settings.GOOGLE_SSO_CLIENT_ID and settings.GOOGLE_SSO_CLIENT_SECRET)
+    # Platform-wide Google SSO configured via the global admin UI
+    # (global_sso_config table) also counts as "platform configured" — it's
+    # the same end-user capability regardless of whether credentials came
+    # from env vars or the system → integrations page.
+    if not platform_configured:
+        try:
+            from models_rbac import GlobalSSOConfig
+            global_sso = db.query(GlobalSSOConfig).first()
+            if (
+                global_sso
+                and global_sso.google_sso_enabled
+                and global_sso.google_client_id
+                and global_sso.google_client_secret_encrypted
+            ):
+                platform_configured = True
+        except Exception as exc:
+            logger.debug("GlobalSSOConfig lookup failed: %s", exc)
     tenant_configured = False
 
     if tenant_slug:

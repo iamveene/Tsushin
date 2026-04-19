@@ -120,6 +120,12 @@ export default function AcceptInvitationPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
+    // Google-SSO invitations cannot be accepted via the password form.
+    if (invitationInfo?.auth_provider === 'google') {
+      setFormErrors(['This invitation must be accepted via Google SSO.'])
+      return
+    }
+
     if (!validateForm()) return
 
     setSubmitting(true)
@@ -196,17 +202,27 @@ export default function AcceptInvitationPage() {
     )
   }
 
+  const isGlobalAdminInvite = invitationInfo.is_global_admin
+  const isGoogleOnly = invitationInfo.auth_provider === 'google'
+  const googleOnlyBlocked = isGoogleOnly && !googleSSOEnabled
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-tsushin-ink p-4">
       <div className="max-w-md w-full">
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-white mb-2">
-            Join {invitationInfo.tenant_name}
+            {isGlobalAdminInvite
+              ? 'Join Tsushin as Global Admin'
+              : `Join ${invitationInfo.tenant_name}`}
           </h1>
           <p className="text-tsushin-slate">
             {invitationInfo.inviter_name} invited you to join as{' '}
-            <strong>{invitationInfo.role_display_name}</strong>
+            <strong>
+              {isGlobalAdminInvite
+                ? 'Global Admin'
+                : invitationInfo.role_display_name}
+            </strong>
           </p>
         </div>
 
@@ -215,12 +231,21 @@ export default function AcceptInvitationPage() {
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
               <div className="text-teal-400 font-medium">Organization</div>
-              <div className="text-tsushin-fog">{invitationInfo.tenant_name}</div>
+              <div className="text-tsushin-fog">
+                {isGlobalAdminInvite ? 'Platform-wide' : invitationInfo.tenant_name}
+              </div>
             </div>
             <div>
               <div className="text-teal-400 font-medium">Role</div>
-              <div className="text-tsushin-fog">
-                {invitationInfo.role_display_name}
+              <div className="text-tsushin-fog flex items-center gap-2">
+                {isGlobalAdminInvite
+                  ? 'Global Admin'
+                  : invitationInfo.role_display_name}
+                {isGlobalAdminInvite && (
+                  <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 text-xs font-semibold rounded-full border border-purple-500/30">
+                    Admin
+                  </span>
+                )}
               </div>
             </div>
             <div>
@@ -237,7 +262,7 @@ export default function AcceptInvitationPage() {
         {/* Registration Form */}
         <div className="bg-tsushin-surface rounded-2xl shadow-elevated border border-tsushin-border p-6">
           <h2 className="text-lg font-semibold text-white mb-4">
-            Create Your Account
+            {isGoogleOnly ? 'Accept Invitation with Google' : 'Create Your Account'}
           </h2>
 
           {formErrors.length > 0 && (
@@ -250,8 +275,16 @@ export default function AcceptInvitationPage() {
             </div>
           )}
 
-          {/* Google SSO Option */}
-          {googleSSOEnabled && (
+          {/* Dead-end guard: Google-only invite on a platform with no Google SSO configured. */}
+          {googleOnlyBlocked && (
+            <div className="mb-4 p-4 bg-tsushin-vermilion/10 border border-tsushin-vermilion/30 rounded-lg text-sm text-tsushin-vermilion">
+              This invitation requires Google SSO, but Google SSO is not configured on this platform.
+              Contact the administrator who sent the invite to either enable Google SSO or reissue the invitation with a password.
+            </div>
+          )}
+
+          {/* Google SSO Option — shown when invite is Google-only OR when platform SSO is enabled alongside a local invite */}
+          {!googleOnlyBlocked && (isGoogleOnly || googleSSOEnabled) && (
             <>
               <button
                 type="button"
@@ -271,22 +304,27 @@ export default function AcceptInvitationPage() {
               </button>
 
               <p className="text-xs text-tsushin-slate mt-2 text-center">
-                Use {invitationInfo.email} to sign in with Google
+                {isGoogleOnly
+                  ? `This invitation must be accepted via Google SSO with the email ${invitationInfo.email}`
+                  : `Use ${invitationInfo.email} to sign in with Google`}
               </p>
 
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-tsushin-border" />
+              {!isGoogleOnly && (
+                <div className="relative my-6">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-tsushin-border" />
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-2 bg-tsushin-surface text-tsushin-slate">
+                      Or create a password
+                    </span>
+                  </div>
                 </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-tsushin-surface text-tsushin-slate">
-                    Or create a password
-                  </span>
-                </div>
-              </div>
+              )}
             </>
           )}
 
+          {!isGoogleOnly && (
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Email (readonly) */}
             <div>
@@ -359,6 +397,7 @@ export default function AcceptInvitationPage() {
               {submitting ? 'Creating Account...' : 'Accept Invitation & Join'}
             </button>
           </form>
+          )}
 
           {/* Already have account */}
           <div className="mt-4 text-center text-sm text-tsushin-slate">

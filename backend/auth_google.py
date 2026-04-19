@@ -25,7 +25,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 import settings
-from models_rbac import User, Tenant, TenantSSOConfig, UserRole, Role
+from models_rbac import User, Tenant, TenantSSOConfig, UserRole, Role, GlobalSSOConfig
 from models import GoogleOAuthCredentials
 from auth_utils import create_access_token, hash_token
 from hub.security import TokenEncryption, OAuthStateManager
@@ -159,7 +159,41 @@ class GoogleSSOService:
                     redirect_uri,
                 )
 
-        # Fall back to platform-wide credentials
+        # Global SSO config — platform-wide credentials stored via
+        # /api/admin/sso-config (see routes_admin_sso.py). Used when there is
+        # no tenant context (e.g. global-admin invitation acceptance).
+        global_cfg = self.db.query(GlobalSSOConfig).first()
+        if (
+            global_cfg
+            and global_cfg.google_sso_enabled
+            and global_cfg.google_client_id
+            and global_cfg.google_client_secret_encrypted
+        ):
+            try:
+                # Mirror routes_admin_sso.py encryption scheme (tokens are
+                # Fernet-encrypted with identifier "sso_client_secret_global").
+                from services.encryption_key_service import get_google_encryption_key
+                enc_key = get_google_encryption_key(self.db)
+                encryptor = TokenEncryption(enc_key.encode())
+                client_secret = encryptor.decrypt(
+                    global_cfg.google_client_secret_encrypted,
+                    "sso_client_secret_global",
+                )
+            except Exception as e:
+                logger.error(f"Failed to decrypt global SSO secret: {e}")
+                raise GoogleSSOError(
+                    "Platform Google SSO credential is configured but could not be "
+                    "decrypted. An administrator must re-save the client secret in "
+                    "System → Integrations."
+                )
+
+            return (
+                global_cfg.google_client_id,
+                client_secret,
+                redirect_uri,
+            )
+
+        # Fall back to platform-wide env-var credentials
         if settings.GOOGLE_SSO_CLIENT_ID and settings.GOOGLE_SSO_CLIENT_SECRET:
             return (
                 settings.GOOGLE_SSO_CLIENT_ID,
@@ -426,6 +460,25 @@ class GoogleSSOService:
         # Try to find by email (exclude deleted users)
         user = self.db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
         if user:
+            # If the caller is presenting an invitation, verify we're not about
+            # to silently log them in as their existing tenant identity while
+            # leaving a global-admin invite unaccepted — that'd be a subtle
+            # privilege-escalation UX gap. Refuse and point the operator at
+            # manual promotion.
+            if invitation_token:
+                from models_rbac import UserInvitation
+                invitation = self.db.query(UserInvitation).filter(
+                    UserInvitation.invitation_token == hash_token(invitation_token),
+                    UserInvitation.accepted_at.is_(None),
+                    UserInvitation.expires_at > datetime.utcnow(),
+                ).first()
+                if invitation and invitation.is_global_admin and not user.is_global_admin:
+                    raise GoogleSSOError(
+                        "An account with this email already exists. A global-admin "
+                        "invitation cannot be used to upgrade an existing user — ask "
+                        "an administrator to promote the account directly."
+                    )
+
             # Link Google account to existing user
             user.google_id = google_id
             user.auth_provider = "google"
@@ -446,38 +499,61 @@ class GoogleSSOService:
                 UserInvitation.expires_at > datetime.utcnow(),
             ).first()
 
-            if invitation and invitation.email.lower() == email.lower():
-                # Create user from invitation
-                user = User(
-                    tenant_id=invitation.tenant_id,
-                    email=email,
-                    password_hash=None,  # No password for SSO users
-                    full_name=full_name,
-                    is_global_admin=False,
-                    is_active=True,
-                    email_verified=True,
-                    auth_provider="google",
-                    google_id=google_id,
-                    avatar_url=avatar_url,
-                )
-                self.db.add(user)
-                self.db.flush()
+            if invitation:
+                # Enforce email match early so we can give a clear error for
+                # both local and google-scoped invites.
+                if invitation.email.lower() != email.lower():
+                    if (invitation.auth_provider or "local") == "google":
+                        raise GoogleSSOError(
+                            "The Google account email does not match the invitation email."
+                        )
+                    # Fall through for non-matching local invites (existing behavior).
+                else:
+                    # auth_provider must be local or google; both allow Google-based
+                    # acceptance (local invites can accept via Google, google invites
+                    # must accept via Google).
+                    if (invitation.auth_provider or "local") not in ("local", "google"):
+                        raise GoogleSSOError(
+                            f"Invitation has unsupported auth_provider: {invitation.auth_provider}"
+                        )
 
-                # Assign role from invitation
-                user_role = UserRole(
-                    user_id=user.id,
-                    role_id=invitation.role_id,
-                    tenant_id=invitation.tenant_id,
-                    assigned_by=invitation.invited_by,
-                )
-                self.db.add(user_role)
+                    is_global_invite = bool(invitation.is_global_admin)
 
-                # Mark invitation as accepted
-                invitation.accepted_at = datetime.utcnow()
+                    # Create user from invitation
+                    user = User(
+                        tenant_id=invitation.tenant_id,  # None for global-admin invites
+                        email=email,
+                        password_hash=None,  # No password for SSO users
+                        full_name=full_name,
+                        is_global_admin=is_global_invite,
+                        is_active=True,
+                        email_verified=True,
+                        auth_provider="google",
+                        google_id=google_id,
+                        avatar_url=avatar_url,
+                    )
+                    self.db.add(user)
+                    self.db.flush()
 
-                self.db.commit()
-                logger.info(f"Created user from invitation via Google SSO: {email}")
-                return user, True
+                    # Assign role only for tenant-scoped invites.
+                    if not is_global_invite and invitation.role_id and invitation.tenant_id:
+                        user_role = UserRole(
+                            user_id=user.id,
+                            role_id=invitation.role_id,
+                            tenant_id=invitation.tenant_id,
+                            assigned_by=invitation.invited_by,
+                        )
+                        self.db.add(user_role)
+
+                    # Mark invitation as accepted
+                    invitation.accepted_at = datetime.utcnow()
+
+                    self.db.commit()
+                    logger.info(
+                        "Created user from invitation via Google SSO: %s (global_admin=%s)",
+                        email, is_global_invite,
+                    )
+                    return user, True
 
         # Check for auto-provisioning
         if tenant_id:

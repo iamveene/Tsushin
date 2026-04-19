@@ -2426,12 +2426,54 @@ export interface RoleInfo {
 
 export interface InvitationInfo {
   email: string
-  tenant_name: string
-  role: string
-  role_display_name: string
+  tenant_name: string | null
+  role: string | null
+  role_display_name: string | null
   inviter_name: string
   expires_at: string
   is_valid: boolean
+  auth_provider: 'local' | 'google'
+  is_global_admin: boolean
+}
+
+// Admin-level (global) invitation with optional invitation_link
+export interface GlobalInvitation {
+  id: number
+  email: string
+  tenant_id: string | null
+  tenant_name: string | null
+  role: string | null
+  role_display_name: string | null
+  is_global_admin: boolean
+  auth_provider: 'local' | 'google'
+  invited_by_name: string
+  expires_at: string
+  created_at: string
+  invitation_link?: string
+}
+
+// Global (platform-wide) Google SSO configuration
+export interface GlobalSSOConfig {
+  id: number
+  google_sso_enabled: boolean
+  google_client_id: string | null
+  has_client_secret: boolean
+  google_client_secret: string | null
+  allowed_domains: string[]
+  auto_provision_users: boolean
+  default_role_id: number | null
+  default_role_name: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface GlobalSSOConfigUpdate {
+  google_sso_enabled?: boolean
+  google_client_id?: string | null
+  google_client_secret?: string | null
+  allowed_domains?: string[]
+  auto_provision_users?: boolean
+  default_role_id?: number | null
 }
 
 // Subscription Plans
@@ -5349,6 +5391,7 @@ export const api = {
     email: string
     role?: string
     message?: string
+    auth_provider?: 'local' | 'google'
   }): Promise<TeamInvitation> {
     const res = await authenticatedFetch(`${API_URL}/api/team/invite`, {
       method: 'POST',
@@ -5802,6 +5845,96 @@ export const api = {
     if (!res.ok) {
       const error = await res.json().catch(() => ({ detail: 'Failed to toggle admin status' }))
       throw new Error(error.detail || 'Failed to toggle admin status')
+    }
+    return res.json()
+  },
+
+  // ========================================================================
+  // Global Admin Invitations API (platform-wide)
+  // ========================================================================
+
+  async inviteGlobalUser(data: {
+    email: string
+    tenant_id: string | null
+    role: string | null
+    is_global_admin: boolean
+    auth_provider: 'local' | 'google'
+    message?: string
+  }): Promise<GlobalInvitation> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/invitations/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to send invitation' }))
+      throw new Error(error.detail || 'Failed to send invitation')
+    }
+    return res.json()
+  },
+
+  async getGlobalInvitations(params?: {
+    is_global_admin?: boolean
+    tenant_id?: string
+    email_contains?: string
+    include_expired?: boolean
+    page?: number
+    page_size?: number
+  }): Promise<{ invitations: GlobalInvitation[]; total: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.is_global_admin !== undefined) searchParams.append('is_global_admin', params.is_global_admin.toString())
+    if (params?.tenant_id !== undefined) searchParams.append('tenant_id', params.tenant_id)
+    if (params?.email_contains) searchParams.append('email_contains', params.email_contains)
+    if (params?.include_expired) searchParams.append('include_expired', 'true')
+    if (params?.page) searchParams.append('page', params.page.toString())
+    if (params?.page_size) searchParams.append('page_size', params.page_size.toString())
+
+    const qs = searchParams.toString()
+    const url = `${API_URL}/api/admin/invitations/${qs ? `?${qs}` : ''}`
+    const res = await authenticatedFetch(url)
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to fetch invitations' }))
+      throw new Error(error.detail || 'Failed to fetch invitations')
+    }
+    return res.json()
+  },
+
+  async cancelGlobalInvitation(invitationId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/invitations/${invitationId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to cancel invitation' }))
+      throw new Error(error.detail || 'Failed to cancel invitation')
+    }
+  },
+
+  // ========================================================================
+  // Global SSO Configuration API (platform-wide Google SSO)
+  // ========================================================================
+
+  async getGlobalSSOConfig(includeSecret: boolean = false): Promise<GlobalSSOConfig> {
+    const params = new URLSearchParams()
+    if (includeSecret) params.append('include_secret', 'true')
+    const qs = params.toString()
+    const url = `${API_URL}/api/admin/sso-config/${qs ? `?${qs}` : ''}`
+    const res = await authenticatedFetch(url)
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to fetch SSO config' }))
+      throw new Error(error.detail || 'Failed to fetch SSO config')
+    }
+    return res.json()
+  },
+
+  async updateGlobalSSOConfig(data: GlobalSSOConfigUpdate): Promise<GlobalSSOConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/sso-config/`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to update SSO config' }))
+      throw new Error(error.detail || 'Failed to update SSO config')
     }
     return res.json()
   },

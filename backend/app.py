@@ -120,6 +120,9 @@ from api.routes_plans import router as plans_router
 from api.routes_sso_config import router as sso_config_router
 # Global User Management
 from api.routes_global_users import router as global_users_router
+# Global Admin: Invitations & Platform SSO (invitation scope + global SSO feature)
+from api.routes_admin_invitations import router as admin_invitations_router
+from api.routes_admin_sso import router as admin_sso_router
 # Toolbox Container Management (Custom Tools)
 from api.routes_toolbox import router as toolbox_router
 # Skill Integrations (Provider Configuration)
@@ -282,6 +285,26 @@ async def lifespan(app: FastAPI):
         migration_db.close()
     except Exception as e:
         logging.error(f"Sandboxed tools skill migration failed: {e}")
+
+    # Belt-and-suspenders: ensure the singleton GlobalSSOConfig row exists.
+    # Migration 0036 already inserts it on upgrade, but a manual volume
+    # restore or a skipped migration would leave admin SSO endpoints with no
+    # row to PUT against. This runs on every startup and is a no-op when
+    # the row already exists.
+    try:
+        SSOSession = sessionmaker(bind=engine)
+        sso_db = SSOSession()
+        from models_rbac import GlobalSSOConfig
+        if sso_db.query(GlobalSSOConfig).first() is None:
+            sso_db.add(GlobalSSOConfig(
+                google_sso_enabled=False,
+                auto_provision_users=False,
+            ))
+            sso_db.commit()
+            print("📦 Seeded default GlobalSSOConfig singleton row")
+        sso_db.close()
+    except Exception as e:
+        logging.error(f"GlobalSSOConfig startup seeding failed: {e}")
 
     # Start MCP watcher
     SessionLocal = sessionmaker(bind=engine)
@@ -1240,6 +1263,8 @@ app.include_router(team_router)  # Phase 7.9 - Team Management
 app.include_router(plans_router)  # Plans Management
 app.include_router(sso_config_router)  # SSO Configuration
 app.include_router(global_users_router)  # Global User Management
+app.include_router(admin_invitations_router)  # Global Admin: Invitation Management
+app.include_router(admin_sso_router)  # Global Admin: Platform-wide SSO Config
 app.include_router(toolbox_router)  # Toolbox Container Management (Custom Tools)
 app.include_router(skill_integrations_router, prefix="/api")  # Skill Integrations (Provider Configuration)
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
