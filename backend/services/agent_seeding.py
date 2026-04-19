@@ -4,11 +4,13 @@ Phase 1: Backend Setup
 
 Creates default system agents during installation:
 - Tsushin (General Assistant)
-- Kokoro (Voice Assistant - Kokoro TTS, free/local)
-- Kira (Voice Assistant - OpenAI TTS)
-- Transcript (Audio Transcription)
 - Shellboy (Remote Commands via Beacon)
 - CustomerService (Customer Support)
+
+Audio/voice agents (Kokoro/Kira/Transcript) are no longer seeded by default.
+Users create them opt-in via the Audio Agents wizard (Studio new-agent
+selector or onboarding tour step) — the wizard covers TTS, transcription,
+and hybrid agents. Existing tenants keep any pre-seeded audio agents.
 
 Usage:
     from services.agent_seeding import seed_default_agents
@@ -120,85 +122,6 @@ Communication style:
             "memory_size": 100,
         },
         {
-            "name": "Kokoro",
-            "description": "Voice assistant with Kokoro TTS (free/local)",
-            "system_prompt": """You are Kokoro, a voice assistant.
-
-CRITICAL RULES:
-1. ALWAYS respond in the same language as the user
-2. KEEP RESPONSES VERY SHORT (maximum 2-3 sentences)
-3. Be direct and objective
-4. Adapt to the user's language preference
-
-GOOD EXAMPLE: Today is December 1st, 2025.
-BAD EXAMPLE: Long responses with many details.""",
-            "skills": [
-                {"type": "agent_switcher", "config": _get_agent_switcher_config(model_name)},
-                {"type": "audio_tts", "config": {"provider": "kokoro", "voice": "pf_dora", "language": "pt", "response_format": "opus", "speed": 1.0}},
-                {"type": "flows", "config": _get_flows_skill_config(model_name)},
-                {"type": "sandboxed_tools", "config": {}},
-            ],
-            "channels": ["playground", "whatsapp"],
-            "trigger_dm_enabled": True,
-            "trigger_group_filters": [".*"],
-            "keywords": ["@kokoro"],
-            "memory_size": 10,
-            "context_message_count": 0,
-            "response_template": "@{agent_name}: {response}",
-        },
-        {
-            "name": "Kira",
-            "description": "Voice assistant with OpenAI TTS",
-            "system_prompt": """You are Kira, a voice assistant. You ALWAYS respond in audio using Text-to-Speech.
-
-CRITICAL RULES:
-1. ALWAYS respond in the same language as the user
-2. Be natural, friendly, and conversational
-3. KEEP RESPONSES SHORT (maximum 200 characters) for optimal audio
-4. Be direct and expressive - your voice IS your personality
-5. Use simple, spoken-language phrasing (avoid complex written constructs)
-
-Remember: Your responses will be converted to speech, so write as you would speak.""",
-            "skills": [
-                {"type": "agent_switcher", "config": _get_agent_switcher_config(model_name)},
-                {"type": "audio_transcript", "config": {"response_mode": "conversational", "language": "pt"}},
-                {"type": "audio_tts", "config": {"provider": "openai", "voice": "nova", "language": "pt", "response_format": "opus", "speed": 1.0}},
-                {"type": "flows", "config": _get_flows_skill_config(model_name)},
-                {"type": "sandboxed_tools", "config": {}},
-            ],
-            "channels": ["playground", "whatsapp"],
-            "trigger_dm_enabled": None,
-            "trigger_group_filters": [],
-            "keywords": ["@kira", "kira"],
-            "response_template": "@{agent_name}: {response}",
-        },
-        {
-            "name": "Transcript",
-            "description": "Audio transcription agent",
-            "system_prompt": """You are Transcript, a transcription agent.
-
-Your ONLY job is to transcribe audio messages accurately.
-
-RULES:
-1. Transcribe audio word-for-word, preserving the original language
-2. Do NOT add commentary, interpretation, or conversation
-3. Do NOT respond to the content of the audio - only transcribe it
-4. If the audio is unclear, note it with [inaudible] markers
-5. Preserve speaker tone indicators where relevant (e.g., [laughs], [whispers])""",
-            "skills": [
-                {"type": "agent_switcher", "config": {"keywords": ["invoke", "invocar"]}},
-                {"type": "audio_transcript", "config": {"response_mode": "transcript_only"}},
-                {"type": "sandboxed_tools", "config": {}},
-            ],
-            "channels": ["playground", "whatsapp"],
-            "trigger_dm_enabled": True,
-            "trigger_group_filters": [],
-            "keywords": [],
-            "memory_size": 10,
-            "model_name_override": "gemini-2.5-flash-lite",
-            "response_template": "@{agent_name}: {response}",
-        },
-        {
             "name": "Shellboy",
             "description": "Remote command execution assistant via Beacon",
             "system_prompt": """You are Shellboy, a remote command execution assistant.
@@ -257,27 +180,6 @@ Best practices:
             "keywords": []
         }
     ]
-
-    # v0.7.0: resolve a per-tenant Kokoro TTSInstance up front so the Kokoro demo
-    # agent can point its audio_response skill at a real instance when available.
-    # If no Kokoro instance exists yet for this tenant, the seeded audio_response
-    # skill is created disabled (with a hint) instead of wired to a dead URL.
-    kokoro_tts_instance_id: Optional[int] = None
-    try:
-        from models import TTSInstance  # local import to avoid circulars at module load
-        kokoro_inst = (
-            db.query(TTSInstance)
-            .filter(
-                TTSInstance.tenant_id == tenant_id,
-                TTSInstance.vendor == "kokoro",
-                TTSInstance.is_active == True,
-            )
-            .first()
-        )
-        if kokoro_inst:
-            kokoro_tts_instance_id = kokoro_inst.id
-    except Exception as e:  # pragma: no cover — defensive; missing table in fresh installs
-        logger.warning(f"Kokoro TTSInstance lookup during seeding failed: {e}")
 
     try:
         for agent_config in agents_config:
@@ -339,20 +241,6 @@ Best practices:
 
                 skill_enabled = True
 
-                # v0.7.0: the legacy compose kokoro-tts URL is gone. For the Kokoro
-                # demo agent's audio_tts skill, wire it to a pre-existing per-tenant
-                # Kokoro TTSInstance when available, otherwise seed it disabled with
-                # a hint so we don't create a zombie agent pointing at nothing.
-                if skill_type == "audio_tts" and skill_config.get("provider") == "kokoro":
-                    if kokoro_tts_instance_id is not None:
-                        skill_config["tts_instance_id"] = kokoro_tts_instance_id
-                    else:
-                        skill_enabled = False
-                        skill_config["_note"] = (
-                            "Enable after configuring a Kokoro TTS instance at "
-                            "Hub → Kokoro TTS → Setup with Wizard"
-                        )
-
                 agent_skill = AgentSkill(
                     agent_id=agent.id,
                     skill_type=skill_type,
@@ -401,7 +289,7 @@ def check_existing_agents(tenant_id: str, db: Session) -> List[str]:
     Returns:
         List of agent names that already exist
     """
-    default_agent_names = ["Tsushin", "Kokoro", "Shellboy", "CustomerService", "Kira", "Transcript"]
+    default_agent_names = ["Tsushin", "Shellboy", "CustomerService"]
 
     existing_agents = db.query(Contact.friendly_name).filter(
         Contact.tenant_id == tenant_id,

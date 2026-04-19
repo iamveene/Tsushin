@@ -2237,6 +2237,31 @@ Four-step guided flow for creating a per-tenant Kokoro TTS container and (option
 **Backend support:**
 - `POST /api/tts-instances/{id}/assign-to-agent` — body `{agent_id, voice?, speed?, language?, response_format?}`. Upserts the `audio_response` AgentSkill row for the target agent. Tenant isolation double-guarded on both the TTS instance and the agent (404 on mismatch). Permission: `org.settings.write`.
 
+#### 20.6.1a Audio Agents Onboarding Wizard (v0.7.0)
+
+**Component:** `frontend/components/audio-wizard/AudioAgentsWizard.tsx`
+**Context provider:** `frontend/contexts/AudioWizardContext.tsx` (mounted globally in `app/layout.tsx` alongside `GoogleWizardProvider` and `WhatsAppWizardProvider`)
+**Entry points:**
+- **Onboarding tour step 12** — a "Voice Capabilities (optional)" step calls `useAudioWizard().openWizard()`; skippable in one click.
+- **Studio → New Agent modal** (`frontend/components/watcher/studio/StudioAgentSelector.tsx`) — a Text / Voice / Hybrid radio; picking Voice or Hybrid closes the inline create modal and calls `openWizard({ presetMode: 'new', presetAgentType, presetNewAgentName })`.
+- Any consumer can also call `useAudioWizard().openWizard({ presetProvider?, presetAgentId?, presetMode? })` directly.
+
+This wizard replaced the built-in Kokoro / Kira / Transcript seed agents (removed from `backend/services/agent_seeding.py` in v0.7.0). Existing tenants keep any already-seeded audio agents untouched; new tenants start with only the text-only defaults and create audio agents opt-in through this wizard.
+
+Five configuration steps + one progress step:
+
+1. **Intent** — three cards: *Voice responses (TTS)*, *Audio transcription only*, *Hybrid — both*. Transcription-only skips provider choice (Whisper via OpenAI is the only option).
+2. **Provider** — three cards: Kokoro (free/local), OpenAI TTS (paid), ElevenLabs (premium). Each card shows a **Detected** badge when the tenant already has that provider configured (`api.getTTSInstances()` for Kokoro, `api.getProviderInstances()` for OpenAI/ElevenLabs keys), or a **Needs API key** badge linking back to Hub → AI Providers otherwise.
+3. **Voice & credentials** — language first (filters Kokoro voices by language), then voice, speed, format. Kokoro adds a memory-limit dropdown and a "Set as tenant-default TTS" checkbox.
+4. **Agent target** — radio: *Create a new Voice Assistant* (system prompt defaults mirror the old Kira/Kokoro prompts, preserved as client-side templates in `defaults.ts`) or *Attach audio to an existing agent* (preserves other skills on the target). Existing-agent radio is disabled if the tenant has no agents yet.
+5. **Review & Create** — summary cards + skill diff (`audio_tts`, `audio_transcript`, or both) + "Create & Provision" CTA.
+
+On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running` (~30–90 s) and then calls `POST /api/tts-instances/{id}/assign-to-agent`; the OpenAI/ElevenLabs path skips the TTSInstance and directly calls `PUT /api/agents/{id}/skills/audio_tts` with `{provider, voice, language, speed, response_format}`. If intent is hybrid or transcript, `PUT /api/agents/{id}/skills/audio_transcript` is also called. New-agent mode creates a Contact (`POST /api/contacts`), an Agent (`POST /api/agents`), then an update call (`PUT /api/agents/{id}`) to apply `memory_size` / `response_template` / `enabled_channels` defaults. All orchestration is client-side — no new backend endpoint was introduced.
+
+**Events.** The provider emits `window.dispatchEvent(new CustomEvent('tsushin:audio-wizard-closed'))` on close so the onboarding tour's step 12 callback can auto-advance to step 13 (mirrors the WhatsApp wizard pattern).
+
+**Completion callbacks.** `useAudioWizardComplete(cb)` subscribes to wizard completion for the lifetime of a component — Hub / Studio pages can use this to reload their agent and TTS-instance lists.
+
 #### 20.6.2 Ollama Setup Wizard
 
 **Component:** `frontend/components/ollama/OllamaSetupWizard.tsx`

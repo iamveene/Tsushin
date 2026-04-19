@@ -21,6 +21,7 @@ import React, { useEffect, useCallback, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useOnboarding } from '@/contexts/OnboardingContext'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
+import { useAudioWizard } from '@/contexts/AudioWizardContext'
 import Modal from '@/components/ui/Modal'
 import { api } from '@/lib/client'
 
@@ -124,6 +125,7 @@ interface TourStep {
 export default function OnboardingWizard() {
   const { state, nextStep, previousStep, minimize, maximize, completeTour, dismissTour, skipTour } = useOnboarding()
   const { openWizard: openWhatsAppWizard } = useWhatsAppWizard()
+  const { openWizard: openAudioWizard } = useAudioWizard()
   const router = useRouter()
   const pathname = usePathname()
   const isAuthPage = pathname?.startsWith('/auth/')
@@ -135,6 +137,19 @@ export default function OnboardingWizard() {
     window.dispatchEvent(new CustomEvent('tsushin:open-user-guide'))
     minimize()
   }, [minimize])
+
+  // v0.7.0: Voice Capabilities step launches the AudioAgentsWizard and advances tour when closed
+  const openVoiceWizard = useCallback(() => {
+    openAudioWizard()
+    minimize()
+    const handleWizardClose = () => {
+      window.removeEventListener('tsushin:audio-wizard-closed', handleWizardClose)
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('tsushin:advance-tour-step'))
+      }, 300)
+    }
+    window.addEventListener('tsushin:audio-wizard-closed', handleWizardClose)
+  }, [openAudioWizard, minimize])
 
   // BUG-321: Step 5 launches WhatsApp wizard directly AND advances tour when wizard closes
   const openChannelsWizard = useCallback(() => {
@@ -354,7 +369,24 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 12 — v0.6.0: Playground Mini floating bubble
+      // Step 12 — v0.7.0: Voice Capabilities (optional)
+      title: 'Voice Capabilities (optional)',
+      targetSelector: null,
+      content: 'Want your agents to reply with audio or transcribe incoming voice messages? Launch the Audio Agents wizard — it walks you through picking a TTS provider (Kokoro free/local, OpenAI, or ElevenLabs), configuring a voice, and either scaffolding a brand-new Voice Assistant agent or attaching audio capabilities to an existing one. This step is entirely optional; skip if you do not need audio.',
+      highlightFeatures: [
+        'Kokoro TTS — free, open-source, runs in a local Docker container (~30–90s auto-provision)',
+        'OpenAI TTS — high-quality cloud voices, uses your existing OpenAI API key',
+        'ElevenLabs — premium voice cloning, requires an ElevenLabs API key',
+        'Create a new Voice Assistant OR attach audio_tts/audio_transcript to an existing agent',
+        'Pick "Hybrid" to both transcribe incoming voice AND reply with synthesized audio',
+      ],
+      actionButton: {
+        label: 'Set up voice agent (guided wizard)',
+        action: openVoiceWizard
+      }
+    },
+    {
+      // Step 13 — v0.6.0: Playground Mini floating bubble
       title: 'New: Playground Mini',
       targetSelector: '[data-testid="playground-mini"]',
       content: 'Test any agent from any page without leaving. Pick an agent, project, or thread, fire a quick message — then hit Expand if you want to continue in the full Playground. The conversation carries over intact.',
@@ -376,7 +408,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 13 — v0.7.0-preview: Sentinel / MemGuard block-mode nudge before the finale.
+      // Step 14 — v0.7.0-preview: Sentinel / MemGuard block-mode nudge before the finale.
       title: 'Sentinel — Security Layer',
       targetSelector: null,
       content: "Sentinel is Tsushin's built-in security agent. It scans every prompt, tool call, and shell command before agents act on them, and can block prompt injection, agent takeover attempts, and memory poisoning (MemGuard). Start with it ON (block mode) — you can always relax it later.",
@@ -389,7 +421,7 @@ export default function OnboardingWizard() {
       customBody: <SentinelTourPanel onAdvanced={() => minimize()} />,
     },
     {
-      // Step 14 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
+      // Step 15 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
       // Points users to the Getting Started Checklist on the dashboard instead of duplicating it.
       title: "You're All Set!",
       targetSelector: null,

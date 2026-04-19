@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Audio Agents Onboarding Wizard — Kokoro / Kira / Transcript removed from seed (2026-04-19)
+
+Every fresh tenant used to get three audio agents seeded automatically: **Kokoro** (free/local TTS), **Kira** (OpenAI TTS), and **Transcript** (Whisper-only). Most tenants never configured audio at all, so those agents sat idle at the top of every agent list — and Kokoro in particular silently disabled itself because it required a Kokoro Docker container that was never provisioned.
+
+The audio agents are now **opt-in** via a new **Audio Agents wizard** that covers all three intents (TTS responses, transcription-only, hybrid) across all three providers (Kokoro / OpenAI / ElevenLabs) in a single guided flow.
+
+**What the wizard does.** 5 steps, all client-side orchestration over existing endpoints:
+1. *Intent* — voice (TTS out), transcript (voice in), or hybrid (both).
+2. *Provider* — Kokoro / OpenAI / ElevenLabs. "Detected" badge renders when the provider is already configured for this tenant (`api.getProviderInstances()` for OpenAI/ElevenLabs keys, `api.getTTSInstances()` for Kokoro); "Needs API key" badge links to Hub → AI Providers otherwise.
+3. *Voice & credentials* — language → voice list (Kokoro voices filter by language), speed, format; Kokoro step also asks for mem_limit and "set as tenant-default TTS".
+4. *Agent target* — create a new Voice Assistant (default system prompt carries over from the old Kira/Kokoro prompts as client-side templates) OR attach `audio_tts` + `audio_transcript` skills to an existing agent.
+5. *Review* + *Provision & wire* — creates the TTSInstance (Kokoro only), polls `/api/tts-instances/{id}/container/status` until `running` (~30–90s), creates the Contact + Agent if new-mode, wires skills via `assignTTSInstanceToAgent` (Kokoro) or `updateAgentSkill('audio_tts'/'audio_transcript')` (OpenAI/ElevenLabs).
+
+**Two entry points** (both optional):
+- **Onboarding tour step 12** — new "Voice Capabilities (optional)" page with a "Set up voice agent" CTA and a skip button. Tour total raised 14 → 15.
+- **Studio → New Agent** — the inline "Create New Agent" modal now has a **Text / Voice / Hybrid** radio. Picking Voice or Hybrid hands off to the wizard preset with the agent name pre-filled and `presetMode='new'`.
+
+**Backward compatibility.** Existing tenants keep their already-seeded Kokoro / Kira / Transcript agents untouched — the change is remove-only in `agent_seeding.py`. The previous Kokoro-TTSInstance resolution block that seeded the `audio_tts` skill disabled-with-a-hint is also gone (no longer needed since the agent isn't seeded). `KokoroSetupWizard` is still mounted in Hub → Voice as a direct deep-link for power users.
+
+**Touched files.**
+- Backend: `backend/services/agent_seeding.py` (removed Kokoro/Kira/Transcript dicts from `agents_config`; removed Kokoro TTSInstance lookup block and the `audio_tts skill_type=='kokoro'` enablement branch; updated `default_agent_names` list used by `check_existing_agents` and the module docstring), `backend/auth_routes.py` (updated the `agents_created` example in the `/api/auth/setup` docstring).
+- Frontend: `frontend/contexts/AudioWizardContext.tsx` (new global provider modeled on `GoogleWizardContext` — `openWizard({ presetProvider, presetAgentId, presetMode, presetAgentType, presetNewAgentName })`, `closeWizard`, `registerOnComplete`, `useAudioWizardComplete`; emits `tsushin:audio-wizard-closed` so the tour can auto-resume), `frontend/components/audio-wizard/AudioAgentsWizard.tsx` (new 6-step wizard — 5 config steps + 1 progress step, container polling, skill wiring), `frontend/components/audio-wizard/defaults.ts` (new — voice/agent templates carrying over the Kira/Kokoro/Transcript prompts as client-side constants), `frontend/app/layout.tsx` (mount `AudioWizardProvider` alongside the existing wizard providers), `frontend/contexts/OnboardingContext.tsx` (`TOTAL_STEPS` 14 → 15), `frontend/components/OnboardingWizard.tsx` (new `openVoiceWizard` callback; new "Voice Capabilities (optional)" tour step between Playground and Playground Mini; shifted step-numbering comments on Sentinel/finale), `frontend/components/watcher/studio/StudioAgentSelector.tsx` (new `newAgentKind` state — text / voice / hybrid — with Audio Wizard hand-off; provider/instance/model fields now render only for Text; button label flips to "Continue in Audio Wizard →" for Voice/Hybrid).
+- Docs: this changelog entry; documentation.md updated under "Voice & Audio" and "Default Agents".
+
 ### Hub: auto health-test provider instances on save (2026-04-19)
 
 Cloud LLM provider instances (OpenAI, Gemini, Anthropic, Groq, Grok, DeepSeek, OpenRouter, Vertex AI, custom) used to sit at `health_status="unknown"` — gray dot in **Hub → AI Providers** — until the user opened the row's three-dot menu and clicked **Test Connection**. Even with valid credentials configured, nothing else flipped the status; only Ollama (which has its own container-manager probe) went green on its own.

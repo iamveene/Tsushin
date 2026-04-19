@@ -591,7 +591,7 @@ async def setup_wizard(
             "tenant_id": "uuid",
             "user_id": 123,
             "access_token": "jwt_token",
-            "agents_created": ["Tsushin", "Kokoro", ...]
+            "agents_created": ["Tsushin", "Shellboy", "CustomerService"]
         }
     """
     # Security check: Only allow if no users exist (first-time setup)
