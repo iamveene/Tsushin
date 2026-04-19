@@ -16,6 +16,7 @@ Key features:
 - Audit logging for Watcher Security tab
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -1045,11 +1046,17 @@ class SentinelService:
             self.logger.debug(f"Injected skill context into {detection_type} analysis")
 
         # Call LLM
+        # BUG-601: Hard-bound the Sentinel LLM call so a stalled provider can't
+        # pin the caller's DB session indefinitely and accelerate pool
+        # exhaustion. `config.timeout_seconds` is already tuned per tenant.
         try:
-            llm_result = await self._call_llm(
-                system_prompt="You are a security analyst. Analyze the content for threats. Respond only with valid JSON.",
-                user_content=analysis_prompt,
-                config=config,
+            llm_result = await asyncio.wait_for(
+                self._call_llm(
+                    system_prompt="You are a security analyst. Analyze the content for threats. Respond only with valid JSON.",
+                    user_content=analysis_prompt,
+                    config=config,
+                ),
+                timeout=config.timeout_seconds,
             )
         except Exception as e:
             self.logger.error(f"LLM call failed: {e}", exc_info=True)
@@ -1336,11 +1343,16 @@ class SentinelService:
             self.logger.debug("Injected skill context into unified analysis")
 
         # Call LLM (single call)
+        # BUG-601: Same hard bound as the per-detection path above — a stalled
+        # Sentinel LLM call must not pin a Playground DB session forever.
         try:
-            llm_result = await self._call_llm(
-                system_prompt="You are a security analyst. Classify the threat type. Respond only with valid JSON.",
-                user_content=analysis_prompt,
-                config=config,
+            llm_result = await asyncio.wait_for(
+                self._call_llm(
+                    system_prompt="You are a security analyst. Classify the threat type. Respond only with valid JSON.",
+                    user_content=analysis_prompt,
+                    config=config,
+                ),
+                timeout=config.timeout_seconds,
             )
         except Exception as e:
             self.logger.error(f"Unified LLM call failed: {e}", exc_info=True)

@@ -1293,26 +1293,15 @@ def get_tool_metadata(
                         ]
                     }]
                 },
-                "asana_tasks": {
-                    "id": "asana_tasks",
-                    "name": "Asana Tasks",
-                    "commands": [{
-                        "id": "create",
-                        "name": "create",
-                        "parameters": [
-                            {
-                                "name": "title",
-                                "required": True,
-                                "description": "Task title"
-                            },
-                            {
-                                "name": "notes",
-                                "required": False,
-                                "description": "Task description"
-                            }
-                        ]
-                    }]
-                },
+                # BUG-606: `asana_tasks` advertised here and in the UI picker,
+                # but `FlowEngine._execute_builtin_tool` only dispatches
+                # `google_search` and `web_scraping`. Execution always failed
+                # with `Unknown built-in tool: asana_tasks`. The Asana
+                # integration lives in `backend/hub/asana` + the scheduler
+                # provider — wiring a real Asana task-creator into the flow
+                # engine is a feature, not a bug fix. Removed from the UI +
+                # this metadata list. Tenants needing Asana from flows can use
+                # the scheduler skill with Asana as the configured provider.
                 "send_message": {
                     "id": "send_message",
                     "name": "Send Message",

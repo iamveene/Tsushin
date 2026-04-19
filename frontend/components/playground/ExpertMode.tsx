@@ -55,6 +55,7 @@ interface SelectedTool {
 
 interface ExpertModeProps {
   agents: PlaygroundAgentInfo[]
+  isLoadingAgents?: boolean
   projects: Project[]
   selectedAgentId: number | null
   agentName: string
@@ -162,6 +163,7 @@ function formatToolName(rawName: string): string {
 
 export default function ExpertMode({
   agents,
+  isLoadingAgents = false,
   projects,
   selectedAgentId,
   agentName,
@@ -740,6 +742,17 @@ export default function ExpertMode({
                   <div className="w-6 h-6 border-2 border-[var(--pg-accent)] border-t-transparent rounded-full animate-spin" />
                 </div>
                 <p className="text-[var(--pg-text-secondary)] mt-4">Loading...</p>
+              </div>
+            ) : isLoadingAgents ? (
+              // BUG-596: While the agent list is still hydrating (first paint
+              // after login), show a spinner instead of the misleading
+              // "Select an Agent" empty state — otherwise the user briefly
+              // sees `Agents 0` even though fetches are in flight.
+              <div className="empty-state h-full">
+                <div className="empty-state-icon animate-pulse">
+                  <div className="w-6 h-6 border-2 border-[var(--pg-accent)] border-t-transparent rounded-full animate-spin" />
+                </div>
+                <p className="text-[var(--pg-text-secondary)] mt-4">Loading agents…</p>
               </div>
             ) : !selectedAgentId ? (
               <div className="empty-state h-full">

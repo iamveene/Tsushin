@@ -2420,7 +2420,6 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               {(currentConfig?.tool_type || 'built_in') === 'built_in' ? (
                 <>
                   <option value="google_search">Google Search</option>
-                  <option value="asana_tasks">Asana Tasks</option>
                   <option value="send_message">Send Message</option>
                 </>
               ) : (
@@ -3725,7 +3724,6 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               {(currentConfig?.tool_type || 'built_in') === 'built_in' ? (
                 <>
                   <option value="google_search">Google Search</option>
-                  <option value="asana_tasks">Asana Tasks</option>
                   <option value="send_message">Send Message</option>
                 </>
               ) : (
