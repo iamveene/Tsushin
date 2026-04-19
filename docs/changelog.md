@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Unify Gmail / Google Calendar wizards across Settings and Hub (2026-04-19)
+
+Hub → Communication "Add Gmail Account" and Hub → Productivity "Add Calendar Account" now open the same multi-step `GmailSetupWizard` / `GoogleCalendarSetupWizard` already used on `/settings/integrations`, instead of doing a bare `window.location.href` OAuth redirect.
+
+**Problem.** The Hub buttons called `/api/hub/google/{gmail|calendar}/oauth/authorize` directly and full-page-redirected. The user came back to Hub with an `HubIntegration` row but with **no agent bound** — they had to re-do the flow from Settings to enable the Gmail / Scheduler skill on the agent and link the integration. Two entry points, two different experiences, silently diverging outcomes.
+
+**Fix.** Lifted the wizards into a shared `GoogleWizardProvider` mounted globally in `app/layout.tsx` (same pattern already in use for WhatsApp via `WhatsAppWizardProvider`). A new `useGoogleWizard()` hook exposes `openWizard('gmail' | 'calendar')`; a `useGoogleWizardComplete(kind, cb)` companion hook lets consumer pages refresh their local integration lists when the wizard finishes.
+
+**Touched files.**
+- `frontend/contexts/GoogleWizardContext.tsx` (new) — provider, hook, `GoogleWizardHost` that mounts both dynamic-imported wizards.
+- `frontend/app/layout.tsx` — wraps tree with `GoogleWizardProvider`.
+- `frontend/app/settings/integrations/page.tsx` — removed local wizard state and inline mounts; buttons call `openWizard()`; `useGoogleWizardComplete` re-fetches Google credentials after completion.
+- `frontend/app/hub/page.tsx` — rewrote `handleGmailConnect` and `handleGoogleCalendarConnect` to call `openWizard()`; registered `loadHubIntegrations` as the completion callback via a ref (the function is declared below the hook call in the same component).
+
+**No backend changes.** Wizards already call `/api/hub/google/{gmail|calendar}/oauth/authorize` in popup mode and then `PUT /api/agents/{id}/skills/{type}` + `PUT /api/agents/{id}/skill-integrations/{type}` — the existing endpoints and schema are unchanged.
+
+**Verified end-to-end (Playwright, https://localhost):**
+- Hub → Communication → "+ Add Gmail Account" opens the 6-step Gmail wizard (not a redirect).
+- Hub → Productivity → "+ Add Calendar Account" opens the 6-step Calendar wizard.
+- `/settings/integrations` → "Set up Gmail →" / "Set up Google Calendar →" still open the same wizards (regression clean).
+- No `ReferenceError`, `TypeError`, or React invariant violations in the browser console.
+
 ### QA — UI-First 4-Audit Regression Campaign (2026-04-19)
 
 - Coverage: Playground + Mini + Graph-Glow (A1 API harness + A2 browser), Flows (B1 API + B2 UI 20-shape matrix + 2 edit scenarios), Sentinel + MemGuard (C1 preflight + C2 browser matrix across Chroma × block/aggressive), Full-Stack multi-tenant UI + Ollama/Kokoro autoprov (D12 + D34-api), Ubuntu VM fresh install (HTTP + self-signed TLS, E1).

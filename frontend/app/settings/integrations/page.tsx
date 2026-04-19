@@ -7,19 +7,10 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
 import { authenticatedFetch } from '@/lib/client'
-
-const GmailSetupWizard = dynamic(
-  () => import('@/components/integrations/GmailSetupWizard'),
-  { ssr: false },
-)
-const GoogleCalendarSetupWizard = dynamic(
-  () => import('@/components/integrations/GoogleCalendarSetupWizard'),
-  { ssr: false },
-)
+import { useGoogleWizard, useGoogleWizardComplete } from '@/contexts/GoogleWizardContext'
 
 interface GoogleCredentials {
   id: number
@@ -46,8 +37,8 @@ export default function IntegrationsSettingsPage() {
   const [googleClientId, setGoogleClientId] = useState('')
   const [googleClientSecret, setGoogleClientSecret] = useState('')
 
-  // Guided setup wizards
-  const [wizard, setWizard] = useState<'gmail' | 'calendar' | null>(null)
+  // Guided setup wizards live in a global context so Hub can reuse them
+  const { openWizard } = useGoogleWizard()
 
   const apiUrl = ''
 
@@ -68,6 +59,14 @@ export default function IntegrationsSettingsPage() {
       console.error('Error fetching Google credentials:', err)
     }
   }, [apiUrl])
+
+  const refreshAfterWizard = useCallback(() => {
+    fetchGoogleCredentials()
+    setSuccess('Integration connected')
+    setTimeout(() => setSuccess(null), 3000)
+  }, [fetchGoogleCredentials])
+  useGoogleWizardComplete('gmail', refreshAfterWizard)
+  useGoogleWizardComplete('calendar', refreshAfterWizard)
 
   const handleSaveGoogleCredentials = async () => {
     if (!googleClientId.trim()) { setError('Client ID is required'); return }
@@ -238,11 +237,11 @@ export default function IntegrationsSettingsPage() {
                 </div>
                 {canEdit && (
                   <div className="flex flex-wrap gap-3 pt-4">
-                    <button onClick={() => setWizard('gmail')}
+                    <button onClick={() => openWizard('gmail')}
                       className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors">
                       Set up Gmail →
                     </button>
-                    <button onClick={() => setWizard('calendar')}
+                    <button onClick={() => openWizard('calendar')}
                       className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">
                       Set up Google Calendar →
                     </button>
@@ -276,10 +275,10 @@ export default function IntegrationsSettingsPage() {
                     </button>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
                       Or jump straight into a guided setup:{' '}
-                      <button onClick={() => setWizard('gmail')} className="text-red-500 hover:text-red-600 underline">
+                      <button onClick={() => openWizard('gmail')} className="text-red-500 hover:text-red-600 underline">
                         Gmail
                       </button>{' '}·{' '}
-                      <button onClick={() => setWizard('calendar')} className="text-blue-500 hover:text-blue-600 underline">
+                      <button onClick={() => openWizard('calendar')} className="text-blue-500 hover:text-blue-600 underline">
                         Google Calendar
                       </button>
                     </p>
@@ -307,25 +306,6 @@ export default function IntegrationsSettingsPage() {
           </div>
         </div>
       </div>
-
-      <GmailSetupWizard
-        isOpen={wizard === 'gmail'}
-        onClose={() => setWizard(null)}
-        onComplete={() => {
-          fetchGoogleCredentials()
-          setSuccess('Gmail connected')
-          setTimeout(() => setSuccess(null), 3000)
-        }}
-      />
-      <GoogleCalendarSetupWizard
-        isOpen={wizard === 'calendar'}
-        onClose={() => setWizard(null)}
-        onComplete={() => {
-          fetchGoogleCredentials()
-          setSuccess('Google Calendar connected')
-          setTimeout(() => setSuccess(null), 3000)
-        }}
-      />
 
       {/* Google Modal */}
       {showGoogleModal && (
