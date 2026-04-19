@@ -76,6 +76,30 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
     }
   }, [])
 
+  // OAuth popup handoff: the popup posts a message here right before it closes.
+  // We react immediately instead of waiting for the 3-second poll tick. Validates
+  // origin (same-origin messaging) and the payload source marker.
+  useEffect(() => {
+    if (!isOpen) return
+    const handler = async (ev: MessageEvent) => {
+      if (ev.origin !== window.location.origin) return
+      const data = ev.data
+      if (!data || typeof data !== 'object') return
+      if (data.source !== 'tsushin-google-oauth' || data.integration !== 'gmail') return
+      if (pollTimer.current) { clearInterval(pollTimer.current); pollTimer.current = null }
+      setPopupOpen(false)
+      setPopupError(null)
+      const list = await fetchIntegrations()
+      setIntegrations(list)
+      const targetId = typeof data.integration_id === 'number' ? data.integration_id : null
+      const target = (targetId && list.find((i) => i.id === targetId)) ||
+                     list.find((i) => !initialIntegrationIds.current.has(i.id))
+      if (target) setSelectedIntegrationId(target.id)
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [isOpen])
+
   const handleClose = () => {
     if (pollTimer.current) {
       clearInterval(pollTimer.current)

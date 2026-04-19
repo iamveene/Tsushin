@@ -283,6 +283,37 @@ const CURATED_OLLAMA_MODELS = [
 ]
 
 export default function HubPage() {
+  // OAuth popup handoff. The Google OAuth callback at /api/hub/google/oauth/callback
+  // redirects the popup window to /hub?integration=<gmail|calendar>&status=success&id=<n>
+  // because the same route is also used by the legacy direct-redirect fallback (popup
+  // blocked). When we're actually inside a wizard-launched popup, the Hub page has no
+  // business rendering — we notify the opener (wizard) and close ourselves so the
+  // wizard can advance immediately instead of waiting on its 3-second poll.
+  //
+  // Runs as early as possible in the component body (before any other hooks allocate
+  // state) so the popup closes without a flash of Hub UI.
+  if (typeof window !== 'undefined' && window.opener && window.opener !== window) {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const status = params.get('status')
+      const integration = params.get('integration') || params.get('type')
+      if (status === 'success' && (integration === 'gmail' || integration === 'calendar')) {
+        const id = params.get('id')
+        const payload = {
+          source: 'tsushin-google-oauth',
+          integration,
+          integration_id: id ? Number(id) : null,
+          status,
+        }
+        try { window.opener.postMessage(payload, window.location.origin) } catch {}
+        window.close()
+        return null
+      }
+    } catch {
+      // Fall through to normal Hub render on any unexpected error
+    }
+  }
+
   const toast = useToast()
   const { isGlobalAdmin, hasPermission } = useAuth()
   // BUG-322: Use forceOpenWizard so the wizard always opens when explicitly triggered from Hub,
