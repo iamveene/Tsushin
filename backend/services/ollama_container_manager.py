@@ -222,8 +222,20 @@ class OllamaContainerManager:
             # base_url points at the DNS alias, not the host port.
             instance.base_url = f"http://{dns_alias}:{config['internal_port']}"
 
-            # Wait for health.
+            # Persist base_url + container fields BEFORE the long health wait so
+            # a stale DB connection after _wait_for_health can't lose this state.
+            db.commit()
+
+            # Wait for health. Can be 60–120s (Ollama image pull + serve warmup).
             healthy = self._wait_for_health(instance)
+
+            # Force a fresh connection from the pool after the long wait —
+            # the pooled connection may have been closed by the server while idle.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
             instance.container_status = "running" if healthy else "error"
             instance.health_status = "healthy" if healthy else "unavailable"
             instance.health_status_reason = (
@@ -243,6 +255,11 @@ class OllamaContainerManager:
                 f"Failed to provision Ollama container {container_name}: {e}",
                 exc_info=True,
             )
+            # Make sure we're not on a dead connection before writing error state.
+            try:
+                db.rollback()
+            except Exception:
+                pass
             # PEER REVIEW B-B3: remove the half-created container BEFORE clearing DB
             # fields so we never orphan a container we can no longer find by name.
             try:

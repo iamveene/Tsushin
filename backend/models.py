@@ -3726,7 +3726,10 @@ class TTSInstance(Base):
     KokoroContainerManager. The TTS provider resolves base_url from the selected
     instance at synthesis time via the chain:
         AgentSkill.config.tts_instance_id → Config.default_tts_instance_id
-        → KOKORO_SERVICE_URL env (escape hatch) → error response.
+        → error response.
+    (v0.7.0 removed the legacy KOKORO_SERVICE_URL env fallback and the stack-
+    level kokoro-tts compose service — per-tenant instances are now the only
+    way to run Kokoro.)
     """
     __tablename__ = "tts_instance"
 

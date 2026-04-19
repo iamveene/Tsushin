@@ -308,12 +308,6 @@ class TsushinInstaller:
         if not env_vars.get('TSN_SSL_MODE'):
             updates['TSN_SSL_MODE'] = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
 
-        desired_kokoro_url = self._get_default_kokoro_service_url()
-        if not env_vars.get('KOKORO_SERVICE_URL'):
-            updates['KOKORO_SERVICE_URL'] = desired_kokoro_url
-        elif env_vars.get('KOKORO_SERVICE_URL') == 'http://kokoro-tts:8880':
-            replacements['KOKORO_SERVICE_URL'] = desired_kokoro_url
-
         if not updates and not replacements:
             return
 
@@ -338,9 +332,6 @@ class TsushinInstaller:
             "Updated existing .env with runtime defaults: "
             + ", ".join(changed_keys)
         )
-
-    def _get_default_kokoro_service_url(self) -> str:
-        return f"http://{self._get_stack_name()}-kokoro-tts:8880"
 
     def check_existing_installation(self) -> str:
         """
@@ -1447,7 +1438,8 @@ HTTPS_PORT=443
 NEXT_PUBLIC_API_URL={backend_url}
 
 # Optional local services
-KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
+# Kokoro TTS: auto-provisioned per-tenant via Hub → Kokoro TTS → Setup with Wizard.
+# The legacy KOKORO_SERVICE_URL / docker compose --profile tts path has been removed.
 """
 
         # Write .env file

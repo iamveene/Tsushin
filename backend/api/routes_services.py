@@ -1,28 +1,22 @@
 """
 Hub Local Services Management Routes
 
-Provides endpoints for managing local service containers (Kokoro TTS, etc.)
-via the Docker API. Requires the Docker socket to be mounted in the backend container.
+Historically provided endpoints for managing the stack-level `kokoro-tts`
+compose container. As of v0.7.0 the legacy compose service and the
+`KOKORO_SERVICE_URL` env fallback have been removed — Kokoro now runs as
+per-tenant auto-provisioned instances managed via `/api/tts-instances/*`.
 
-Permissions:
-- Start/Stop: org.settings.write
-- Status: org.settings.read
+The three endpoints below are preserved ONLY to return HTTP 410 Gone with a
+helpful pointer to the replacement API, so old clients get a clear migration
+message instead of a 404.
 
-DEPRECATION NOTE (v0.6.0-patch.5):
-The /api/services/kokoro/* endpoints target the single stack-level `kokoro-tts`
-compose container (named `{TSN_STACK_NAME}-kokoro-tts`). They are preserved for
-backward compatibility, but per-tenant Kokoro containers now have their own
-auto-provisioning API at `/api/tts-instances/*`. New integrations should use the
-TTS Instance routes instead of these endpoints.
+Replacement: `/api/tts-instances` + `/api/tts-instances/{id}/container/*`.
 """
 
-import os
-
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from fastapi.responses import JSONResponse
 import logging
 
-from db import get_db
 from models_rbac import User
 from auth_dependencies import require_permission
 
@@ -31,110 +25,56 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/services", tags=["Local Services"])
 
 
-def _kokoro_compose_container_name() -> str:
-    """Exact container name for the stack-level Kokoro TTS container.
+_GONE_BODY = {
+    "error": "gone",
+    "message": (
+        "The global Kokoro TTS service has been replaced by per-tenant "
+        "auto-provisioned instances. Configure one at Hub → Kokoro TTS → "
+        "Setup with Wizard."
+    ),
+    "replacement": "/api/tts-instances",
+}
 
-    Matches the naming convention used by docker-compose for the `kokoro-tts`
-    service under the configured TSN_STACK_NAME.
-    """
-    stack_name = (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
-    return f"{stack_name}-kokoro-tts"
-
-
-def _kokoro_name_filter() -> dict:
-    """Docker name filter anchored to exact-match via ^$ regex.
-
-    Peer review A-B1: the previous loose {"name": "kokoro"} filter would match
-    ANY container whose name contained 'kokoro', including per-tenant
-    auto-provisioned TTS instances (`tsushin-tts-kokoro-*`). Pinning to the
-    regex-anchored exact name prevents these legacy endpoints from hijacking a
-    tenant container.
-    """
-    return {"name": f"^{_kokoro_compose_container_name()}$"}
+_GONE_HEADERS = {"Link": "</api/tts-instances>; rel=\"successor-version\""}
 
 
-# ==================== Kokoro TTS Container Management ====================
+def _gone_response() -> JSONResponse:
+    return JSONResponse(status_code=410, content=_GONE_BODY, headers=_GONE_HEADERS)
+
+
+# ==================== Kokoro TTS Container Management (DEPRECATED) ====================
 
 @router.post("/kokoro/start")
 async def start_kokoro(
     _user: User = Depends(require_permission("org.settings.write")),
-    db: Session = Depends(get_db),
 ):
-    """Start the stack-level Kokoro TTS Docker container.
+    """REMOVED in v0.7.0 — returns 410 Gone.
 
-    DEPRECATED: Use POST /api/tts-instances/{id}/container/start for per-tenant
-    Kokoro instances. This endpoint only affects the single shared compose-level
-    container named `{TSN_STACK_NAME}-kokoro-tts`.
+    Use POST /api/tts-instances/{id}/container/start for per-tenant Kokoro
+    instances. The stack-level compose `kokoro-tts` service no longer exists.
     """
-    import docker
-    try:
-        client = docker.from_env()
-        containers = client.containers.list(all=True, filters=_kokoro_name_filter())
-        if not containers:
-            return {
-                "success": False,
-                "message": "Kokoro TTS container not found. Start with: docker compose --profile tts up -d",
-            }
-
-        container = containers[0]
-        if container.status == "running":
-            return {"success": True, "message": "Kokoro TTS is already running"}
-
-        container.start()
-        return {"success": True, "message": "Kokoro TTS started successfully"}
-    except Exception as e:
-        logger.exception("Failed to start Kokoro TTS container")
-        return {"success": False, "message": f"Failed to start Kokoro: {str(e)}"}
+    return _gone_response()
 
 
 @router.post("/kokoro/stop")
 async def stop_kokoro(
     _user: User = Depends(require_permission("org.settings.write")),
-    db: Session = Depends(get_db),
 ):
-    """Stop the stack-level Kokoro TTS Docker container.
+    """REMOVED in v0.7.0 — returns 410 Gone.
 
-    DEPRECATED: Use POST /api/tts-instances/{id}/container/stop for per-tenant
-    Kokoro instances. This endpoint only affects the single shared compose-level
-    container named `{TSN_STACK_NAME}-kokoro-tts`.
+    Use POST /api/tts-instances/{id}/container/stop for per-tenant Kokoro
+    instances. The stack-level compose `kokoro-tts` service no longer exists.
     """
-    import docker
-    try:
-        client = docker.from_env()
-        containers = client.containers.list(filters=_kokoro_name_filter())
-        if not containers:
-            return {"success": False, "message": "Kokoro TTS is not running"}
-
-        containers[0].stop()
-        return {"success": True, "message": "Kokoro TTS stopped"}
-    except Exception as e:
-        logger.exception("Failed to stop Kokoro TTS container")
-        return {"success": False, "message": f"Failed to stop Kokoro: {str(e)}"}
+    return _gone_response()
 
 
 @router.get("/kokoro/status")
 async def kokoro_status(
     _user: User = Depends(require_permission("org.settings.read")),
 ):
-    """Get the stack-level Kokoro TTS container status.
+    """REMOVED in v0.7.0 — returns 410 Gone.
 
-    DEPRECATED: Use GET /api/tts-instances/{id}/container/status for per-tenant
-    Kokoro instances. This endpoint only affects the single shared compose-level
-    container named `{TSN_STACK_NAME}-kokoro-tts`.
+    Use GET /api/tts-instances/{id}/container/status for per-tenant Kokoro
+    instances. The stack-level compose `kokoro-tts` service no longer exists.
     """
-    import docker
-    try:
-        client = docker.from_env()
-        containers = client.containers.list(all=True, filters=_kokoro_name_filter())
-        if not containers:
-            return {"status": "not_installed", "message": "Container not found"}
-
-        c = containers[0]
-        return {
-            "status": c.status,  # running, exited, created
-            "name": c.name,
-            "image": c.image.tags[0] if c.image.tags else "unknown",
-        }
-    except Exception as e:
-        logger.exception("Failed to get Kokoro TTS container status")
-        return {"status": "error", "message": str(e)}
+    return _gone_response()

@@ -5,7 +5,8 @@
 # Usage:
 #   Development:  docker compose up --build
 #   Production:   docker compose -f docker-compose.yml up -d
-#   With TTS:     docker compose --profile tts up --build
+#   Local TTS:    enable per-tenant Kokoro via Hub → Kokoro TTS → Setup with Wizard
+#                 (auto-provisions a dedicated container; no compose profile needed)
 #   Tester note:  Hub tester controls resolve legacy/runtime tester targets;
 #                 the current compose file does not define a `testing` profile.
 #
@@ -76,7 +77,7 @@ services:
       SWARM: 0
       SYSTEM: 0
       TASKS: 0
-      VOLUMES: 0
+      VOLUMES: 1         # list, create, remove — needed by auto-provisioning (VS, Kokoro, Ollama)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -200,7 +201,6 @@ services:
       - ASANA_REDIRECT_URI=${ASANA_REDIRECT_URI:-http://localhost:3030/hub/asana/callback}
 
       # External services (use host.docker.internal for host access)
-      - KOKORO_SERVICE_URL=${KOKORO_SERVICE_URL:-http://${TSN_STACK_NAME:-tsushin}-kokoro-tts:8880}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - GROK_API_KEY=${GROK_API_KEY:-}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
@@ -258,35 +258,6 @@ services:
     networks:
       - tsushin-network
 
-  # ==========================================================================
-  # Kokoro TTS Service - Free Text-to-Speech (Optional Profile)
-  # ==========================================================================
-  kokoro-tts:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4
-    container_name: ${TSN_STACK_NAME:-tsushin}-kokoro-tts
-    profiles:
-      - tts
-    ports:
-      - "8880:8880"
-    volumes:
-      # Model cache to avoid re-downloading
-      - kokoro-models:/app/models
-      # Audio output cache
-      - kokoro-audio:/tmp/kokoro-audio
-    environment:
-      - KOKORO_MODEL=kokoro-v0_19.onnx
-      - KOKORO_DEFAULT_VOICE=af_bella
-      - KOKORO_DEFAULT_SPEED=1.0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    restart: unless-stopped
-    networks:
-      - tsushin-network
-
 # ==========================================================================
 # Networks
 # ==========================================================================
@@ -315,11 +286,6 @@ volumes:
   # Shared images directory for ImageSkill between backend and MCP containers
   tsushin-images:
     name: ${TSN_STACK_NAME:-tsushin}-images
-  # Kokoro TTS volumes (used with --profile tts)
-  kokoro-models:
-    name: kokoro-models
-  kokoro-audio:
-    name: kokoro-audio
   # PostgreSQL persistent data — CRITICAL: contains all tenant data
   tsushin-postgres-data:
     name: ${TSN_STACK_NAME:-tsushin}-postgres-data

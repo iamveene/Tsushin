@@ -258,6 +258,27 @@ Best practices:
         }
     ]
 
+    # v0.7.0: resolve a per-tenant Kokoro TTSInstance up front so the Kokoro demo
+    # agent can point its audio_response skill at a real instance when available.
+    # If no Kokoro instance exists yet for this tenant, the seeded audio_response
+    # skill is created disabled (with a hint) instead of wired to a dead URL.
+    kokoro_tts_instance_id: Optional[int] = None
+    try:
+        from models import TTSInstance  # local import to avoid circulars at module load
+        kokoro_inst = (
+            db.query(TTSInstance)
+            .filter(
+                TTSInstance.tenant_id == tenant_id,
+                TTSInstance.vendor == "kokoro",
+                TTSInstance.is_active == True,
+            )
+            .first()
+        )
+        if kokoro_inst:
+            kokoro_tts_instance_id = kokoro_inst.id
+    except Exception as e:  # pragma: no cover — defensive; missing table in fresh installs
+        logger.warning(f"Kokoro TTSInstance lookup during seeding failed: {e}")
+
     try:
         for agent_config in agents_config:
             # Check if agent already exists
@@ -314,12 +335,28 @@ Best practices:
                     skill_config = {}
                 else:
                     skill_type = skill_def["type"]
-                    skill_config = skill_def.get("config", {})
+                    skill_config = dict(skill_def.get("config", {}))
+
+                skill_enabled = True
+
+                # v0.7.0: the legacy compose kokoro-tts URL is gone. For the Kokoro
+                # demo agent's audio_tts skill, wire it to a pre-existing per-tenant
+                # Kokoro TTSInstance when available, otherwise seed it disabled with
+                # a hint so we don't create a zombie agent pointing at nothing.
+                if skill_type == "audio_tts" and skill_config.get("provider") == "kokoro":
+                    if kokoro_tts_instance_id is not None:
+                        skill_config["tts_instance_id"] = kokoro_tts_instance_id
+                    else:
+                        skill_enabled = False
+                        skill_config["_note"] = (
+                            "Enable after configuring a Kokoro TTS instance at "
+                            "Hub → Kokoro TTS → Setup with Wizard"
+                        )
 
                 agent_skill = AgentSkill(
                     agent_id=agent.id,
                     skill_type=skill_type,
-                    is_enabled=True,
+                    is_enabled=skill_enabled,
                     config=skill_config
                 )
                 db.add(agent_skill)
