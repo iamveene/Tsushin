@@ -159,9 +159,12 @@ class AudioTTSSkill(BaseSkill):
             f"text_length={len(response_text)}"
         )
 
-        # v0.6.0-patch.5: Resolve per-tenant Kokoro TTS base_url if the tenant has
-        # a TTSInstance configured (per-skill override > Config default). Falls back
-        # to the provider's own self.service_url when no instance is selected.
+        # v0.7.0: Resolve per-tenant Kokoro TTS base_url from a TTSInstance.
+        # Resolution chain: AgentSkill.config.tts_instance_id → Config.default_tts_instance_id
+        # → ERROR (legacy KOKORO_SERVICE_URL env fallback removed with the compose
+        # kokoro-tts service). If nothing resolves, we surface a clear error
+        # pointing at Hub → Kokoro TTS → Setup with Wizard instead of silently
+        # routing to a URL that no longer exists.
         resolved_base_url = None
         if provider_name == "kokoro":
             try:
@@ -195,7 +198,23 @@ class AudioTTSSkill(BaseSkill):
                         if (not inst.is_auto_provisioned) or inst.container_status == "running":
                             resolved_base_url = inst.base_url
             except Exception as e:
-                logger.warning(f"TTS base_url resolution failed, falling back to env URL: {e}")
+                logger.warning(f"TTS base_url resolution failed: {e}")
+
+            if not resolved_base_url:
+                return SkillResult(
+                    success=False,
+                    output=(
+                        "❌ Kokoro TTS is not configured. Create a Kokoro instance at "
+                        "Hub → Kokoro TTS → Setup with Wizard, then either assign it to "
+                        "this agent's audio_response skill (tts_instance_id) or set it "
+                        "as the tenant default."
+                    ),
+                    metadata={
+                        "error": "kokoro_not_configured",
+                        "provider": provider_name,
+                        "hint": "POST /api/tts-instances to create, then PUT /api/settings/tts/default or assign via /api/tts-instances/{id}/assign-to-agent",
+                    },
+                )
 
         tts_response = await provider.synthesize(request, base_url=resolved_base_url) if provider_name == "kokoro" else await provider.synthesize(request)
 

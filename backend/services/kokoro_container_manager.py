@@ -181,8 +181,24 @@ class KokoroContainerManager:
             # Build base_url using the short DNS alias (safe for DNS labels)
             instance.base_url = f"http://{dns_alias}:{config['internal_port']}"
 
-            # Wait for service to become healthy
+            # Build base_url BEFORE health check so we can persist it even if
+            # the DB connection goes stale during the health wait. Commit now,
+            # then rollback+use a fresh connection for the final status update.
+            db.commit()
+
+            # Wait for service to become healthy. This can take 30–90s during
+            # which the DB connection may go idle and get closed by the server.
+            # We intentionally do NOT hold an open transaction during this wait.
             healthy = self._wait_for_health(instance)
+
+            # Force a fresh connection from the pool after the long wait.
+            # SQLAlchemy's rollback() discards the stale connection; subsequent
+            # operations get a healthy one.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
             instance.container_status = "running" if healthy else "error"
             instance.health_status = "healthy" if healthy else "unavailable"
             instance.health_status_reason = (
@@ -196,6 +212,11 @@ class KokoroContainerManager:
             logger.info(f"Provisioned kokoro container: {container_name} (healthy={healthy})")
 
         except Exception as e:
+            # Make sure we're not on a broken connection before writing error state.
+            try:
+                db.rollback()
+            except Exception:
+                pass
             # Peer review A-B3: clean up orphan container before nulling DB fields
             if container_name:
                 try:

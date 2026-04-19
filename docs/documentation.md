@@ -76,7 +76,7 @@ Tsushin ships as a Docker Compose stack defined in `docker-compose.yml`. The cor
 | `tsushin-docker-proxy` | `tecnativa/docker-socket-proxy:latest` | 2375 (internal) | Restricts the Docker API surface to reduce container-escape risk. Backend talks to `tcp://docker-socket-proxy:2375` rather than mounting the raw socket. | `docker-compose.yml:43-75` |
 | `tsushin-backend` | Built from `./backend/Dockerfile` | `${TSN_APP_PORT:-8081}` | FastAPI app. Agents, flows, memory, skills, channels, API v1, WebSockets. | `docker-compose.yml:80-168` |
 | `tsushin-frontend` | Built from `./frontend/Dockerfile` | `${FRONTEND_PORT:-3030}` | Next.js 16 UI (Watcher, Hub, Studio, Playground, Settings). | `docker-compose.yml:173-195` |
-| `kokoro-tts` (profile `tts`) | `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4` | 8880 | Optional local text-to-speech. | `docker-compose.yml:200-224` |
+| *(removed v0.7.0)* `kokoro-tts` | — | — | Stack-level Kokoro service removed. Kokoro runs as per-tenant auto-provisioned containers managed by `KokoroContainerManager`, configured via Hub → Kokoro TTS → Setup with Wizard. See §20.6. | `models.py` (`TTSInstance`), `backend/services/kokoro_container_manager.py` |
 
 **Network:** All services attach to the **external** bridge network `tsushin-network`. The network is declared `external: true`, so `docker compose down` does not remove it. That matters because MCP WhatsApp bot containers (spawned dynamically by `ToolboxContainerService` / `MCPContainerManager`) also join this network. Create the network once with `docker network create tsushin-network`; `install.py` handles this automatically. Source: `docker-compose.yml:229-237`.
 
@@ -288,8 +288,9 @@ docker compose logs --tail=100 backend
 # Stop without removing network (SAFE)
 docker compose stop backend
 
-# Optional profiles
-docker compose --profile tts up -d        # Add Kokoro TTS
+# Local TTS (Kokoro): no compose profile. Configure a per-tenant instance at
+#   Hub → Kokoro TTS → Setup with Wizard.
+# The legacy `docker compose --profile tts up -d` path was removed in v0.7.0.
 
 # Tester note
 # The current repo does not define a `testing` compose profile.
@@ -297,7 +298,7 @@ docker compose --profile tts up -d        # Add Kokoro TTS
 # or the active runtime tester instance for the tenant.
 ```
 
-Source: `docs/docker.md:114-169`, `docker-compose.yml:220-226` (tts profile).
+Source: `docs/docker.md:114-169`. (The `tts` compose profile was removed in v0.7.0 — Kokoro runs as per-tenant auto-provisioned instances now.)
 
 ### 4.2 Container rebuild safety (SAFE vs UNSAFE)
 
@@ -2164,12 +2165,12 @@ The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate
 
 - Providers expose `get_available_voices()` → `List[VoiceInfo]` and a default voice.
 - OpenAI TTS default voice: `"nova"` (`tts_provider.py:43`).
-- Kokoro is a local/self-hosted TTS option (see `KOKORO_TTS_FIX.md`).
+- Kokoro is a local/self-hosted TTS option. **v0.7.0 removed the stack-level `kokoro-tts` compose service and the `KOKORO_SERVICE_URL` env fallback** — Kokoro now runs as per-tenant auto-provisioned containers managed by `KokoroContainerManager` and addressed via `TTSInstance.base_url`. The provider's `synthesize()` raises `RuntimeError` if called without a `base_url`; `AudioTTSSkill` resolves one from `AgentSkill.config.tts_instance_id` → `Config.default_tts_instance_id`, and surfaces a clear skill-result error if neither is set.
 
 #### 20.6.1 Kokoro TTS Setup Wizard
 
 **Component:** `frontend/components/tts/KokoroSetupWizard.tsx`
-**Entry point:** `/hub` page → AI Providers tab → Kokoro TTS card → "Setup with Wizard" button. The legacy `/settings/tts` page has been removed (v0.7.0 pull-forward); per-tenant Kokoro instance management is now consolidated inside the Hub Kokoro card so it mirrors the Ollama auto-provisioning UX. The Hub card renders the full instance list (with per-instance Start / Stop / Restart / Logs / Delete controls), a default-selector radio, and a collapsed "Legacy (global compose Kokoro)" section that still exposes the original docker-compose `tts` profile toggle for installs that prefer a single shared service.
+**Entry point:** `/hub` page → AI Providers tab → Kokoro TTS card → "Setup with Wizard" button. Per-tenant Kokoro instance management is consolidated inside the Hub Kokoro card (mirroring the Ollama auto-provisioning UX). The card renders the full instance list with per-instance Start / Stop / Restart / Logs / Delete controls and a default-selector radio. (The legacy `/settings/tts` page and the compose `tts` profile toggle were removed in v0.7.0.)
 
 Four-step guided flow for creating a per-tenant Kokoro TTS container and (optionally) wiring it to agents:
 
@@ -3445,7 +3446,6 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `CONTAMINATION_PATTERNS_EXTRA` | `""` | Extra regex patterns for Sentinel contamination detector. | `agent/contamination_detector.py:54` |
 | `QA_PHONE_NUMBER` | `""` | Allowlist phone for QA tester. | `app.py:430` |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama endpoint from inside container. | `agent/ai_client.py:205`, `db.py:1339` |
-| `KOKORO_SERVICE_URL` | `http://${TSN_STACK_NAME:-tsushin}-kokoro-tts:8880` | Kokoro TTS service URL (stack-scoped by default). | `hub/providers/kokoro_tts_provider.py:182` |
 | `GROQ_API_KEY` / `GROK_API_KEY` / `ELEVENLABS_API_KEY` | `""` | Pass-through env for providers not configured via Hub. | `docker-compose.yml:149-151` |
 | `ASANA_ENCRYPTION_KEY` | `""` | Fernet key for Asana integration. | `docker-compose.yml:144`, `migrations/add_service_encryption_keys.py:164` |
 | `ASANA_REDIRECT_URI` | `http://localhost:3030/hub/asana/callback` | Asana OAuth callback. | `api/routes_hub.py:153` |
