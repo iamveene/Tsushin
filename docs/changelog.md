@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Tenant isolation hardening — skill-integrations routes (2026-04-19)
+
+A tenant-isolation audit performed while planning the Gmail / Google Calendar / Shell Beacon / Sandboxed Tools / Web Search setup wizards surfaced two pre-existing cross-tenant defects in `backend/api/routes_skill_integrations.py`. The wizards would have scaled the impact of both bugs by turning these endpoints into the primary call path for every tenant that opted into guided setup. Both bugs are now fixed with a parametrized SQL-compile regression test that runs offline and covers every affected subclass.
+
+**BUG-608 — `GET /api/skill-providers/{skill_type}` leaked integrations across tenants.** Every per-subclass query (`CalendarIntegration`, `GmailIntegration`, `AsanaIntegration`, `GoogleFlightsIntegration`, `AmadeusIntegration`) previously filtered only by `is_active == True`. Any tenant member with `agents.read` could list every other tenant's active integrations — owner email, integration id, health status. Fixed: each query now joins `HubIntegration` on the shared primary-key id and filters `HubIntegration.tenant_id == ctx.tenant_id`. Per-row `HubIntegration` lookups that re-queried the parent table were removed; the already-joined polymorphic subclass row exposes `.name` / `.health_status` directly.
+
+**BUG-609 — `PUT /api/agents/{agent_id}/skill-integrations/{skill_type}` accepted cross-tenant `integration_id`.** The route validated integration existence without checking tenant ownership (`HubIntegration.id == request.integration_id` only). An attacker who obtained a foreign integration id (trivially reachable through BUG-608) could wire that integration to one of their own agents. Fixed: lookup now requires both `HubIntegration.id == request.integration_id` and `HubIntegration.tenant_id == ctx.tenant_id`. The route returns `404` (not `400`) so integration existence cannot be probed across tenants via the error string.
+
+**Regression coverage.** `backend/tests/test_skill_integration_tenant_isolation.py` (newly tracked — previously every `backend/tests/*` was local-only) contains 7 assertions that compile the exact SQLAlchemy queries used inside the route and check for `tenant_id = <caller>` in the rendered SQL. Run with `docker exec tsushin-backend python -m pytest tests/test_skill_integration_tenant_isolation.py -v --no-cov`. The SQL-compile approach matches the existing `test_memory_tenant_scoping.py` pattern — no database fixture or HTTP stack needed.
+
+**Rebuild.** Backend-only: `docker-compose build --no-cache backend` + `docker-compose up -d backend`. WhatsApp / MCP sessions preserved.
+
 ### Kokoro TTS Hub consolidation + Config.tenant_id fix (2026-04-19)
 
 Kokoro TTS management was split across two pages (`/settings/tts` for per-tenant instances + `/hub` for the legacy global compose service), which made the UX inconsistent with Ollama's in-Hub auto-provision flow and confused users who couldn't tell which page was authoritative. This change collapses everything into the existing Hub Kokoro card, mirroring the Ollama pattern, and fixes a latent `Config.tenant_id` AttributeError that was crashing `GET/PUT /api/settings/tts/default` at runtime.
