@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Modal from './ui/Modal'
+import CopyableBlock from './ui/CopyableBlock'
 import {
   AlertTriangleIcon,
   CheckCircleIcon,
@@ -84,27 +85,7 @@ const MANIFEST_JSON = JSON.stringify(
   2,
 )
 
-function CopyableBlock({ value, label }: { value: string; label?: string }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <div className="relative">
-      <pre className="bg-gray-900 text-purple-200 text-xs font-mono rounded-lg p-3 overflow-x-auto max-h-48 border border-gray-700">
-        {value}
-      </pre>
-      <button
-        type="button"
-        onClick={() => {
-          navigator.clipboard?.writeText(value)
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        }}
-        className="absolute top-2 right-2 px-2 py-1 text-xs bg-purple-600/30 text-purple-200 border border-purple-500/40 rounded hover:bg-purple-600/50"
-      >
-        {copied ? 'Copied!' : `Copy${label ? ' ' + label : ''}`}
-      </button>
-    </div>
-  )
-}
+// CopyableBlock now imported from '@/components/ui/CopyableBlock' (see top of file).
 
 function StepPill({ idx, current, completed }: { idx: number; current: number; completed: boolean }) {
   return (
@@ -314,7 +295,7 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
           <span className="w-6 h-6 rounded-full bg-purple-500/20 text-purple-300 flex items-center justify-center text-xs font-bold flex-shrink-0">3</span>
           <div>
             Switch to the <strong>JSON</strong> tab and replace the contents with this:
-            <div className="mt-2"><CopyableBlock value={MANIFEST_JSON} label="manifest" /></div>
+            <div className="mt-2"><CopyableBlock value={MANIFEST_JSON} label="manifest" tone="purple" /></div>
           </div>
         </li>
         <li className="flex gap-3">
@@ -515,7 +496,7 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
       {mode === 'http' && publicBaseUrl && doneIntegrationId && (
         <div className="p-4 bg-amber-500/10 border border-amber-500/40 rounded-lg">
           <h4 className="text-sm font-semibold text-amber-200 mb-2">Paste this Request URL into Slack</h4>
-          <CopyableBlock value={`${publicBaseUrl}/api/channels/slack/${doneIntegrationId}/events`} label="URL" />
+          <CopyableBlock value={`${publicBaseUrl}/api/channels/slack/${doneIntegrationId}/events`} label="URL" tone="purple" />
           <p className="text-xs text-amber-100/80 mt-2">
             In your Slack app → <strong>Event Subscriptions</strong> → toggle ON → paste into <strong>Request URL</strong>. Slack will verify it.
           </p>
