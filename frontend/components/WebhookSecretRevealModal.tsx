@@ -14,6 +14,8 @@ interface Props {
   rotatedNotice?: boolean
 }
 
+type CopyKind = 'secret' | 'url' | 'curl'
+
 export default function WebhookSecretRevealModal({
   isOpen,
   onClose,
@@ -23,10 +25,27 @@ export default function WebhookSecretRevealModal({
   title,
   rotatedNotice = false,
 }: Props) {
-  const [copied, setCopied] = useState<'secret' | 'url' | null>(null)
+  const [copied, setCopied] = useState<CopyKind | null>(null)
   const [autoCopied, setAutoCopied] = useState(false)
 
   const fullInboundUrl = inboundUrl.startsWith('http') ? inboundUrl : `${apiBase}${inboundUrl}`
+  const isLocalhostUrl = /^https:\/\/localhost(?::\d+)?\b/.test(fullInboundUrl)
+  const curlFlag = isLocalhostUrl ? '-sk' : '-s'
+
+  const testCommand = [
+    `# Paste in a terminal with openssl + curl installed.`,
+    `# Signs a test payload with your secret and POSTs it to the inbound URL.`,
+    `SECRET='${secret}'`,
+    `URL='${fullInboundUrl}'`,
+    `TS=$(date +%s)`,
+    `BODY='{"message":"Hello from Tsushin webhook test","sender_id":"curl-test","sender_name":"Curl"}'`,
+    `SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')`,
+    `curl ${curlFlag} -X POST "$URL" \\`,
+    `  -H "X-Tsushin-Signature: sha256=$SIG" \\`,
+    `  -H "X-Tsushin-Timestamp: $TS" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d "$BODY"`,
+  ].join('\n')
 
   useEffect(() => {
     if (!isOpen || !secret || autoCopied) return
@@ -40,7 +59,7 @@ export default function WebhookSecretRevealModal({
     if (!isOpen) setAutoCopied(false)
   }, [isOpen])
 
-  const copy = async (text: string, kind: 'secret' | 'url') => {
+  const copy = async (text: string, kind: CopyKind) => {
     try {
       await navigator.clipboard.writeText(text)
       setCopied(kind)
@@ -137,15 +156,45 @@ export default function WebhookSecretRevealModal({
           </div>
         </div>
 
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-gray-300">
+              Test it now (copy &amp; paste into your terminal)
+            </label>
+            <button
+              type="button"
+              onClick={() => copy(testCommand, 'curl')}
+              className="flex items-center gap-1 px-2 py-1 text-xs bg-cyan-600/20 text-cyan-300 border border-cyan-600/50 rounded hover:bg-cyan-600/30"
+              title="Copy test command"
+            >
+              {copied === 'curl' ? <CheckCircleIcon size={14} /> : <CopyIcon size={14} />}
+              {copied === 'curl' ? 'Copied' : 'Copy command'}
+            </button>
+          </div>
+          <pre
+            data-testid="webhook-test-curl"
+            className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-gray-200 font-mono text-xs overflow-x-auto whitespace-pre"
+          >
+{testCommand}
+          </pre>
+          <p className="mt-2 text-xs text-gray-500">
+            Needs <code className="text-gray-300">openssl</code> and <code className="text-gray-300">curl</code>. A successful test returns
+            <code className="bg-gray-900 px-1 mx-1 rounded text-cyan-300">{`{"status":"queued","queue_id":…,"poll_url":"/api/v1/queue/…"}`}</code>.
+            {isLocalhostUrl && (
+              <> Uses <code className="text-gray-300">-k</code> because <code className="text-gray-300">localhost</code> is served with a self-signed cert; drop it in production.</>
+            )}
+          </p>
+        </div>
+
         <div className="p-3 bg-gray-800 rounded-lg border border-gray-700">
           <p className="text-xs text-gray-400 mb-2">
-            <strong className="text-gray-300">Signing instructions:</strong> For each request, compute
+            <strong className="text-gray-300">Signing scheme:</strong>
             <code className="bg-gray-900 px-1 mx-1 rounded text-cyan-300">HMAC-SHA256(secret, timestamp + &quot;.&quot; + body)</code>
-            and send as
+            sent as
             <code className="bg-gray-900 px-1 mx-1 rounded text-cyan-300">X-Tsushin-Signature: sha256=&lt;hex&gt;</code>
             with
             <code className="bg-gray-900 px-1 mx-1 rounded text-cyan-300">X-Tsushin-Timestamp: &lt;unix_seconds&gt;</code>
-            (±5 min from server time).
+            (±5 min window).
           </p>
         </div>
       </div>
