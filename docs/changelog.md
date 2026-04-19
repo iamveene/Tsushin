@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Gmail setup wizard + shared wizard primitives (2026-04-19)
+
+Added the first of a planned series of friction-reduction wizards that bundle resource creation, OAuth authorization, and agent-skill wiring into a single modal flow. The Gmail wizard replaces a four-UI-hop sequence (configure Google OAuth credentials → start the OAuth flow → enable the Gmail skill on each agent → link the integration per-agent from Agent Studio) with a 6-step guided path.
+
+**New — `frontend/components/integrations/GmailSetupWizard.tsx` (~670 LOC).** Steps:
+1. Welcome (explains read-only scope `gmail.readonly` and multi-account support).
+2. Google OAuth app credentials (delegates to the shared `GoogleAppCredentialsStep`; auto-skips when the tenant already has credentials).
+3. Connect Gmail account — radio picker of existing `GmailIntegration` rows plus "Connect new Gmail account" that opens the authorization URL in a popup and polls `/api/hub/google/gmail/integrations` every 3 s (6-minute ceiling) for the new row. Popup-blocked fallback redirects to the auth URL in the current tab.
+4. Link to agents — multi-select, cloned from the Kokoro pattern; uses `api.getAgents(true)`.
+5. Review — account + scope + selected agents summary.
+6. Progress — for each selected agent, `api.updateAgentSkill(id, 'gmail', {is_enabled: true})` then `api.updateSkillIntegration(id, 'gmail', {integration_id, config: {}})`. Per-agent live log, "Retry failed" button, green success banner.
+
+**New — `frontend/components/ui/CopyableBlock.tsx` (~40 LOC).** Extracted the copy-to-clipboard code block that lived inline in `SlackSetupWizard.tsx:87-107`. Accepts a `tone` prop (teal / purple / blue / amber / slate) so each wizard can match its accent. `SlackSetupWizard` updated to import the shared component and pass `tone="purple"` at its two call sites.
+
+**New — `frontend/components/integrations/GoogleAppCredentialsStep.tsx` (~200 LOC).** Reusable wizard step that ensures the tenant has Google OAuth app credentials before any downstream Gmail / Calendar OAuth flow can start. Fetches `GET /api/hub/google/credentials`; if configured, shows a "Use these credentials" confirmation panel; if missing, renders the client_id / client_secret form and POSTs. Mirrors the copy + amber help box from the Integrations settings page.
+
+**Entry points** (in `frontend/app/settings/integrations/page.tsx`): when Google credentials are configured, a red "Set up Gmail →" button lives next to the existing Update / Remove actions. When no credentials yet, a secondary "Or jump into a guided setup: Gmail · Google Calendar (soon)" link appears below the primary "Configure Google Integration" CTA. The wizard is lazy-loaded via `next/dynamic` with `ssr:false`. The Google Calendar entry point is present but disabled with a "(soon)" tooltip — the Calendar wizard lands in a follow-up commit in the same release.
+
+**Safety.** Every backend endpoint the wizard calls was tenant-isolation-audited in the preceding commit (BUG-608 / BUG-609). Integration ids passed to `PUT /api/agents/{id}/skill-integrations/gmail` are verified against `HubIntegration.tenant_id == ctx.tenant_id`, and `GET /api/skill-providers/gmail` is scoped to the caller's tenant, so the wizard cannot leak or link cross-tenant resources even if the payload is tampered with.
+
+**Verified.** `docker-compose build --no-cache frontend` + `docker-compose up -d frontend` clean compile and healthy boot.
+
+### Legacy Kokoro compose service removed (2026-04-19)
+
+The stack-level `kokoro-tts` compose service and the `KOKORO_SERVICE_URL` env fallback have been deleted. Per-tenant auto-provisioned Kokoro containers (introduced in v0.7.0 via the TTSInstance model and the Hub "Kokoro TTS → Setup with Wizard" flow) are now the only supported way to run Kokoro.
+
+- **BREAKING**: Removed `kokoro-tts` service from `docker-compose.yml` and the `tts` profile. Users running `docker compose --profile tts up -d` must migrate to per-tenant auto-provisioned instances via Hub → Kokoro TTS → Setup with Wizard. The `kokoro-models` and `kokoro-audio` top-level volumes were also removed (the old compose service owned them; per-tenant instances manage their own volumes via `KokoroContainerManager`).
+- `KOKORO_SERVICE_URL` env fallback removed from `KokoroTTSProvider`. `synthesize(request, *, base_url)` now raises `RuntimeError` immediately if `base_url` is not supplied, and `health_check(base_url=None)` returns `status="unknown"` when called without one. `AudioTTSSkill` no longer silently falls back to an env URL: agents without a `tts_instance_id` or `Config.default_tts_instance_id` now return a clear `SkillResult` error pointing at Hub → Kokoro TTS → Setup with Wizard.
+- `POST /api/services/kokoro/{start,stop}` and `GET /api/services/kokoro/status` now return HTTP 410 Gone with a JSON body `{error, message, replacement: "/api/tts-instances"}` and a `Link: </api/tts-instances>; rel="successor-version"` header so old clients get a helpful migration message instead of a 404.
+- `install.py` no longer writes `KOKORO_SERVICE_URL` to `.env` during install and no longer backfills it into existing `.env` files. The `_get_default_kokoro_service_url()` helper has been deleted.
+- `backend/services/agent_seeding.py` is now Kokoro-instance-aware. When seeding the default "Kokoro" demo agent, it checks for an existing per-tenant `TTSInstance(vendor="kokoro", is_active=True)`. If one exists, the seeded `audio_tts` skill is wired to it via `tts_instance_id`. If none exists, the skill is seeded with `is_enabled=False` and a `_note` pointing the user to Hub → Kokoro TTS → Setup with Wizard — no more zombie agents referencing a dead compose URL.
+- Docs: `docs/documentation.md` no longer lists `KOKORO_SERVICE_URL` in the env reference and the quick-start `docker compose --profile tts up -d` note has been replaced by a pointer to the Hub wizard.
+
 ### Tenant isolation hardening — skill-integrations routes (2026-04-19)
 
 A tenant-isolation audit performed while planning the Gmail / Google Calendar / Shell Beacon / Sandboxed Tools / Web Search setup wizards surfaced two pre-existing cross-tenant defects in `backend/api/routes_skill_integrations.py`. The wizards would have scaled the impact of both bugs by turning these endpoints into the primary call path for every tenant that opted into guided setup. Both bugs are now fixed with a parametrized SQL-compile regression test that runs offline and covers every affected subclass.
