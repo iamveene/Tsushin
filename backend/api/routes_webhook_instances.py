@@ -249,6 +249,7 @@ def _validate_callback(url: Optional[str]) -> None:
 @router.get("/slug-available")
 async def check_slug_available(
     slug: str,
+    exclude_id: Optional[int] = None,
     _: None = Depends(require_permission("integrations.webhook.read")),
     context: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
@@ -257,13 +258,20 @@ async def check_slug_available(
 
     Returns {"available": bool, "reason": str | None}. Does not raise — the
     UI renders the reason inline. Format and reserved-word checks run first;
-    only valid slugs hit the DB for uniqueness.
+    only valid slugs hit the DB for uniqueness. ``exclude_id`` lets the
+    edit flow check "is this slug free for me to keep or rename to?"
+    without treating the integration's own current slug as a collision.
+
+    Uniqueness is global and independent of ``is_active`` — a paused
+    webhook's slug stays reserved; only deleting the integration frees it.
     """
     fmt_err = _slug_format_error(slug)
     if fmt_err:
         return {"available": False, "reason": fmt_err}
-    taken = db.query(WebhookIntegration).filter_by(slug=slug).first() is not None
-    if taken:
+    q = db.query(WebhookIntegration).filter(WebhookIntegration.slug == slug)
+    if exclude_id is not None:
+        q = q.filter(WebhookIntegration.id != exclude_id)
+    if q.first() is not None:
         return {"available": False, "reason": "Slug already in use"}
     return {"available": True, "reason": None}
 

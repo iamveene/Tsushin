@@ -4797,10 +4797,14 @@ export const api = {
     return res.json()
   },
 
-  // v0.7.1: live validation of a custom slug before submit
-  async checkWebhookSlugAvailable(slug: string): Promise<WebhookSlugAvailability> {
+  // v0.7.1: live validation of a custom slug before submit. Pass excludeId
+  // from the edit flow so the integration's own current slug isn't treated
+  // as a collision with itself.
+  async checkWebhookSlugAvailable(slug: string, excludeId?: number): Promise<WebhookSlugAvailability> {
+    const params = new URLSearchParams({ slug })
+    if (typeof excludeId === 'number') params.set('exclude_id', String(excludeId))
     const res = await authenticatedFetch(
-      `${API_URL}/api/webhook-integrations/slug-available?slug=${encodeURIComponent(slug)}`
+      `${API_URL}/api/webhook-integrations/slug-available?${params.toString()}`
     )
     if (!res.ok) {
       return { available: false, reason: 'Unable to check availability' }

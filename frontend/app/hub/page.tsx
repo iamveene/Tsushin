@@ -37,6 +37,7 @@ import DiscordSetupModal from '@/components/DiscordSetupWizard'
 import PublicBaseUrlCard from '@/components/PublicBaseUrlCard'
 import WebhookSetupModal from '@/components/WebhookSetupModal'
 import WebhookSecretRevealModal from '@/components/WebhookSecretRevealModal'
+import WebhookEditModal from '@/components/WebhookEditModal'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
@@ -346,6 +347,7 @@ export default function HubPage() {
   const [webhookRotateModal, setWebhookRotateModal] = useState<
     { open: boolean; secret: string; inboundUrl: string } | null
   >(null)
+  const [webhookEditTarget, setWebhookEditTarget] = useState<WebhookIntegration | null>(null)
   const [webhookSaving, setWebhookSaving] = useState(false)
 
   // v0.6.1: resolved public ingress info — authoritative source for inbound
@@ -2201,6 +2203,18 @@ export default function HubPage() {
       loadWebhookIntegrations()
     } catch (err: any) {
       setError(err.message || 'Failed to delete webhook integration')
+    }
+  }
+
+  const handleToggleWebhookActive = async (integration: WebhookIntegration) => {
+    const next = !integration.is_active
+    try {
+      await api.updateWebhookIntegration(integration.id, { is_active: next })
+      setSuccessMessage(next ? `"${integration.integration_name}" is now active` : `"${integration.integration_name}" paused — slug remains reserved`)
+      setTimeout(() => setSuccessMessage(null), 4000)
+      loadWebhookIntegrations()
+    } catch (err: any) {
+      setError(err.message || 'Failed to toggle webhook')
     }
   }
 
@@ -4154,13 +4168,49 @@ export default function HubPage() {
                             <p>Rate limit: <span className="text-white">{integration.rate_limit_rpm} req/min</span></p>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2">
+                          <label className="flex items-center justify-between gap-3 mb-3 p-2 rounded bg-gray-900/40 border border-gray-800 cursor-pointer">
+                            <div className="text-xs">
+                              <div className="text-gray-300 font-medium">
+                                {integration.is_active ? 'Enabled' : 'Paused'}
+                              </div>
+                              <div className="text-gray-500">
+                                {integration.is_active
+                                  ? 'Accepts inbound signed events.'
+                                  : 'Slug stays reserved — only deletion frees it for reuse.'}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={integration.is_active}
+                              onClick={() => handleToggleWebhookActive(integration)}
+                              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                                integration.is_active ? 'bg-cyan-500' : 'bg-gray-600'
+                              }`}
+                              title={integration.is_active ? 'Pause webhook' : 'Enable webhook'}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                                  integration.is_active ? 'translate-x-4' : 'translate-x-0.5'
+                                }`}
+                              />
+                            </button>
+                          </label>
+
+                          <div className="grid grid-cols-3 gap-2">
+                            <button
+                              onClick={() => setWebhookEditTarget(integration)}
+                              className="px-3 py-1.5 bg-gray-700 text-gray-200 border border-gray-600 rounded text-xs hover:bg-gray-600"
+                              title="Edit webhook"
+                            >
+                              Edit
+                            </button>
                             <button
                               onClick={() => handleRotateWebhookSecret(integration.id, integration.inbound_url)}
                               className="px-3 py-1.5 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded text-xs hover:bg-cyan-600/30"
                               title="Rotate HMAC secret"
                             >
-                              Rotate Secret
+                              Rotate
                             </button>
                             <button
                               onClick={() => handleDeleteWebhookIntegration(integration.id)}
@@ -5651,6 +5701,15 @@ export default function HubPage() {
           rotatedNotice
         />
       )}
+
+      {/* v0.7.1: Webhook Edit Modal */}
+      <WebhookEditModal
+        isOpen={webhookEditTarget !== null}
+        onClose={() => setWebhookEditTarget(null)}
+        onSaved={loadWebhookIntegrations}
+        integration={webhookEditTarget}
+        apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
+      />
 
       {/* v0.6.0: Vector Store Config Modal */}
       <VectorStoreConfigModal
