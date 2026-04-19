@@ -9,7 +9,7 @@ servers, Ollama instances, or custom LLM gateways).
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import logging
@@ -166,6 +166,132 @@ def _sanitize_test_error(err_str: str, test_model: str) -> str:
     if "permission" in lower or "403" in err_str:
         return "Access denied — check API key permissions for this model"
     return f"Connection test failed: {err_str[:200]}"
+
+
+async def _background_test_instance(instance_id: int, user_id: int) -> None:
+    """Run a connection test in the background after create/update.
+
+    Without this, cloud LLM provider instances sit at health_status='unknown'
+    (gray dot in the Hub UI) until the user explicitly clicks Test Connection,
+    even though the credentials may be perfectly valid. Mirrors the logic of
+    the test_provider_connection endpoint but runs in a fresh DB session
+    because the request session is closed by the time BackgroundTasks fires.
+    """
+    if _engine is None:
+        logger.warning("Auto-test skipped for instance %s: engine not initialized", instance_id)
+        return
+
+    from sqlalchemy.orm import sessionmaker
+    SessionLocal = sessionmaker(bind=_engine)
+    db = SessionLocal()
+    try:
+        instance = db.query(ProviderInstance).filter(ProviderInstance.id == instance_id).first()
+        if not instance:
+            return
+
+        has_instance_key = bool(_decrypt_provider_key(instance, db))
+        has_tenant_key = False
+        if not has_instance_key:
+            try:
+                from services.api_key_service import get_api_key
+                has_tenant_key = bool(get_api_key(instance.vendor, db, tenant_id=instance.tenant_id))
+            except Exception:
+                pass
+        if not has_instance_key and not has_tenant_key and instance.vendor != "ollama":
+            return
+
+        from api.routes_integrations import PROVIDER_TEST_MODELS
+        test_model = None
+        if instance.available_models:
+            test_model = instance.available_models[0]
+        if not test_model:
+            test_model = PROVIDER_TEST_MODELS.get(instance.vendor)
+        if not test_model and instance.vendor == "ollama":
+            test_model = "llama3.2"
+        if not test_model and instance.vendor == "custom":
+            test_model = "default"
+        if not test_model:
+            return
+
+        start_time = time.time()
+        error_message: Optional[str] = None
+        success = False
+        resolved_ip: Optional[str] = None
+
+        try:
+            from agent.ai_client import AIClient
+            from analytics.token_tracker import TokenTracker
+            tracker = TokenTracker(db, instance.tenant_id)
+
+            client = AIClient(
+                provider=instance.vendor if instance.vendor != "custom" else "openai",
+                model_name=test_model,
+                db=db,
+                token_tracker=tracker,
+                tenant_id=instance.tenant_id,
+                provider_instance_id=instance.id,
+                max_tokens=20,
+            )
+            _disable_sdk_retries(client)
+
+            result = await client.generate(
+                system_prompt="You are a test assistant. Respond with exactly: OK",
+                user_message="Test connection. Reply with OK.",
+                operation_type="connection_test",
+            )
+            if result.get("error"):
+                error_message = str(result["error"])
+            else:
+                success = True
+
+            if instance.base_url:
+                try:
+                    from urllib.parse import urlparse
+                    import socket
+                    parsed = urlparse(instance.base_url)
+                    if parsed.hostname:
+                        resolved_ip = socket.gethostbyname(parsed.hostname)
+                except Exception:
+                    pass
+        except Exception as e:
+            error_message = _sanitize_test_error(str(e), test_model)
+            logger.warning("Auto-test failed for instance %s: %s", instance_id, e)
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        instance.health_status = "healthy" if success else "unavailable"
+        instance.health_status_reason = None if success else error_message
+        instance.last_health_check = datetime.utcnow()
+
+        audit = ProviderConnectionAudit(
+            tenant_id=instance.tenant_id,
+            user_id=user_id,
+            provider_instance_id=instance.id,
+            action="auto_test_on_save",
+            resolved_ip=resolved_ip,
+            base_url=instance.base_url,
+            success=success,
+            error_message=error_message,
+        )
+        db.add(audit)
+        db.commit()
+        logger.info(
+            "Auto-test for instance %s (%s) -> %s (%dms)",
+            instance_id, instance.vendor,
+            "healthy" if success else "unavailable", latency_ms,
+        )
+    except Exception as e:
+        logger.error("Auto-test for instance %s crashed: %s", instance_id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
 
 # Curated suggestions shown in the UI as model-name autocomplete.
 # Providers with a live /models endpoint (openai/groq/grok/deepseek/openrouter via
@@ -435,6 +561,7 @@ def list_provider_instances(
 @router.post("/provider-instances", response_model=ProviderInstanceResponse, status_code=201)
 def create_provider_instance(
     data: ProviderInstanceCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -520,6 +647,15 @@ def create_provider_instance(
     db.commit()
     db.refresh(instance)
     logger.info(f"Created provider instance '{data.instance_name}' (vendor={vendor}) for tenant {ctx.tenant_id}")
+
+    # Auto-run a connection test in the background so the Hub UI dot reflects
+    # real connectivity instead of staying gray ('unknown') until the user
+    # clicks Test Connection. Skip when no credentials are configured (the
+    # test would just fail with "no api key") — except ollama, which can run
+    # keyless against a local daemon.
+    if (api_key_to_store or vendor == "ollama") and instance.available_models:
+        background_tasks.add_task(_background_test_instance, instance.id, current_user.id)
+
     return _to_response(instance, db)
 
 
@@ -562,6 +698,7 @@ def get_provider_instance(
 def update_provider_instance(
     instance_id: int,
     data: ProviderInstanceUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -620,8 +757,11 @@ def update_provider_instance(
                 raise HTTPException(status_code=500, detail="Failed to encrypt API key")
             instance.api_key_encrypted = encrypted
         else:
-            # Empty string = clear the key
+            # Empty string = clear the key. Reset health so the dot doesn't
+            # keep showing a stale 'healthy' from a previous test.
             instance.api_key_encrypted = None
+            instance.health_status = "unknown"
+            instance.health_status_reason = None
 
     if data.available_models is not None:
         instance.available_models = data.available_models
@@ -646,6 +786,21 @@ def update_provider_instance(
     db.commit()
     db.refresh(instance)
     logger.info(f"Updated provider instance {instance_id} for tenant {instance.tenant_id}")
+
+    # Re-test in the background when something connectivity-relevant changed
+    # (key, base URL, vendor-specific config, or model list). Skip pure metadata
+    # edits like rename or default-toggle so we don't burn provider quota for
+    # no reason.
+    connectivity_changed = (
+        (data.api_key is not None and data.api_key != "")
+        or data.base_url is not None
+        or data.extra_config is not None
+        or data.available_models is not None
+    )
+    can_test = bool(instance.api_key_encrypted) or instance.vendor == "ollama"
+    if connectivity_changed and can_test and instance.is_active and instance.available_models:
+        background_tasks.add_task(_background_test_instance, instance.id, current_user.id)
+
     return _to_response(instance, db)
 
 
