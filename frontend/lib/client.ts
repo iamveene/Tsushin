@@ -2668,6 +2668,11 @@ export interface ProviderInstance {
   health_status: string
   health_status_reason: string | null
   last_health_check: string | null
+  // v0.6.x: Ollama per-tenant auto-provisioning
+  is_auto_provisioned?: boolean
+  container_status?: string | null  // none | creating | provisioning | running | stopped | error
+  container_name?: string | null
+  container_port?: number | null
 }
 
 export interface ProviderInstanceCreate {
@@ -2718,6 +2723,68 @@ export interface VectorStoreInstanceCreate {
   auto_provision?: boolean
   mem_limit?: string
   cpu_quota?: number
+}
+
+// ==================== TTS Instances (v0.6.x Kokoro per-tenant) ====================
+
+export interface TTSInstance {
+  id: number
+  tenant_id: string
+  vendor: string  // kokoro
+  instance_name: string
+  description?: string | null
+  base_url?: string | null
+  extra_config?: Record<string, any> | null
+  default_voice?: string | null
+  default_speed?: number | null
+  default_language?: string | null
+  default_format?: string | null
+  health_status: string  // unknown | healthy | degraded | unavailable
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  is_default: boolean
+  is_active: boolean
+  is_auto_provisioned: boolean
+  container_status?: string | null  // none | creating | provisioning | running | stopped | error
+  container_name?: string | null
+  container_port?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TTSInstanceCreate {
+  vendor?: string  // defaults to 'kokoro'
+  instance_name: string
+  description?: string
+  base_url?: string
+  is_default?: boolean
+  auto_provision?: boolean
+  mem_limit?: string
+  default_voice?: string
+  default_speed?: number
+  default_language?: string
+  default_format?: string
+}
+
+// Generic container status payload (shared by TTS + Ollama + Vector Stores)
+export interface ContainerStatusResponse {
+  status?: string  // none | creating | provisioning | running | stopped | error
+  name?: string | null
+  image?: string | null
+  port?: number | null
+  message?: string | null
+  [key: string]: any
+}
+
+// Ollama model pull job progress
+export interface PullJobResponse {
+  job_id: string
+  status: string  // pulling | done | error
+  percent?: number
+  bytes_downloaded?: number
+  bytes_total?: number
+  error?: string | null
+  model?: string
 }
 
 // ==================== Custom Skills (Phase 22/23) ====================
@@ -7202,6 +7269,173 @@ export const api = {
       body: JSON.stringify({ default_vector_store_instance_id: instanceId }),
     })
     if (!res.ok) await handleApiError(res, 'Failed to update default vector store')
+  },
+
+  // ==================== TTS Instances (v0.6.x Kokoro per-tenant) ====================
+
+  async getTTSInstances(): Promise<TTSInstance[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch TTS instances')
+    return res.json()
+  },
+
+  async createTTSInstance(data: TTSInstanceCreate): Promise<TTSInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create TTS instance')
+    return res.json()
+  },
+
+  async getTTSInstance(id: number): Promise<TTSInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch TTS instance')
+    return res.json()
+  },
+
+  async updateTTSInstance(id: number, data: Partial<TTSInstanceCreate>): Promise<TTSInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update TTS instance')
+    return res.json()
+  },
+
+  async deleteTTSInstance(id: number, removeVolume: boolean = false): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}?remove_volume=${removeVolume}`, { method: 'DELETE' })
+    if (!res.ok) await handleApiError(res, 'Failed to delete TTS instance')
+  },
+
+  async ttsContainerAction(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}/container/${action}`, { method: 'POST' })
+    if (!res.ok) await handleApiError(res, `Failed to ${action} TTS container`)
+    return res.json()
+  },
+
+  async getTTSContainerStatus(id: number): Promise<ContainerStatusResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}/container/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to get TTS container status')
+    return res.json()
+  },
+
+  async getTTSContainerLogs(id: number, tail: number = 100): Promise<{ logs: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}/container/logs?tail=${tail}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get TTS container logs')
+    return res.json()
+  },
+
+  async getDefaultTTSInstance(): Promise<{ default_tts_instance_id: number | null; instance: TTSInstance | null }> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/tts/default`)
+    if (!res.ok) await handleApiError(res, 'Failed to get default TTS instance')
+    return res.json()
+  },
+
+  async setDefaultTTSInstance(instanceId: number | null): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/tts/default`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ default_tts_instance_id: instanceId }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update default TTS instance')
+  },
+
+  async assignTTSInstanceToAgent(id: number, data: {
+    agent_id: number
+    voice?: string
+    speed?: number
+    language?: string
+    response_format?: string
+  }): Promise<{ agent_id: number; skill_id: number }> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}/assign-to-agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to assign TTS instance to agent')
+    return res.json()
+  },
+
+  // ==================== Ollama container management (extends provider instances) ====================
+
+  async provisionOllamaContainer(id: number, gpu_enabled: boolean, mem_limit: string): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/provision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gpu_enabled, mem_limit }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to provision Ollama container')
+    return res.json()
+  },
+
+  async deprovisionOllamaContainer(id: number, removeVolume: boolean = false): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/deprovision?remove_volume=${removeVolume}`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to deprovision Ollama container')
+  },
+
+  async controlOllamaContainer(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/container/${action}`, { method: 'POST' })
+    if (!res.ok) await handleApiError(res, `Failed to ${action} Ollama container`)
+    return res.json()
+  },
+
+  async getOllamaContainerStatus(id: number): Promise<ContainerStatusResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/container/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to get Ollama container status')
+    return res.json()
+  },
+
+  async getOllamaContainerLogs(id: number, tail: number = 100): Promise<{ logs: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/container/logs?tail=${tail}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get Ollama container logs')
+    return res.json()
+  },
+
+  async pullOllamaModel(id: number, model: string): Promise<PullJobResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/models/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to start Ollama model pull')
+    return res.json()
+  },
+
+  async getPullJobStatus(id: number, job_id: string): Promise<PullJobResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/models/pull/${encodeURIComponent(job_id)}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get pull job status')
+    return res.json()
+  },
+
+  async deleteOllamaModel(id: number, model_name: string): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/models/${encodeURIComponent(model_name)}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete Ollama model')
+  },
+
+  async assignOllamaInstanceToAgent(id: number, data: {
+    agent_id: number
+    model_name: string
+  }): Promise<{ agent_id: number; provider_instance_id: number; model_name: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/assign-to-agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to assign Ollama instance to agent')
+    return res.json()
+  },
+
+  async listOllamaModels(id: number): Promise<{ models: string[] }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/models`)
+    if (!res.ok) await handleApiError(res, 'Failed to list Ollama models')
+    return res.json()
   },
 
   // ==================== Custom Skills (Phase 22/23) ====================

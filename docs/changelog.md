@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Kokoro TTS Hub consolidation + Config.tenant_id fix (2026-04-19)
+
+Kokoro TTS management was split across two pages (`/settings/tts` for per-tenant instances + `/hub` for the legacy global compose service), which made the UX inconsistent with Ollama's in-Hub auto-provision flow and confused users who couldn't tell which page was authoritative. This change collapses everything into the existing Hub Kokoro card, mirroring the Ollama pattern, and fixes a latent `Config.tenant_id` AttributeError that was crashing `GET/PUT /api/settings/tts/default` at runtime.
+
+**Backend — Config.tenant_id bug fix.** `backend/services/tts_instance_service.py` (`get_config_default` and `set_default`) and `backend/agent/skills/audio_tts_skill.py` (TTS base_url resolution path) were filtering `Config` rows with `.filter(Config.tenant_id == tenant_id)`, but the `Config` model has no `tenant_id` column — it is a singleton. That meant every call to the default-TTS endpoints and every Kokoro message with per-tenant override resolution would crash with `AttributeError: type object 'Config' has no attribute 'tenant_id'`. Fixed by querying `db.query(Config).first()` (the single row) and keeping tenant isolation on the INSTANCE side: `set_default` still validates that the target `TTSInstance.tenant_id == ctx.tenant_id` before accepting it, and `audio_tts_skill` now adds a `TTSInstance.tenant_id == tenant_id` filter as defense-in-depth so a globally-configured default cannot leak another tenant's instance. The `SELECT ... FOR UPDATE` row-lock in `set_default` is preserved; it now locks by `Config.id` instead of by `tenant_id`. The `default_tts_instance_id` FK is effectively global for v0.7.0; a schema migration adding per-tenant Config defaults can follow later.
+
+**Frontend — consolidation.**
+
+- `frontend/app/settings/tts/page.tsx` — **deleted**. The standalone page and its classic single-form modal no longer exist.
+- `frontend/app/settings/page.tsx` — removed the "TTS / Speech Synthesis" settings card and the now-orphaned `tts` icon definition. The settings hub no longer links to a dedicated TTS page.
+- `frontend/app/hub/page.tsx` — extended the existing Kokoro card (AI Providers tab) with a "Per-Tenant Instances" section above the demoted "Legacy (global compose Kokoro)" collapsed panel. New card UX:
+  - `+ Setup with Wizard` CTA opens `KokoroSetupWizard` (unchanged 4-step flow — reused verbatim from the deleted page).
+  - Instance list shows name + vendor + auto-provisioned + default badges, container status chip (running / creating / stopped / error), base_url in mono, and per-instance actions: Default radio (click to set as tenant default), Start / Stop / Restart (for auto-provisioned), Logs toggle with inline drawer + Refresh, Delete with remove-volume confirm dialog.
+  - Container status for `creating` / `provisioning` instances polls `GET /api/tts-instances/{id}/container/status` every 3 s until terminal state, then triggers a full instance refresh.
+  - Empty state renders "No Kokoro instances yet." with a Setup-with-Wizard button.
+  - The legacy global-compose toggle (previously the only thing on the card) is still available but collapsed behind a "Legacy (global compose Kokoro)" expandable details section — preserved for installs still using the `docker compose --profile tts` pattern.
+- The `KokoroSetupWizard.tsx` component was unchanged; only its mount point moved from `/settings/tts` to the Hub card. `onComplete` now triggers a full Kokoro instance list refresh on the Hub page.
+
+**Backend warning text.** `tts_instance_service.provision_instance` fail-open warning text updated from "You can retry from Settings > TTS Instances." to "You can retry from Hub > AI Providers > Kokoro TTS." to match the new UX.
+
+**Verified.**
+
+- `docker exec tsushin-backend python -c "from services.tts_instance_service import TTSInstanceService; ..."` — confirmed both service methods no longer reference `Config.tenant_id`.
+- Direct API tests (as `test@example.com`, tenant owner): `POST /api/tts-instances` (create) → `PUT /api/settings/tts/default` (set default — previously crashed) → `GET /api/settings/tts/default` (returns default with `is_default:true`) → `DELETE /api/tts-instances/{id}` → `GET /api/settings/tts/default` (returns `{default_tts_instance_id: null}` — FK auto-cleared by the delete). Full round-trip passes.
+- Browser walkthrough via Playwright: `/hub` renders the consolidated Kokoro card with "Per-Tenant Instances" heading, `+ Setup with Wizard` CTA, empty state, and the collapsed "Legacy (global compose Kokoro)" toggle. Clicking "Setup with Wizard" opens the 4-step modal (What is Kokoro → Configure → Link Agents → Review & Create) with the step indicator tracking correctly. `/settings/tts` returns 404 as expected. `/settings` no longer lists the TTS card.
+
+No schema changes, no volume impact. Backend + frontend rebuilt safely via `docker compose up -d --no-deps --build backend` and `docker compose build --no-cache frontend`.
+
+### Kokoro TTS & Ollama setup wizards (2026-04-19)
+
+Added guided multi-step creation wizards for the two local-container providers so users no longer have to juggle the classic single-form modal, the container lifecycle APIs, and the agent-skill configuration separately.
+
+**Backend — two new "assign to agent" endpoints.**
+
+- `POST /api/tts-instances/{id}/assign-to-agent` — body `{agent_id, voice?, speed?, language?, response_format?}`. Upserts the `audio_response` `AgentSkill` row for the target agent with `config = {provider: "kokoro", tts_instance_id, voice, language, speed, response_format}` and `is_enabled = true`. Tenant isolation is double-guarded on both the TTS instance and the agent; cross-tenant access returns 404 (same shape as missing resource to avoid leaking existence). Permission: `org.settings.write`. [`backend/api/routes_tts_instances.py`](backend/api/routes_tts_instances.py).
+- `POST /api/provider-instances/{id}/assign-to-agent` — body `{agent_id, model_name}`. Sets `Agent.provider_instance_id`, `Agent.model_name`, and `Agent.model_provider` (to the instance vendor — typically `"ollama"`) in one call. Same double-guard tenant isolation pattern. Empty `model_name` returns 400. Permission: `org.settings.write`. [`backend/api/routes_provider_instances.py`](backend/api/routes_provider_instances.py).
+
+**Frontend — two new wizard components.**
+
+- `frontend/components/tts/KokoroSetupWizard.tsx` — 4-step modal (mirrors `MCPServerWizard.tsx`): What-is-Kokoro card → Configure (instance name, auto-provision, memory limit, voice/speed/language/format, set-as-default) → Link agents (multi-select with "Select all"/"Skip") → Review & Create. On submit: `createTTSInstance` → optional `setDefaultTTSInstance` → poll `/container/status` every 3 s until `running` (or `error`) → `assignTTSInstanceToAgent` per selected agent → close with success toast. Error states surface a Retry button. Keyboard: ESC closes, Enter advances on config/link/review steps.
+- `frontend/components/ollama/OllamaSetupWizard.tsx` — 5-step modal: What-is-Ollama card → Configure container (instance name, GPU checkbox, memory limit) → Choose model (curated list of 7 models with params/disk/summary, plus Custom) → Link agents (multi-select) → Review & Provision. Orchestration: `ensureOllamaInstance` → `provisionOllamaContainer(gpu, mem)` → poll `/container/status` → `pullOllamaModel` → poll pull job (2 s tick, live % progress bar) → `assignOllamaInstanceToAgent` per selected agent → close. Three-stage progress indicator (Provision → Pull → Assign) with per-stage active/done states.
+
+**Frontend — CTAs wired into existing pages.**
+
+- `frontend/app/settings/tts/page.tsx` now shows two buttons in the header: "Create with Wizard" (primary teal) + "Advanced: Add Manually" (secondary, opens the existing classic modal). The wizard is a *supplement*, not a replacement — power users who know exactly what they want keep the single-form path.
+- `frontend/app/hub/page.tsx` adds a "Setup with Wizard" button at the top of the Ollama card above the host/auto-provision radio. The existing inline auto-provision panel stays intact for users already past first-run onboarding.
+
+**API client additions.**
+
+- `api.assignTTSInstanceToAgent(id, data)` and `api.assignOllamaInstanceToAgent(id, data)` added to `frontend/lib/client.ts`, returning the updated skill or agent summary.
+
+**Verified.**
+
+- `docker exec tsushin-backend python -c "import api.routes_tts_instances; import api.routes_provider_instances"` → OK.
+- Direct API tests (as `test@example.com`, tenant owner): 404 paths for missing instance / agent / wrong-tenant agent all return the expected `{"detail": "..."}` shape; empty `model_name` returns 400; valid assignments return 200 with the correct upserted row/agent config. Re-running an assignment on an agent that already has an `audio_response` skill updates the existing row (skill_id preserved) instead of creating a duplicate.
+- Browser walkthrough via Playwright: both wizards open, step indicator advances (1 → ✓, current step highlighted), agent multi-select shows all tenant agents (9 in test tenant), review screen renders Instance / Voice Defaults / Agent Assignments / Container / Model sections with the current selections. ESC / X / backdrop close work. No new TypeScript errors in the Next build.
+
+No schema changes, no volume impact. Safe per-service rebuild.
+
 ### Bug-Fix Sprint — BUG-594 to BUG-607 resolved (2026-04-19)
 
 Closed the 11 remaining Open items on `develop` across the 2026-04-18 UI-Only Playground/Mini/Graph sweep, Sentinel + MemGuard audit, and Flows UI-First sweep. Per-bug evidence in [`BUGS.md`](../BUGS.md) under the matching Resolved entries.

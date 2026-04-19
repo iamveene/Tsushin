@@ -159,7 +159,45 @@ class AudioTTSSkill(BaseSkill):
             f"text_length={len(response_text)}"
         )
 
-        tts_response = await provider.synthesize(request)
+        # v0.6.0-patch.5: Resolve per-tenant Kokoro TTS base_url if the tenant has
+        # a TTSInstance configured (per-skill override > Config default). Falls back
+        # to the provider's own self.service_url when no instance is selected.
+        resolved_base_url = None
+        if provider_name == "kokoro":
+            try:
+                from models import Config, TTSInstance
+                tts_instance_id = (
+                    config.get("tts_instance_id") if isinstance(config, dict) else None
+                )
+                if not tts_instance_id and self._db_session and tenant_id:
+                    # Config is a singleton (no tenant_id column); the
+                    # default_tts_instance_id FK is effectively global. Tenant
+                    # isolation is still enforced below when we load the
+                    # TTSInstance (we only accept one that belongs to this
+                    # tenant).
+                    cfg = self._db_session.query(Config).first()
+                    if cfg and cfg.default_tts_instance_id:
+                        tts_instance_id = cfg.default_tts_instance_id
+                if tts_instance_id and self._db_session:
+                    # Peer review A-H1: require container_status == 'running' for
+                    # auto-provisioned instances; non-auto rows are trusted as-is.
+                    # Defense-in-depth: filter by tenant_id so a globally-configured
+                    # default cannot leak a different tenant's instance (Config is a
+                    # singleton in v0.7.0, so tenant_id filter here is load-bearing).
+                    inst_query = self._db_session.query(TTSInstance).filter(
+                        TTSInstance.id == tts_instance_id,
+                        TTSInstance.is_active == True,
+                    )
+                    if tenant_id:
+                        inst_query = inst_query.filter(TTSInstance.tenant_id == tenant_id)
+                    inst = inst_query.first()
+                    if inst and inst.base_url:
+                        if (not inst.is_auto_provisioned) or inst.container_status == "running":
+                            resolved_base_url = inst.base_url
+            except Exception as e:
+                logger.warning(f"TTS base_url resolution failed, falling back to env URL: {e}")
+
+        tts_response = await provider.synthesize(request, base_url=resolved_base_url) if provider_name == "kokoro" else await provider.synthesize(request)
 
         # Convert TTSResponse to SkillResult
         if tts_response.success:

@@ -2166,6 +2166,37 @@ The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate
 - OpenAI TTS default voice: `"nova"` (`tts_provider.py:43`).
 - Kokoro is a local/self-hosted TTS option (see `KOKORO_TTS_FIX.md`).
 
+#### 20.6.1 Kokoro TTS Setup Wizard
+
+**Component:** `frontend/components/tts/KokoroSetupWizard.tsx`
+**Entry point:** `/hub` page → AI Providers tab → Kokoro TTS card → "Setup with Wizard" button. The legacy `/settings/tts` page has been removed (v0.7.0 pull-forward); per-tenant Kokoro instance management is now consolidated inside the Hub Kokoro card so it mirrors the Ollama auto-provisioning UX. The Hub card renders the full instance list (with per-instance Start / Stop / Restart / Logs / Delete controls), a default-selector radio, and a collapsed "Legacy (global compose Kokoro)" section that still exposes the original docker-compose `tts` profile toggle for installs that prefer a single shared service.
+
+Four-step guided flow for creating a per-tenant Kokoro TTS container and (optionally) wiring it to agents:
+
+1. **What is Kokoro TTS?** — marketing/explanation card (languages, voice count, cost, image size, CPU-friendliness).
+2. **Configure** — instance name, auto-provision toggle, memory limit (1g/1.5g/2g), default voice (from a curated list of 14 Kokoro voices with language/gender auto-hints), default speed (0.5–2.0× slider), default language (pt/en), audio format (opus/mp3/wav), set-as-tenant-default checkbox.
+3. **Link to Agent(s)** — multi-select checkbox list of tenant agents with "Select all" / "Skip this step". Enables the `audio_response` skill on each selected agent.
+4. **Review & Create** — summary + "Create & Provision" CTA. Progress step then polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running`, auto-calls `assign-to-agent` per selected agent, and closes with a success toast. Error states surface a Retry button.
+
+**Backend support:**
+- `POST /api/tts-instances/{id}/assign-to-agent` — body `{agent_id, voice?, speed?, language?, response_format?}`. Upserts the `audio_response` AgentSkill row for the target agent. Tenant isolation double-guarded on both the TTS instance and the agent (404 on mismatch). Permission: `org.settings.write`.
+
+#### 20.6.2 Ollama Setup Wizard
+
+**Component:** `frontend/components/ollama/OllamaSetupWizard.tsx`
+**Entry point:** `/hub` page — "Setup with Wizard" button on the Ollama card (the inline auto-provision panel stays for power users).
+
+Five-step guided flow for provisioning an Ollama container, pulling a model, and wiring agents:
+
+1. **What is Ollama?** — explanation (cost, GPU optional, image/model sizes, best-for scenarios).
+2. **Configure container** — instance name, GPU checkbox (with NVIDIA Container Toolkit note), memory limit (2/4/8/16 GB).
+3. **Choose a model** — radio list of 7 curated models (llama3.2:1b, llama3.2:3b, qwen2.5:3b, qwen2.5:7b, deepseek-r1:7b, phi3.5:3.8b, mistral:7b) with params/disk/summary columns, plus a Custom option for any `namespace/model:tag`.
+4. **Link to Agent(s)** — multi-select agents; their LLM backend will switch to Ollama on the chosen model.
+5. **Review & Provision** — summary + "Provision & Pull" CTA. Progress step runs `ensureOllamaInstance` → `provisionOllamaContainer` → poll status → `pullOllamaModel` → poll pull job (2 s tick, live progress bar) → `assignOllamaInstanceToAgent` per selected agent. Three-stage indicator (Provision / Pull / Assign) with per-stage active/done states and a Retry button on error.
+
+**Backend support:**
+- `POST /api/provider-instances/{id}/assign-to-agent` — body `{agent_id, model_name}`. Sets `Agent.provider_instance_id`, `Agent.model_name`, and `Agent.model_provider` (to the instance vendor — typically `"ollama"`) in one call. Same double-guarded tenant isolation. Empty `model_name` returns 400. Permission: `org.settings.write`.
+
 ### 20.7 MCP Server Registration
 
 **Sources:** `backend/hub/mcp/connection_manager.py`, `backend/hub/mcp/sse_transport.py`, `backend/hub/mcp/stdio_transport.py`, `backend/hub/mcp/transport_base.py`, `backend/hub/mcp/utils.py`

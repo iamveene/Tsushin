@@ -229,7 +229,7 @@ class KokoroTTSProvider(TTSProvider):
         self.logger.warning(f"Invalid voice '{voice}', using default")
         return self.get_default_voice()
 
-    async def synthesize(self, request: TTSRequest) -> TTSResponse:
+    async def synthesize(self, request: TTSRequest, *, base_url: str = None) -> TTSResponse:
         """
         Synthesize audio using Kokoro TTS service.
 
@@ -241,10 +241,16 @@ class KokoroTTSProvider(TTSProvider):
 
         Args:
             request: TTSRequest with text and configuration
+            base_url: Optional per-tenant Kokoro base URL. When provided (typically
+                resolved from TTSInstance.base_url), overrides self.service_url for
+                this call only, enabling per-tenant auto-provisioned containers.
 
         Returns:
             TTSResponse with audio file path or error
         """
+        # Peer review A-H2: resolve effective URL at the top so every downstream
+        # reference (POST target, error messages, logs) uses the per-call override.
+        effective_url = base_url or self.service_url
         try:
             # Validate and normalize parameters
             language = request.language if request.language in self.SUPPORTED_LANGUAGES else "pt"
@@ -296,7 +302,7 @@ class KokoroTTSProvider(TTSProvider):
                 try:
                     async with client.stream(
                         "POST",
-                        f"{self.service_url}/v1/audio/speech",
+                        f"{effective_url}/v1/audio/speech",
                         json={
                             "model": "kokoro",
                             "input": text,
@@ -404,13 +410,13 @@ class KokoroTTSProvider(TTSProvider):
                         )
 
                 except httpx.ConnectError:
-                    self.logger.error(f"Cannot connect to Kokoro service at {self.service_url}")
+                    self.logger.error(f"Cannot connect to Kokoro service at {effective_url}")
                     return TTSResponse(
                         success=False,
                         provider=self.provider_name,
-                        error=f"Kokoro service not reachable at {self.service_url}",
+                        error=f"Kokoro service not reachable at {effective_url}",
                         metadata={
-                            "kokoro_url": self.service_url,
+                            "kokoro_url": effective_url,
                             "hint": "Start Kokoro with: docker compose --profile tts up -d"
                         }
                     )
