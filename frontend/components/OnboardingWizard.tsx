@@ -17,11 +17,95 @@
  *           custom skills/MCP, and A2A + long-term memory (vector stores). Total steps: 12.
  */
 
-import React, { useEffect, useCallback } from 'react'
+import React, { useEffect, useCallback, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useOnboarding } from '@/contexts/OnboardingContext'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 import Modal from '@/components/ui/Modal'
+import { api } from '@/lib/client'
+
+function SentinelTourPanel({ onAdvanced }: { onAdvanced: () => void }) {
+  const [isBlock, setIsBlock] = useState<boolean | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    api.getSentinelConfig().then((cfg) => {
+      if (cancelled) return
+      const enabled = cfg.is_enabled !== false
+      const mode = cfg.detection_mode
+      setIsBlock(enabled && mode === 'block')
+      setLoaded(true)
+    }).catch(() => { if (!cancelled) setLoaded(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  const toggle = async (next: boolean) => {
+    setSaving(true)
+    setError(null)
+    try {
+      if (next) {
+        await api.updateSentinelConfig({
+          is_enabled: true,
+          detection_mode: 'block',
+          block_on_detection: true,
+          enable_prompt_analysis: true,
+          enable_tool_analysis: true,
+          enable_shell_analysis: true,
+        })
+      } else {
+        await api.updateSentinelConfig({
+          detection_mode: 'detect_only',
+          block_on_detection: false,
+        })
+      }
+      setIsBlock(next)
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save Sentinel setting')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 p-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 space-y-3">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <div className="text-sm font-medium text-white">Sentinel detection mode</div>
+          <div className="text-xs text-gray-400 mt-0.5">
+            {!loaded ? 'Loading…' : isBlock
+              ? 'Block (recommended) — Sentinel blocks detections in real time.'
+              : 'Detect only — Sentinel logs detections but agents still run.'}
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={!loaded || saving}
+          onClick={() => toggle(!isBlock)}
+          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+            isBlock ? 'bg-emerald-500' : 'bg-gray-600'
+          } disabled:opacity-50`}
+        >
+          <span
+            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${
+              isBlock ? 'translate-x-5' : 'translate-x-0'
+            }`}
+          />
+        </button>
+      </div>
+      <p className="text-[11px] text-gray-400">
+        This is a tenant-wide setting. Per-agent overrides live in{' '}
+        <a href="/settings/sentinel" onClick={onAdvanced} className="text-emerald-400 underline">
+          Sentinel Settings
+        </a>
+        .
+      </p>
+      {error && <div className="text-xs text-red-400">{error}</div>}
+    </div>
+  )
+}
 
 interface TourStep {
   title: string
@@ -34,6 +118,7 @@ interface TourStep {
     disabled?: boolean
     disabledReason?: string
   }
+  customBody?: React.ReactNode
 }
 
 export default function OnboardingWizard() {
@@ -291,7 +376,20 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 13 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
+      // Step 13 — v0.7.0-preview: Sentinel / MemGuard block-mode nudge before the finale.
+      title: 'Sentinel — Security Layer',
+      targetSelector: null,
+      content: "Sentinel is Tsushin's built-in security agent. It scans every prompt, tool call, and shell command before agents act on them, and can block prompt injection, agent takeover attempts, and memory poisoning (MemGuard). Start with it ON (block mode) — you can always relax it later.",
+      highlightFeatures: [
+        'Prompt injection + agent takeover detection on every message',
+        'Tool / shell / slash-command analysis before execution',
+        'Detect-only or warn-only modes for dev work',
+        'Full audit log of every decision',
+      ],
+      customBody: <SentinelTourPanel onAdvanced={() => minimize()} />,
+    },
+    {
+      // Step 14 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
       // Points users to the Getting Started Checklist on the dashboard instead of duplicating it.
       title: "You're All Set!",
       targetSelector: null,
@@ -449,6 +547,8 @@ export default function OnboardingWizard() {
               </ul>
             </div>
           )}
+
+          {currentStepData.customBody}
 
           {currentStepData.actionButton && (
             <button

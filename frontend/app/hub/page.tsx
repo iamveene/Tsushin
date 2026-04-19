@@ -12,10 +12,16 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
+
+const SearchIntegrationWizard = dynamic(
+  () => import('@/components/integrations/SearchIntegrationWizard'),
+  { ssr: false },
+)
 import { useToast } from '@/contexts/ToastContext'
 import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
@@ -286,6 +292,7 @@ export default function HubPage() {
     const requested = new URLSearchParams(window.location.search).get('tab') as TabType | null
     return requested && validTabs.includes(requested) ? requested : 'ai-providers'
   })
+  const [showSearchWizard, setShowSearchWizard] = useState(false)
 
   // Sync activeTab with ?tab= query param when it changes (e.g., via soft nav back from sub-pages)
   useEffect(() => {
@@ -923,7 +930,7 @@ export default function HubPage() {
           status: 'unavailable',
           message: 'Health check failed',
           available: false,
-          details: { hint: 'Start with: docker compose --profile tts up -d' }
+          details: { hint: 'Create a per-tenant Kokoro instance at /hub (Kokoro card → Setup with Wizard).' }
         })
       }
     } catch (error) {
@@ -932,7 +939,7 @@ export default function HubPage() {
         status: 'unavailable',
         message: 'Cannot reach backend',
         available: false,
-        details: { hint: 'Start with: docker compose --profile tts up -d' }
+        details: { hint: 'Create a per-tenant Kokoro instance at /hub (Kokoro card → Setup with Wizard).' }
       })
     }
   }
@@ -3513,7 +3520,7 @@ export default function HubPage() {
                               <p className="text-[11px] font-mono text-tsushin-accent">{kokoroHealth.details?.service_url || 'http://localhost:8880'}</p>
                             )}
                             {kokoroContainerStatus?.status === 'not_installed' && (
-                              <p className="text-[11px] text-tsushin-slate">Install with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">docker compose --profile tts up -d</code></p>
+                              <p className="text-[11px] text-tsushin-slate">No Kokoro instance yet. Click <span className="font-semibold text-tsushin-accent">Setup with Wizard</span> above to auto-provision one.</p>
                             )}
                             <button
                               onClick={async () => {
@@ -4703,6 +4710,12 @@ export default function HubPage() {
                     <h2 className="text-lg font-display font-semibold text-white">Tool APIs</h2>
                     <p className="text-sm text-tsushin-slate">External APIs for agent capabilities</p>
                   </div>
+                  <button
+                    onClick={() => setShowSearchWizard(true)}
+                    className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    🔎 Setup Web Search
+                  </button>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 animate-stagger">
@@ -5835,6 +5848,11 @@ export default function HubPage() {
           </div>
         </div>
       )}
+
+      <SearchIntegrationWizard
+        isOpen={showSearchWizard}
+        onClose={() => setShowSearchWizard(false)}
+      />
     </div>
   )
 }

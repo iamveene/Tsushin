@@ -47,7 +47,8 @@ const OnboardingContext = createContext<OnboardingContextType | undefined>(undef
 // BUG-319: Reduced from 9 to 8 (step 9 "Setup Checklist" removed — it duplicated GettingStartedChecklist)
 // v0.6.0: Raised to 12 — added four "What's New in v0.6.0" showcase pages at the start
 // v0.6.0 (Playground Mini): Raised to 13 — added a step highlighting the new floating Playground Mini bubble.
-const TOTAL_STEPS = 13
+// v0.7.0-preview (Sentinel nudge): Raised to 14 — added a Sentinel/MemGuard block-mode toggle before the finale.
+const TOTAL_STEPS = 14
 const LEGACY_STORAGE_KEY = 'tsushin_onboarding_completed'
 const STARTED_KEY_PREFIX = 'tsushin_onboarding_started'
 
