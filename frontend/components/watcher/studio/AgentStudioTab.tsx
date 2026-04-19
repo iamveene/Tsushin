@@ -219,6 +219,16 @@ export default function AgentStudioTab() {
       {isMaximized && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick={() => setIsMaximized(false)} />}
 
       <div className={`${isMaximized ? 'fixed inset-4 z-50 h-auto' : 'h-[calc(100vh-19rem)] min-h-[350px] relative'} glass-card rounded-xl p-1 transition-all duration-300`}>
+        {isMaximized && (
+          <button
+            onClick={() => setIsMaximized(false)}
+            className="absolute top-3 right-3 z-[60] p-2 rounded-lg bg-tsushin-surface/90 border border-tsushin-border hover:border-tsushin-muted hover:bg-tsushin-surface transition-colors backdrop-blur-sm shadow-lg"
+            title="Exit fullscreen (Esc)"
+            aria-label="Exit fullscreen"
+          >
+            <MinimizeIcon className="w-4 h-4 text-tsushin-slate" />
+          </button>
+        )}
         {selectedAgentId ? (
           <>
             <StudioLeftPanel studioData={studioData} builder={builder} onSave={handleSave} />

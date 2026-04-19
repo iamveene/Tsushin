@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Agent Studio empty-canvas + stale-switch fix, fullscreen exit button, integration-disconnect leak fix (2026-04-19)
+
+Three fixes in the Studio/Hub areas surfaced by a UI regression pass.
+
+**Agent Studio — canvas empty on first load (`frontend/components/watcher/studio/hooks/useAgentBuilder.ts`).**
+- Symptom: on fresh page load the default agent auto-selected in the dropdown, but the React Flow canvas rendered 0 nodes. The `/api/v2/agents/{id}/builder-data` call fired and returned 200, yet the layout never committed.
+- Root cause: the node-generation effect used a `let cancelled = false` local with a cleanup `() => { cancelled = true }`. Because the effect depends on `detachProfile` (and other callbacks whose refs change on every parent render — `onWarning` in `AgentStudioTab` was an unmemoized lambda), the effect re-ran frequently. Each re-run cancelled the prior in-flight dagre layout, and if the re-run early-returned (because the structural fingerprint hadn't changed) no new layout was kicked off — so the first layout's nodes never landed.
+- Fix: replaced the cleanup-based cancellation with a `layoutRequestVersion` ref. A pending layout only gets discarded when a newer layout is actually started, so benign re-renders no longer wipe the canvas.
+
+**Agent Studio — first agent switch rendered the previous agent's data (`useAgentBuilder.ts` + `useStudioData.ts`).**
+- Symptom: after the empty-canvas state above, clicking a different agent showed the dropdown updated to the new agent but the canvas rendered the previously-selected agent's name, channels, skill count, etc. Only the first switch was affected.
+- Root cause: `useStudioData` did not clear `agent`/`skills`/etc. when `agentId` changed — it waited for the new fetch to resolve, during which consumers saw the old payload combined with the new id.
+- Fix: `useStudioData` now tracks the last synced agentId via a ref and clears the per-agent state slice the moment `agentId` actually changes (before kicking off the new fetch). `useAgentBuilder`'s load-state effect also gained a defensive `if (studioData.agent.id !== agentId) return` guard so it never processes a mismatched payload even for a single render.
+
+**Agent Studio — exit-fullscreen button hidden behind backdrop (`frontend/components/watcher/studio/AgentStudioTab.tsx`).**
+- When the board was maximized, the existing minimize button in the header row ended up under the `z-40` backdrop (header wasn't elevated), so users had to hit `Esc` or click the dark overlay — both non-obvious.
+- Added a visible close button (top-right, `z-[60]`) inside the maximized container. `Esc` and click-outside still work.
+
+**Hub — Gmail / Google Calendar / Asana disconnect left the card visible.**
+- Symptom: clicking "Disconnect" on a Gmail/Calendar/Asana card would sometimes succeed on the backend but the card remained in the list after reload.
+- Root cause split across layers:
+  1. Backend `disconnect_integration` (`backend/hub/google/oauth_handler.py`, `backend/hub/asana/oauth_handler.py`) set `integration.is_active = False` but did not reset `health_status`. The listing filter in `backend/api/routes_hub.py` returned integrations where `is_active=True` **or** `health_status='unavailable'` (the "needs re-auth" branch), so a just-disconnected integration that was previously unavailable still matched.
+  2. Frontend handlers (`frontend/app/hub/page.tsx`) for Gmail/Calendar/Asana did not check `response.ok`, silently showing the "Disconnected" toast even on backend failure; they also didn't await the re-fetch.
+- Fix: backend now sets `health_status = 'disconnected'` alongside `is_active = False`. Listing filter now requires `health_status != 'disconnected'` in addition to the existing active/unavailable predicate. Frontend handlers throw on non-2xx responses, optimistically drop the card from local state, await the re-fetch, and surface errors via the existing error toast path instead of a silent success.
+- Reconnect path is unaffected — the existing authorize flow resets `is_active=True` and `health_status='unknown'`, which clears the `disconnected` marker.
+
 ### Live Playground regression harness (2026-04-19)
 
 Added a reusable live-stack regression runner for Playground / Playground Mini / Watcher Graph verification.
