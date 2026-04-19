@@ -555,7 +555,7 @@ Invitations are the primary way to onboard both tenant-scoped users and platform
 
 **UI entry points.**
 - Tenant owner: `/settings/team/invite` — form with email / role / **Sign-in method** radio / message. The "Google SSO" radio is disabled (with a tooltip) when the tenant has no Google SSO configured.
-- Global admin: `/system/users` → **Invite User** button. Modal includes a role dropdown with **Global Admin** as one option; when selected, the tenant dropdown hides.
+- Global admin: `/system/users` → **Invite User** button. Modal leads with an explicit two-option **kind picker** — *Tenant User* (default) or *Global Admin* — to make the multi-tenant mental model unambiguous. Tenant-user path requires a non-empty Organization (dropdown labeled `{name} — {slug} ({user_count} members)`) and a role in `owner | admin | member | readonly`; Global-admin path hides tenant + role entirely. Submit button stays disabled until required fields for the active kind are filled. The same picker appears on the break-glass **+ Create User** modal. Backed by `POST /api/admin/invitations/` / `POST /api/admin/users/` (both accept `is_global_admin`).
 - Invitee: `/auth/invite/[token]` — header/body adapt to global-admin invites and Google-only invites automatically.
 
 ### 6.6 Global vs tenant Google SSO independence
@@ -2002,6 +2002,44 @@ A compact companion to the full Playground, mounted globally in `frontend/app/la
 - `frontend/app/globals.css` (`.playground-mini-tour-glow`, `.mini-markdown`)
 - `frontend/contexts/AuthContext.tsx` (`logout()` clears sessionStorage)
 
+### 18.6.1 Live Regression Harness
+
+For live-stack regression and diagnosis, use `backend/dev_tests/run_playground_regression_live.py`.
+
+**Purpose.** This runner validates the existing Playground / Playground Mini / Watcher Graph contracts on the currently running local HTTPS stack without introducing any new test-only product endpoints. It is intended for "the stack is already up, tell me whether full Playground, Mini, watcher activity, KB glow, provider glow, and A2A still work right now" passes.
+
+**Entry assumptions.**
+- Run from the repo root: `/Users/vinicios/code/tsushin`.
+- Target base URL: `https://localhost`.
+- Owner fixture: `test@example.com / test1234`.
+- Fixture KB document: `sample_data/acme_sales.csv`.
+
+**Covered interfaces.**
+- Auth/session: `/api/auth/login`, `/api/auth/me`
+- Playground: `/api/playground/agents`, `/api/playground/threads`, `/api/playground/threads/{id}`, `/api/playground/chat?sync=true`
+- Projects: `/api/projects`
+- Graph/Watcher discovery: `/api/v2/agents/graph-preview`, `/api/v2/agents/{id}/expand-data`, `/api/v2/agents/comm-enabled`
+- Knowledge base: `/api/agents/{id}/knowledge-base/*`
+- Watcher activity socket: `/ws/watcher/activity`
+
+**Behavior.**
+- Uses cookie auth for HTTPS requests and first-message token auth for `wss://localhost/ws/watcher/activity`.
+- Discovers the live primary/provider/A2A-capable agents from current API state instead of assuming hard-coded ids, while still preferring the common `Tsushin (1) -> Gemini1 (17)` mapping when present.
+- Uploads `sample_data/acme_sales.csv` to the chosen provider-backed agent KB, polls until `status=completed` and `num_chunks > 0`, then runs:
+  - baseline thread create -> read -> sync chat -> post-read -> explicit rename -> filtered thread list
+  - provider-backed `web_search`
+  - KB-backed answer using the uploaded CSV
+  - `agent_communication` from the primary agent to the provider-backed target
+- Captures watcher event families around each chat so the report can tie browser graph glow, watcher activity, and backend logs together with explicit correlation tokens.
+
+**Artifacts.**
+- API JSON report: `output/playwright/playground-regression-api-<timestamp>.json`
+- Intended paired browser artifact folder: `output/playwright/playground-regression-<timestamp>/`
+
+**Useful flags.**
+- Default mode cleans up the runner-created KB document and threads.
+- `--skip-cleanup` leaves the artifacts in place so a browser/Graph pass can verify the same KB node and recent regression threads before teardown.
+
 ### 18.7 Async Queuing & Dead-Letter Retry
 
 Service layer: `backend/services/message_queue_service.py`, `backend/services/queue_worker.py`.
@@ -2478,15 +2516,20 @@ Backing service: `backend/services/audit_service.py` (global admin actions logge
 
 Global user directory — list all users across tenants, toggle `is_global_admin`, reset credentials, suspend accounts.
 
-**Invite User (since 2026-04-18).** Primary button next to the break-glass "+ Create User". Opens a modal with: email, role dropdown (includes **Global Admin** alongside Owner/Admin/Member/Read-Only), target **Organization** dropdown (hidden when role is Global Admin), **Auth method** radio (Local password / Google SSO), optional personal message. On submit the modal shows a copy-able invitation link. Backed by `POST /api/admin/invitations` (require_global_admin); see §6.5.
+**Invite User + Create User — explicit kind picker (since 2026-04-19).** Both modals lead with a two-option segmented control:
+
+| Kind | Semantics | Required fields |
+|---|---|---|
+| **Tenant User** (default) | Belongs to exactly one organization; cannot cross tenant boundaries | email, **Organization** (required — labeled `{name} — {slug} ({user_count} members)`), **Role** (`owner | admin | member | readonly`) |
+| **Global Admin** | Platform-wide administrator, `User.is_global_admin=True`, `User.tenant_id=NULL`, no `UserRole` row | email only (tenant + role hidden) |
+
+The Organization dropdown is only shown for the Tenant-User path; when empty it surfaces a red inline helper (*"Invitees are not global admins and must belong to one tenant"*). The submit button stays disabled until required fields for the active kind are filled — the form cannot submit in an ambiguous state. Backing endpoints: `POST /api/admin/invitations/` (invite) and `POST /api/admin/users/` (direct create). Both accept the same shape: `is_global_admin=true` ⇒ no tenant_id/role; `is_global_admin=false` ⇒ both required. See §6.5.
 
 **Pending Invitations.** A second section on the same page lists outstanding invites across all tenants with scope (Global vs tenant name), role, auth provider, invited-by, expiry, and a Cancel button. Powered by `GET /api/admin/invitations` + `DELETE /api/admin/invitations/{id}`.
 
-### 22.3 Platform Integrations (`frontend/app/system/integrations/page.tsx`)
+### 22.3 Global SSO (`frontend/app/system/sso/page.tsx`)
 
-Platform-level third-party credentials (keys that apply globally, not per-tenant). This is the global counterpart to §21.4.
-
-**Platform-wide Google SSO (since 2026-04-18).** This page now contains a first-class Google SSO configuration section backed by the `global_sso_config` singleton table and the `/api/admin/sso-config` endpoints. Fields:
+Dedicated page for platform-wide Google OAuth configuration (moved out of the retired `/system/integrations` hub in 2026-04-19). Backed by the `global_sso_config` singleton table and the `/api/admin/sso-config` endpoints. Fields:
 
 | Field | Purpose |
 |---|---|
@@ -2499,7 +2542,11 @@ Platform-level third-party credentials (keys that apply globally, not per-tenant
 
 **Credential resolution order** (`backend/auth_google.py::get_oauth_credentials`): per-tenant `GoogleOAuthCredentials` (when a tenant context is present) → `GlobalSSOConfig` (when `google_sso_enabled=true` and credentials are complete) → env-var fallback (`GOOGLE_SSO_CLIENT_ID` / `GOOGLE_SSO_CLIENT_SECRET` in `backend/settings.py`). Global and tenant scopes are fully independent — updates at one scope do not affect the other.
 
-**Not a link-out.** Pre-2026-04-18 this route was a navigation overview that pointed to other system pages. It now renders real config UI for Google SSO in place (while keeping the overview nav cards for tenant/user/plan/remote-access).
+**`/system/integrations` is deprecated.** The old hub page (navigation cards + embedded SSO config) was split in 2026-04-19: the admin cards now live as a *System* card group inside Core (`/settings`); the SSO config moved here. The `/system/integrations` route is a redirect stub that `router.replace('/settings')` on mount so old bookmarks and email links do not 404.
+
+### 22.3.1 System group inside Core (global admin only)
+
+Starting 2026-04-19, the global-admin view no longer has a separate top-level **System** nav item. Instead, `/settings` (the **Core** hub) gains a *System* card group (role-gated on `is_global_admin`) with five cards: **Tenant Management**, **User Management**, **Plans & Limits**, **Remote Access**, **Global SSO**. This matches the tenant-view pattern where operational areas are discovered as cards under Core. Global-admin login now redirects to `/settings` (was `/system/integrations`). Top nav is identical for all roles.
 
 ### 22.4 Plans / Subscription Tiers (`frontend/app/system/plans/page.tsx`)
 

@@ -137,9 +137,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(response.user)
     setLoading(false)
 
-    // Redirect based on user type
+    // Redirect based on user type.
+    // Global admins land on Core settings where the System card group lives.
     if (response.user.is_global_admin) {
-      router.push('/system/integrations')
+      router.push('/settings')
     } else {
       router.push('/')
     }

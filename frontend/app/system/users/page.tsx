@@ -26,7 +26,8 @@ function toAbsoluteInviteUrl(link: string): string {
   return `${window.location.origin}${link.startsWith('/') ? link : `/${link}`}`
 }
 
-type InviteRole = 'global_admin' | 'owner' | 'admin' | 'member' | 'readonly'
+type InviteKind = 'global_admin' | 'tenant_user'
+type TenantRole = 'owner' | 'admin' | 'member' | 'readonly'
 type AuthProvider = 'local' | 'google'
 
 export default function GlobalUsersPage() {
@@ -56,7 +57,15 @@ export default function GlobalUsersPage() {
   const [modalError, setModalError] = useState<string | null>(null)
 
   // Create form state
-  const [createForm, setCreateForm] = useState({
+  const [createForm, setCreateForm] = useState<{
+    kind: InviteKind
+    email: string
+    password: string
+    full_name: string
+    tenant_id: string
+    role_name: TenantRole
+  }>({
+    kind: 'tenant_user',
     email: '',
     password: '',
     full_name: '',
@@ -67,12 +76,14 @@ export default function GlobalUsersPage() {
   // Invite modal state (platform-wide invitation)
   const [showInviteModal, setShowInviteModal] = useState(false)
   const [inviteForm, setInviteForm] = useState<{
+    kind: InviteKind
     email: string
-    role: InviteRole
+    role: TenantRole
     tenant_id: string
     auth_provider: AuthProvider
     message: string
   }>({
+    kind: 'tenant_user',
     email: '',
     role: 'member',
     tenant_id: '',
@@ -173,15 +184,24 @@ export default function GlobalUsersPage() {
     setModalLoading(true)
     setModalError(null)
     try {
+      const isGlobal = createForm.kind === 'global_admin'
       await api.createGlobalUser({
         email: createForm.email,
         password: createForm.password,
         full_name: createForm.full_name,
-        tenant_id: createForm.tenant_id,
-        role_name: createForm.role_name,
+        tenant_id: isGlobal ? null : createForm.tenant_id,
+        role_name: isGlobal ? null : createForm.role_name,
+        is_global_admin: isGlobal,
       })
       setShowCreateModal(false)
-      setCreateForm({ email: '', password: '', full_name: '', tenant_id: '', role_name: 'member' })
+      setCreateForm({
+        kind: 'tenant_user',
+        email: '',
+        password: '',
+        full_name: '',
+        tenant_id: '',
+        role_name: 'member',
+      })
       fetchUsers()
       fetchStatsAndTenants()
     } catch (err: any) {
@@ -249,10 +269,10 @@ export default function GlobalUsersPage() {
     setInviteError(null)
     setInviteSuccessLink(null)
     try {
-      const isGlobal = inviteForm.role === 'global_admin'
+      const isGlobal = inviteForm.kind === 'global_admin'
       const resp = await api.inviteGlobalUser({
         email: inviteForm.email.trim(),
-        tenant_id: isGlobal ? null : inviteForm.tenant_id || null,
+        tenant_id: isGlobal ? null : inviteForm.tenant_id,
         role: isGlobal ? null : inviteForm.role,
         is_global_admin: isGlobal,
         auth_provider: inviteForm.auth_provider,
@@ -269,6 +289,7 @@ export default function GlobalUsersPage() {
 
   const resetInviteForm = () => {
     setInviteForm({
+      kind: 'tenant_user',
       email: '',
       role: 'member',
       tenant_id: '',
@@ -746,6 +767,44 @@ export default function GlobalUsersPage() {
                         {inviteError}
                       </div>
                     )}
+
+                    {/* Kind picker — explicit Tenant User vs Global Admin branching */}
+                    <div>
+                      <label className="block text-sm font-medium text-tsushin-fog mb-2">Who are you inviting?</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setInviteForm({ ...inviteForm, kind: 'tenant_user' })}
+                          className={`text-left p-3 rounded-md border transition-colors ${
+                            inviteForm.kind === 'tenant_user'
+                              ? 'border-teal-500 bg-teal-500/10'
+                              : 'border-tsushin-border bg-tsushin-elevated hover:bg-tsushin-surface'
+                          }`}
+                        >
+                          <div className="text-sm font-semibold text-white">Tenant User</div>
+                          <div className="text-xs text-tsushin-slate mt-1">Invite into a specific organization. Most common.</div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInviteForm({ ...inviteForm, kind: 'global_admin', tenant_id: '', role: 'member' })}
+                          className={`text-left p-3 rounded-md border transition-colors ${
+                            inviteForm.kind === 'global_admin'
+                              ? 'border-purple-500 bg-purple-500/10'
+                              : 'border-tsushin-border bg-tsushin-elevated hover:bg-tsushin-surface'
+                          }`}
+                        >
+                          <div className="text-sm font-semibold text-white">Global Admin</div>
+                          <div className="text-xs text-tsushin-slate mt-1">Platform-wide administrator. No tenant.</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {inviteForm.kind === 'global_admin' && (
+                      <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded text-xs text-purple-200">
+                        Global admins have platform-wide access — they are not scoped to any tenant.
+                      </div>
+                    )}
+
                     <div>
                       <label className="block text-sm font-medium text-tsushin-fog mb-1">Email</label>
                       <input
@@ -756,36 +815,51 @@ export default function GlobalUsersPage() {
                         required
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-tsushin-fog mb-1">Role</label>
-                      <select
-                        value={inviteForm.role}
-                        onChange={(e) => setInviteForm({ ...inviteForm, role: e.target.value as InviteRole })}
-                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
-                      >
-                        <option value="global_admin">Global Admin</option>
-                        <option value="owner">Owner</option>
-                        <option value="admin">Admin</option>
-                        <option value="member">Member</option>
-                        <option value="readonly">Read-Only</option>
-                      </select>
-                    </div>
 
-                    {inviteForm.role !== 'global_admin' && (
-                      <div>
-                        <label className="block text-sm font-medium text-tsushin-fog mb-1">Organization</label>
-                        <select
-                          value={inviteForm.tenant_id}
-                          onChange={(e) => setInviteForm({ ...inviteForm, tenant_id: e.target.value })}
-                          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
-                          required
-                        >
-                          <option value="">Select organization...</option>
-                          {tenants.map((t) => (
-                            <option key={t.id} value={t.id}>{t.name}</option>
-                          ))}
-                        </select>
-                      </div>
+                    {inviteForm.kind === 'tenant_user' && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-tsushin-fog mb-1">
+                            Assign to Organization <span className="text-red-400">*</span>
+                          </label>
+                          <select
+                            value={inviteForm.tenant_id}
+                            onChange={(e) => setInviteForm({ ...inviteForm, tenant_id: e.target.value })}
+                            className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                            required
+                          >
+                            <option value="">Select organization...</option>
+                            {tenants.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} — {t.slug} ({t.user_count} {t.user_count === 1 ? 'member' : 'members'})
+                              </option>
+                            ))}
+                          </select>
+                          {!inviteForm.tenant_id && (
+                            <p className="mt-1 text-xs text-red-400">
+                              Select an organization. Invitees are not global admins and must belong to one tenant.
+                            </p>
+                          )}
+                          {tenants.length === 0 && (
+                            <p className="mt-1 text-xs text-amber-400">
+                              No organizations exist yet. Create one from System → Tenant Management first.
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-tsushin-fog mb-1">Role within organization</label>
+                          <select
+                            value={inviteForm.role}
+                            onChange={(e) => setInviteForm({ ...inviteForm, role: e.target.value as TenantRole })}
+                            className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                          >
+                            <option value="owner">Owner</option>
+                            <option value="admin">Admin</option>
+                            <option value="member">Member</option>
+                            <option value="readonly">Read-Only</option>
+                          </select>
+                        </div>
+                      </>
                     )}
 
                     <div>
@@ -846,7 +920,7 @@ export default function GlobalUsersPage() {
                       disabled={
                         inviteLoading
                         || !inviteForm.email
-                        || (inviteForm.role !== 'global_admin' && !inviteForm.tenant_id)
+                        || (inviteForm.kind === 'tenant_user' && (!inviteForm.tenant_id || !inviteForm.role))
                       }
                       className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
                     >
@@ -873,6 +947,44 @@ export default function GlobalUsersPage() {
                     {modalError}
                   </div>
                 )}
+
+                {/* Kind picker — same Tenant User vs Global Admin branching as Invite */}
+                <div>
+                  <label className="block text-sm font-medium text-tsushin-fog mb-2">What kind of user?</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCreateForm({ ...createForm, kind: 'tenant_user' })}
+                      className={`text-left p-3 rounded-md border transition-colors ${
+                        createForm.kind === 'tenant_user'
+                          ? 'border-teal-500 bg-teal-500/10'
+                          : 'border-tsushin-border bg-tsushin-elevated hover:bg-tsushin-surface'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold text-white">Tenant User</div>
+                      <div className="text-xs text-tsushin-slate mt-1">Belongs to a specific organization.</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCreateForm({ ...createForm, kind: 'global_admin', tenant_id: '', role_name: 'member' })}
+                      className={`text-left p-3 rounded-md border transition-colors ${
+                        createForm.kind === 'global_admin'
+                          ? 'border-purple-500 bg-purple-500/10'
+                          : 'border-tsushin-border bg-tsushin-elevated hover:bg-tsushin-surface'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold text-white">Global Admin</div>
+                      <div className="text-xs text-tsushin-slate mt-1">Platform-wide administrator. No tenant.</div>
+                    </button>
+                  </div>
+                </div>
+
+                {createForm.kind === 'global_admin' && (
+                  <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded text-xs text-purple-200">
+                    Global admins have platform-wide access — they are not scoped to any tenant.
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-sm font-medium text-tsushin-fog mb-1">Email</label>
                   <input
@@ -904,33 +1016,52 @@ export default function GlobalUsersPage() {
                     required
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-tsushin-fog mb-1">Organization</label>
-                  <select
-                    value={createForm.tenant_id}
-                    onChange={(e) => setCreateForm({ ...createForm, tenant_id: e.target.value })}
-                    className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
-                    required
-                  >
-                    <option value="">Select organization...</option>
-                    {tenants.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-tsushin-fog mb-1">Role</label>
-                  <select
-                    value={createForm.role_name}
-                    onChange={(e) => setCreateForm({ ...createForm, role_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
-                  >
-                    <option value="owner">Owner</option>
-                    <option value="admin">Admin</option>
-                    <option value="member">Member</option>
-                    <option value="readonly">Read Only</option>
-                  </select>
-                </div>
+
+                {createForm.kind === 'tenant_user' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-tsushin-fog mb-1">
+                        Assign to Organization <span className="text-red-400">*</span>
+                      </label>
+                      <select
+                        value={createForm.tenant_id}
+                        onChange={(e) => setCreateForm({ ...createForm, tenant_id: e.target.value })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                        required
+                      >
+                        <option value="">Select organization...</option>
+                        {tenants.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name} — {t.slug} ({t.user_count} {t.user_count === 1 ? 'member' : 'members'})
+                          </option>
+                        ))}
+                      </select>
+                      {!createForm.tenant_id && (
+                        <p className="mt-1 text-xs text-red-400">
+                          Select an organization. Tenant users must belong to one tenant.
+                        </p>
+                      )}
+                      {tenants.length === 0 && (
+                        <p className="mt-1 text-xs text-amber-400">
+                          No organizations exist yet. Create one from System → Tenant Management first.
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-tsushin-fog mb-1">Role within organization</label>
+                      <select
+                        value={createForm.role_name}
+                        onChange={(e) => setCreateForm({ ...createForm, role_name: e.target.value as TenantRole })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                      >
+                        <option value="owner">Owner</option>
+                        <option value="admin">Admin</option>
+                        <option value="member">Member</option>
+                        <option value="readonly">Read Only</option>
+                      </select>
+                    </div>
+                  </>
+                )}
               </div>
               <div className="flex justify-end gap-3 p-6 border-t border-tsushin-border">
                 <button
@@ -941,7 +1072,13 @@ export default function GlobalUsersPage() {
                 </button>
                 <button
                   onClick={handleCreate}
-                  disabled={modalLoading || !createForm.email || !createForm.password || !createForm.full_name || !createForm.tenant_id}
+                  disabled={
+                    modalLoading
+                    || !createForm.email
+                    || !createForm.password
+                    || !createForm.full_name
+                    || (createForm.kind === 'tenant_user' && (!createForm.tenant_id || !createForm.role_name))
+                  }
                   className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
                 >
                   {modalLoading ? 'Creating...' : 'Create User'}

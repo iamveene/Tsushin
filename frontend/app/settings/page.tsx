@@ -218,6 +218,30 @@ export default function SettingsHubPage() {
       icon: icons.globe,
       href: '/system/tenants',
     },
+    {
+      title: 'User Management',
+      description: 'Manage users across all organizations — search, invite, transfer, or suspend',
+      icon: icons.team,
+      href: '/system/users',
+    },
+    {
+      title: 'Plans & Limits',
+      description: 'Configure platform plans, feature entitlements, and resource limits',
+      icon: icons.billing,
+      href: '/system/plans',
+    },
+    {
+      title: 'Remote Access',
+      description: 'Cloudflare tunnel and per-tenant public URL access',
+      icon: icons.integrations,
+      href: '/system/remote-access',
+    },
+    {
+      title: 'Global SSO',
+      description: 'Platform-wide Google SSO (client ID, allowed domains, auto-provisioning)',
+      icon: icons.security,
+      href: '/system/sso',
+    },
   ]
 
   // Filter sections based on permissions
@@ -244,7 +268,7 @@ export default function SettingsHubPage() {
           <div className="mb-12">
             <div className="flex items-center space-x-3 mb-6">
               <h2 className="text-xl font-display font-semibold text-white">
-                Platform Administration
+                System
               </h2>
               <span className="badge badge-indigo">
                 Global Admin

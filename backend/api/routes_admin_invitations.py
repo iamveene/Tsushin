@@ -150,19 +150,34 @@ async def create_admin_invitation(
 ):
     """Create a tenant-scoped or global-admin invitation."""
     # ------------------- shape validation -------------------
+    # NOTE: use truthy checks (not `is not None`) so empty strings from the
+    # frontend are rejected too. An empty `tenant_id=""` on a global-admin
+    # invite would otherwise be written verbatim to UserInvitation.tenant_id,
+    # breaking the `tenant_id IS NULL` invariant and the partial-unique
+    # dedup index.
     if payload.is_global_admin:
-        if payload.tenant_id is not None or payload.role is not None:
+        if payload.tenant_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Global admin invitations must not include tenant_id or role",
+                detail="Global admin invitations must not include tenant_id. Global admins are platform-wide and not scoped to a tenant.",
+            )
+        if payload.role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Global admin invitations must not include role.",
             )
         tenant_id: Optional[str] = None
         role_id: Optional[int] = None
     else:
-        if not payload.tenant_id or not payload.role:
+        if not payload.tenant_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Tenant-scoped invitations require both tenant_id and role",
+                detail="tenant_id is required for tenant-scoped invitations. Pick the organization this user should belong to.",
+            )
+        if not payload.role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="role is required for tenant-scoped invitations.",
             )
         tenant = db.query(Tenant).filter(Tenant.id == payload.tenant_id).first()
         if not tenant:
@@ -270,7 +285,7 @@ async def create_admin_invitation(
     log_admin_action(
         db=db,
         admin=current_user,
-        action=AuditActions.USER_CREATE if payload.is_global_admin else AuditActions.USER_UPDATE,
+        action=AuditActions.USER_CREATE,
         target_tenant_id=tenant_id,
         resource_type="user_invitation",
         resource_id=str(inv.id),

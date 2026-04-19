@@ -61,9 +61,10 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     full_name: str
-    tenant_id: str
-    role_name: str = "member"
+    tenant_id: Optional[str] = None
+    role_name: Optional[str] = None
     is_active: bool = True
+    is_global_admin: bool = False
 
 
 class UserUpdate(BaseModel):
@@ -291,54 +292,89 @@ async def create_user(
     _: None = Depends(require_global_admin()),
 ):
     """
-    Create a new user in any tenant (global admin only).
+    Create a new user (global admin only).
+
+    Two shapes:
+      - Global admin user: ``is_global_admin=True``, ``tenant_id``/``role_name`` must be omitted.
+      - Tenant user: ``is_global_admin=False`` (default), both ``tenant_id`` and ``role_name`` required.
     """
-    # Check if email exists
-    existing = db.query(User).filter(User.email == request.email).first()
+    # Shape validation (truthy checks so empty-string payloads are rejected)
+    if request.is_global_admin:
+        if request.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Global admin users must not include tenant_id. Global admins are platform-wide and not scoped to a tenant.",
+            )
+        if request.role_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Global admin users must not include role_name.",
+            )
+    else:
+        if not request.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tenant_id is required when creating a tenant-scoped user. Pick the organization this user should belong to.",
+            )
+        if not request.role_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="role_name is required when creating a tenant-scoped user.",
+            )
+
+    # Check if email exists (ignore soft-deleted rows — their email is mangled)
+    existing = db.query(User).filter(
+        User.email == request.email,
+        User.deleted_at.is_(None),
+    ).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email is already registered"
         )
 
-    # Validate tenant
-    tenant = db.query(Tenant).filter(
-        Tenant.id == request.tenant_id,
-        Tenant.deleted_at.is_(None)
-    ).first()
-    if not tenant:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid tenant ID"
-        )
+    tenant = None
+    role = None
 
-    # Validate role
-    role = db.query(Role).filter(Role.name == request.role_name).first()
-    if not role:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid role name"
-        )
+    if not request.is_global_admin:
+        # Validate tenant
+        tenant = db.query(Tenant).filter(
+            Tenant.id == request.tenant_id,
+            Tenant.deleted_at.is_(None)
+        ).first()
+        if not tenant:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid tenant ID"
+            )
 
-    # Check tenant limits
-    current_users = db.query(User).filter(
-        User.tenant_id == request.tenant_id,
-        User.deleted_at.is_(None)
-    ).count()
+        # Validate role
+        role = db.query(Role).filter(Role.name == request.role_name).first()
+        if not role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid role name"
+            )
 
-    if tenant.max_users > 0 and current_users >= tenant.max_users:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Tenant has reached maximum user limit ({tenant.max_users})"
-        )
+        # Check tenant limits
+        current_users = db.query(User).filter(
+            User.tenant_id == request.tenant_id,
+            User.deleted_at.is_(None)
+        ).count()
+
+        if tenant.max_users > 0 and current_users >= tenant.max_users:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Tenant has reached maximum user limit ({tenant.max_users})"
+            )
 
     # Create user
     user = User(
         email=request.email,
         password_hash=hash_password(request.password),
         full_name=request.full_name,
-        tenant_id=request.tenant_id,
-        is_global_admin=False,
+        tenant_id=None if request.is_global_admin else request.tenant_id,
+        is_global_admin=request.is_global_admin,
         is_active=request.is_active,
         email_verified=True,  # Created by admin
         auth_provider='local',
@@ -346,14 +382,15 @@ async def create_user(
     db.add(user)
     db.flush()
 
-    # Assign role
-    user_role = UserRole(
-        user_id=user.id,
-        role_id=role.id,
-        tenant_id=request.tenant_id,
-        assigned_by=current_user.id,
-    )
-    db.add(user_role)
+    # Assign role only for tenant-scoped users
+    if not request.is_global_admin:
+        user_role = UserRole(
+            user_id=user.id,
+            role_id=role.id,
+            tenant_id=request.tenant_id,
+            assigned_by=current_user.id,
+        )
+        db.add(user_role)
 
     db.commit()
     db.refresh(user)
@@ -365,11 +402,18 @@ async def create_user(
         action=AuditActions.USER_CREATE,
         resource_type="user",
         resource_id=str(user.id),
-        target_tenant_id=request.tenant_id,
-        details={"email": user.email, "role": request.role_name},
+        target_tenant_id=None if request.is_global_admin else request.tenant_id,
+        details={
+            "email": user.email,
+            "role": request.role_name,
+            "is_global_admin": request.is_global_admin,
+        },
     )
 
-    logger.info(f"Global admin created user: {user.email} in tenant: {request.tenant_id}")
+    if request.is_global_admin:
+        logger.info(f"Global admin created global admin user: {user.email}")
+    else:
+        logger.info(f"Global admin created user: {user.email} in tenant: {request.tenant_id}")
 
     return user_to_response(user, db)
 
@@ -669,8 +713,27 @@ async def toggle_global_admin(
             detail="Cannot modify your own admin status"
         )
 
-    # Toggle
-    user.is_global_admin = not user.is_global_admin
+    # Enforce the scope invariant:
+    #   is_global_admin=TRUE  ↔ tenant_id IS NULL AND no UserRole
+    #   is_global_admin=FALSE ↔ tenant_id IS NOT NULL AND has UserRole
+    if not user.is_global_admin:
+        # PROMOTE tenant user → global admin: clear tenant_id + drop UserRole rows
+        # so the resulting row cannot have both is_global_admin=True and a tenant
+        # assignment (which would let the admin appear scoped to a tenant while
+        # also bypassing tenant filters via is_global_admin).
+        user.is_global_admin = True
+        user.tenant_id = None
+        db.query(UserRole).filter(UserRole.user_id == user.id).delete(synchronize_session=False)
+    else:
+        # DEMOTE global admin → tenant user: a tenant user must belong to a
+        # tenant + have a role, but those aren't provided here. Refuse and
+        # direct the admin to the Edit User flow which lets them pick a tenant
+        # and role atomically.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Demoting a global admin requires assigning a tenant and role. Use Edit User to transfer them into an organization.",
+        )
+
     user.updated_at = datetime.utcnow()
     db.commit()
 

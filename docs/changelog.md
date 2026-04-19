@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Live Playground regression harness (2026-04-19)
+
+Added a reusable live-stack regression runner for Playground / Playground Mini / Watcher Graph verification.
+
+- **New test-only runner** — `backend/dev_tests/run_playground_regression_live.py`
+  - Authenticates against `https://localhost` with the current owner fixture (`test@example.com / test1234`).
+  - Validates the existing live interfaces only: `/api/auth/login`, `/api/auth/me`, `/api/playground/agents`, `/api/projects`, `/api/playground/threads`, `/api/playground/chat?sync=true`, `/api/v2/agents/graph-preview`, `/api/v2/agents/{id}/expand-data`, `/api/v2/agents/comm-enabled`, `/api/agents/{id}/knowledge-base/*`, and `/ws/watcher/activity`.
+  - Discovers the live default/default-capable agent mapping, uploads `sample_data/acme_sales.csv` to the provider-backed graph agent knowledge base, waits for chunking completion, and then exercises baseline thread flow, provider-backed `web_search`, KB-backed answers, and `agent_communication` A2A.
+  - Writes a structured JSON report into `output/playwright/playground-regression-api-<timestamp>.json` with correlation tokens, watcher event capture, cleanup targets, and per-scenario assertions.
+  - Supports `--skip-cleanup` so the browser Graph run can inspect the same KB / thread artifacts before cleanup.
+
+- **Regression artifact convention** — browser evidence for the paired Playwright CLI run is now expected under `output/playwright/playground-regression-<timestamp>/` so screenshots, summaries, and API JSON stay grouped per live pass.
+
+- **No product contract changes.** This is regression-only scaffolding; all coverage uses the existing tenant-scoped Playground, project, watcher, graph, KB, and auth routes.
+
+### Global admin invite UX + System-under-Core nav consolidation (2026-04-19)
+
+Hardens the multi-tenant mental model in the global-admin UI. Previously, inviting a user from `/system/users` let the admin drift into an ambiguous state where a tenant-scoped invite could be submitted with no tenant selected, relying solely on a backend 400 to catch it — and the Create User modal had the same shape. The System area also lived as a standalone top-level nav item in the global-admin view, inconsistent with the tenant view where System is a card under Core.
+
+**Frontend — explicit `Tenant User` vs `Global Admin` branching** (`frontend/app/system/users/page.tsx`).
+- Both Invite User and Create User modals now lead with a two-option segmented picker: **Tenant User** (belongs to a specific organization — the common case, default) and **Global Admin** (platform-wide administrator, no tenant).
+- Tenant-user path: required Organization dropdown labeled with `{name} — {slug} ({user_count} members)` so the admin can disambiguate; inline red helper when empty (*"Invitees are not global admins and must belong to one tenant"*); role dropdown constrained to `owner | admin | member | readonly` (no `global_admin` row here — global admin is chosen via the kind picker).
+- Global-admin path: tenant + role dropdowns hidden; small purple info banner explains platform-wide scope.
+- Submit button disabled until all required fields for the active kind are filled — the old form could submit without a tenant and fail server-side.
+- When no tenants exist yet, both modals surface an amber hint to create one via System → Tenant Management first.
+
+**Frontend — System becomes a Core section, not a standalone nav link.**
+- Removed the separate `System` top-level nav item for global admins in `components/LayoutContent.tsx`. Top nav is now identical for all roles: `Watcher, Studio, Hub, Flows, Playground, Core`.
+- `app/settings/page.tsx` — expanded the global-admin section from one card (Tenant Management) to five: **Tenant Management, User Management, Plans & Limits, Remote Access, Global SSO**. Section header renamed from `Platform Administration` to `System` to match the concept (and the old nav label).
+- Global admin login now redirects to `/settings` (Core) instead of `/system/integrations`.
+- `app/system/integrations/page.tsx` replaced with a redirect stub that `router.replace('/settings')` — preserves old bookmarks and email links.
+- New `app/system/sso/page.tsx` — dedicated Global SSO page; extracts the Google SSO config block (credentials form, domain whitelist, auto-provision + default-role dropdown, setup instructions) from the old `/system/integrations` hub. Behavior preserved verbatim (`api.getGlobalSSOConfig` / `api.updateGlobalSSOConfig`).
+
+**Backend — clearer validation + `is_global_admin` on create (non-breaking).**
+- `backend/api/routes_admin_invitations.py`: replaced the two generic 400s with field-specific messages that name the missing or forbidden field (`"tenant_id is required for tenant-scoped invitations. Pick the organization this user should belong to."`, `"Global admin invitations must not include tenant_id. Global admins are platform-wide and not scoped to a tenant."`, etc.), so the UI can surface actionable feedback.
+- `backend/api/routes_global_users.py`: `POST /api/admin/users/` now accepts `is_global_admin: bool = False` and branches shape validation the same way as the invite endpoint. When `True`, `tenant_id`/`role_name` must be absent, the user is created with `tenant_id=NULL` and `is_global_admin=True`, no `UserRole` row is inserted, and the tenant user-limit check is skipped. When `False` (default), both `tenant_id` and `role_name` are required and the existing tenant-scoped path runs unchanged. Existing callers are 100% unaffected. Audit log includes `is_global_admin` in details.
+
+**Frontend type change** — `lib/client.ts` `UserCreateRequest` now has `tenant_id?: string | null`, `role_name?: string | null`, and `is_global_admin?: boolean` to match the widened backend contract.
+
+**Database — no migration.** The existing `UserInvitation` CHECK constraint `(is_global_admin=TRUE ↔ tenant_id IS NULL AND role_id IS NULL)` and the `User.tenant_id` nullable column already support both shapes.
+
+**Verified.** `docker-compose build --no-cache backend frontend` + `up -d`. Browser sweep: global-admin login lands on `/settings`; top nav no longer shows `System`; Core shows System group with 5 cards; invite with kind=`Tenant User` + no tenant keeps submit disabled and shows the red helper; invite with kind=`Global Admin` hides tenant/role and submits against the admin-invitations endpoint with `is_global_admin=true`; `/system/integrations` redirects to `/settings`. Tenant-owner invite flow at `/settings/team/invite` unchanged.
+
 ### Calendar + Shell Beacon + Sandboxed Tools + Search wizards + Sentinel tour step (2026-04-19)
 
 Completes the guided-setup wizard track. Five new end-to-end flows + one onboarding tour step, all following the Kokoro shape (numbered pill indicator, 4-card info grid on step 1, Back / Cancel / primary-action footer). Cosmetically verified in-browser — consistent accent color per wizard (red Gmail, blue Calendar, teal Shell / Tools / Search).

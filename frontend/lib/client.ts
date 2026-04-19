@@ -2624,17 +2624,18 @@ export interface UserCreateRequest {
   email: string
   password: string
   full_name: string
-  tenant_id: string
-  role_name?: string
+  tenant_id?: string | null
+  role_name?: string | null
   is_active?: boolean
+  is_global_admin?: boolean
 }
 
 export interface UserUpdateRequest {
   full_name?: string
   is_active?: boolean
   email_verified?: boolean
-  tenant_id?: string
-  role_name?: string
+  tenant_id?: string | null
+  role_name?: string | null
 }
 
 // Canonical vendor label map — used by any component that needs human-readable vendor names

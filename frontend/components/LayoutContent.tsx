@@ -39,10 +39,8 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
   const { logout, isGlobalAdmin } = useAuth()
   const { startTour } = useOnboarding()
 
-  // Build nav items — add "System" link for global admins
-  const navItems = isGlobalAdmin
-    ? [...baseNavItems, { href: '/system/tenants', label: 'System', activePrefix: '/system' }]
-    : baseNavItems
+  // Global admin reaches System pages via Core → System section cards.
+  const navItems = baseNavItems
 
   // Mobile menu state
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
