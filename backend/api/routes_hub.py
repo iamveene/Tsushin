@@ -378,11 +378,16 @@ async def list_integrations(
     query = ctx.filter_by_tenant(query, HubIntegration.tenant_id)
 
     if active_only:
-        # Also include unavailable integrations (need re-auth) so the UI can show them
-        from sqlalchemy import or_
-        query = query.filter(or_(
-            HubIntegration.is_active == True,
-            HubIntegration.health_status == "unavailable"
+        # Also include unavailable integrations (need re-auth) so the UI can show them,
+        # but exclude those explicitly disconnected by the user — their is_active=False
+        # combined with health_status='disconnected' means they must not appear.
+        from sqlalchemy import or_, and_
+        query = query.filter(and_(
+            HubIntegration.health_status != "disconnected",
+            or_(
+                HubIntegration.is_active == True,
+                HubIntegration.health_status == "unavailable"
+            )
         ))
 
     hub_integrations = query.all()

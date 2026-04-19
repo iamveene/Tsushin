@@ -707,8 +707,10 @@ class GoogleOAuthHandler:
             OAuthToken.integration_id == integration_id
         ).delete()
 
-        # Deactivate integration
+        # Deactivate integration and mark health as terminal 'disconnected' so it
+        # doesn't remain visible via the 'unavailable → needs re-auth' listing branch.
         integration.is_active = False
+        integration.health_status = "disconnected"
 
         self.db.commit()
         logger.info(f"Integration {integration_id} disconnected successfully")

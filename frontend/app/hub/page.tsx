@@ -2233,14 +2233,19 @@ export default function HubPage() {
 
     try {
       const apiUrl = ''
-      await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
-      loadHubIntegrations()
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        throw new Error(body || `Disconnect failed (${response.status})`)
+      }
+      setHubIntegrations(prev => prev.filter(i => i.id !== integrationId))
+      await loadHubIntegrations()
       setSuccessMessage('Asana disconnected')
       setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (error) {
-      setError('Failed to disconnect Asana')
+    } catch (error: any) {
+      setError(error?.message || 'Failed to disconnect Asana')
     }
   }
 
@@ -2303,14 +2308,19 @@ export default function HubPage() {
 
     try {
       const apiUrl = ''
-      await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/disconnect/${integrationId}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
-      loadHubIntegrations()
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        throw new Error(body || `Disconnect failed (${response.status})`)
+      }
+      setHubIntegrations(prev => prev.filter(i => i.id !== integrationId))
+      await loadHubIntegrations()
       setSuccessMessage('Google Calendar disconnected')
       setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (error) {
-      setError('Failed to disconnect Google Calendar')
+    } catch (error: any) {
+      setError(error?.message || 'Failed to disconnect Google Calendar')
     }
   }
 
@@ -2350,14 +2360,19 @@ export default function HubPage() {
 
     try {
       const apiUrl = ''
-      await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/disconnect/${integrationId}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
-      loadHubIntegrations()
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        throw new Error(body || `Disconnect failed (${response.status})`)
+      }
+      setHubIntegrations(prev => prev.filter(i => i.id !== integrationId))
+      await loadHubIntegrations()
       setSuccessMessage('Gmail disconnected')
       setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (error) {
-      setError('Failed to disconnect Gmail')
+    } catch (error: any) {
+      setError(error?.message || 'Failed to disconnect Gmail')
     }
   }
 
