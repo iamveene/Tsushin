@@ -153,6 +153,8 @@ from api.routes_syslog import router as syslog_config_router
 from api.routes_provider_instances import router as provider_instances_router, set_engine as set_provider_instances_engine
 # v0.6.0: Vector Store Instance Management
 from api.routes_vector_stores import router as vector_stores_router, set_engine as set_vector_stores_engine
+# v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
+from api.routes_tts_instances import router as tts_instances_router, set_engine as set_tts_instances_engine
 # Phase 22: Custom Skills Foundation
 from api.routes_custom_skills import router as custom_skills_router, set_engine as set_custom_skills_engine
 # Phase 22.4: MCP Server Integration
@@ -230,6 +232,8 @@ async def lifespan(app: FastAPI):
     set_provider_instances_engine(engine)
     # v0.6.0: Vector Store Instance Management
     set_vector_stores_engine(engine)
+    # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
+    set_tts_instances_engine(engine)
 
     # Phase 22: Custom Skills Foundation
     set_custom_skills_engine(engine)
@@ -241,6 +245,16 @@ async def lifespan(app: FastAPI):
     set_agent_comm_engine(engine)
 
     logging.info("Database initialized")
+
+    # v0.6.0-patch.5: Reconcile auto-provisioned Ollama containers.
+    # Rows stuck in 'creating'/'provisioning' (e.g. after a host crash) get
+    # their container_status synced from the runtime so the UI shows the
+    # real state on the next request.
+    try:
+        from services.ollama_container_manager import startup_reconcile as ollama_startup_reconcile
+        ollama_startup_reconcile()  # uses its own db session
+    except Exception as e:
+        logger.warning(f"Ollama startup reconcile failed: {e}")
 
     async def _prewarm_embedding_models() -> None:
         """Warm the default embedder off the request path."""
@@ -853,6 +867,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error starting MCP Server Health Check Service: {e}", exc_info=True)
 
+    # v0.6.0-patch.5: Reconcile TTS instances stuck in 'creating' (e.g. after a crash)
+    try:
+        from services.kokoro_container_manager import startup_reconcile as kokoro_startup_reconcile
+        ReconcileSession = sessionmaker(bind=engine)
+        reconcile_db = ReconcileSession()
+        try:
+            kokoro_startup_reconcile(reconcile_db)
+        finally:
+            reconcile_db.close()
+        logging.info("Kokoro TTS instances reconciled at startup")
+    except Exception as e:
+        logging.error(f"Kokoro TTS startup reconcile failed (non-fatal): {e}", exc_info=True)
+
     yield
 
     # Shutdown
@@ -1284,6 +1311,7 @@ app.include_router(sentinel_exceptions_router, prefix="/api")  # Phase 20 Enhanc
 app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel Security Profiles
 app.include_router(provider_instances_router, prefix="/api", tags=["Provider Instances"])  # Phase 21: Provider Instance Management
 app.include_router(vector_stores_router, prefix="/api", tags=["Vector Stores"])  # v0.6.0: Vector Store Instance Management
+app.include_router(tts_instances_router, prefix="/api", tags=["TTS Instances"])  # v0.6.0-patch.5: Per-tenant Kokoro TTS auto-provisioning
 app.include_router(custom_skills_router, prefix="/api", tags=["Custom Skills"])  # Phase 22: Custom Skills Foundation
 app.include_router(mcp_servers_router, prefix="/api", tags=["MCP Servers"])  # Phase 22.4: MCP Server Integration
 app.include_router(services_router)  # Hub Local Services (Kokoro TTS container management)

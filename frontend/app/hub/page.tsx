@@ -17,7 +17,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
 // V060-CHN-002: SlackSetupModal/DiscordSetupModal replaced by guided wizards.
@@ -35,6 +35,8 @@ import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
 import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
 import MCPServerWizard from '@/components/mcp/MCPServerWizard'
+import OllamaSetupWizard from '@/components/ollama/OllamaSetupWizard'
+import KokoroSetupWizard from '@/components/tts/KokoroSetupWizard'
 import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/TypeaheadChipInput'
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
@@ -259,6 +261,18 @@ const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; desc
 
 const NOTIFICATION_SERVICES: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = []
 
+// v0.6.x: Curated list of Ollama models for per-tenant auto-provisioning
+const CURATED_OLLAMA_MODELS = [
+  'llama3.2:1b',
+  'llama3.2:3b',
+  'qwen2.5:3b',
+  'qwen2.5:7b',
+  'deepseek-r1:7b',
+  'phi3.5:3.8b',
+  'mistral:7b',
+  'custom',
+]
+
 export default function HubPage() {
   const toast = useToast()
   const { isGlobalAdmin, hasPermission } = useAuth()
@@ -346,6 +360,16 @@ export default function HubPage() {
   // Local Services state (Ollama & Kokoro management)
   const [kokoroContainerStatus, setKokoroContainerStatus] = useState<{ status: string; name?: string; image?: string; message?: string } | null>(null)
   const [kokoroActionLoading, setKokoroActionLoading] = useState(false)
+  // v0.7.0: Per-tenant Kokoro auto-provisioning (Hub-consolidated, replaces /settings/tts)
+  const [kokoroInstances, setKokoroInstances] = useState<TTSInstance[]>([])
+  const [kokoroDefault, setKokoroDefault] = useState<{ default_tts_instance_id: number | null; instance: TTSInstance | null } | null>(null)
+  const [kokoroWizardOpen, setKokoroWizardOpen] = useState(false)
+  const [kokoroInstanceActionLoading, setKokoroInstanceActionLoading] = useState<number | null>(null)
+  const [kokoroLegacyExpanded, setKokoroLegacyExpanded] = useState(false)
+  const [kokoroLogsOpenFor, setKokoroLogsOpenFor] = useState<number | null>(null)
+  const [kokoroLogsContent, setKokoroLogsContent] = useState<string>('')
+  const [kokoroLogsLoading, setKokoroLogsLoading] = useState(false)
+  const [kokoroConfirmDelete, setKokoroConfirmDelete] = useState<{ id: number; removeVolume: boolean } | null>(null)
   const [ollamaEnabled, setOllamaEnabled] = useState(false)
   const [ollamaToggleLoading, setOllamaToggleLoading] = useState(false)
   const [ollamaUrlEditing, setOllamaUrlEditing] = useState(false)
@@ -353,6 +377,19 @@ export default function HubPage() {
   const [ollamaUrlSaving, setOllamaUrlSaving] = useState(false)
   const [ollamaTestResult, setOllamaTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const [ollamaTestLoading, setOllamaTestLoading] = useState(false)
+  // v0.6.x: Ollama per-tenant auto-provisioning
+  const [ollamaMode, setOllamaMode] = useState<'host' | 'auto'>('host')
+  const [ollamaProvisionLoading, setOllamaProvisionLoading] = useState(false)
+  const [showOllamaSetupWizard, setShowOllamaSetupWizard] = useState(false)
+  const [ollamaContainerStatus, setOllamaContainerStatus] = useState<any | null>(null)
+  const [ollamaGpuEnabled, setOllamaGpuEnabled] = useState(false)
+  const [ollamaMemLimit, setOllamaMemLimit] = useState('4g')
+  const [ollamaSelectedModel, setOllamaSelectedModel] = useState('llama3.2:1b')
+  const [ollamaCustomModel, setOllamaCustomModel] = useState('')
+  const [ollamaPullLoading, setOllamaPullLoading] = useState(false)
+  const [ollamaPullJobId, setOllamaPullJobId] = useState<string | null>(null)
+  const [ollamaPullProgress, setOllamaPullProgress] = useState<any | null>(null)
+  const [ollamaPulledModels, setOllamaPulledModels] = useState<string[]>([])
 
   // MCP Servers state (Phase 26)
   const [mcpServers, setMcpServers] = useState<any[]>([])
@@ -654,6 +691,7 @@ export default function HubPage() {
         fetchOllamaHealth(),
         fetchKokoroHealth(),
         fetchKokoroContainerStatus(),
+        refreshKokoroInstances(),  // v0.7.0: per-tenant Kokoro (Hub-consolidated)
         loadHubIntegrations(),
         loadMcpInstances(),
         loadTesterStatus(),
@@ -982,6 +1020,149 @@ export default function HubPage() {
     }
   }, [kokoroContainerStatus?.status, kokoroHealth?.available, kokoroActionLoading])
 
+  // ==================== Per-tenant Kokoro Instance Management (v0.7.0) ====================
+
+  const refreshKokoroInstances = async () => {
+    try {
+      const [list, def] = await Promise.all([
+        api.getTTSInstances().catch(() => [] as TTSInstance[]),
+        api.getDefaultTTSInstance().catch(() => null),
+      ])
+      setKokoroInstances((list || []).filter((i: TTSInstance) => i.vendor === 'kokoro'))
+      setKokoroDefault(def)
+    } catch {
+      // Non-fatal — tenant may not have permissions
+    }
+  }
+
+  const handleKokoroWizardClose = (refresh?: boolean) => {
+    setKokoroWizardOpen(false)
+    if (refresh) {
+      refreshKokoroInstances()
+    }
+  }
+
+  const handleKokoroInstanceStart = async (id: number) => {
+    setKokoroInstanceActionLoading(id)
+    try {
+      await api.ttsContainerAction(id, 'start')
+      toast.success('Starting Kokoro container...')
+      setTimeout(() => refreshKokoroInstances(), 1200)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to start container')
+    } finally {
+      setKokoroInstanceActionLoading(null)
+    }
+  }
+
+  const handleKokoroInstanceStop = async (id: number) => {
+    setKokoroInstanceActionLoading(id)
+    try {
+      await api.ttsContainerAction(id, 'stop')
+      toast.success('Stopping Kokoro container...')
+      setTimeout(() => refreshKokoroInstances(), 1200)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to stop container')
+    } finally {
+      setKokoroInstanceActionLoading(null)
+    }
+  }
+
+  const handleKokoroInstanceRestart = async (id: number) => {
+    setKokoroInstanceActionLoading(id)
+    try {
+      await api.ttsContainerAction(id, 'restart')
+      toast.success('Restarting Kokoro container...')
+      setTimeout(() => refreshKokoroInstances(), 1500)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to restart container')
+    } finally {
+      setKokoroInstanceActionLoading(null)
+    }
+  }
+
+  const handleSetKokoroDefault = async (id: number | null) => {
+    try {
+      await api.setDefaultTTSInstance(id)
+      toast.success(id ? 'Default Kokoro instance updated' : 'Default Kokoro cleared')
+      await refreshKokoroInstances()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to set default')
+    }
+  }
+
+  const handleKokoroInstanceDelete = async () => {
+    if (!kokoroConfirmDelete) return
+    const { id, removeVolume } = kokoroConfirmDelete
+    try {
+      await api.deleteTTSInstance(id, removeVolume)
+      toast.success('Kokoro instance deleted')
+      setKokoroConfirmDelete(null)
+      await refreshKokoroInstances()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete instance')
+      setKokoroConfirmDelete(null)
+    }
+  }
+
+  const handleKokoroViewLogs = async (id: number) => {
+    if (kokoroLogsOpenFor === id) {
+      setKokoroLogsOpenFor(null)
+      setKokoroLogsContent('')
+      return
+    }
+    setKokoroLogsOpenFor(id)
+    setKokoroLogsLoading(true)
+    try {
+      const { logs } = await api.getTTSContainerLogs(id, 100)
+      setKokoroLogsContent(logs || '(no logs)')
+    } catch (e: any) {
+      setKokoroLogsContent(`Error loading logs: ${e?.message || 'unknown'}`)
+    } finally {
+      setKokoroLogsLoading(false)
+    }
+  }
+
+  // Poll container status for Kokoro instances that are creating/provisioning
+  useEffect(() => {
+    const pending = kokoroInstances.filter(i => {
+      const s = (i.container_status || '').toLowerCase()
+      return s === 'creating' || s === 'provisioning'
+    })
+    if (pending.length === 0) return
+    const interval = setInterval(async () => {
+      try {
+        const updates = await Promise.all(
+          pending.map(i => api.getTTSContainerStatus(i.id).catch(() => null))
+        )
+        let changed = false
+        const next = kokoroInstances.map((inst) => {
+          const match = pending.find(p => p.id === inst.id)
+          if (!match) return inst
+          const idx = pending.indexOf(match)
+          const statusResp = updates[idx]
+          if (statusResp && statusResp.status && statusResp.status !== inst.container_status) {
+            changed = true
+            return { ...inst, container_status: statusResp.status }
+          }
+          return inst
+        })
+        if (changed) {
+          setKokoroInstances(next)
+          // If any transitioned to running/error/stopped, refresh the full list
+          const anyTerminal = updates.some(u => {
+            const s = (u?.status || '').toLowerCase()
+            return s === 'running' || s === 'error' || s === 'stopped'
+          })
+          if (anyTerminal) {
+            refreshKokoroInstances()
+          }
+        }
+      } catch { /* transient */ }
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [kokoroInstances])
+
   // ==================== Ollama Instance Management ====================
 
   // Derive Ollama enabled state from provider instances
@@ -1060,6 +1241,208 @@ export default function HubPage() {
       toast.error(err.message || 'Test failed')
     } finally {
       setOllamaTestLoading(false)
+    }
+  }
+
+  // v0.6.x: Ollama auto-provisioning handlers
+  const refreshOllamaContainerStatus = async () => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return null
+    try {
+      const status = await api.getOllamaContainerStatus(inst.id)
+      setOllamaContainerStatus(status)
+      return status
+    } catch {
+      return null
+    }
+  }
+
+  const refreshOllamaPulledModels = async () => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    try {
+      const { models } = await api.listOllamaModels(inst.id)
+      setOllamaPulledModels(models || [])
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Detect auto-provisioned Ollama and load its state
+  useEffect(() => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (inst?.is_auto_provisioned) {
+      setOllamaMode('auto')
+      // Load initial status + pulled models
+      ;(async () => {
+        try {
+          const status = await api.getOllamaContainerStatus(inst.id)
+          setOllamaContainerStatus(status)
+          if ((status?.status || '').toLowerCase() === 'running') {
+            try {
+              const { models } = await api.listOllamaModels(inst.id)
+              setOllamaPulledModels(models || [])
+            } catch { /* ignore */ }
+          }
+        } catch { /* ignore */ }
+      })()
+    } else if (inst) {
+      setOllamaMode('host')
+    }
+  }, [providerInstances])
+
+  // Poll container status while provisioning (peer review A-11: cleanup on unmount)
+  useEffect(() => {
+    if (ollamaMode !== 'auto') return
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst?.is_auto_provisioned) return
+    const state = (ollamaContainerStatus?.status || '').toLowerCase()
+    if (state !== 'creating' && state !== 'provisioning') return
+
+    let cancelled = false
+    let ticks = 0
+    const timer = setInterval(async () => {
+      if (cancelled) return
+      ticks++
+      try {
+        const status = await api.getOllamaContainerStatus(inst.id)
+        if (cancelled) return
+        setOllamaContainerStatus(status)
+        const s = (status?.status || '').toLowerCase()
+        if (s === 'running') {
+          try {
+            const { models } = await api.listOllamaModels(inst.id)
+            if (!cancelled) setOllamaPulledModels(models || [])
+          } catch { /* ignore */ }
+          clearInterval(timer)
+        } else if (s === 'error') {
+          clearInterval(timer)
+        }
+      } catch { /* keep polling on transient errors */ }
+      if (ticks > 180) clearInterval(timer)  // ~9 min cap
+    }, 3000)
+
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [ollamaMode, ollamaContainerStatus?.status, providerInstances])
+
+  const handleOllamaProvision = async () => {
+    // Ensure an Ollama provider instance exists first
+    setOllamaProvisionLoading(true)
+    try {
+      let inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+      if (!inst) {
+        inst = await api.ensureOllamaInstance()
+        await fetchProviderInstances()
+      }
+      await api.provisionOllamaContainer(inst.id, ollamaGpuEnabled, ollamaMemLimit)
+      toast.success('Provisioning Ollama container — this may take 1-2 minutes')
+      // Set initial status so the status-poll useEffect kicks in
+      setOllamaContainerStatus({ status: 'provisioning' })
+      await fetchProviderInstances()
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to provision Ollama container')
+    } finally {
+      setOllamaProvisionLoading(false)
+    }
+  }
+
+  const handleOllamaDeprovision = async (removeVolume: boolean) => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    if (!confirm(`Deprovision Ollama container${removeVolume ? ' and remove model volume (permanent data loss)' : ''}?`)) return
+    try {
+      await api.deprovisionOllamaContainer(inst.id, removeVolume)
+      toast.success('Ollama container deprovisioned')
+      setOllamaContainerStatus(null)
+      setOllamaPulledModels([])
+      await fetchProviderInstances()
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to deprovision Ollama container')
+    }
+  }
+
+  const handleOllamaContainerAction = async (action: 'start' | 'stop' | 'restart') => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    try {
+      await api.controlOllamaContainer(inst.id, action)
+      toast.success(`Container ${action === 'start' ? 'started' : action === 'stop' ? 'stopped' : 'restarted'}`)
+      setTimeout(() => { refreshOllamaContainerStatus() }, 1200)
+    } catch (err: any) {
+      toast.error(err.message || `Failed to ${action} container`)
+    }
+  }
+
+  const handleOllamaPullModel = async () => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    const modelName = ollamaSelectedModel === 'custom'
+      ? ollamaCustomModel.trim()
+      : ollamaSelectedModel
+    if (!modelName) {
+      toast.error('Please enter a model name')
+      return
+    }
+    setOllamaPullLoading(true)
+    setOllamaPullProgress(null)
+    try {
+      const job = await api.pullOllamaModel(inst.id, modelName)
+      setOllamaPullJobId(job.job_id)
+      setOllamaPullProgress(job)
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to start model pull')
+      setOllamaPullLoading(false)
+    }
+  }
+
+  // Poll pull job (peer review A-11: cleanup on unmount)
+  useEffect(() => {
+    if (!ollamaPullJobId || !ollamaPullLoading) return
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+
+    let cancelled = false
+    const timer = setInterval(async () => {
+      if (cancelled) return
+      try {
+        const status = await api.getPullJobStatus(inst.id, ollamaPullJobId)
+        if (cancelled) return
+        setOllamaPullProgress(status)
+        if (status.status === 'done') {
+          toast.success(`Pulled ${status.model || 'model'}`)
+          setOllamaPullLoading(false)
+          setOllamaPullJobId(null)
+          await refreshOllamaPulledModels()
+          clearInterval(timer)
+        } else if (status.status === 'error') {
+          toast.error(status.error || 'Pull failed')
+          setOllamaPullLoading(false)
+          setOllamaPullJobId(null)
+          clearInterval(timer)
+        }
+      } catch { /* keep polling on transient */ }
+    }, 2000)
+
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ollamaPullJobId, ollamaPullLoading])
+
+  const handleOllamaDeleteModel = async (modelName: string) => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    if (!confirm(`Delete model "${modelName}"?`)) return
+    try {
+      await api.deleteOllamaModel(inst.id, modelName)
+      toast.success(`Deleted ${modelName}`)
+      await refreshOllamaPulledModels()
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete model')
     }
   }
 
@@ -2537,8 +2920,242 @@ export default function HubPage() {
                         </div>
                       </div>
                       <p className="text-xs text-tsushin-slate mb-3">Run LLMs locally - no API key needed</p>
+
+                      {/* Setup wizard CTA — guides users through provision + model pull + agent wiring */}
+                      {canEditSettings && (
+                        <button
+                          onClick={() => setShowOllamaSetupWizard(true)}
+                          className="w-full mb-3 bg-purple-500 hover:bg-purple-400 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors"
+                        >
+                          Setup with Wizard
+                        </button>
+                      )}
+
+                      {/* v0.6.x: Mode selector (host vs auto-provision) */}
+                      {ollamaEnabled && canEditSettings && (
+                        <div className="mb-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
+                          <p className="text-xs font-medium text-tsushin-accent mb-1.5">Mode</p>
+                          <label className="flex items-start gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="ollama-mode"
+                              value="host"
+                              checked={ollamaMode === 'host'}
+                              onChange={() => setOllamaMode('host')}
+                              className="mt-0.5 accent-tsushin-success"
+                            />
+                            <div className="flex-1">
+                              <span className="text-xs text-white">Use host Ollama (URL)</span>
+                              <p className="text-[11px] text-tsushin-muted">Point at an Ollama server you manage.</p>
+                            </div>
+                          </label>
+                          <label className="flex items-start gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="ollama-mode"
+                              value="auto"
+                              checked={ollamaMode === 'auto'}
+                              onChange={() => setOllamaMode('auto')}
+                              className="mt-0.5 accent-tsushin-success"
+                            />
+                            <div className="flex-1">
+                              <span className="text-xs text-white">Auto-provision container</span>
+                              <p className="text-[11px] text-tsushin-muted">Tsushin manages a dedicated Ollama container for this tenant.</p>
+                            </div>
+                          </label>
+                        </div>
+                      )}
+
+                      {/* v0.6.x: Auto-provision panel */}
+                      {ollamaMode === 'auto' && ollamaEnabled && (() => {
+                        const state = (ollamaContainerStatus?.status || 'none').toLowerCase()
+                        const isProvisioning = state === 'creating' || state === 'provisioning'
+                        const isRunning = state === 'running'
+                        const isStopped = state === 'stopped'
+                        const isNoneOrError = state === 'none' || state === 'error' || !state
+                        return (
+                          <div className="mb-3 p-3 bg-tsushin-ink/40 border border-white/10 rounded-lg space-y-3">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs font-medium text-tsushin-accent">Container Management</p>
+                              <span className={`text-[11px] px-2 py-0.5 rounded ${
+                                isRunning ? 'bg-tsushin-success/20 text-tsushin-success' :
+                                isProvisioning ? 'bg-yellow-500/20 text-yellow-400' :
+                                isStopped ? 'bg-gray-500/20 text-gray-400' :
+                                state === 'error' ? 'bg-tsushin-vermilion/20 text-tsushin-vermilion' :
+                                'bg-gray-500/20 text-gray-400'
+                              }`}>
+                                {isProvisioning ? 'Provisioning...' : state || 'not created'}
+                              </span>
+                            </div>
+
+                            {isNoneOrError && canEditSettings && (
+                              <div className="space-y-2">
+                                <label className="flex items-center gap-2 text-xs text-tsushin-slate">
+                                  <input
+                                    type="checkbox"
+                                    checked={ollamaGpuEnabled}
+                                    onChange={e => setOllamaGpuEnabled(e.target.checked)}
+                                    className="accent-tsushin-success"
+                                  />
+                                  GPU enabled (requires NVIDIA runtime on host)
+                                </label>
+                                <div>
+                                  <label className="block text-[11px] text-tsushin-muted mb-1">Memory limit</label>
+                                  <select
+                                    value={ollamaMemLimit}
+                                    onChange={e => setOllamaMemLimit(e.target.value)}
+                                    className="w-full bg-tsushin-ink border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                                  >
+                                    <option value="2g">2g</option>
+                                    <option value="4g">4g</option>
+                                    <option value="8g">8g</option>
+                                    <option value="16g">16g</option>
+                                  </select>
+                                </div>
+                                <button
+                                  onClick={handleOllamaProvision}
+                                  disabled={ollamaProvisionLoading}
+                                  className="w-full bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded-lg px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
+                                >
+                                  {ollamaProvisionLoading ? 'Starting...' : 'Provision Container'}
+                                </button>
+                              </div>
+                            )}
+
+                            {isProvisioning && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 text-xs text-yellow-400">
+                                  <span className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-yellow-400" />
+                                  Setting up Ollama container (may take 1-2 minutes to pull image)...
+                                </div>
+                                <button
+                                  onClick={refreshOllamaContainerStatus}
+                                  className="text-[11px] text-tsushin-accent hover:text-white"
+                                >
+                                  Refresh status
+                                </button>
+                              </div>
+                            )}
+
+                            {isRunning && (
+                              <div className="space-y-3">
+                                {/* Pulled models */}
+                                <div>
+                                  <p className="text-[11px] text-tsushin-muted mb-1.5">Pulled models</p>
+                                  {ollamaPulledModels.length === 0 ? (
+                                    <p className="text-[11px] text-tsushin-slate italic">None yet — pull one below.</p>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {ollamaPulledModels.map(m => (
+                                        <span key={m} className="inline-flex items-center gap-1.5 text-[11px] bg-tsushin-ink border border-white/10 rounded-lg px-2 py-1 text-white font-mono">
+                                          {m}
+                                          {canEditSettings && (
+                                            <button
+                                              onClick={() => handleOllamaDeleteModel(m)}
+                                              className="text-tsushin-vermilion hover:text-red-300 text-xs"
+                                              title="Delete model"
+                                            >
+                                              &times;
+                                            </button>
+                                          )}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Pull model */}
+                                {canEditSettings && (
+                                  <div className="space-y-2 pt-2 border-t border-white/5">
+                                    <p className="text-[11px] text-tsushin-muted">Pull a new model</p>
+                                    <div className="flex gap-1.5">
+                                      <select
+                                        value={ollamaSelectedModel}
+                                        onChange={e => setOllamaSelectedModel(e.target.value)}
+                                        disabled={ollamaPullLoading}
+                                        className="flex-1 bg-tsushin-ink border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono disabled:opacity-50"
+                                      >
+                                        {CURATED_OLLAMA_MODELS.map(m => (
+                                          <option key={m} value={m}>{m}</option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        onClick={handleOllamaPullModel}
+                                        disabled={ollamaPullLoading || (ollamaSelectedModel === 'custom' && !ollamaCustomModel.trim())}
+                                        className="bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded-lg px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
+                                      >
+                                        {ollamaPullLoading ? 'Pulling...' : 'Pull'}
+                                      </button>
+                                    </div>
+                                    {ollamaSelectedModel === 'custom' && (
+                                      <input
+                                        type="text"
+                                        value={ollamaCustomModel}
+                                        onChange={e => setOllamaCustomModel(e.target.value)}
+                                        placeholder="e.g. llama3.2:8b-instruct-q4_K_M"
+                                        disabled={ollamaPullLoading}
+                                        className="w-full bg-tsushin-ink border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono disabled:opacity-50"
+                                      />
+                                    )}
+                                    {ollamaPullLoading && ollamaPullProgress && (
+                                      <div className="space-y-1">
+                                        <div className="flex items-center justify-between text-[11px] text-tsushin-slate">
+                                          <span>Pulling {ollamaPullProgress.model || ollamaSelectedModel}</span>
+                                          <span>{ollamaPullProgress.percent != null ? `${Math.round(ollamaPullProgress.percent)}%` : '...'}</span>
+                                        </div>
+                                        <div className="h-1.5 w-full bg-tsushin-ink rounded-full overflow-hidden">
+                                          <div
+                                            className="h-full bg-purple-400 transition-all"
+                                            style={{ width: `${ollamaPullProgress.percent ?? 0}%` }}
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Container controls */}
+                                {canEditSettings && (
+                                  <div className="flex gap-1.5 pt-2 border-t border-white/5">
+                                    <button
+                                      onClick={() => handleOllamaContainerAction('stop')}
+                                      className="flex-1 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors"
+                                    >
+                                      Stop
+                                    </button>
+                                    <button
+                                      onClick={() => handleOllamaContainerAction('restart')}
+                                      className="flex-1 bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors"
+                                    >
+                                      Restart
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {isStopped && canEditSettings && (
+                              <div className="flex gap-1.5">
+                                <button
+                                  onClick={() => handleOllamaContainerAction('start')}
+                                  className="flex-1 bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
+                                >
+                                  Start Container
+                                </button>
+                                <button
+                                  onClick={() => handleOllamaDeprovision(true)}
+                                  className="flex-1 bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
+                                >
+                                  Deprovision
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
+
                       <div className="text-sm text-tsushin-slate space-y-2">
-                        {ollamaHealth?.available ? (
+                        {ollamaMode === 'host' && ollamaHealth?.available ? (
                           <>
                             <p className="text-xs">{ollamaHealth.models_count || 0} models available</p>
                             {/* Inline URL editor */}
@@ -2590,25 +3207,27 @@ export default function HubPage() {
                               <p className="text-xs text-tsushin-slate">... and {(ollamaHealth.models_count || 0) - 3} more</p>
                             )}
                           </>
-                        ) : (
+                        ) : ollamaMode === 'host' ? (
                           <>
                             <p className="text-xs text-tsushin-vermilion">{ollamaHealth?.error || 'Not running'}</p>
                             <p className="text-xs">Start with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">ollama serve</code></p>
                           </>
+                        ) : null}
+                        {/* BUG-331: Docker networking guidance — visible only in host mode */}
+                        {ollamaMode === 'host' && (
+                          <div className="mt-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
+                            <p className="text-xs font-medium text-tsushin-accent">Docker Networking Note</p>
+                            <p className="text-xs text-tsushin-slate">
+                              Tsushin runs inside Docker. Use <code className="bg-tsushin-ink px-1 rounded font-mono text-tsushin-accent">http://172.18.0.1:11434</code> instead of <code className="bg-tsushin-ink px-1 rounded font-mono">localhost</code> so the backend container can reach Ollama on the host.
+                            </p>
+                            <p className="text-xs text-tsushin-slate">
+                              Also ensure Ollama listens on all interfaces — add to its systemd override:
+                            </p>
+                            <code className="block text-xs bg-tsushin-ink px-2 py-1.5 rounded font-mono text-tsushin-success whitespace-nowrap overflow-x-auto">
+                              Environment=&quot;OLLAMA_HOST=0.0.0.0:11434&quot;
+                            </code>
+                          </div>
                         )}
-                        {/* BUG-331: Docker networking guidance — always visible */}
-                        <div className="mt-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
-                          <p className="text-xs font-medium text-tsushin-accent">Docker Networking Note</p>
-                          <p className="text-xs text-tsushin-slate">
-                            Tsushin runs inside Docker. Use <code className="bg-tsushin-ink px-1 rounded font-mono text-tsushin-accent">http://172.18.0.1:11434</code> instead of <code className="bg-tsushin-ink px-1 rounded font-mono">localhost</code> so the backend container can reach Ollama on the host.
-                          </p>
-                          <p className="text-xs text-tsushin-slate">
-                            Also ensure Ollama listens on all interfaces — add to its systemd override:
-                          </p>
-                          <code className="block text-xs bg-tsushin-ink px-2 py-1.5 rounded font-mono text-tsushin-success whitespace-nowrap overflow-x-auto">
-                            Environment=&quot;OLLAMA_HOST=0.0.0.0:11434&quot;
-                          </code>
-                        </div>
                         {/* Test result display */}
                         {ollamaTestResult && (
                           <p className={`text-xs ${ollamaTestResult.success ? 'text-tsushin-success' : 'text-tsushin-vermilion'}`}>
@@ -2656,98 +3275,256 @@ export default function HubPage() {
                       })()}
                     </div>
 
-                    {/* Kokoro TTS Card (Enhanced - Container Management) */}
+                    {/* Kokoro TTS Card (v0.7.0 consolidated — per-tenant instances + legacy) */}
                     <div className="card p-5 hover-glow group border-green-700/30">
-                      <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                             <MicrophoneIcon size={20} className="text-green-400" />
                           </div>
-                          <h3 className="font-semibold text-white">Kokoro TTS (Free)</h3>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          {/* Status indicator with color-coded dot */}
-                          <div className="flex items-center gap-1.5">
-                            <div className={`w-2 h-2 rounded-full ${
-                              kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
-                                ? 'bg-tsushin-success animate-pulse'
-                                : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
-                                  ? 'bg-yellow-400 animate-pulse'
-                                  : kokoroContainerStatus?.status === 'not_installed' || kokoroContainerStatus?.status === 'error'
-                                    ? 'bg-tsushin-vermilion'
-                                    : 'bg-tsushin-slate'
-                            }`} />
-                            <span className="text-[11px] text-tsushin-slate capitalize">
-                              {kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
-                                ? 'Running'
-                                : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
-                                  ? 'Initializing...'
-                                  : kokoroContainerStatus?.status === 'exited'
-                                    ? 'Stopped'
-                                    : kokoroContainerStatus?.status === 'not_installed'
-                                      ? 'Not Installed'
-                                      : kokoroContainerStatus?.status === 'error'
-                                        ? 'Error'
-                                        : kokoroHealth?.available ? 'Online' : 'Offline'}
-                            </span>
+                          <div>
+                            <h3 className="font-semibold text-white">Kokoro TTS (Free)</h3>
+                            <p className="text-[11px] text-tsushin-slate">Self-hosted, multilingual text-to-speech</p>
                           </div>
-                          {/* Enable/Disable Toggle */}
-                          {canEditSettings && kokoroContainerStatus?.status !== 'not_installed' && (
-                            <ToggleSwitch
-                              checked={kokoroContainerStatus?.status === 'running'}
-                              onChange={async (checked) => {
-                                if (checked) {
-                                  await handleStartKokoro()
-                                } else {
-                                  await handleStopKokoro()
-                                }
-                              }}
-                              disabled={kokoroActionLoading}
-                              title={kokoroContainerStatus?.status === 'running' ? 'Stop Kokoro' : 'Start Kokoro'}
-                            />
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <div className={`w-2 h-2 rounded-full ${
+                            kokoroInstances.some(i => (i.container_status || '').toLowerCase() === 'running')
+                              ? 'bg-tsushin-success animate-pulse'
+                              : kokoroInstances.length > 0 ? 'bg-yellow-400' : 'bg-tsushin-slate'
+                          }`} />
+                          <span className="text-[11px] text-tsushin-slate">
+                            {kokoroInstances.length} instance{kokoroInstances.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Per-Tenant Instances (primary UX) */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-tsushin-accent uppercase tracking-wider">Per-Tenant Instances</p>
+                          {canEditSettings && (
+                            <button
+                              onClick={() => setKokoroWizardOpen(true)}
+                              className="text-[11px] bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg px-2.5 py-1 transition-colors"
+                            >
+                              + Setup with Wizard
+                            </button>
                           )}
                         </div>
-                      </div>
-                      <p className="text-xs text-tsushin-slate mb-3">Free text-to-speech with PTBR support</p>
-                      <div className="text-sm text-tsushin-slate space-y-2">
-                        {kokoroHealth?.available ? (
-                          <>
-                            <p className="text-xs">{kokoroHealth.details?.voices || 15} voices available</p>
-                            <p className="text-xs font-mono text-tsushin-accent">{kokoroHealth.details?.service_url || 'http://localhost:8880'}</p>
-                            {kokoroHealth.latency_ms && (
-                              <p className="text-xs text-green-400">Latency: {kokoroHealth.latency_ms}ms</p>
+
+                        {kokoroInstances.length === 0 ? (
+                          <div className="p-4 bg-tsushin-ink/40 border border-white/5 rounded-lg text-center">
+                            <p className="text-xs text-tsushin-slate mb-2">No Kokoro instances yet.</p>
+                            {canEditSettings && (
+                              <button
+                                onClick={() => setKokoroWizardOpen(true)}
+                                className="text-xs bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg px-3 py-1.5 transition-colors"
+                              >
+                                Setup with Wizard
+                              </button>
                             )}
-                            <p className="text-xs text-green-400 flex items-center gap-1"><CreditCardIcon size={12} className="text-green-400" /> 100% FREE - No API costs!</p>
-                          </>
-                        ) : kokoroContainerStatus?.status === 'running' ? (
-                          <>
-                            <p className="text-xs text-yellow-400">Container is running — loading TTS models, please wait...</p>
-                            {kokoroContainerStatus?.name && (
-                              <p className="text-xs font-mono text-tsushin-slate">Container: {kokoroContainerStatus.name}</p>
-                            )}
-                          </>
+                          </div>
                         ) : (
-                          <>
-                            <p className="text-xs text-tsushin-vermilion">{kokoroHealth?.message || kokoroContainerStatus?.message || 'Service not running'}</p>
-                            {kokoroContainerStatus?.status === 'not_installed' && (
-                              <p className="text-xs">Install with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">docker compose --profile tts up -d</code></p>
-                            )}
-                            {kokoroContainerStatus?.name && (
-                              <p className="text-xs font-mono text-tsushin-slate">Container: {kokoroContainerStatus.name}</p>
-                            )}
-                          </>
+                          <div className="space-y-2">
+                            {kokoroInstances.map(inst => {
+                              const status = (inst.container_status || 'none').toLowerCase()
+                              const isProvisioning = status === 'creating' || status === 'provisioning'
+                              const isRunning = status === 'running'
+                              const isStopped = status === 'stopped'
+                              const isBusy = kokoroInstanceActionLoading === inst.id
+                              const isDefault = kokoroDefault?.default_tts_instance_id === inst.id
+                              return (
+                                <div key={inst.id} className="p-3 bg-tsushin-ink/40 border border-white/5 rounded-lg">
+                                  <div className="flex items-start justify-between gap-2 flex-wrap">
+                                    <div className="flex items-start gap-2 min-w-0">
+                                      <input
+                                        type="radio"
+                                        checked={isDefault}
+                                        onChange={() => canEditSettings && handleSetKokoroDefault(isDefault ? null : inst.id)}
+                                        disabled={!canEditSettings}
+                                        aria-label={`Set ${inst.instance_name} as default Kokoro instance`}
+                                        className="mt-1 accent-green-400"
+                                      />
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className="text-sm text-white font-medium truncate">{inst.instance_name}</span>
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400">{inst.vendor}</span>
+                                          {inst.is_auto_provisioned && (
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">Auto</span>
+                                          )}
+                                          {isDefault && (
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-tsushin-success/20 text-tsushin-success">Default</span>
+                                          )}
+                                        </div>
+                                        {inst.base_url && (
+                                          <p className="text-[11px] font-mono text-tsushin-muted mt-1 truncate">{inst.base_url}</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${
+                                      isRunning ? 'bg-tsushin-success/20 text-tsushin-success' :
+                                      isProvisioning ? 'bg-yellow-500/20 text-yellow-400' :
+                                      isStopped ? 'bg-gray-500/20 text-gray-400' :
+                                      status === 'error' ? 'bg-tsushin-vermilion/20 text-tsushin-vermilion' :
+                                      'bg-gray-500/20 text-gray-400'
+                                    }`}>
+                                      {isProvisioning ? 'Provisioning...' : status || 'n/a'}
+                                    </span>
+                                  </div>
+
+                                  {/* Actions */}
+                                  {canEditSettings && inst.is_auto_provisioned && (
+                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                      {!isRunning && !isProvisioning && (
+                                        <button
+                                          onClick={() => handleKokoroInstanceStart(inst.id)}
+                                          disabled={isBusy}
+                                          className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-0.5 disabled:opacity-50"
+                                        >
+                                          {isBusy ? '...' : 'Start'}
+                                        </button>
+                                      )}
+                                      {isRunning && (
+                                        <button
+                                          onClick={() => handleKokoroInstanceStop(inst.id)}
+                                          disabled={isBusy}
+                                          className="text-[11px] bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded px-2 py-0.5 disabled:opacity-50"
+                                        >
+                                          {isBusy ? '...' : 'Stop'}
+                                        </button>
+                                      )}
+                                      {(isRunning || isStopped) && (
+                                        <button
+                                          onClick={() => handleKokoroInstanceRestart(inst.id)}
+                                          disabled={isBusy}
+                                          className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5 disabled:opacity-50"
+                                        >
+                                          Restart
+                                        </button>
+                                      )}
+                                      {isRunning && (
+                                        <button
+                                          onClick={() => handleKokoroViewLogs(inst.id)}
+                                          className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5"
+                                        >
+                                          {kokoroLogsOpenFor === inst.id ? 'Hide Logs' : 'Logs'}
+                                        </button>
+                                      )}
+                                      <button
+                                        onClick={() => setKokoroConfirmDelete({ id: inst.id, removeVolume: false })}
+                                        className="text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-0.5 ml-auto"
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  {/* Logs drawer (inline) */}
+                                  {kokoroLogsOpenFor === inst.id && (
+                                    <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
+                                        <button
+                                          onClick={async () => {
+                                            setKokoroLogsLoading(true)
+                                            try {
+                                              const { logs } = await api.getTTSContainerLogs(inst.id, 100)
+                                              setKokoroLogsContent(logs || '(no logs)')
+                                            } catch (e: any) {
+                                              setKokoroLogsContent(`Error: ${e?.message || 'unknown'}`)
+                                            } finally {
+                                              setKokoroLogsLoading(false)
+                                            }
+                                          }}
+                                          disabled={kokoroLogsLoading}
+                                          className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
+                                        >
+                                          {kokoroLogsLoading ? 'Loading...' : 'Refresh'}
+                                        </button>
+                                      </div>
+                                      <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
+                                        {kokoroLogsContent || (kokoroLogsLoading ? 'Loading logs...' : '(no logs loaded)')}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
                         )}
                       </div>
-                      {/* Container management */}
-                      <div className="flex gap-2 mt-4">
+
+                      {/* Legacy global compose Kokoro (demoted, collapsed by default) */}
+                      <div className="mt-4 pt-3 border-t border-white/5">
                         <button
-                          onClick={async () => {
-                            await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
-                          }}
-                          className="flex-1 btn-secondary py-1.5 text-sm"
+                          onClick={() => setKokoroLegacyExpanded(v => !v)}
+                          className="flex items-center gap-1.5 text-[11px] text-tsushin-slate hover:text-white transition-colors"
+                          aria-expanded={kokoroLegacyExpanded}
                         >
-                          Refresh Status
+                          <svg className={`w-3 h-3 transition-transform ${kokoroLegacyExpanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                          Legacy (global compose Kokoro)
                         </button>
+                        {kokoroLegacyExpanded && (
+                          <div className="mt-3 p-3 bg-tsushin-ink/30 border border-white/5 rounded-lg space-y-2">
+                            <p className="text-[11px] text-tsushin-muted">
+                              The original single shared Kokoro service defined in docker-compose. Prefer per-tenant instances above; this fallback remains for installs still using the <code className="text-tsushin-accent font-mono">tts</code> compose profile.
+                            </p>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <div className={`w-2 h-2 rounded-full ${
+                                  kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
+                                    ? 'bg-tsushin-success animate-pulse'
+                                    : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
+                                      ? 'bg-yellow-400 animate-pulse'
+                                      : kokoroContainerStatus?.status === 'not_installed' || kokoroContainerStatus?.status === 'error'
+                                        ? 'bg-tsushin-vermilion'
+                                        : 'bg-tsushin-slate'
+                                }`} />
+                                <span className="text-[11px] text-tsushin-slate capitalize">
+                                  {kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
+                                    ? 'Running'
+                                    : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
+                                      ? 'Initializing...'
+                                      : kokoroContainerStatus?.status === 'exited'
+                                        ? 'Stopped'
+                                        : kokoroContainerStatus?.status === 'not_installed'
+                                          ? 'Not Installed'
+                                          : kokoroContainerStatus?.status === 'error'
+                                            ? 'Error'
+                                            : kokoroHealth?.available ? 'Online' : 'Offline'}
+                                </span>
+                              </div>
+                              {canEditSettings && kokoroContainerStatus?.status !== 'not_installed' && (
+                                <ToggleSwitch
+                                  checked={kokoroContainerStatus?.status === 'running'}
+                                  onChange={async (checked) => {
+                                    if (checked) await handleStartKokoro()
+                                    else await handleStopKokoro()
+                                  }}
+                                  disabled={kokoroActionLoading}
+                                  title={kokoroContainerStatus?.status === 'running' ? 'Stop legacy Kokoro' : 'Start legacy Kokoro'}
+                                />
+                              )}
+                            </div>
+                            {kokoroHealth?.available && (
+                              <p className="text-[11px] font-mono text-tsushin-accent">{kokoroHealth.details?.service_url || 'http://localhost:8880'}</p>
+                            )}
+                            {kokoroContainerStatus?.status === 'not_installed' && (
+                              <p className="text-[11px] text-tsushin-slate">Install with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">docker compose --profile tts up -d</code></p>
+                            )}
+                            <button
+                              onClick={async () => {
+                                await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
+                              }}
+                              className="text-[11px] text-tsushin-accent hover:text-white"
+                            >
+                              Refresh status
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -4878,6 +5655,19 @@ export default function HubPage() {
         onComplete={loadMcpServers}
       />
 
+      {/* Ollama Setup Wizard — guided provision + model pull + agent assignment */}
+      <OllamaSetupWizard
+        isOpen={showOllamaSetupWizard}
+        onClose={() => setShowOllamaSetupWizard(false)}
+        onComplete={() => {
+          setShowOllamaSetupWizard(false)
+          toast.success('Ollama is ready — model pulled and agents wired')
+          // Refresh provider instances and container status so the card reflects new state
+          fetchOllamaHealth()
+          refreshOllamaContainerStatus()
+        }}
+      />
+
       {/* Vertex AI Configuration Modal */}
       {showVertexAiModal && (
         <Modal
@@ -4995,6 +5785,55 @@ export default function HubPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Kokoro Setup Wizard (v0.7.0 Hub-consolidated) */}
+      {kokoroWizardOpen && (
+        <KokoroSetupWizard
+          isOpen={kokoroWizardOpen}
+          onClose={() => handleKokoroWizardClose(false)}
+          onComplete={() => handleKokoroWizardClose(true)}
+        />
+      )}
+
+      {/* Kokoro delete confirmation */}
+      {kokoroConfirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+          <div className="bg-[#12121a] border border-white/10 rounded-xl w-full max-w-md">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">Delete Kokoro instance?</h3>
+              <p className="text-sm text-tsushin-slate mb-4">
+                This will soft-delete the instance and (if auto-provisioned) stop the container.
+              </p>
+              <label className="flex items-start gap-2 p-3 rounded-lg bg-tsushin-vermilion/5 border border-tsushin-vermilion/20 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={kokoroConfirmDelete.removeVolume}
+                  onChange={e => setKokoroConfirmDelete({ ...kokoroConfirmDelete, removeVolume: e.target.checked })}
+                  className="mt-0.5 accent-tsushin-vermilion"
+                />
+                <div>
+                  <div className="text-sm text-white">Also remove container volume</div>
+                  <div className="text-xs text-tsushin-vermilion mt-0.5">Permanent data loss — cached models and any voice files will be deleted.</div>
+                </div>
+              </label>
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setKokoroConfirmDelete(null)}
+                  className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-tsushin-slate text-sm hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleKokoroInstanceDelete}
+                  className="px-4 py-2 rounded-lg bg-tsushin-vermilion text-white text-sm font-medium hover:bg-red-400"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

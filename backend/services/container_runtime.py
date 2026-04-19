@@ -55,6 +55,7 @@ class ContainerRuntime(ABC):
         cap_drop: Optional[List[str]] = None,
         pids_limit: Optional[int] = None,
         dns: Optional[List[str]] = None,
+        device_requests: Optional[List[Any]] = None,
     ) -> Any:
         """
         Create and start a container.
@@ -77,6 +78,8 @@ class ContainerRuntime(ABC):
             cap_drop: Linux capabilities to drop (e.g. ["ALL"])
             pids_limit: Maximum number of PIDs in the container
             dns: Custom DNS servers (e.g. ["8.8.8.8", "8.8.4.4"])
+            device_requests: Device requests (e.g. docker DeviceRequest list
+                             for GPU passthrough). Only honoured by Docker runtime.
 
         Returns:
             Container object (Docker Container or K8s Pod wrapper)
@@ -423,6 +426,22 @@ class DockerRuntime(ContainerRuntime):
         """Access the underlying docker.DockerClient for advanced/legacy operations."""
         return self._client
 
+    def supports_gpu(self) -> bool:
+        """
+        Detect whether the Docker daemon advertises the NVIDIA runtime.
+
+        Used as a pre-flight check before spawning GPU-enabled Ollama
+        containers so we fail with a friendly error instead of a cryptic
+        Docker API 500.
+        """
+        try:
+            info = self._client.info()
+            runtimes = info.get("Runtimes") or {}
+            return "nvidia" in runtimes
+        except Exception as e:
+            logger.debug(f"DockerRuntime.supports_gpu: {e}")
+            return False
+
     def create_container(
         self,
         image: str,
@@ -443,6 +462,7 @@ class DockerRuntime(ContainerRuntime):
         cap_drop: Optional[List[str]] = None,
         pids_limit: Optional[int] = None,
         dns: Optional[List[str]] = None,
+        device_requests: Optional[List[Any]] = None,
     ) -> Any:
         import docker as docker_lib
         try:
@@ -479,6 +499,8 @@ class DockerRuntime(ContainerRuntime):
                 kwargs["pids_limit"] = pids_limit
             if dns is not None:
                 kwargs["dns"] = dns
+            if device_requests is not None:
+                kwargs["device_requests"] = device_requests
 
             container = self._client.containers.run(**kwargs)
             logger.info(f"DockerRuntime: Created container {name} (ID: {container.id})")
@@ -1122,6 +1144,17 @@ class K8sRuntime(ContainerRuntime):
     # ContainerRuntime interface
     # ------------------------------------------------------------------
 
+    def supports_gpu(self) -> bool:
+        """
+        K8s GPU support is out of scope for the current runtime stub —
+        GPU pods require explicit device plugin configuration and
+        `nvidia.com/gpu` resource requests in the pod spec.
+        """
+        logger.warning(
+            "K8sRuntime.supports_gpu: GPU support not implemented on K8s runtime"
+        )
+        return False
+
     def create_container(
         self,
         image: str,
@@ -1142,7 +1175,14 @@ class K8sRuntime(ContainerRuntime):
         cap_drop: Optional[List[str]] = None,
         pids_limit: Optional[int] = None,
         dns: Optional[List[str]] = None,
+        device_requests: Optional[List[Any]] = None,
     ) -> Any:
+        if device_requests:
+            logger.warning(
+                "K8sRuntime.create_container: device_requests supplied but not "
+                "supported on K8s runtime (use nvidia.com/gpu resources in the "
+                "pod spec via Helm chart). Ignoring."
+            )
         k8s_client = self._k8s_client_module
         dep_name = self._sanitize_name(name)
 
