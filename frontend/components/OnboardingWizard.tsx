@@ -378,6 +378,22 @@ export default function OnboardingWizard() {
     return null
   }
 
+  // BUG-595: Belt-and-suspenders — if the user has already completed or
+  // dismissed the tour, never render the wizard Modal again, even if some
+  // stray state flip set `isActive=true`. `hasCompletedOnboarding` is pinned
+  // to `true` by both `completeTour` and `dismissTour` and mirrors the
+  // per-user localStorage flag, so this guard is authoritative.
+  if (state.hasCompletedOnboarding) {
+    return null
+  }
+
+  // BUG-603: Don't show the onboarding overlay on auth or setup routes — the
+  // route-level flows (login, signup, /setup) have their own UX and the tour
+  // Modal can stack on top of them and trap the page.
+  if (isAuthPage || pathname?.startsWith('/setup')) {
+    return null
+  }
+
   return (
     <Modal
       isOpen={state.isActive && !state.isMinimized}

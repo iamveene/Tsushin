@@ -676,7 +676,16 @@ class ToolStepHandler(FlowStepHandler):
 
         tool_type = config.get("tool_type", "built_in")
         tool_name = config.get("tool_name") or config.get("tool_id") or ""
-        parameters = config.get("parameters", config.get("tool_parameters", {})) or {}
+        # BUG-605: The flows UI saves step parameters under `tool_parameters`.
+        # The original `config.get("parameters", config.get("tool_parameters", {}))`
+        # only fell back when the key was *missing*; if the UI wrote both
+        # `parameters={}` and `tool_parameters={"query": "X"}` the fallback
+        # never fired and downstream `parameters.get("query")` returned "".
+        # Merge both keys instead — later wins — so either shape resolves
+        # correctly.
+        _p = config.get("parameters") or {}
+        _tp = config.get("tool_parameters") or {}
+        parameters = {**_p, **_tp}
         timeout = step.timeout_seconds or DEFAULT_STEP_TIMEOUT
 
         # Phase 13.1: Resolve template variables in parameters

@@ -205,6 +205,18 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
           // Guide is open, or the user already launched/dismissed the tour.
           return
         }
+        // BUG-595: Final localStorage re-check at timer-fire time. The initial
+        // `completed` capture above is a closure over the effect run; if the
+        // user dismissed the tour on the home page and navigated to another
+        // route before the 1s timer fired, the refs above may not be in sync
+        // across context identity shifts — but localStorage always is. Treat
+        // it as the source of truth so a dismissed tour NEVER re-opens just
+        // because the user changed routes.
+        const key = activeStorageKeyRef.current
+        if (key && getCompletedForUser(key)) {
+          tourDismissedRef.current = true
+          return
+        }
         tourStartedRef.current = true
         // BUG-536: Persist "started" state so page reloads don't restart the tour from scratch
         if (activeStorageKeyRef.current) {

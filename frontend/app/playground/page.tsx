@@ -32,6 +32,11 @@ export default function PlaygroundPage() {
   const { user, loading } = useRequireAuth()
 
   const [agents, setAgents] = useState<PlaygroundAgentInfo[]>([])
+  // BUG-596: Gate the "Select an Agent" / empty-state render on a real
+  // loading flag so the first paint doesn't flash "Agents 0" before the
+  // cached-then-fresh agent list resolves. Starts `true` and only flips
+  // `false` after `loadAgents()`'s fresh fetch settles (success or failure).
+  const [isLoadingAgents, setIsLoadingAgents] = useState(true)
   // Seed from the URL `?agent=` query param on initial mount so Playground Mini's
   // expand handover (`router.push('/playground?agent=X&thread=Y')`) pre-selects the
   // right agent BEFORE `loadAgents()` runs its default-agent auto-pick — otherwise
@@ -760,6 +765,8 @@ export default function PlaygroundPage() {
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load agents')
+    } finally {
+      setIsLoadingAgents(false)
     }
   }
 
@@ -1807,6 +1814,7 @@ export default function PlaygroundPage() {
     <div className="h-full w-full overflow-hidden">
       <ExpertMode
         agents={agents}
+        isLoadingAgents={isLoadingAgents}
         projects={projects}
         selectedAgentId={selectedAgentId}
         agentName={agentName}

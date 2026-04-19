@@ -141,16 +141,25 @@ def readiness_check():
     components = {}
 
     # --- PostgreSQL check ---
+    # BUG-604/607: Use the module-level session factory (same one FastAPI's
+    # `Depends(get_db)` uses) and always rollback before close. A per-call
+    # `sessionmaker(bind=_engine)` combined with a missing rollback leaks an
+    # `idle in transaction` connection on every probe — under k8s / monitoring
+    # polling that exhausts the pool, which manifests as auth/login stalls
+    # (BUG-604) while /api/health (DB-free) stays green (BUG-607).
     try:
-        from sqlalchemy.orm import sessionmaker
-        SessionLocal = sessionmaker(bind=_engine)
-        db = SessionLocal()
+        from db import get_session_factory
+        db = get_session_factory()()
         try:
             db.execute(
                 __import__("sqlalchemy").text("SELECT 1")
             )
             components["postgresql"] = {"status": "healthy"}
         finally:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             db.close()
     except Exception as exc:
         logger.warning(f"Readiness: PostgreSQL check failed: {exc}")
