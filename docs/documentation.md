@@ -1646,7 +1646,14 @@ Capability flags (`adapter.py:27-33`):
 
 **Source:** `backend/channels/webhook/adapter.py`
 
-Bidirectional HTTP channel. Inbound: external systems POST HMAC-signed events to `/api/webhooks/{id}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound: the adapter POSTs agent responses back to the customer's `callback_url`.
+Bidirectional HTTP channel. Inbound: external systems POST HMAC-signed events to `/api/webhooks/{slug}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound: the adapter POSTs agent responses back to the customer's `callback_url`.
+
+**URI slug modes (v0.7.1):** each integration has a human-readable `slug` used in the inbound path.
+- **Auto** (default on create) — server generates `wh-{6-hex}`.
+- **Custom** — user-supplied. Validated against `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (3–64 chars, lowercase, must start with a letter, no leading/trailing/consecutive hyphens), checked against the reserved set (`inbound, rotate-secret, health, status, test, callback, docs, openapi, api, webhooks, admin, v1`), and required to be globally unique.
+- Global uniqueness is enforced because the inbound route is authenticated by HMAC *after* the row lookup — the slug is the only identifier used to resolve the tenant.
+- **Backward compatibility:** the inbound route still accepts a numeric integration id via a `slug.isdigit()` fallback, so any legacy `/api/webhooks/{id}/inbound` URL keeps working.
+- **Live availability check:** `GET /api/webhook-integrations/slug-available?slug=...` → `{ available, reason }` backs the UI's green-check / red-X indicator.
 
 Capability flags (`adapter.py:39-46`):
 - `delivery_mode=push`, text-only in v1 (`supports_media=false`), `text_chunk_limit=16000`.
@@ -1671,21 +1678,21 @@ Capability flags (`adapter.py:39-46`):
 
 **E2E setup — Webhook channel:**
 
-1. Navigate to **Hub → Channels → Webhooks** in the UI.
-2. Click **Add Integration** — provide a name and optionally a callback URL for outbound responses.
-3. The system generates an HMAC signing secret (visible once, stored encrypted). **Copy and save it.**
+1. Navigate to **Hub → Communication → Webhook Integrations** in the UI.
+2. Click **+ New Webhook** — provide a name, choose **Auto** or **Custom** URI mode (Custom gets a live-validated slug input), and optionally a callback URL for outbound responses.
+3. The system generates an HMAC signing secret. A reveal modal shows the full plaintext once with a copy button (auto-copied to clipboard). **Save it now** — the same modal will appear again only if you rotate the secret.
 4. Configure optional defenses: IP allowlist (CIDR ranges), rate limit (RPM), max payload size.
-5. **Assign to an agent** — on the agent's Channels tab, set `webhook_integration_id`.
-6. **Test inbound** — send a signed event to your webhook:
+5. **Assign to an agent** — on the agent's Channels tab, enable Webhook and select the integration (sets `webhook_integration_id`).
+6. **Test inbound** — send a signed event to your webhook (the absolute URL appears in the card, e.g. `https://localhost/api/webhooks/my-crm/inbound`):
 
 ```bash
 # Generate HMAC signature
 TIMESTAMP=$(date +%s)
 BODY='{"text":"Hello from webhook","sender_key":"external-user-1"}'
-SIGNATURE=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "<your_api_secret>" | awk '{print $2}')
+SIGNATURE=$(printf '%s.%s' "${TIMESTAMP}" "${BODY}" | openssl dgst -sha256 -hmac "<your_api_secret>" -hex | awk '{print $2}')
 
-# Send inbound event
-curl -X POST http://localhost:8081/api/webhooks/<webhook_id>/inbound \
+# Send inbound event (use the slug shown on the card, or the numeric id for legacy URLs)
+curl -X POST https://localhost/api/webhooks/<slug>/inbound \
   -H "Content-Type: application/json" \
   -H "X-Tsushin-Signature: sha256=${SIGNATURE}" \
   -H "X-Tsushin-Timestamp: ${TIMESTAMP}" \
@@ -1693,6 +1700,7 @@ curl -X POST http://localhost:8081/api/webhooks/<webhook_id>/inbound \
 ```
 
 7. If `callback_url` is configured, the agent's response will be POSTed there with HMAC-signed headers.
+8. **Rotate Secret** — the button on each card invalidates the previous secret and opens the same reveal modal showing the fresh plaintext. Update your external system before the next request, or it will start failing with `403`.
 
 ### 15.6 Playground
 

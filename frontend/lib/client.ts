@@ -1770,11 +1770,12 @@ export interface TelegramHealthStatus {
   error: string | null
 }
 
-// v0.6.0: Webhook-as-a-Channel Integration
+// v0.6.0: Webhook-as-a-Channel Integration (v0.7.1 adds human-readable slug)
 export interface WebhookIntegration {
   id: number
   tenant_id: string
   integration_name: string
+  slug: string                 // v0.7.1: human-readable URI component
   api_secret_preview: string
   callback_url: string | null
   callback_enabled: boolean
@@ -1794,6 +1795,7 @@ export interface WebhookIntegration {
 
 export interface WebhookIntegrationCreate {
   integration_name: string
+  slug?: string | null          // v0.7.1: optional; omit for auto-generated
   callback_url?: string | null
   callback_enabled?: boolean
   ip_allowlist?: string[] | null
@@ -1803,6 +1805,7 @@ export interface WebhookIntegrationCreate {
 
 export interface WebhookIntegrationUpdate {
   integration_name?: string
+  slug?: string | null          // v0.7.1: optional rename
   callback_url?: string | null
   callback_enabled?: boolean
   ip_allowlist?: string[] | null
@@ -1821,6 +1824,11 @@ export interface WebhookSecretRotateResponse {
   api_secret: string
   api_secret_preview: string
   warning: string
+}
+
+export interface WebhookSlugAvailability {
+  available: boolean
+  reason: string | null
 }
 
 // v0.6.0: Slack Integration
@@ -4786,6 +4794,17 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete webhook integration')
+    return res.json()
+  },
+
+  // v0.7.1: live validation of a custom slug before submit
+  async checkWebhookSlugAvailable(slug: string): Promise<WebhookSlugAvailability> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/webhook-integrations/slug-available?slug=${encodeURIComponent(slug)}`
+    )
+    if (!res.ok) {
+      return { available: false, reason: 'Unable to check availability' }
+    }
     return res.json()
   },
 

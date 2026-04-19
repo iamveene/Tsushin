@@ -14,6 +14,7 @@ from __future__ import annotations
 import ipaddress
 import json as _json
 import logging
+import re
 import secrets
 from datetime import datetime
 from typing import List, Optional
@@ -42,6 +43,7 @@ router = APIRouter(
 
 class WebhookIntegrationCreate(BaseModel):
     integration_name: str = Field(..., min_length=1, max_length=100)
+    slug: Optional[str] = Field(default=None, max_length=64)
     callback_url: Optional[str] = Field(default=None, max_length=500)
     callback_enabled: bool = False
     ip_allowlist: Optional[List[str]] = None  # list of CIDRs
@@ -63,6 +65,7 @@ class WebhookIntegrationCreate(BaseModel):
 
 class WebhookIntegrationUpdate(BaseModel):
     integration_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    slug: Optional[str] = Field(default=None, max_length=64)
     callback_url: Optional[str] = Field(default=None, max_length=500)
     callback_enabled: Optional[bool] = None
     ip_allowlist: Optional[List[str]] = None
@@ -87,6 +90,7 @@ class WebhookIntegrationRead(BaseModel):
     id: int
     tenant_id: str
     integration_name: str
+    slug: str
     api_secret_preview: str
     callback_url: Optional[str]
     callback_enabled: bool
@@ -141,9 +145,61 @@ def _encrypt_secret(db: Session, tenant_id: str, plaintext: str) -> str:
     return TokenEncryption(master_key.encode()).encrypt(plaintext, tenant_id)
 
 
-def _inbound_url(webhook_id: int) -> str:
+# v0.7.1: Custom webhook slug validation
+_SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+_RESERVED_SLUGS = frozenset({
+    "inbound", "rotate-secret", "health", "status", "test",
+    "callback", "docs", "openapi", "api", "webhooks", "admin", "v1",
+})
+
+
+def _slug_format_error(slug: str) -> Optional[str]:
+    if not isinstance(slug, str):
+        return "Slug must be a string"
+    if len(slug) < 3:
+        return "Slug must be at least 3 characters"
+    if len(slug) > 64:
+        return "Slug must be at most 64 characters"
+    if not _SLUG_RE.match(slug):
+        if slug[:1].isdigit():
+            return "Slug must start with a lowercase letter"
+        if slug != slug.lower():
+            return "Slug must be lowercase"
+        if slug.startswith("-") or slug.endswith("-"):
+            return "Slug cannot start or end with a hyphen"
+        if "--" in slug:
+            return "Slug cannot contain consecutive hyphens"
+        return "Slug may only contain lowercase letters, digits, and single hyphens"
+    if slug in _RESERVED_SLUGS:
+        return "Slug is reserved"
+    return None
+
+
+def _validate_slug_format(slug: str) -> None:
+    err = _slug_format_error(slug)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+
+
+def _check_slug_unique(db: Session, slug: str, exclude_id: Optional[int] = None) -> None:
+    q = db.query(WebhookIntegration).filter(WebhookIntegration.slug == slug)
+    if exclude_id is not None:
+        q = q.filter(WebhookIntegration.id != exclude_id)
+    if q.first() is not None:
+        raise HTTPException(status_code=409, detail="Slug already in use")
+
+
+def _generate_auto_slug(db: Session) -> str:
+    for _ in range(8):
+        candidate = f"wh-{secrets.token_hex(3)}"
+        if db.query(WebhookIntegration).filter_by(slug=candidate).first() is None:
+            return candidate
+    raise HTTPException(status_code=500, detail="Could not generate unique slug")
+
+
+def _inbound_url(slug: str) -> str:
     # Caller builds absolute URL from their own base; we return a relative path
-    return f"/api/webhooks/{webhook_id}/inbound"
+    return f"/api/webhooks/{slug}/inbound"
 
 
 def _to_read(integration: WebhookIntegration) -> WebhookIntegrationRead:
@@ -157,6 +213,7 @@ def _to_read(integration: WebhookIntegration) -> WebhookIntegrationRead:
         id=integration.id,
         tenant_id=integration.tenant_id,
         integration_name=integration.integration_name,
+        slug=integration.slug,
         api_secret_preview=integration.api_secret_preview,
         callback_url=integration.callback_url,
         callback_enabled=bool(integration.callback_enabled),
@@ -171,7 +228,7 @@ def _to_read(integration: WebhookIntegration) -> WebhookIntegrationRead:
         circuit_breaker_state=integration.circuit_breaker_state or "closed",
         created_at=integration.created_at,
         updated_at=integration.updated_at,
-        inbound_url=_inbound_url(integration.id),
+        inbound_url=_inbound_url(integration.slug),
     )
 
 
@@ -189,6 +246,28 @@ def _validate_callback(url: Optional[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/slug-available")
+async def check_slug_available(
+    slug: str,
+    _: None = Depends(require_permission("integrations.webhook.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """Live-validation endpoint for the custom URI slug input.
+
+    Returns {"available": bool, "reason": str | None}. Does not raise — the
+    UI renders the reason inline. Format and reserved-word checks run first;
+    only valid slugs hit the DB for uniqueness.
+    """
+    fmt_err = _slug_format_error(slug)
+    if fmt_err:
+        return {"available": False, "reason": fmt_err}
+    taken = db.query(WebhookIntegration).filter_by(slug=slug).first() is not None
+    if taken:
+        return {"available": False, "reason": "Slug already in use"}
+    return {"available": True, "reason": None}
+
+
 @router.post("", response_model=WebhookIntegrationCreateResponse)
 async def create_webhook_integration(
     body: WebhookIntegrationCreate,
@@ -200,12 +279,21 @@ async def create_webhook_integration(
         raise HTTPException(status_code=403, detail="Tenant context required")
     _validate_callback(body.callback_url)
 
+    # v0.7.1: resolve slug (auto or custom)
+    if body.slug:
+        slug = body.slug.strip()
+        _validate_slug_format(slug)
+        _check_slug_unique(db, slug)
+    else:
+        slug = _generate_auto_slug(db)
+
     plaintext, preview = _make_secret()
     encrypted = _encrypt_secret(db, context.tenant_id, plaintext)
 
     integration = WebhookIntegration(
         tenant_id=context.tenant_id,
         integration_name=body.integration_name,
+        slug=slug,
         api_secret_encrypted=encrypted,
         api_secret_preview=preview,
         callback_url=body.callback_url,
@@ -221,7 +309,7 @@ async def create_webhook_integration(
     db.commit()
     db.refresh(integration)
     logger.info(
-        f"Created webhook integration {integration.id} for tenant {context.tenant_id}"
+        f"Created webhook integration {integration.id} (slug={slug}) for tenant {context.tenant_id}"
     )
     return WebhookIntegrationCreateResponse(
         integration=_to_read(integration),
@@ -270,6 +358,12 @@ async def update_webhook_integration(
         integration.callback_url = body.callback_url
     if body.integration_name is not None:
         integration.integration_name = body.integration_name
+    if body.slug is not None:
+        new_slug = body.slug.strip()
+        if new_slug != integration.slug:
+            _validate_slug_format(new_slug)
+            _check_slug_unique(db, new_slug, exclude_id=integration.id)
+            integration.slug = new_slug
     if body.callback_enabled is not None:
         integration.callback_enabled = body.callback_enabled
     if body.ip_allowlist is not None:
