@@ -117,13 +117,20 @@ async def receive_webhook(
 
     webhook_id = integration.id
 
-    # v0.6.0: Honor global emergency stop at the ingress (avoid eating queue/LLM resources)
+    # Honor emergency stop at the ingress (avoid eating queue/LLM resources).
+    # v0.7.3: Check BOTH the global kill switch and the integration's tenant flag.
     try:
         from models import Config as ConfigModel
         _config = db.query(ConfigModel).first()
         if _config and getattr(_config, 'emergency_stop', False):
-            logger.warning(f"[EMERGENCY STOP] Rejecting webhook {webhook_id} inbound — emergency stop active")
+            logger.warning(f"[EMERGENCY STOP:global] Rejecting webhook {webhook_id} inbound — GLOBAL emergency stop active")
             raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+        if integration.tenant_id:
+            from models_rbac import Tenant as TenantModel
+            _tenant = db.query(TenantModel).filter(TenantModel.id == integration.tenant_id).first()
+            if _tenant and getattr(_tenant, 'emergency_stop', False):
+                logger.warning(f"[EMERGENCY STOP:tenant] Rejecting webhook {webhook_id} inbound — tenant {integration.tenant_id} emergency stop active")
+                raise HTTPException(status_code=503, detail="Service temporarily unavailable")
     except HTTPException:
         raise
     except Exception:

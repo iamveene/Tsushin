@@ -1454,14 +1454,22 @@ class AgentRouter:
 
         self.logger.info(f"Routing message from {sender_key} (trigger: {trigger_type})")
 
-        # Item 32/33/34: Global emergency stop — blocks ALL channels (WhatsApp, Telegram, Slack, Discord)
+        # Emergency stop — blocks ALL channels (WhatsApp, Telegram, Slack, Discord).
+        # v0.7.3: Two-level — GLOBAL kill switch on Config (admin-only) OR the
+        # per-tenant flag on Tenant (tenant owner-controlled). Either → block.
         try:
             from models import Config as ConfigModel
             config_record = self.db.query(ConfigModel).first()
+            channel = message.get("channel", "whatsapp")
             if config_record and getattr(config_record, 'emergency_stop', False):
-                channel = message.get("channel", "whatsapp")
-                self.logger.warning(f"[EMERGENCY STOP] Blocking {channel} message from {sender_key} — emergency stop is active")
+                self.logger.warning(f"[EMERGENCY STOP:global] Blocking {channel} message from {sender_key} — GLOBAL emergency stop is active")
                 return
+            if self.tenant_id:
+                from models_rbac import Tenant as TenantModel
+                tenant_record = self.db.query(TenantModel).filter(TenantModel.id == self.tenant_id).first()
+                if tenant_record and getattr(tenant_record, 'emergency_stop', False):
+                    self.logger.warning(f"[EMERGENCY STOP:tenant] Blocking {channel} message from {sender_key} for tenant {self.tenant_id}")
+                    return
         except Exception:
             pass  # If check fails, continue normal processing
 
@@ -2506,6 +2514,8 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
         else:
             self.logger.warning("No response generated (AI call may have failed)")
 
+        self.logger.error(f"[TRACE-webhook] channel={message.get('channel')} result_keys={list(result.keys())} response_text_len={len(response_text)} error={result.get('error')}")
+
         # Send response back to WhatsApp
         if response_text and not result.get('error'):
             # Format response using agent's response template
@@ -2515,8 +2525,12 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                 response=response_text
             )
 
-            recipient = message.get("chat_id", "")  # Use chat_id for reply
+            # Webhook inbound payloads put the sender in `sender`, not `chat_id`;
+            # fall back so the outbound adapter still runs (adapter resolves the
+            # real callback URL from its own integration row anyway).
+            recipient = message.get("chat_id") or message.get("sender") or ""
             channel = message.get("channel", "whatsapp")
+            self.logger.error(f"[TRACE-webhook] pre-send channel={channel} recipient={recipient} text_preview={formatted_response[:60]!r}")
 
             # Phase 7.3: Check if agent has TTS skill enabled
             # Skip TTS for agent-switch confirmations — these should always be text

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Emergency Stop split into tenant + global scopes (2026-04-19)
+
+The header emergency-stop toggle was a single control writing a **singleton** flag on `config.emergency_stop`. That made it a GLOBAL kill switch in practice — any tenant owner with `org.settings.write` could halt every tenant on the instance. Functional for defence, wrong for multi-tenant separation of concerns.
+
+**What changed.** The control is now **two independent toggles**, one per scope:
+
+- **Tenant stop** (`tenant.emergency_stop`, new column) — toggled by the logged-in tenant owner via `POST /api/system/emergency-stop` and `/api/system/resume`. Halts all channels/triggers for that tenant only (WhatsApp, Telegram, Slack, Discord, webhooks, API). Other tenants keep running. Permission: unchanged — still `org.settings.write`.
+- **Global stop** (`config.emergency_stop`, existing column, now admin-only) — toggled by global admins via the new `POST /api/system/global-emergency-stop` and `/api/system/global-resume` endpoints guarded by `require_global_admin()`. Halts every tenant on the instance — reserved for platform-wide incidents.
+
+**Enforcement.** All three existing ingress points now evaluate `Config.emergency_stop (global) OR Tenant.emergency_stop (this tenant)`:
+- `backend/mcp_reader/filters.py` — `MessageFilter` gained a `tenant_id` kwarg; `watcher_manager.py` passes `instance.tenant_id` when constructing the filter. MCP-sourced WhatsApp/Telegram messages are dropped before routing.
+- `backend/agent/router.py` — the existing router-level block now also reads `Tenant.emergency_stop` via `self.tenant_id`. Log lines are tagged `[EMERGENCY STOP:global]` vs `[EMERGENCY STOP:tenant]` so ops can attribute the halt.
+- `backend/api/routes_webhook_inbound.py` — webhook inbound path reads `integration.tenant_id` and rejects with 503 when either flag is true.
+
+All three fail-open on DB errors (unchanged behavior — a DB blip should not silently halt a tenant).
+
+**Header UI** (`frontend/components/LayoutContent.tsx`). Two toggles in the top-right:
+- Tenant toggle: green "Online" / red "Tenant Stopped". Tooltip names the tenant explicitly. Confirmation modal is red, titled "Tenant Emergency Stop", button "Stop This Tenant".
+- Global toggle (visible only when `user.is_global_admin`): purple "Global" / amber "Global Stopped" + shield icon to telegraph system-wide scope. Confirmation modal is amber, titled "Halt ALL Tenants?", button "Halt Every Tenant".
+- When a global stop is active, the tenant toggle is disabled with tooltip "Blocked by GLOBAL stop" — prevents a confused tenant owner from resuming into a no-op.
+- Both toggles share the same `/api/system/status` poll (10s) which now returns `{ tenant_emergency_stop, global_emergency_stop, is_global_admin, tenant_id, tenant_name, maintenance_mode }`. Legacy `emergency_stop` field remains (= tenant OR global) for older clients.
+
+**Migration.** `backend/alembic/versions/0041_add_tenant_emergency_stop.py` — `ALTER TABLE tenant ADD COLUMN emergency_stop BOOLEAN NOT NULL DEFAULT FALSE` with `server_default=false`, so every existing tenant row is backfilled automatically on deploy.
+
+**Touched files.**
+- Backend: `backend/models_rbac.py` (+`Tenant.emergency_stop`), `backend/alembic/versions/0041_add_tenant_emergency_stop.py` (new), `backend/api/routes.py` (two endpoints re-scoped to tenant + two new global endpoints + extended status payload + audit log calls), `backend/mcp_reader/filters.py` (`tenant_id` kwarg, dual-flag check), `backend/services/watcher_manager.py` (pass `instance.tenant_id` to `MessageFilter`), `backend/agent/router.py` (dual-flag check at router), `backend/api/routes_webhook_inbound.py` (dual-flag check at webhook ingress).
+- Frontend: `frontend/components/LayoutContent.tsx` (two independent toggles, scope-aware confirmation modal, blocked-state styling when global is on).
+
+**Verified via API + browser automation (https://localhost):**
+- `GET /api/system/status` as tenant owner returns `{tenant_emergency_stop:false, global_emergency_stop:false, is_global_admin:false}`.
+- Tenant owner `POST /api/system/emergency-stop` flips only the tenant flag; `/api/system/global-emergency-stop` returns 403.
+- Global admin `POST /api/system/global-emergency-stop` flips the global flag; the tenant owner's subsequent `/api/system/status` correctly reports `global_emergency_stop:true`, greying out the tenant toggle.
+- Resumes work for both scopes; clearing the global flag restores the tenant toggle's interactive state.
+
 ### Audio Agents Onboarding Wizard — Kokoro / Kira / Transcript removed from seed (2026-04-19)
 
 Every fresh tenant used to get three audio agents seeded automatically: **Kokoro** (free/local TTS), **Kira** (OpenAI TTS), and **Transcript** (Whisper-only). Most tenants never configured audio at all, so those agents sat idle at the top of every agent list — and Kokoro in particular silently disabled itself because it required a Kokoro Docker container that was never provisioned.

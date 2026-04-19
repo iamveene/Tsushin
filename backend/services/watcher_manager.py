@@ -152,7 +152,8 @@ class WatcherManager:
                 agent_name=config.agent_name,
                 group_keywords=base_group_keywords,
                 contact_service=contact_service,
-                db_session=db
+                db_session=db,
+                tenant_id=instance.tenant_id,
             )
 
             # Create config dict

@@ -389,6 +389,45 @@ GCP provider features (`services/secret_provider.py:148-267`):
 
 ---
 
+### 4.6 Emergency Stop (tenant + global kill switches)
+
+Two independent kill switches sit in the header and gate every ingress point (WhatsApp, Telegram, Slack, Discord, webhooks, API triggers). Either switch being `true` halts processing for the messages it covers.
+
+| Scope | Storage | Permission | Endpoint (stop / resume) | What it halts |
+|---|---|---|---|---|
+| **Tenant** | `tenant.emergency_stop` | `org.settings.write` (tenant owners) | `POST /api/system/emergency-stop` / `POST /api/system/resume` | All channels/triggers for the caller's tenant only. Other tenants keep running. |
+| **Global** | `config.emergency_stop` | `is_global_admin = true` (enforced by `require_global_admin()`) | `POST /api/system/global-emergency-stop` / `POST /api/system/global-resume` | Every tenant on the instance. Reserved for platform-wide incidents. |
+
+`GET /api/system/status` returns both flags so the frontend can render the correct UI state:
+
+```json
+{
+  "emergency_stop": false,          // legacy: tenant OR global, kept for older clients
+  "tenant_emergency_stop": false,
+  "global_emergency_stop": false,
+  "is_global_admin": false,
+  "tenant_id": "tenant_...",
+  "tenant_name": "Tsushin QA",
+  "maintenance_mode": false
+}
+```
+
+**Enforcement points** (both flags checked at each; either true → block):
+- `backend/mcp_reader/filters.py` — MCP ingress filter; `MessageFilter` takes a `tenant_id` kwarg (passed from `services/watcher_manager.py` as `instance.tenant_id`).
+- `backend/agent/router.py` — router-level block; uses `self.tenant_id` already tracked on the `AgentRouter`. Log lines tagged `[EMERGENCY STOP:global]` vs `[EMERGENCY STOP:tenant]`.
+- `backend/api/routes_webhook_inbound.py` — webhook inbound ingress; reads `integration.tenant_id` and returns HTTP 503 when blocked.
+
+All three fail-open on DB errors — a transient outage never silently halts a tenant.
+
+**UI behaviour** (`frontend/components/LayoutContent.tsx`):
+- Tenant toggle (always visible for anyone with `org.settings.write`): green "Online" / red "Tenant Stopped". Confirmation modal names the tenant explicitly.
+- Global toggle (only rendered when `user.is_global_admin`): purple "Global" / amber "Global Stopped" with a shield icon. Confirmation modal titled "Halt ALL Tenants?".
+- When the global flag is true, the tenant toggle is disabled with tooltip "Blocked by GLOBAL stop" — prevents a tenant owner from resuming into a no-op.
+
+Both flags are polled from `/api/system/status` every 10 seconds.
+
+---
+
 ---
 
 ## 5. System Configuration

@@ -38,6 +38,11 @@ class Tenant(Base):
     # URL the tenant must paste into Slack/Discord. Nullable — when unset, the UI
     # shows a "configure this first" warning before allowing HTTP-mode setup.
     public_base_url = Column(String(512), nullable=True)
+    # v0.7.3: Per-tenant emergency stop. When True, every channel/trigger for this
+    # tenant is blocked at the ingress (MCP filters, agent router, webhook inbound).
+    # Orthogonal to the GLOBAL kill switch on Config.emergency_stop, which halts
+    # every tenant at once and is reserved for global admins.
+    emergency_stop = Column(Boolean, default=False, nullable=False, server_default="false")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)

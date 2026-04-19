@@ -8,13 +8,13 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import Config, MessageCache, AgentRun
-from models_rbac import User
+from models_rbac import User, Tenant
 from schemas import (
     ConfigResponse, ConfigUpdate,
     MessageResponse, AgentRunResponse,
     TriggerTestRequest, TriggerTestResponse
 )
-from auth_dependencies import require_permission, get_current_user_optional, get_tenant_context, TenantContext
+from auth_dependencies import require_permission, require_global_admin, get_current_user_optional, get_tenant_context, TenantContext
 from services.audit_service import log_tenant_event, TenantAuditActions
 from agent.router import AgentRouter
 # Import SenderMemory from the old location (agent/memory.py)
@@ -327,15 +327,93 @@ def update_config(
     return config_dict
 
 
+def _resolve_caller_tenant(current_user: User, db: Session) -> Tenant:
+    """Resolve the Tenant row for the caller, or 400 if they have none."""
+    if not current_user.tenant_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No tenant scope for this user. Global admins must use the global endpoints."
+        )
+    tenant = db.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return tenant
+
+
 @router.post("/api/system/emergency-stop")
 def emergency_stop(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write"))
 ):
     """
-    Emergency Stop - Immediately stops all agent message processing.
-    Bug Fix 2026-01-06: Prevents uncontrollable message loops.
+    Tenant-scoped emergency stop. Halts all message processing for the
+    caller's tenant only. Other tenants are unaffected. For the global
+    kill switch, see /api/system/global-emergency-stop.
     """
+    tenant = _resolve_caller_tenant(current_user, db)
+    tenant.emergency_stop = True
+    tenant.updated_at = datetime.utcnow()
+    db.commit()
+
+    try:
+        log_tenant_event(
+            db,
+            tenant_id=tenant.id,
+            user_id=current_user.id,
+            action=TenantAuditActions.SETTINGS_UPDATE,
+            resource_type="tenant",
+            resource_id=str(tenant.id),
+            details={"emergency_stop": True, "scope": "tenant"},
+        )
+    except Exception:
+        pass
+
+    return {
+        "status": "stopped",
+        "scope": "tenant",
+        "message": f"Emergency stop activated for tenant {tenant.name} — all message processing halted for this tenant",
+        "tenant_emergency_stop": True,
+    }
+
+
+@router.post("/api/system/resume")
+def resume_operations(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write"))
+):
+    """Resume tenant-scoped processing. Does not clear the global kill switch."""
+    tenant = _resolve_caller_tenant(current_user, db)
+    tenant.emergency_stop = False
+    tenant.updated_at = datetime.utcnow()
+    db.commit()
+
+    try:
+        log_tenant_event(
+            db,
+            tenant_id=tenant.id,
+            user_id=current_user.id,
+            action=TenantAuditActions.SETTINGS_UPDATE,
+            resource_type="tenant",
+            resource_id=str(tenant.id),
+            details={"emergency_stop": False, "scope": "tenant"},
+        )
+    except Exception:
+        pass
+
+    return {
+        "status": "resumed",
+        "scope": "tenant",
+        "message": f"Operations resumed for tenant {tenant.name}",
+        "tenant_emergency_stop": False,
+    }
+
+
+@router.post("/api/system/global-emergency-stop")
+def global_emergency_stop(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_global_admin())
+):
+    """GLOBAL kill switch — halts message processing for every tenant. Global admin only."""
     config = db.query(Config).first()
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
@@ -346,20 +424,18 @@ def emergency_stop(
 
     return {
         "status": "stopped",
-        "message": "Emergency stop activated - all message processing halted",
-        "emergency_stop": True
+        "scope": "global",
+        "message": "GLOBAL emergency stop activated — all tenants halted",
+        "global_emergency_stop": True,
     }
 
 
-@router.post("/api/system/resume")
-def resume_operations(
+@router.post("/api/system/global-resume")
+def global_resume_operations(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("org.settings.write"))
+    current_user: User = Depends(require_global_admin())
 ):
-    """
-    Resume Operations - Re-enables agent message processing after emergency stop.
-    Bug Fix 2026-01-06: Restores normal operations.
-    """
+    """Clear the GLOBAL kill switch. Per-tenant stops remain in effect."""
     config = db.query(Config).first()
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
@@ -370,8 +446,9 @@ def resume_operations(
 
     return {
         "status": "resumed",
-        "message": "Operations resumed - message processing enabled",
-        "emergency_stop": False
+        "scope": "global",
+        "message": "GLOBAL emergency stop cleared. Per-tenant stops (if any) remain in effect.",
+        "global_emergency_stop": False,
     }
 
 
@@ -381,17 +458,40 @@ def get_system_status(
     current_user: User = Depends(require_permission("org.settings.read"))
 ):
     """
-    Get system status including emergency stop state.
-    Bug Fix 2026-01-06: Check if emergency stop is active.
-    Security Fix CRIT-007: Added authentication requirement.
+    Return tenant + global emergency stop state and maintenance mode.
+
+    Both flags are always returned so the frontend can show the user
+    whether a global halt is blocking their tenant. Only global admins
+    should be able to *toggle* the global flag — the UI enforces that
+    based on ``is_global_admin``.
     """
     config = db.query(Config).first()
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
 
+    global_flag = bool(getattr(config, "emergency_stop", False))
+
+    tenant_flag = False
+    tenant_id = None
+    tenant_name = None
+    if current_user.tenant_id:
+        tenant = db.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+        if tenant:
+            tenant_flag = bool(getattr(tenant, "emergency_stop", False))
+            tenant_id = tenant.id
+            tenant_name = tenant.name
+
     return {
-        "emergency_stop": config.emergency_stop if hasattr(config, 'emergency_stop') else False,
-        "maintenance_mode": config.maintenance_mode
+        # Legacy field name — preserved so older clients still read the
+        # global flag they used to see. New clients should prefer the
+        # explicit tenant/global fields below.
+        "emergency_stop": tenant_flag or global_flag,
+        "tenant_emergency_stop": tenant_flag,
+        "global_emergency_stop": global_flag,
+        "is_global_admin": bool(current_user.is_global_admin),
+        "tenant_id": tenant_id,
+        "tenant_name": tenant_name,
+        "maintenance_mode": config.maintenance_mode,
     }
 
 
