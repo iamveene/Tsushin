@@ -3495,6 +3495,10 @@ class AgentCommunicationPermission(Base):
     is_enabled = Column(Boolean, default=True)
     max_depth = Column(Integer, default=3)  # Max delegation depth for this pair
     rate_limit_rpm = Column(Integer, default=30)  # Rate limit for this pair
+    # When true, the target agent may invoke its own skills (gmail, sandboxed_tools, etc.)
+    # during an A2A call. Default false preserves the original LLM-knowledge-only behavior
+    # and keeps the capability amplification surface opt-in per source→target pair.
+    allow_target_skills = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

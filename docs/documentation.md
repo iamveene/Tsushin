@@ -675,7 +675,9 @@ Two skills drive inter-agent behavior:
 
 Set the mode per-agent in Studio → Skills → Agent Switcher → Config. The schema is defined at `backend/agent/skills/agent_switcher_skill.py:505-509`.
 
-The Studio → Agent Communication page (`frontend/app/agents/communication/page.tsx`) mounts `AgentCommunicationManager` to manage inter-agent messaging permissions and monitor communication sessions.
+**A2A Communications live in Studio** (`/agents/communication`) — a first-class Studio tab sitting between Security and Builder in the Studio sub-nav. It mounts `A2APermissionsManager` (`frontend/components/studio/A2APermissionsManager.tsx`), which owns the full permission-rule CRUD: Source/Target/Max Depth/Rate Limit/Target Skills/Status/Delete table plus the Add-Permission modal. Observability (session log + statistics) lives separately in Watcher → A2A Comms (`frontend/components/watcher/CommunicationTab.tsx`), which is read-only since v0.7.2 and shows a banner pointing back to Studio for rule management.
+
+**Per-permission `allow_target_skills` toggle (v0.7.2).** Each row in `agent_communication_permission` carries an opt-in boolean, exposed in Studio → A2A Communications as an amber inline toggle in the rules table and as a checkbox in the Add-Permission modal. When `false` (default), the target runs with `disable_skills=True` on its `AgentService` — pure LLM-knowledge reply, preserving the original A2A contract. When `true`, the target loads its own skills (gmail, sandboxed_tools, shell, …) during the A2A call, which is what lets "Tsushin, ask movl for the latest emails" actually reach movl's Gmail mailbox. Recursion stays bounded by the row's `max_depth` + `rate_limit_rpm`, and Sentinel analysis + permission checks still run. Implementation: `backend/services/agent_communication_service.py::send_message` reads the permission, `_invoke_target_agent` maps it to `disable_skills=not allow_target_skills`. API contract: `PermissionCreateRequest`, `PermissionUpdateRequest`, and `PermissionResponse` all carry the field (`backend/api/routes_agent_communication.py`).
 
 ---
 
@@ -2117,6 +2119,8 @@ This means: adding a new provider in Hub automatically makes it available everyw
 ### 19.4 Model Discovery
 
 `backend/services/model_discovery_service.py` auto-fetches the vendor's `/models` endpoint (for OpenAI-compatible providers) and populates `available_models`. Used by the frontend Provider form to let the user pick which models to expose.
+
+**Auto health-test on save (2026-04-19).** `POST /api/provider-instances` and `PUT /api/provider-instances/{id}` schedule a connection test in a FastAPI `BackgroundTasks` after the response returns, so the Hub UI dot reflects real connectivity instead of staying gray (`unknown`) until the user clicks **Test Connection**. Same code path as the manual test (model picked from `available_models[0]` → `PROVIDER_TEST_MODELS` fallback; `AIClient.generate` with `max_tokens=20` and SDK retries disabled). Result is written to `health_status` (`healthy` / `unavailable`), `health_status_reason`, `last_health_check`, plus a `ProviderConnectionAudit` row with `action="auto_test_on_save"`. Triggers only when (a) credentials are present (or vendor is `ollama`) **and** `available_models` is non-empty; updates require a connectivity-relevant change (`api_key`, `base_url`, `extra_config`, `available_models`) — pure renames or default-toggles do not re-test. Clearing the API key (`api_key=""`) resets `health_status` back to `unknown` so the dot doesn't keep showing a stale green from the previous valid key. (`backend/api/routes_provider_instances.py` — `_background_test_instance`).
 
 ### 19.5 Model Pricing
 

@@ -2909,6 +2909,7 @@ export interface AgentCommPermission {
   is_enabled: boolean
   max_depth: number
   rate_limit_rpm: number
+  allow_target_skills: boolean
   created_at?: string | null
   updated_at?: string | null
 }
@@ -7650,7 +7651,7 @@ export const api = {
     return res.json()
   },
 
-  async createAgentCommPermission(data: { source_agent_id: number; target_agent_id: number; max_depth?: number; rate_limit_rpm?: number }): Promise<AgentCommPermission> {
+  async createAgentCommPermission(data: { source_agent_id: number; target_agent_id: number; max_depth?: number; rate_limit_rpm?: number; allow_target_skills?: boolean }): Promise<AgentCommPermission> {
     const res = await authenticatedFetch(`${API_URL}/api/agent-communication/permissions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -7660,7 +7661,7 @@ export const api = {
     return res.json()
   },
 
-  async updateAgentCommPermission(id: number, data: { is_enabled?: boolean; max_depth?: number; rate_limit_rpm?: number }): Promise<AgentCommPermission> {
+  async updateAgentCommPermission(id: number, data: { is_enabled?: boolean; max_depth?: number; rate_limit_rpm?: number; allow_target_skills?: boolean }): Promise<AgentCommPermission> {
     const res = await authenticatedFetch(`${API_URL}/api/agent-communication/permissions/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

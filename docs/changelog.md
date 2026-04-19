@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Hub: auto health-test provider instances on save (2026-04-19)
+
+Cloud LLM provider instances (OpenAI, Gemini, Anthropic, Groq, Grok, DeepSeek, OpenRouter, Vertex AI, custom) used to sit at `health_status="unknown"` — gray dot in **Hub → AI Providers** — until the user opened the row's three-dot menu and clicked **Test Connection**. Even with valid credentials configured, nothing else flipped the status; only Ollama (which has its own container-manager probe) went green on its own.
+
+The `POST /api/provider-instances` and `PUT /api/provider-instances/{id}` endpoints now schedule a connection test in a FastAPI `BackgroundTasks` after the response is returned. The test mirrors the manual button: it picks the first model (or vendor fallback), calls `AIClient.generate` with `max_tokens=20` and SDK retries disabled, then writes `health_status` (`healthy`/`unavailable`), `health_status_reason`, `last_health_check`, and a `ProviderConnectionAudit` row with `action="auto_test_on_save"`.
+
+**Trigger rules.**
+- *Create:* fire iff the instance was saved with credentials (or vendor is `ollama`) **and** `available_models` is non-empty.
+- *Update:* fire iff a connectivity-relevant field changed (`api_key`, `base_url`, `extra_config`, `available_models`) and the instance still has credentials and is active. Pure renames or default-toggles do not re-test.
+- *Clear key:* setting `api_key=""` resets `health_status` back to `"unknown"` (gray) so the dot doesn't keep showing a stale green from the previous valid key.
+
+**Touched files.**
+- Backend: `backend/api/routes_provider_instances.py` (new `_background_test_instance` helper; `BackgroundTasks` parameter on create + update; clear-key resets health).
+
+### A2A Communications moved to Studio (2026-04-19)
+
+A2A permission-rule CRUD was previously hosted under **Watcher → A2A Comms → Permissions**, which was a layering mistake — Watcher is the observability surface ("what's happening"), not configuration ("what's allowed"). Since A2A wiring describes the whole multi-agent graph (many-to-many, group-level), it belongs in Studio, where tenant-admins already configure agents, personas, projects, and security profiles.
+
+**New location.** `/agents/communication` — a first-class Studio tab sitting between **Security** and **Builder** in the Studio sub-nav, with a two-way-arrow icon. The full CRUD lives here: Permission Rules table (Source, Target, Max Depth, Rate Limit, Target Skills toggle, Status toggle, Delete) + Add-Permission modal.
+
+**Watcher → A2A Comms** is now purely read-only observability: sub-nav is just **Communication Log** + **Statistics**, with an info banner at the top of the page pointing users to Studio → A2A Communications for rule management.
+
+**Touched files.**
+- Frontend: `frontend/app/agents/communication/page.tsx` (new Studio route; mounts StudioTabs + the manager), `frontend/components/studio/A2APermissionsManager.tsx` (new — full permission CRUD, extracted from CommunicationTab), `frontend/components/studio/StudioTabs.tsx` (+`A2A Communications` entry with a cyan two-way-arrow icon), `frontend/components/watcher/CommunicationTab.tsx` (removed Permissions view, Add modal, and all CRUD handlers/state; added pointer banner).
+
+**Verified via browser automation (https://localhost):**
+- Studio nav shows A2A Communications between Security and Builder; clicking it loads the Permission Rules table with the two existing pairs (Tsushin→movl, Tsushin→archsec), TARGET SKILLS amber toggle ON, STATUS teal toggle ON.
+- Add-Permission modal renders all fields including the "Allow target to use its own skills" checkbox + help text.
+- Watcher → A2A Comms sub-nav is now **Communication Log | Statistics** only; banner "Permission rules moved — configure which agents can communicate in Studio → A2A Communications" links to `/agents/communication`.
+- 0 console errors.
+
+### A2A: opt-in "allow_target_skills" per permission row (2026-04-19)
+
+The `agent_communication_service._invoke_target_agent` call had historically hard-coded `disable_skills=True`, so when Agent A asked Agent B anything via A2A, B answered with LLM knowledge only — every tool (gmail, sandboxed_tools, shell, …) was silenced. A user asking "Tsushin, ask movl for the latest emails" got "I have no email access" back from movl, even though movl had its Gmail integration correctly bound to `movl2007@gmail.com`.
+
+`AgentCommunicationPermission` now has an `allow_target_skills` Boolean column (default `false`, preserves old behavior for every existing row). When `true` on a source→target pair, the target's own skills load during A2A invocation; depth limit, rate limiting, permission check, and Sentinel analysis continue to bound the call.
+
+**Touched files.**
+- Backend: `backend/alembic/versions/0040_add_allow_target_skills_to_agent_comm_permission.py` (new migration, idempotent, `server_default=false`), `backend/models.py` (+`allow_target_skills` column), `backend/services/agent_communication_service.py` (`create_permission`/`update_permission` accept the flag; `send_message` reads it from the permission row and passes through; `_invoke_target_agent` translates it into `disable_skills=not allow_target_skills`), `backend/api/routes_agent_communication.py` (`PermissionResponse`/`PermissionCreateRequest`/`PermissionUpdateRequest` updated, route plumbing passes the flag on).
+- Frontend: `frontend/lib/client.ts` (`AgentCommPermission.allow_target_skills`, extended create/update signatures), `frontend/components/watcher/CommunicationTab.tsx` (new "Target Skills" column with inline amber toggle + `handleToggleTargetSkills`; checkbox in Add-Permission modal with help text).
+- Tests: `backend/tests/test_agent_communication_service.py` (+6 cases covering default-false, opt-in true, toggle-update, `_invoke_target_agent` disable_skills mapping in both directions, and end-to-end propagation from permission row → invoke call).
+
+**Verified:**
+- Migration applied cleanly: `0039 -> 0040` in backend logs, column present on `agent_communication_permission`.
+- Unit tests: 15/15 pass (`pytest tests/test_agent_communication_service.py -o addopts=`); API v1 E2E 28/29 pass (the one failure is a pre-existing agent-quota 409, unrelated).
+- Live E2E via `/api/v1/agents/1/chat`: Tsushin asked movl → movl fetched and returned real subjects from `movl2007@gmail.com`; asked archsec → archsec returned real subjects from `mv@archsec.io`. Three completed sessions recorded in `agent_communication_session` (status=completed, depth=1).
+- UI: Permissions table shows the new column + amber toggle; Add-Permission modal shows the new checkbox and help text; Graph View renders the A2A edges (`a2a-4` Tsushin→movl, `a2a-5` Tsushin→archsec) with dashed styling and glows during active calls.
+
 ### Webhook: ready-to-paste test snippet in the reveal modal (2026-04-19)
 
 The Webhook reveal modal (shown once on create and after Rotate Secret) now includes a pre-filled `openssl`+`curl` snippet with the actual secret and inbound URL baked in. The user copies the block, pastes it into any shell, and a successful reply (`{"status":"queued",…}`) confirms the integration end-to-end — no signing library or manual HMAC computation required. The `-k` flag is included automatically when the URL is `https://localhost` so the self-signed cert on the dev stack doesn't break the test; production URLs render without it.
