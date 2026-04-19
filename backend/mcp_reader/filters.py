@@ -14,7 +14,8 @@ class MessageFilter:
         agent_name: str = None,
         group_keywords: list = None,
         contact_service = None,  # Phase 4.2: ContactService for mention detection
-        db_session = None  # Phase 6.4 Week 3: For checking active conversations
+        db_session = None,  # Phase 6.4 Week 3: For checking active conversations
+        tenant_id: str = None,  # v0.7.3: Per-tenant emergency stop check
     ):
         self.group_filters = set(group_filters)
         self.number_filters = set(number_filters)
@@ -25,6 +26,7 @@ class MessageFilter:
         self.group_keywords = [kw.lower() for kw in (group_keywords or [])]
         self.contact_service = contact_service
         self.db_session = db_session
+        self.tenant_id = tenant_id
         self.logger = logging.getLogger(__name__)
 
     def should_trigger(self, message: Dict) -> Optional[str]:
@@ -46,13 +48,22 @@ class MessageFilter:
           - sender is a contact with is_dm_trigger enabled, OR
           - sender matches number_filters (legacy)
         """
-        # Bug Fix 2026-01-06: Emergency Stop Check - Highest Priority
+        # Emergency Stop Check (highest priority).
+        # v0.7.3: Check BOTH the global kill switch (Config.emergency_stop) and
+        # the per-tenant flag (Tenant.emergency_stop) for this watcher's tenant.
+        # Either flag true → block. DB errors fail-open so a transient outage
+        # does not silently halt the bot.
         if self.db_session:
             try:
                 from models import Config
                 config = self.db_session.query(Config).first()
-                if config and hasattr(config, 'emergency_stop') and config.emergency_stop:
-                    return None  # Emergency stop is active - block all messages
+                if config and getattr(config, 'emergency_stop', False):
+                    return None  # Global emergency stop — block every channel
+                if self.tenant_id:
+                    from models_rbac import Tenant
+                    tenant = self.db_session.query(Tenant).filter(Tenant.id == self.tenant_id).first()
+                    if tenant and getattr(tenant, 'emergency_stop', False):
+                        return None  # Tenant-scoped emergency stop
             except Exception:
                 pass  # If check fails, continue normal processing
 
