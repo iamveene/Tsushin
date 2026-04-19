@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Webhook: edit modal + enable/pause toggle (2026-04-19)
+
+Each webhook card now has an **Edit** button (opens `WebhookEditModal` — name, slug, callback, rate limit, IP allowlist) and a **Pause / Enable** toggle that flips `is_active` via `PATCH /api/webhook-integrations/{id}`. The slug-available endpoint gained an optional `exclude_id` query param so the edit flow doesn't collide with the integration's own current slug.
+
+**Slug collision while paused.** Uniqueness is independent of `is_active`. A paused webhook's slug stays reserved — only `DELETE` frees it for reuse. Verified: `PATCH {is_active:false}` on `qa-crm-test` + `POST /api/webhook-integrations` with the same slug returns `409 {"detail":"Slug already in use"}`.
+
+**Touched files.**
+- Backend: `backend/api/routes_webhook_instances.py` (exclude_id on slug-available).
+- Frontend: `frontend/components/WebhookEditModal.tsx` (new), `frontend/app/hub/page.tsx` (toggle + Edit button + modal mount), `frontend/lib/client.ts` (`checkWebhookSlugAvailable(slug, excludeId?)`).
+
 ### Webhook: reveal rotated secret + custom URI slug (2026-04-19)
 
 Two UX defects addressed in the v0.6.0 Webhook-as-a-Channel feature.
@@ -35,6 +45,16 @@ Slug is globally unique (not per-tenant) because the inbound route has no auth b
 **Verified via API:**
 - Signed inbound POST to `/api/webhooks/qa-ui-test/inbound` → 200 `{queue_id, poll_url}`; agent binding resolved; queue worker picked up the item.
 - Signed inbound POST to legacy numeric path `/api/webhooks/<id>/inbound` → HMAC accepted, agent lookup path identical (backward-compat confirmed).
+
+### Wizard Step 3 no longer lists disconnected Gmail/Calendar accounts (2026-04-19)
+
+Follow-up to the wizard-unification work below. `GET /api/hub/google/gmail/integrations` and `GET /api/hub/google/calendar/integrations` now exclude rows with `health_status='disconnected'`, matching the filter already applied by the main Hub list endpoint.
+
+**Why.** The wizard's Step 3 "Existing accounts" picker was backed by an unfiltered query, so a previously-disconnected row still appeared there. A user could select it, walk through the agent-linking step, and `PUT /api/agents/{id}/skill-integrations/gmail` would happily bind the agent's Gmail skill to the dead `integration_id`. The Hub card list correctly hid the integration (because it's disconnected), which made the wizard feel silently broken — "I finished the flow, where's my card?".
+
+**Fix.** Added `HubIntegration.health_status != 'disconnected'` to both list endpoints in `backend/api/routes_google.py`. Reconnecting a disconnected account goes through the OAuth flow, which already flips `is_active=True` and clears the `disconnected` status, so the row becomes eligible for the wizard list again naturally.
+
+**Data cleanup.** Unbound a stale `agent_skill_integration` row on a test-tenant agent that was pointing at a disconnected Gmail integration, and disabled the orphan Gmail skill row so the agent wouldn't sit in an "enabled but unbound" state.
 
 ### Unify Gmail / Google Calendar wizards across Settings and Hub (2026-04-19)
 

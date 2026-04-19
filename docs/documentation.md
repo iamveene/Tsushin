@@ -1653,7 +1653,12 @@ Bidirectional HTTP channel. Inbound: external systems POST HMAC-signed events to
 - **Custom** — user-supplied. Validated against `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (3–64 chars, lowercase, must start with a letter, no leading/trailing/consecutive hyphens), checked against the reserved set (`inbound, rotate-secret, health, status, test, callback, docs, openapi, api, webhooks, admin, v1`), and required to be globally unique.
 - Global uniqueness is enforced because the inbound route is authenticated by HMAC *after* the row lookup — the slug is the only identifier used to resolve the tenant.
 - **Backward compatibility:** the inbound route still accepts a numeric integration id via a `slug.isdigit()` fallback, so any legacy `/api/webhooks/{id}/inbound` URL keeps working.
-- **Live availability check:** `GET /api/webhook-integrations/slug-available?slug=...` → `{ available, reason }` backs the UI's green-check / red-X indicator.
+- **Live availability check:** `GET /api/webhook-integrations/slug-available?slug=…[&exclude_id=…]` → `{ available, reason }` backs the UI's green-check / red-X indicator. `exclude_id` lets the edit flow check "is this slug free for me to keep or rename to?" without colliding with itself.
+
+**Lifecycle: edit / pause / delete.** Each card exposes three actions in addition to Rotate Secret:
+- **Edit** — opens `WebhookEditModal` to change the name, slug, callback URL, rate limit, and IP allowlist. Secret rotation is intentionally separate (Rotate button) to avoid mixing destructive secret operations with non-destructive config edits.
+- **Pause / Enable toggle** — flips `is_active` via `PATCH /api/webhook-integrations/{id}`. When paused, inbound `POST /api/webhooks/{slug}/inbound` returns `403` and the slug is still reserved globally; nothing else will be able to create a new integration with the same slug. **Only `DELETE` frees the slug for reuse.**
+- **Delete** — removes the integration row; agent bindings are nulled via `ON DELETE SET NULL`.
 
 Capability flags (`adapter.py:39-46`):
 - `delivery_mode=push`, text-only in v1 (`supports_media=false`), `text_chunk_limit=16000`.
@@ -2331,6 +2336,8 @@ Lists system and tenant-defined roles with display names and permission badges. 
 3. Lets the user pick one or more agents and, on completion, calls `PUT /api/agents/{id}/skills/{gmail|scheduler}` + `PUT /api/agents/{id}/skill-integrations/{gmail|scheduler}` to enable the skill and bind the new `integration_id`.
 
 Either caller page can subscribe to completion via `useGoogleWizardComplete(kind, cb)` — Settings re-fetches Google credentials, Hub re-fetches `/api/hub/integrations` so the card list refreshes without a page reload.
+
+**Disconnected accounts are excluded from the wizard's Step 3 picker.** `GET /api/hub/google/{gmail|calendar}/integrations` filters out rows with `health_status='disconnected'`, matching the filter used by the Hub card list. This prevents a user from binding an agent skill to a dead integration, which would hide the resulting card in Hub and make the flow feel silently broken. To reuse a previously-disconnected email, click "Connect new account" — the OAuth callback flips the existing row back to `is_active=True` and clears the `disconnected` status, so it reappears in the picker.
 
 ### 21.5 Security & SSO (`frontend/app/settings/security/page.tsx`)
 
