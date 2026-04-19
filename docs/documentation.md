@@ -2317,6 +2317,13 @@ Lists system and tenant-defined roles with display names and permission badges. 
 
 "Coming Soon" section (`:277`) lists planned integrations. Removing Google credentials warns that it will disconnect all Google integrations (Gmail, Calendar) and disable Google SSO (`:79`).
 
+**Guided wizards — shared with Hub.** The "Set up Gmail →" and "Set up Google Calendar →" buttons on this page open the same 6-step wizards (`GmailSetupWizard`, `GoogleCalendarSetupWizard`) that the Hub "Communication → Add Gmail Account" and "Productivity → Add Calendar Account" buttons trigger. Both live under a global `GoogleWizardProvider` (`frontend/contexts/GoogleWizardContext.tsx`) mounted in `app/layout.tsx`. The wizard:
+1. Confirms Google OAuth app credentials are configured.
+2. Opens a popup to `/api/hub/google/{gmail|calendar}/oauth/authorize` and polls `/api/hub/google/{gmail|calendar}/integrations` for the new row.
+3. Lets the user pick one or more agents and, on completion, calls `PUT /api/agents/{id}/skills/{gmail|scheduler}` + `PUT /api/agents/{id}/skill-integrations/{gmail|scheduler}` to enable the skill and bind the new `integration_id`.
+
+Either caller page can subscribe to completion via `useGoogleWizardComplete(kind, cb)` — Settings re-fetches Google credentials, Hub re-fetches `/api/hub/integrations` so the card list refreshes without a page reload.
+
 ### 21.5 Security & SSO (`frontend/app/settings/security/page.tsx`)
 
 Three sections:

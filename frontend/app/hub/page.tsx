@@ -11,7 +11,7 @@
  * - Tool APIs: Brave Search, Tavily, Amadeus
  */
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
@@ -36,6 +36,7 @@ import SlackSetupModal from '@/components/SlackSetupWizard'
 import DiscordSetupModal from '@/components/DiscordSetupWizard'
 import PublicBaseUrlCard from '@/components/PublicBaseUrlCard'
 import WebhookSetupModal from '@/components/WebhookSetupModal'
+import WebhookSecretRevealModal from '@/components/WebhookSecretRevealModal'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
@@ -46,6 +47,7 @@ import KokoroSetupWizard from '@/components/tts/KokoroSetupWizard'
 import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/TypeaheadChipInput'
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
+import { useGoogleWizard, useGoogleWizardComplete } from '@/contexts/GoogleWizardContext'
 import IntegrationSummary from '@/components/hub/IntegrationSummary'
 import {
   GeminiIcon,
@@ -285,6 +287,16 @@ export default function HubPage() {
   // BUG-322: Use forceOpenWizard so the wizard always opens when explicitly triggered from Hub,
   // even if the user previously dismissed it.
   const { forceOpenWizard: openWhatsAppWizard } = useWhatsAppWizard()
+  const { openWizard: openGoogleWizard } = useGoogleWizard()
+  // loadHubIntegrations is defined later in the component; keep a ref so we can
+  // invoke the latest version from the wizard-complete callback without
+  // dancing around declaration order.
+  const loadHubIntegrationsRef = useRef<((refreshHealth?: boolean) => Promise<void>) | null>(null)
+  const onGoogleWizardComplete = useCallback(() => {
+    loadHubIntegrationsRef.current?.()
+  }, [])
+  useGoogleWizardComplete('gmail', onGoogleWizardComplete)
+  useGoogleWizardComplete('calendar', onGoogleWizardComplete)
   const searchParams = useSearchParams()
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     if (typeof window === 'undefined') return 'ai-providers'
@@ -331,6 +343,9 @@ export default function HubPage() {
   // v0.6.0: Webhook-as-a-Channel
   const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])
   const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
+  const [webhookRotateModal, setWebhookRotateModal] = useState<
+    { open: boolean; secret: string; inboundUrl: string } | null
+  >(null)
   const [webhookSaving, setWebhookSaving] = useState(false)
 
   // v0.6.1: resolved public ingress info — authoritative source for inbound
@@ -1502,6 +1517,8 @@ export default function HubPage() {
       console.error('Failed to fetch Hub integrations:', error)
     }
   }
+  // Keep the ref used by the Google wizard complete handler in sync.
+  loadHubIntegrationsRef.current = loadHubIntegrations
 
   const handleSaveWhatsappDelay = async () => {
     if (!canEditSettings) {
@@ -2187,13 +2204,11 @@ export default function HubPage() {
     }
   }
 
-  const handleRotateWebhookSecret = async (id: number) => {
+  const handleRotateWebhookSecret = async (id: number, inboundUrl: string) => {
     if (!confirm('Rotate the HMAC secret? Your external system will need the new secret before the next request.')) return
     try {
       const result = await api.rotateWebhookSecret(id)
-      await navigator.clipboard.writeText(result.api_secret).catch(() => {})
-      setSuccessMessage(`New secret copied to clipboard: ${result.api_secret_preview}`)
-      setTimeout(() => setSuccessMessage(null), 6000)
+      setWebhookRotateModal({ open: true, secret: result.api_secret, inboundUrl })
       loadWebhookIntegrations()
     } catch (err: any) {
       setError(err.message || 'Failed to rotate webhook secret')
@@ -2272,35 +2287,14 @@ export default function HubPage() {
     }
   }
 
-  // Google Calendar handlers
-  const handleGoogleCalendarConnect = async () => {
-    // Check if Google credentials are configured first
+  // Google Calendar handlers — route through the shared wizard so OAuth, account
+  // selection and agent-linking all happen in one flow.
+  const handleGoogleCalendarConnect = () => {
     if (!googleCredentials) {
       setError('Google OAuth credentials are not configured. Please configure them in Settings → Integrations first.')
       return
     }
-
-    try {
-      const apiUrl = ''
-      const params = new URLSearchParams({ redirect_url: '/hub' })
-      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/authorize?${params}`, {
-        method: 'POST'
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
-        throw new Error(errorData.detail || `HTTP ${response.status}`)
-      }
-
-      const data = await response.json()
-      window.location.href = data.authorization_url
-    } catch (err: any) {
-      if (err.message?.includes('credentials not configured')) {
-        setError('Google OAuth credentials are not configured. Please configure them in Settings → Integrations first.')
-      } else {
-        setError(`Failed to connect: ${err.message}`)
-      }
-    }
+    openGoogleWizard('calendar')
   }
 
   const handleGoogleCalendarDisconnect = async (integrationId: number) => {
@@ -2324,35 +2318,14 @@ export default function HubPage() {
     }
   }
 
-  // Gmail handlers
-  const handleGmailConnect = async () => {
-    // Check if Google credentials are configured first
+  // Gmail handlers — route through the shared wizard so OAuth and agent-linking
+  // run together (matches the Settings → Integrations flow).
+  const handleGmailConnect = () => {
     if (!googleCredentials) {
       setError('Google OAuth credentials are not configured. Please configure them in Settings → Integrations first.')
       return
     }
-
-    try {
-      const apiUrl = ''
-      const params = new URLSearchParams({ redirect_url: '/hub' })
-      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/authorize?${params}`, {
-        method: 'POST'
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
-        throw new Error(errorData.detail || `HTTP ${response.status}`)
-      }
-
-      const data = await response.json()
-      window.location.href = data.authorization_url
-    } catch (err: any) {
-      if (err.message?.includes('credentials not configured')) {
-        setError('Google OAuth credentials are not configured. Please configure them in Settings → Integrations first.')
-      } else {
-        setError(`Failed to connect: ${err.message}`)
-      }
-    }
+    openGoogleWizard('gmail')
   }
 
   const handleGmailDisconnect = async (integrationId: number) => {
@@ -4183,7 +4156,7 @@ export default function HubPage() {
 
                           <div className="grid grid-cols-2 gap-2">
                             <button
-                              onClick={() => handleRotateWebhookSecret(integration.id)}
+                              onClick={() => handleRotateWebhookSecret(integration.id, integration.inbound_url)}
                               className="px-3 py-1.5 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded text-xs hover:bg-cyan-600/30"
                               title="Rotate HMAC secret"
                             >
@@ -5666,6 +5639,18 @@ export default function HubPage() {
         saving={webhookSaving}
         apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
       />
+
+      {/* v0.7.1: Webhook Rotate Secret Reveal Modal */}
+      {webhookRotateModal && (
+        <WebhookSecretRevealModal
+          isOpen={webhookRotateModal.open}
+          onClose={() => setWebhookRotateModal(null)}
+          secret={webhookRotateModal.secret}
+          inboundUrl={webhookRotateModal.inboundUrl}
+          apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
+          rotatedNotice
+        />
+      )}
 
       {/* v0.6.0: Vector Store Config Modal */}
       <VectorStoreConfigModal
