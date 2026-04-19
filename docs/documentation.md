@@ -1685,7 +1685,7 @@ Capability flags (`adapter.py:39-46`):
 
 1. Navigate to **Hub → Communication → Webhook Integrations** in the UI.
 2. Click **+ New Webhook** — provide a name, choose **Auto** or **Custom** URI mode (Custom gets a live-validated slug input), and optionally a callback URL for outbound responses.
-3. The system generates an HMAC signing secret. A reveal modal shows the full plaintext once with a copy button (auto-copied to clipboard). **Save it now** — the same modal will appear again only if you rotate the secret.
+3. The system generates an HMAC signing secret. A reveal modal shows the full plaintext once with a copy button (auto-copied to clipboard) **plus a ready-to-paste `openssl`+`curl` snippet pre-filled with your secret and inbound URL** — copy the block, paste it into any shell with `openssl` + `curl`, and a successful reply (`{"status":"queued",…}`) confirms the integration end-to-end without leaving the browser. **Save the secret now** — the same modal will appear again only if you rotate the secret.
 4. Configure optional defenses: IP allowlist (CIDR ranges), rate limit (RPM), max payload size.
 5. **Assign to an agent** — on the agent's Channels tab, enable Webhook and select the integration (sets `webhook_integration_id`).
 6. **Test inbound** — send a signed event to your webhook (the absolute URL appears in the card, e.g. `https://localhost/api/webhooks/my-crm/inbound`):
@@ -2338,6 +2338,8 @@ Lists system and tenant-defined roles with display names and permission badges. 
 Either caller page can subscribe to completion via `useGoogleWizardComplete(kind, cb)` — Settings re-fetches Google credentials, Hub re-fetches `/api/hub/integrations` so the card list refreshes without a page reload.
 
 **Disconnected accounts are excluded from the wizard's Step 3 picker.** `GET /api/hub/google/{gmail|calendar}/integrations` filters out rows with `health_status='disconnected'`, matching the filter used by the Hub card list. This prevents a user from binding an agent skill to a dead integration, which would hide the resulting card in Hub and make the flow feel silently broken. To reuse a previously-disconnected email, click "Connect new account" — the OAuth callback flips the existing row back to `is_active=True` and clears the `disconnected` status, so it reappears in the picker.
+
+**OAuth popup handoff.** "Connect new account" opens the Google consent screen in a popup. After approval, Google redirects the popup to the backend OAuth callback, which in turn redirects to `/hub?integration=<kind>&status=success&id=<n>`. The Hub page detects it's loaded inside a popup (via `window.opener`) and, instead of rendering, posts a `{ source: 'tsushin-google-oauth', integration, integration_id, status }` message to the opener (same-origin) and calls `window.close()`. The wizard listens for that message in a `useEffect` gated on `isOpen`, stops its 3-second poll, re-fetches the integration list, and selects the new row. Popup-blocked fallback still works: a direct visit to `/hub?…` has no `window.opener`, so the page renders normally.
 
 ### 21.5 Security & SSO (`frontend/app/settings/security/page.tsx`)
 

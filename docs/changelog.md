@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Webhook: ready-to-paste test snippet in the reveal modal (2026-04-19)
+
+The Webhook reveal modal (shown once on create and after Rotate Secret) now includes a pre-filled `openssl`+`curl` snippet with the actual secret and inbound URL baked in. The user copies the block, pastes it into any shell, and a successful reply (`{"status":"queued",…}`) confirms the integration end-to-end — no signing library or manual HMAC computation required. The `-k` flag is included automatically when the URL is `https://localhost` so the self-signed cert on the dev stack doesn't break the test; production URLs render without it.
+
+Touched files: `frontend/components/WebhookSecretRevealModal.tsx` (new test block + Copy command button).
+
 ### Webhook: edit modal + enable/pause toggle (2026-04-19)
 
 Each webhook card now has an **Edit** button (opens `WebhookEditModal` — name, slug, callback, rate limit, IP allowlist) and a **Pause / Enable** toggle that flips `is_active` via `PATCH /api/webhook-integrations/{id}`. The slug-available endpoint gained an optional `exclude_id` query param so the edit flow doesn't collide with the integration's own current slug.
@@ -45,6 +51,23 @@ Slug is globally unique (not per-tenant) because the inbound route has no auth b
 **Verified via API:**
 - Signed inbound POST to `/api/webhooks/qa-ui-test/inbound` → 200 `{queue_id, poll_url}`; agent binding resolved; queue worker picked up the item.
 - Signed inbound POST to legacy numeric path `/api/webhooks/<id>/inbound` → HMAC accepted, agent lookup path identical (backward-compat confirmed).
+
+### Gmail/Calendar OAuth popup auto-closes and hands off to the wizard (2026-04-19)
+
+Fixes a stuck-wizard UX in the Gmail / Calendar setup flow.
+
+**Symptom.** In Step 3 ("Connect a Gmail account" / "Connect a Calendar account"), clicking "Connect new account" opened the Google consent screen in a popup window. After the user approved, Google redirected the popup to the backend callback, which in turn redirected to `/hub?integration=<kind>&status=success&type=<kind>&id=<n>`. The popup then loaded the entire Hub page inside itself and stayed open. The wizard's parent window had no way to know OAuth had finished — it waited for its 3-second poll tick, which could be missed entirely if the user closed the popup manually before it fired.
+
+**Fix — two-sided.**
+
+1. **Popup side** (`frontend/app/hub/page.tsx`): At the very top of `HubPage`, before any hooks, we check `window.opener && window.opener !== window` plus the `status=success` + `integration=gmail|calendar` query params. When that's true, we post a `{ source: 'tsushin-google-oauth', integration, integration_id, status }` message back to `window.opener` (same-origin), call `window.close()`, and `return null`. This runs only in the popup render — a direct browser visit to `/hub?integration=gmail&status=success&…` (the popup-blocked fallback path) still renders Hub normally because `window.opener` is null.
+2. **Wizard side** (`frontend/components/integrations/GmailSetupWizard.tsx`, `GoogleCalendarSetupWizard.tsx`): Added a `message` event listener inside a `useEffect` gated on `isOpen`. On receipt of a same-origin message with the expected shape, it stops the 3-second poll, refreshes the integrations list, and selects the integration ID the popup reported (falling back to "first id not in the initial snapshot" if the payload is missing).
+
+**Verified end-to-end (Playwright):**
+- Direct visit to `/hub?integration=gmail&status=success&type=gmail&id=3` (no `window.opener`) renders Hub normally — the popup-blocked fallback still works.
+- `window.open('/hub?integration=gmail&status=success&type=gmail&id=3', …)` from the parent tab → parent received exactly one `{source:'tsushin-google-oauth', integration:'gmail', integration_id:3, status:'success'}` message; `popup.closed === true` within ~3 s. Calendar path behaves identically with `integration:'calendar', integration_id:4`.
+
+**Not touched:** the backend OAuth callback continues to redirect to `/hub?…` so the legacy popup-blocked fallback (which the wizard code still supports) stays unchanged.
 
 ### Wizard Step 3 no longer lists disconnected Gmail/Calendar accounts (2026-04-19)
 
