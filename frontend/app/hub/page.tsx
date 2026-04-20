@@ -2452,7 +2452,13 @@ export default function HubPage() {
   const runtimeTesterInstances = testerMcpInstances.filter(instance => instance.status !== 'deleted')
   const communicationMcpInstances = mcpInstances
   const testerControlSource = testerStatus?.source ?? (runtimeTesterInstances.length > 0 ? 'runtime' : 'compose')
-  const showDedicatedTesterCard = Boolean(testerStatus) || runtimeTesterInstances.length > 0
+  const hasComposeTesterContainer = Boolean(
+    testerStatus &&
+    testerStatus.source === 'compose' &&
+    testerStatus.container_state &&
+    testerStatus.container_state !== 'not_found'
+  )
+  const showDedicatedTesterCard = hasComposeTesterContainer
   const testerSourceLabel = testerControlSource === 'runtime' ? 'Runtime-managed tester' : 'Compose-managed tester'
   const testerContainerLabel = testerStatus?.name || runtimeTesterInstances[0]?.container_name || 'tester-mcp'
   const apiKeyDeleteLabel = apiKeyDeleteTarget
@@ -3608,9 +3614,6 @@ export default function HubPage() {
                   </button>
                 </div>
 
-                {/* v0.6.0 V060-CHN-002: Public Base URL setting (used by Slack HTTP + Discord) */}
-                <PublicBaseUrlCard canEdit={canEditSettings} />
-
                 {/* WhatsApp Instances */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
@@ -4118,6 +4121,9 @@ export default function HubPage() {
                     </div>
                   )}
                 </div>
+
+                {/* v0.6.0 V060-CHN-002: Public Base URL setting (used by Slack HTTP + Discord + Webhooks) */}
+                <PublicBaseUrlCard canEdit={canEditSettings} />
 
                 {/* v0.6.0: Webhook-as-a-Channel Integrations */}
                 <div className="space-y-4">
