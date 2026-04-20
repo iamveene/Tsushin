@@ -87,14 +87,12 @@ const PROVIDERS: ProviderMeta[] = [
     id: 'tavily',
     label: 'Tavily',
     category: 'web_search',
-    description: 'AI-optimized answers; paid after free quota.',
+    description: 'AI-optimized answers with a concise summary; paid after free quota.',
     skillType: 'web_search',
     credentialMode: 'api_key',
     skillProvider: 'tavily',
     apiKeyService: 'tavily',
-    keyUrl: 'https://tavily.com/',
-    disabled: true,
-    disabledReason: 'Adapter not yet shipped — we can save your key for when it lands.',
+    keyUrl: 'https://app.tavily.com/home',
   },
   // --- Travel ---
   {

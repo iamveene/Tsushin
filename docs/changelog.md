@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Tavily search provider (2026-04-20)
+
+- New `TavilySearchProvider` wrapping `https://api.tavily.com/search`.
+  Registered in `SearchProviderRegistry` as `tavily` (`requires_api_key=True`).
+- Wizard: removed the "Coming soon" placeholder on Tavily — the provider step
+  now saves the key and the runtime adapter actually uses it.
+- Motivation: Hub card previously showed "Active" for any saved API key row
+  even when no backend adapter existed, which was misleading. With the adapter
+  shipped, "Active" is now truthful for Tavily.
+
 ### Add Integration wizard + SearXNG auto-provisioning (2026-04-20)
 
 Addresses a post-PR-#24 regression where the Hub > Tool APIs "Setup Web Search" button

@@ -2301,9 +2301,9 @@ Anthropic supports up to four `cache_control` breakpoints per request. Tsushin u
 **Source:** `backend/hub/amadeus/amadeus_service.py`, `backend/hub/providers/amadeus_provider.py`
 Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (encrypted) and talks to the Amadeus test/production API for flight offers.
 
-### 20.4 Brave Search / SerpAPI / SearXNG / Google Flights
+### 20.4 Brave Search / SerpAPI / SearXNG / Tavily / Google Flights
 
-**Sources:** `backend/hub/providers/brave_search_provider.py`, `backend/hub/providers/serpapi_search_provider.py`, `backend/hub/providers/searxng_search_provider.py`, `backend/hub/providers/google_flights_provider.py`, `backend/hub/providers/search_registry.py`, `backend/hub/providers/flight_search_provider.py`
+**Sources:** `backend/hub/providers/brave_search_provider.py`, `backend/hub/providers/serpapi_search_provider.py`, `backend/hub/providers/searxng_search_provider.py`, `backend/hub/providers/tavily_search_provider.py`, `backend/hub/providers/google_flights_provider.py`, `backend/hub/providers/search_registry.py`, `backend/hub/providers/flight_search_provider.py`
 
 - **Brave Search**: API key based web search provider (primary supported search provider in v0.6.0).
 - **SerpAPI**: used for both generic web search and Google Flights (Google Flights falls back to env var `SERPAPI_KEY` or `GOOGLE_FLIGHTS_API_KEY` — `google_flights_provider.py:71-74`).
@@ -2317,11 +2317,16 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
   CRUD + lifecycle endpoints at `/api/hub/searxng/instances`. Setup flow:
   **Hub > Tool APIs > Add Integration > Web Search > SearXNG**. External-URL
   installs are also supported (toggle off auto-provision in the wizard).
+- **Tavily** — since v0.6.0-patch.6. AI-optimized web search wrapping
+  `https://api.tavily.com/search`. Request posts JSON `{api_key, query,
+  search_depth: 'basic', max_results, include_answer: true}`; response carries
+  both a ranked result list and a pre-synthesized `answer` string surfaced via
+  `SearchResponse.metadata['answer']`. API key is stored encrypted per-tenant
+  (`service='tavily'`) and loaded through `get_api_key('tavily', ...)` like
+  every other API-key provider.
 - All search providers register with `SearchRegistry` and are configured
   through the Hub page via the generic **Add Integration** wizard
   (`frontend/components/integrations/AddIntegrationWizard.tsx`).
-- **Tavily:** adapter not yet shipped; wizard records the API key for when
-  the adapter lands.
 
 **Port-range allocation summary** (auto-provisioned tenant containers):
 

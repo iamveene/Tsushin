@@ -305,6 +305,22 @@ class SearchProviderRegistry:
         except ImportError as e:
             logger.warning(f"Could not import SearXNGSearchProvider: {e}")
 
+        # Register Tavily provider (AI-optimized search)
+        try:
+            from .tavily_search_provider import TavilySearchProvider
+            cls.register_provider(
+                "tavily",
+                TavilySearchProvider,
+                {
+                    "requires_api_key": True,
+                    "is_default": False,
+                    "status": "available",
+                    "description": "AI-optimized web search with concise answers"
+                }
+            )
+        except ImportError as e:
+            logger.warning(f"Could not import TavilySearchProvider: {e}")
+
         cls._initialized = True
         logger.info(f"Initialized {len(cls._providers)} Search provider(s)")
 

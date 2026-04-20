@@ -176,3 +176,20 @@ def test_searxng_registered_without_api_key_requirement():
         assert cfg.get("status", "available") == "available"
     finally:
         SearchProviderRegistry.reset()
+
+
+def test_tavily_registered_with_api_key_requirement():
+    """v0.6.0-patch.6: Tavily flipped from "coming soon" placeholder to a real
+    adapter. The registry entry must be present and require an API key so the
+    wizard's credential step renders the API-key input (not the SearXNG auto-
+    provision toggle)."""
+    from hub.providers.search_registry import SearchProviderRegistry
+    SearchProviderRegistry.reset()
+    SearchProviderRegistry.initialize_providers()
+    try:
+        assert SearchProviderRegistry.is_provider_registered("tavily")
+        cfg = SearchProviderRegistry.get_provider_config("tavily")
+        assert cfg.get("requires_api_key") is True
+        assert cfg.get("status", "available") == "available"
+    finally:
+        SearchProviderRegistry.reset()
