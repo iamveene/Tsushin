@@ -2514,8 +2514,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
         else:
             self.logger.warning("No response generated (AI call may have failed)")
 
-        self.logger.error(f"[TRACE-webhook] channel={message.get('channel')} result_keys={list(result.keys())} response_text_len={len(response_text)} error={result.get('error')}")
-
         # Send response back to WhatsApp
         if response_text and not result.get('error'):
             # Format response using agent's response template
@@ -2530,7 +2528,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             # real callback URL from its own integration row anyway).
             recipient = message.get("chat_id") or message.get("sender") or ""
             channel = message.get("channel", "whatsapp")
-            self.logger.error(f"[TRACE-webhook] pre-send channel={channel} recipient={recipient} text_preview={formatted_response[:60]!r}")
 
             # Phase 7.3: Check if agent has TTS skill enabled
             # Skip TTS for agent-switch confirmations — these should always be text
