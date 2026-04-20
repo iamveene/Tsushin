@@ -1272,6 +1272,88 @@ class SentinelService:
         """Get custom prompt from config if set."""
         return config.get_custom_prompt(detection_type)
 
+    def _heuristic_floor_result(
+        self,
+        input_content: str,
+        analysis_type: str,
+        config: SentinelEffectiveConfig,
+        start_time: float,
+    ) -> Optional[SentinelAnalysisResult]:
+        """
+        BUG-643 / BUG-644 / BUG-656: Provider-independent pattern floor.
+
+        Runs a deterministic regex match against well-known attack
+        phrasings. Returns a pre-built SentinelAnalysisResult with the
+        appropriate action for the current detection mode, or ``None``
+        if nothing matched (fall through to the LLM classifier).
+
+        The regex patterns live in ``agent.sentinel.heuristics`` so they
+        can be shared with the fact extractor (BUG-642, BUG-661).
+        """
+        try:
+            from agent.sentinel.heuristics import evaluate_content
+        except Exception as import_error:
+            self.logger.warning(
+                f"Heuristic floor unavailable (import failed): {import_error}"
+            )
+            return None
+
+        # Build enabled-detection set so disabled detections don't fire.
+        enabled_detection_types = None
+        try:
+            enabled_detection_types = [
+                dt for dt in DETECTION_REGISTRY.keys()
+                if config.is_detection_enabled(dt)
+            ]
+        except Exception:
+            # If config introspection fails, fall back to "all enabled"
+            # — we still want the floor to fire rather than be silent.
+            enabled_detection_types = None
+
+        match = evaluate_content(
+            input_content,
+            aggressiveness_level=config.aggressiveness_level,
+            enabled_detection_types=enabled_detection_types,
+        )
+        if match is None:
+            return None
+
+        detection_mode = config.detection_mode
+        if detection_mode == "block":
+            action = "blocked"
+            is_threat = True
+        elif detection_mode == "warn_only":
+            action = "warned"
+            is_threat = True
+        elif detection_mode == "detect_only":
+            action = "allowed"
+            is_threat = True
+        else:
+            # Mode is off / unknown — don't escalate from the floor.
+            return None
+
+        reason = (
+            f"{match.reason} "
+            f"(heuristic floor: type={match.detection_type}, "
+            f"matched=\"{match.matched_text}\")"
+        )
+        response_time_ms = int((time.time() - start_time) * 1000)
+        self.logger.warning(
+            "🛡️ SENTINEL heuristic floor matched: "
+            f"type={match.detection_type} score={match.score:.2f} "
+            f"level={match.pattern_level} action={action}"
+        )
+        return SentinelAnalysisResult(
+            is_threat_detected=is_threat,
+            threat_score=match.score,
+            threat_reason=reason,
+            action=action,
+            detection_type=match.detection_type,
+            analysis_type=analysis_type,
+            cached=False,
+            response_time_ms=response_time_ms,
+        )
+
     async def _analyze_unified(
         self,
         input_content: str,
@@ -1308,6 +1390,52 @@ class SentinelService:
 
         # Use scan_mode in cache key to avoid cross-contamination
         cache_detection_key = "unified" if scan_mode == "standard" else f"unified_{scan_mode}"
+
+        # ------------------------------------------------------------------
+        # BUG-643 / BUG-644 / BUG-656: Pre-LLM heuristic / regex floor
+        # ------------------------------------------------------------------
+        # Provider-independent. Runs BEFORE the LLM so well-known attack
+        # phrasings are blocked even when:
+        #   - No LLM provider API key is configured (BUG-656 — Sentinel was
+        #     previously a silent no-op on fresh installs)
+        #   - The classifier at level-1 under-detects (BUG-643)
+        #   - The classifier at level-3 regresses vs level-1 (BUG-644)
+        # We still fall through to the LLM when the heuristic doesn't fire,
+        # so false-positive risk on benign content is unchanged.
+        if scan_mode == "standard":
+            heuristic_result = self._heuristic_floor_result(
+                input_content=input_content,
+                analysis_type=analysis_type,
+                config=config,
+                start_time=start_time,
+            )
+            if heuristic_result is not None:
+                # Log, cache, and return. Identical bookkeeping to the
+                # LLM-classifier path so audit rows stay consistent.
+                if self._should_log_analysis(heuristic_result, config):
+                    self._log_analysis(
+                        analysis_type=analysis_type,
+                        detection_type=heuristic_result.detection_type,
+                        input_content=input_content[:500],
+                        input_hash=input_hash,
+                        result=heuristic_result,
+                        sender_key=sender_key,
+                        message_id=message_id,
+                        agent_id=agent_id,
+                        llm_provider="heuristic",
+                        llm_model="regex-floor",
+                        response_time_ms=heuristic_result.response_time_ms,
+                        detection_mode_used=detection_mode,
+                    )
+                self._save_cache(
+                    input_hash=input_hash,
+                    analysis_type=analysis_type,
+                    detection_type=cache_detection_key,
+                    aggressiveness=config.aggressiveness_level,
+                    result=heuristic_result,
+                    ttl=config.cache_ttl_seconds,
+                )
+                return heuristic_result
 
         # Check cache
         cached_result = self._check_cache(
@@ -1357,6 +1485,40 @@ class SentinelService:
         except Exception as e:
             self.logger.error(f"Unified LLM call failed: {e}", exc_info=True)
             response_time_ms = int((time.time() - start_time) * 1000)
+
+            # BUG-656: If the LLM is unreachable (missing key, network, etc.)
+            # run the heuristic floor once more so at least the well-known
+            # attack phrasings are still caught. `_heuristic_floor_result`
+            # already returned None above — if it matches now it means
+            # scan_mode != "standard" (e.g. tool/shell path) reached here.
+            heuristic_fallback = self._heuristic_floor_result(
+                input_content=input_content,
+                analysis_type=analysis_type,
+                config=config,
+                start_time=start_time,
+            )
+            if heuristic_fallback is not None:
+                heuristic_fallback.threat_reason = (
+                    f"{heuristic_fallback.threat_reason} "
+                    f"(LLM unavailable: {type(e).__name__}; heuristic floor fired)"
+                )
+                if self._should_log_analysis(heuristic_fallback, config):
+                    self._log_analysis(
+                        analysis_type=analysis_type,
+                        detection_type=heuristic_fallback.detection_type,
+                        input_content=input_content[:500],
+                        input_hash=input_hash,
+                        result=heuristic_fallback,
+                        sender_key=sender_key,
+                        message_id=message_id,
+                        agent_id=agent_id,
+                        llm_provider="heuristic-fallback",
+                        llm_model="regex-floor",
+                        response_time_ms=heuristic_fallback.response_time_ms,
+                        detection_mode_used=detection_mode,
+                    )
+                return heuristic_fallback
+
             if detection_mode != "block":
                 self.logger.warning(
                     "Unified Sentinel analysis unavailable while Sentinel is in "

@@ -1220,6 +1220,25 @@ export default function PlaygroundPage() {
             }
             setMessages((prev) => [...prev, agentMsg])
           }
+        } else if (response.status === 'blocked') {
+          // BUG-646: Sentinel blocked the prompt. Surface the threat
+          // reason as an inline assistant-slot banner instead of a
+          // silent no-op. The backend puts the threat_reason in
+          // `response.message`; we prefix it with a well-known marker
+          // (`SENTINEL_BLOCK:`) so the renderer can identify the bubble
+          // and draw it with the security-block styling.
+          const threatType = (response as any).threat_type
+            || (response as any).security_detection_type
+            || 'security_block'
+          const reason = response.message || 'Message blocked for security reasons.'
+          const blockedMsgId = `msg_blocked_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+          const blockedMsg: PlaygroundMessage = {
+            role: 'assistant',
+            content: `SENTINEL_BLOCK:${threatType}:${reason}`,
+            timestamp: response.timestamp || new Date().toISOString(),
+            message_id: blockedMsgId,
+          }
+          setMessages((prev) => [...prev, blockedMsg])
         } else if (response.error) {
           setError(response.error)
         }

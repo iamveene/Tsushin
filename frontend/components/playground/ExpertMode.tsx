@@ -777,6 +777,63 @@ export default function ExpertMode({
                 {messages.map((msg, idx) => {
                   const isUser = msg.role === 'user'
                   const messageKey = msg.message_id || `msg_${msg.timestamp}_${idx}`
+
+                  // BUG-646: Detect Sentinel-block bubbles emitted via the
+                  // SENTINEL_BLOCK:<threat_type>:<reason> marker and also
+                  // the legacy "🛡️ Your message was blocked by security
+                  // measures: …" string shape that some assistant turns
+                  // persist to history. Either one renders as an inline
+                  // block-reason callout instead of a generic chat bubble.
+                  let sentinelBlock: { threatType: string; reason: string } | null = null
+                  if (!isUser && typeof msg.content === 'string') {
+                    if (msg.content.startsWith('SENTINEL_BLOCK:')) {
+                      const rest = msg.content.slice('SENTINEL_BLOCK:'.length)
+                      const colonIdx = rest.indexOf(':')
+                      sentinelBlock = {
+                        threatType: colonIdx > 0 ? rest.slice(0, colonIdx) : 'security_block',
+                        reason: colonIdx > 0 ? rest.slice(colonIdx + 1) : rest,
+                      }
+                    } else if (msg.content.startsWith('🛡️ Your message was blocked by security measures:')) {
+                      sentinelBlock = {
+                        threatType: 'security_block',
+                        reason: msg.content.replace('🛡️ Your message was blocked by security measures:', '').trim(),
+                      }
+                    }
+                  }
+
+                  if (sentinelBlock) {
+                    return (
+                      <div
+                        key={messageKey}
+                        data-testid="sentinel-block-banner"
+                        className="flex gap-3 animate-slide-up"
+                        style={{ animationDelay: `${idx * 15}ms` }}
+                      >
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-semibold flex-shrink-0 bg-[var(--pg-error)]/15 border border-[var(--pg-error)]/40 text-[var(--pg-error)]">
+                          🛡
+                        </div>
+                        <div className="flex flex-col gap-1 max-w-[75%]">
+                          <div className="rounded-xl rounded-tl-sm border border-[var(--pg-error)]/40 bg-[var(--pg-error)]/10 px-4 py-3 text-sm leading-relaxed text-[var(--pg-text)]">
+                            <div className="flex items-center gap-2 mb-1 text-[var(--pg-error)] font-semibold">
+                              <span>Blocked by Sentinel</span>
+                              <span className="text-[10px] uppercase tracking-wider rounded-full px-2 py-0.5 bg-[var(--pg-error)]/20 border border-[var(--pg-error)]/30">
+                                {sentinelBlock.threatType.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <div className="text-[var(--pg-text-secondary)] whitespace-pre-wrap break-words">
+                              {sentinelBlock.reason}
+                            </div>
+                          </div>
+                          <div className="px-1">
+                            <span className="text-[10px] text-[var(--pg-text-muted)]">
+                              {formatTimestamp(msg.timestamp)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  }
+
                   return (
                     <div
                       key={messageKey}
