@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### BUG-668 — Kokoro auto-provision disconnect fix (2026-04-20, post-PR-#26 regression)
+
+Surfaced by the post-merge comprehensive regression when a QA agent actually exercised the Kokoro wizard end-to-end (earlier regression passes only clicked through the wizard UI without committing a provision). Kokoro hit the same `psycopg2.OperationalError: server closed the connection unexpectedly` + `docker-socket-proxy Read timed out` disconnect pattern BUG-663 fixed for Ollama, because the BUG-663 fix only covered `ollama_container_manager.py` and didn't include the parallel `kokoro_container_manager.py` path.
+
+Applied the same fix pattern to `kokoro_container_manager.py provision()`:
+- Capture `instance_id`, `tenant_id`, `internal_port`, `volume_bind`, and a reference to the engine BEFORE the blocking `create_container()` call.
+- Close the original DB session BEFORE `create_container()` so the idle pooled connection cannot time out during the long docker pull.
+- Open three short-lived fresh sessions after `create_container()`: one to persist `container_id` + `base_url`, one for the final running/health status, and (on exception) one to write the error state.
+- Mirrors the sessionmaker+filter-by-instance-id+tenant_id pattern in the Ollama fix.
+
+Verified: cold Kokoro provision via the Hub wizard on a freshly-rebuilt local backend completes without the prior psycopg/docker-socket-proxy timeout; `tts-kokoro-*` container transitions to `running`; `/api/tts-providers/kokoro/status` returns healthy.
+
 ### Fresh-install regression sweep — BUG-662/663/664/665 closed + BUG-666 surfaced (2026-04-20)
 
 Four open bugs from the 2026-04-20 Ubuntu VM fresh-install audit closed in one pass, plus one new bug surfaced by a newly-added Hub API-key validation regression test.
