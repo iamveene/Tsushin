@@ -29,6 +29,12 @@ export class PlaygroundWebSocket {
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
   private pingInterval: ReturnType<typeof setInterval> | null = null
   private pingIntervalMs: number = 30000 // 30 seconds
+  // BUG-620: Suppress repeated `Connection error: Event` noise. The browser
+  // emits an onerror event for every transient blip (incl. normal close paths),
+  // and a raw `Event` stringifies to `[object Event]`. We log once per
+  // close-cycle and reset the flag after each onclose, so reconnect attempts
+  // stay visible but redundant fires don't spam the console.
+  private errorLoggedThisCycle: boolean = false
 
   constructor() {
     // SEC-005 Phase 3: No token needed — auth via httpOnly cookie on WS upgrade
@@ -86,14 +92,40 @@ export class PlaygroundWebSocket {
         }
       }
 
-      this.ws.onerror = (error) => {
-        console.error('[WebSocket] Connection error:', error)
+      this.ws.onerror = (event) => {
+        // BUG-620: `event` is a generic DOM Event — stringifying it yields
+        // `[object Event]` which is useless. Pull diagnostics from the
+        // underlying socket instead. Only surface as `warn` (not `error`)
+        // and only once per close-cycle so routine reconnect blips don't
+        // taint the "zero console errors" matrix.
+        if (this.errorLoggedThisCycle) return
+        this.errorLoggedThisCycle = true
+        const ws = this.ws
+        const diag = {
+          readyState: ws?.readyState,
+          readyStateLabel: ws ? ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][ws.readyState] : 'NO_SOCKET',
+          url: ws?.url,
+          type: (event as Event)?.type,
+        }
+        console.warn('[WebSocket] Connection error (pre-close):', diag)
         this.setConnectionState('error')
       }
 
       this.ws.onclose = (event) => {
-        console.log('[WebSocket] Connection closed:', event.code, event.reason)
+        // Non-error clean closes are normal lifecycle events — log at debug
+        // level (console.debug) to avoid poisoning the Playground QA matrix
+        // with noise. Abnormal closes stay visible via console.log.
+        if (event.code === 1000) {
+          if (typeof console.debug === 'function') {
+            console.debug('[WebSocket] Connection closed cleanly:', event.code, event.reason || '(no reason)')
+          }
+        } else {
+          console.log('[WebSocket] Connection closed:', event.code, event.reason || '(no reason)')
+        }
         this.stopPingInterval()
+        // Reset the once-per-cycle error guard so the next connection attempt
+        // can log its own error without being swallowed.
+        this.errorLoggedThisCycle = false
 
         if (event.code !== 1000) { // Not a clean close
           this.setConnectionState('disconnected')

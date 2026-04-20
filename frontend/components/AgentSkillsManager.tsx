@@ -311,9 +311,17 @@ export default function AgentSkillsManager({ agentId }: Props) {
       // Load current integration for this skill
       const skillType = PROVIDER_SKILLS[providerKey].skillType
       const integration = getSkillIntegration(skillType)
+      const defaultProvider =
+        (providers.find((p: any) => p.is_default)?.provider_type)
+        || providers[0]?.provider_type
+        || (providerKey === 'scheduler' ? 'flows' : (providerKey === 'email' ? 'gmail' : 'brave'))
 
       if (integration) {
-        setSelectedProvider(integration.scheduler_provider || (providerKey === 'web_search' ? 'brave' : (providerKey === 'scheduler' ? 'flows' : 'gmail')))
+        setSelectedProvider(
+          providerKey === 'web_search'
+            ? (getSkillConfig(skillType).provider || defaultProvider)
+            : (integration.scheduler_provider || defaultProvider)
+        )
         setSelectedIntegration(integration.integration_id)
 
         // Load permissions from config if available
@@ -321,13 +329,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
         setProviderPermissions(permissions)
       } else {
         // Set default provider
-        if (providerKey === 'web_search') {
-          setSelectedProvider('brave')
-        } else if (providerKey === 'scheduler') {
-          setSelectedProvider('flows')
-        } else {
-          setSelectedProvider('gmail')
-        }
+        setSelectedProvider(defaultProvider)
         setSelectedIntegration(null)
         // Default permissions: read-only for safety
         setProviderPermissions({ read: true, write: false })
@@ -356,10 +358,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
       // For web_search, we need to update the skill config with the provider
       if (configuringProvider === 'web_search') {
         const currentConfig = getSkillConfig(skillType)
-        config.provider = selectedProvider
-
-        // Merge with existing config
-        Object.assign(config, currentConfig)
+        // Merge existing config first, then overwrite the provider selected
+        // in the modal so stale defaults like "brave" do not win.
+        Object.assign(config, currentConfig, {
+          provider: selectedProvider
+        })
 
         // Update the skill config directly
         await api.updateAgentSkill(agentId, skillType, {
@@ -735,7 +738,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
     if (providerKey === 'web_search') {
       // For web search, provider is in config
       const provider = config.provider || 'brave'
-      providerDisplay = provider === 'brave' ? 'Brave Search' : provider === 'google' ? 'Google Search (SerpAPI)' : provider
+      providerDisplay =
+        provider === 'brave' ? 'Brave Search'
+        : provider === 'google' ? 'Google Search (SerpAPI)'
+        : provider === 'searxng' ? 'SearXNG'
+        : provider
     } else if (integration) {
       if (providerKey === 'scheduler') {
         switch (integration.scheduler_provider) {
@@ -1247,7 +1254,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     const providerEntries: { providerKey: 'scheduler' | 'email' | 'web_search'; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = [
       { providerKey: 'scheduler', displayName: 'Scheduler', skillType: 'flows', icon: CalendarIcon, description: 'Create events, reminders, and schedule AI conversations. Choose between built-in Flows, Google Calendar, or Asana.' },
       { providerKey: 'email', displayName: 'Email', skillType: 'gmail', icon: MailIcon, description: 'Read and search emails. Connect your Gmail account to enable email access.' },
-      { providerKey: 'web_search', displayName: 'Web Search', skillType: 'web_search', icon: SearchIcon, description: 'Search the web for information. Choose between Brave Search (privacy-focused) or Google Search (via SerpAPI).' },
+      { providerKey: 'web_search', displayName: 'Web Search', skillType: 'web_search', icon: SearchIcon, description: 'Search the web for information. Choose between Brave Search, SearXNG, or Google Search (via SerpAPI).' },
     ]
     for (const entry of providerEntries) {
       if (enabledSkillTypes.has(entry.skillType)) {
@@ -1486,10 +1493,18 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       <div className={`p-3 rounded-lg ${
                         selectedProvider === 'brave'
                           ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700'
+                          : selectedProvider === 'searxng'
+                          ? 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700'
                           : 'bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700'
                       }`}>
                         <p className="text-sm font-medium inline-flex items-center gap-1.5">
-                          <SearchIcon size={14} /> {selectedProvider === 'brave' ? 'Brave Search' : 'Google Search (SerpAPI)'}
+                          <SearchIcon size={14} /> {
+                            selectedProvider === 'brave'
+                              ? 'Brave Search'
+                              : selectedProvider === 'searxng'
+                              ? 'SearXNG'
+                              : 'Google Search (SerpAPI)'
+                          }
                         </p>
                         <p className="text-xs mt-1">
                           {(selectedProviderData as any).pricing?.description || 'Web search provider'}

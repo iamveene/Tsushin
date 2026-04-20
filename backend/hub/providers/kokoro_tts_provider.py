@@ -6,6 +6,13 @@ Kokoro is a FREE, open-source TTS solution running locally via Docker.
 Supports multiple languages including Brazilian Portuguese.
 
 Pricing: FREE (zero cost!)
+
+Lifecycle: v0.7.0 removed the stack-level compose kokoro-tts service and the
+KOKORO_SERVICE_URL env fallback. The only supported path is per-tenant
+auto-provisioned Kokoro containers managed via the TTSInstance model. This
+provider is constructed without a base URL and REQUIRES a caller-supplied
+`base_url` argument at synthesize time (typically resolved from
+AgentSkill.config.tts_instance_id or Config.default_tts_instance_id).
 """
 
 import os
@@ -28,13 +35,6 @@ from .tts_provider import (
 
 
 logger = logging.getLogger(__name__)
-
-
-def _get_default_kokoro_service_url() -> str:
-    stack_name = (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
-    if os.path.exists("/.dockerenv"):
-        return f"http://{stack_name}-kokoro-tts:8880"
-    return "http://localhost:8880"
 
 
 class KokoroTTSProvider(TTSProvider):
@@ -178,7 +178,8 @@ class KokoroTTSProvider(TTSProvider):
 
     def __init__(self, db=None, token_tracker=None, tenant_id=None):
         super().__init__(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
-        self.service_url = os.getenv("KOKORO_SERVICE_URL", _get_default_kokoro_service_url())
+        # v0.7.0: No construction-time URL. base_url MUST be supplied at call time
+        # via per-tenant TTSInstance resolution. See class docstring.
 
     def get_provider_name(self) -> str:
         return "kokoro"
@@ -229,7 +230,7 @@ class KokoroTTSProvider(TTSProvider):
         self.logger.warning(f"Invalid voice '{voice}', using default")
         return self.get_default_voice()
 
-    async def synthesize(self, request: TTSRequest) -> TTSResponse:
+    async def synthesize(self, request: TTSRequest, *, base_url: str = None) -> TTSResponse:
         """
         Synthesize audio using Kokoro TTS service.
 
@@ -241,10 +242,26 @@ class KokoroTTSProvider(TTSProvider):
 
         Args:
             request: TTSRequest with text and configuration
+            base_url: REQUIRED per-tenant Kokoro base URL (resolved from a
+                TTSInstance row). v0.7.0 removed the KOKORO_SERVICE_URL fallback,
+                so this must always be provided by the caller.
 
         Returns:
             TTSResponse with audio file path or error
+
+        Raises:
+            RuntimeError: if base_url is None (legacy env fallback removed).
         """
+        # v0.7.0: base_url is mandatory. The legacy KOKORO_SERVICE_URL env fallback
+        # and the global `kokoro-tts` compose service have been removed. Configure
+        # a TTS instance at /hub (Kokoro card → Setup with Wizard) and the
+        # AudioTTSSkill resolver will supply base_url from the TTSInstance row.
+        if base_url is None:
+            raise RuntimeError(
+                "Kokoro TTS base URL not provided. Configure a TTS instance at "
+                "/hub (Kokoro card → Setup with Wizard)."
+            )
+        effective_url = base_url
         try:
             # Validate and normalize parameters
             language = request.language if request.language in self.SUPPORTED_LANGUAGES else "pt"
@@ -296,7 +313,7 @@ class KokoroTTSProvider(TTSProvider):
                 try:
                     async with client.stream(
                         "POST",
-                        f"{self.service_url}/v1/audio/speech",
+                        f"{effective_url}/v1/audio/speech",
                         json={
                             "model": "kokoro",
                             "input": text,
@@ -404,14 +421,14 @@ class KokoroTTSProvider(TTSProvider):
                         )
 
                 except httpx.ConnectError:
-                    self.logger.error(f"Cannot connect to Kokoro service at {self.service_url}")
+                    self.logger.error(f"Cannot connect to Kokoro service at {effective_url}")
                     return TTSResponse(
                         success=False,
                         provider=self.provider_name,
-                        error=f"Kokoro service not reachable at {self.service_url}",
+                        error=f"Kokoro service not reachable at {effective_url}",
                         metadata={
-                            "kokoro_url": self.service_url,
-                            "hint": "Start Kokoro with: docker compose --profile tts up -d"
+                            "kokoro_url": effective_url,
+                            "hint": "Start the per-tenant Kokoro instance at /hub (Kokoro card → Start) or create one via Setup with Wizard."
                         }
                     )
 
@@ -496,19 +513,38 @@ class KokoroTTSProvider(TTSProvider):
             self.logger.error(f"WAV to Opus conversion failed: {e}")
             return False
 
-    async def health_check(self) -> ProviderStatus:
+    async def health_check(self, *, base_url: Optional[str] = None) -> ProviderStatus:
         """
-        Check Kokoro service availability.
+        Check Kokoro service availability for a specific per-tenant instance.
+
+        v0.7.0: health_check now REQUIRES a caller-supplied base_url (resolved
+        from a TTSInstance row). Without it, the provider cannot know which
+        tenant container to probe and returns status="unknown". The legacy
+        stack-level kokoro-tts compose service is gone.
+
+        Args:
+            base_url: Per-tenant Kokoro base URL (from TTSInstance.base_url).
 
         Returns:
-            ProviderStatus with health information
+            ProviderStatus with health information, or status="unknown" if
+            base_url is not supplied.
         """
+        if not base_url:
+            return ProviderStatus(
+                provider=self.provider_name,
+                status="unknown",
+                message="Health check requires a TTS instance. Configure one at /hub (Kokoro card → Setup with Wizard).",
+                available=False,
+                details={
+                    "hint": "Supply base_url from a TTSInstance row, or use GET /api/tts-instances/{id}/container/status."
+                }
+            )
         try:
             start_time = time.time()
             async with httpx.AsyncClient(timeout=10.0) as client:
                 try:
                     # Try health endpoint
-                    response = await client.get(f"{self.service_url}/health")
+                    response = await client.get(f"{base_url}/health")
                     latency_ms = int((time.time() - start_time) * 1000)
 
                     if response.status_code == 200:
@@ -521,7 +557,7 @@ class KokoroTTSProvider(TTSProvider):
                             available=True,
                             latency_ms=latency_ms,
                             details={
-                                "service_url": self.service_url,
+                                "service_url": base_url,
                                 "voices": len(self.VOICES),
                                 "languages": self.SUPPORTED_LANGUAGES,
                                 "is_free": True,
@@ -542,7 +578,7 @@ class KokoroTTSProvider(TTSProvider):
                     # Retry with voices endpoint as fallback
                     try:
                         fallback_start = time.time()
-                        fallback_response = await client.get(f"{self.service_url}/v1/audio/voices")
+                        fallback_response = await client.get(f"{base_url}/v1/audio/voices")
                         fallback_latency = int((time.time() - fallback_start) * 1000)
                         if fallback_response.status_code == 200:
                             return ProviderStatus(
@@ -552,7 +588,7 @@ class KokoroTTSProvider(TTSProvider):
                                 available=True,
                                 latency_ms=fallback_latency,
                                 details={
-                                    "service_url": self.service_url,
+                                    "service_url": base_url,
                                     "voices": len(self.VOICES),
                                     "languages": self.SUPPORTED_LANGUAGES,
                                     "is_free": True,
@@ -563,11 +599,11 @@ class KokoroTTSProvider(TTSProvider):
                     return ProviderStatus(
                         provider=self.provider_name,
                         status="unavailable",
-                        message=f"Cannot connect to Kokoro at {self.service_url}",
+                        message=f"Cannot connect to Kokoro at {base_url}",
                         available=False,
                         details={
-                            "service_url": self.service_url,
-                            "hint": "Start with: docker compose --profile tts up -d"
+                            "service_url": base_url,
+                            "hint": "Start the per-tenant Kokoro instance at /hub (Kokoro card → Start) or create one via Setup with Wizard."
                         }
                     )
 

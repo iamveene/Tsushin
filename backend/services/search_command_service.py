@@ -92,7 +92,7 @@ class SearchCommandService:
                 )
             raise ValueError(
                 "No search providers configured. "
-                "Add a Brave Search or SerpAPI key in Studio -> API Keys."
+                "Configure Brave, SearXNG, or SerpAPI in Studio -> API Keys."
             )
 
         return provider, {

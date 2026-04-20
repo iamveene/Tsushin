@@ -120,6 +120,9 @@ from api.routes_plans import router as plans_router
 from api.routes_sso_config import router as sso_config_router
 # Global User Management
 from api.routes_global_users import router as global_users_router
+# Global Admin: Invitations & Platform SSO (invitation scope + global SSO feature)
+from api.routes_admin_invitations import router as admin_invitations_router
+from api.routes_admin_sso import router as admin_sso_router
 # Toolbox Container Management (Custom Tools)
 from api.routes_toolbox import router as toolbox_router
 # Skill Integrations (Provider Configuration)
@@ -150,6 +153,8 @@ from api.routes_syslog import router as syslog_config_router
 from api.routes_provider_instances import router as provider_instances_router, set_engine as set_provider_instances_engine
 # v0.6.0: Vector Store Instance Management
 from api.routes_vector_stores import router as vector_stores_router, set_engine as set_vector_stores_engine
+# v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
+from api.routes_tts_instances import router as tts_instances_router, set_engine as set_tts_instances_engine
 # Phase 22: Custom Skills Foundation
 from api.routes_custom_skills import router as custom_skills_router, set_engine as set_custom_skills_engine
 # Phase 22.4: MCP Server Integration
@@ -227,6 +232,8 @@ async def lifespan(app: FastAPI):
     set_provider_instances_engine(engine)
     # v0.6.0: Vector Store Instance Management
     set_vector_stores_engine(engine)
+    # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
+    set_tts_instances_engine(engine)
 
     # Phase 22: Custom Skills Foundation
     set_custom_skills_engine(engine)
@@ -238,6 +245,27 @@ async def lifespan(app: FastAPI):
     set_agent_comm_engine(engine)
 
     logging.info("Database initialized")
+
+    # v0.6.0-patch.5: Reconcile auto-provisioned Ollama containers.
+    # Rows stuck in 'creating'/'provisioning' (e.g. after a host crash) get
+    # their container_status synced from the runtime so the UI shows the
+    # real state on the next request.
+    try:
+        from services.ollama_container_manager import startup_reconcile as ollama_startup_reconcile
+        ollama_startup_reconcile()  # uses its own db session
+    except Exception as e:
+        logger.warning(f"Ollama startup reconcile failed: {e}")
+
+    async def _prewarm_embedding_models() -> None:
+        """Warm the default embedder off the request path."""
+        try:
+            from agent.memory.embedding_service import get_shared_embedding_service
+            await asyncio.to_thread(get_shared_embedding_service, "all-MiniLM-L6-v2")
+            logging.info("Embedding model prewarmed successfully")
+        except Exception as e:
+            logging.warning(f"Embedding prewarm skipped: {e}")
+
+    asyncio.create_task(_prewarm_embedding_models())
 
     # Migration: Ensure sandboxed_tools skill exists for agents with tool assignments
     try:
@@ -271,6 +299,26 @@ async def lifespan(app: FastAPI):
         migration_db.close()
     except Exception as e:
         logging.error(f"Sandboxed tools skill migration failed: {e}")
+
+    # Belt-and-suspenders: ensure the singleton GlobalSSOConfig row exists.
+    # Migration 0036 already inserts it on upgrade, but a manual volume
+    # restore or a skipped migration would leave admin SSO endpoints with no
+    # row to PUT against. This runs on every startup and is a no-op when
+    # the row already exists.
+    try:
+        SSOSession = sessionmaker(bind=engine)
+        sso_db = SSOSession()
+        from models_rbac import GlobalSSOConfig
+        if sso_db.query(GlobalSSOConfig).first() is None:
+            sso_db.add(GlobalSSOConfig(
+                google_sso_enabled=False,
+                auto_provision_users=False,
+            ))
+            sso_db.commit()
+            print("📦 Seeded default GlobalSSOConfig singleton row")
+        sso_db.close()
+    except Exception as e:
+        logging.error(f"GlobalSSOConfig startup seeding failed: {e}")
 
     # Start MCP watcher
     SessionLocal = sessionmaker(bind=engine)
@@ -819,6 +867,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error starting MCP Server Health Check Service: {e}", exc_info=True)
 
+    # v0.6.0-patch.5: Reconcile TTS instances stuck in 'creating' (e.g. after a crash)
+    try:
+        from services.kokoro_container_manager import startup_reconcile as kokoro_startup_reconcile
+        ReconcileSession = sessionmaker(bind=engine)
+        reconcile_db = ReconcileSession()
+        try:
+            kokoro_startup_reconcile(reconcile_db)
+        finally:
+            reconcile_db.close()
+        logging.info("Kokoro TTS instances reconciled at startup")
+    except Exception as e:
+        logging.error(f"Kokoro TTS startup reconcile failed (non-fatal): {e}", exc_info=True)
+
     yield
 
     # Shutdown
@@ -1229,6 +1290,8 @@ app.include_router(team_router)  # Phase 7.9 - Team Management
 app.include_router(plans_router)  # Plans Management
 app.include_router(sso_config_router)  # SSO Configuration
 app.include_router(global_users_router)  # Global User Management
+app.include_router(admin_invitations_router)  # Global Admin: Invitation Management
+app.include_router(admin_sso_router)  # Global Admin: Platform-wide SSO Config
 app.include_router(toolbox_router)  # Toolbox Container Management (Custom Tools)
 app.include_router(skill_integrations_router, prefix="/api")  # Skill Integrations (Provider Configuration)
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
@@ -1248,6 +1311,7 @@ app.include_router(sentinel_exceptions_router, prefix="/api")  # Phase 20 Enhanc
 app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel Security Profiles
 app.include_router(provider_instances_router, prefix="/api", tags=["Provider Instances"])  # Phase 21: Provider Instance Management
 app.include_router(vector_stores_router, prefix="/api", tags=["Vector Stores"])  # v0.6.0: Vector Store Instance Management
+app.include_router(tts_instances_router, prefix="/api", tags=["TTS Instances"])  # v0.6.0-patch.5: Per-tenant Kokoro TTS auto-provisioning
 app.include_router(custom_skills_router, prefix="/api", tags=["Custom Skills"])  # Phase 22: Custom Skills Foundation
 app.include_router(mcp_servers_router, prefix="/api", tags=["MCP Servers"])  # Phase 22.4: MCP Server Integration
 app.include_router(services_router)  # Hub Local Services (Kokoro TTS container management)
@@ -1411,7 +1475,7 @@ async def websocket_endpoint(websocket: WebSocket):
 # Phase 14.9: WebSocket endpoint for Playground streaming v4
 # Phase SEC-002: Fixed token exposure in query parameters (HIGH-001)
 @app.websocket("/ws/playground")
-async def playground_websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)):
+async def playground_websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for Playground real-time streaming.
 
@@ -1420,8 +1484,6 @@ async def playground_websocket_endpoint(websocket: WebSocket, db: Session = Depe
     Security: Token is sent in first message after connection (not in URL query params)
     to prevent exposure in browser history, server logs, and referrer headers.
     """
-    from fastapi import Query
-    from auth_service import AuthService
     from services.playground_websocket_service import PlaygroundWebSocketService
     import json
 
@@ -1521,69 +1583,64 @@ async def playground_websocket_endpoint(websocket: WebSocket, db: Session = Depe
         # Send connection confirmation
         await websocket.send_json({"type": "connected", "user_id": user_id})
 
-        # Initialize service - use global engine variable
+        # Initialize service - use short-lived DB sessions per Playground
+        # message instead of holding one open for the full WebSocket lifetime.
         from sqlalchemy.orm import sessionmaker
         global engine
-        SessionLocal = sessionmaker(bind=engine)
-        db = SessionLocal()
+        SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+        ws_service = PlaygroundWebSocketService(SessionLocal, user_id)
 
-        try:
-            ws_service = PlaygroundWebSocketService(db, user_id)
+        # Handle incoming messages
+        while True:
+            data = await websocket.receive_text()
 
-            # Handle incoming messages
-            while True:
-                data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+                message_type = message.get("type")
 
-                try:
-                    message = json.loads(data)
-                    message_type = message.get("type")
+                if message_type == "ping":
+                    # Heartbeat
+                    await websocket.send_json({"type": "pong"})
 
-                    if message_type == "ping":
-                        # Heartbeat
-                        await websocket.send_json({"type": "pong"})
+                elif message_type == "chat":
+                    # Stream chat response
+                    agent_id = message.get("agent_id")
+                    thread_id = message.get("thread_id")
+                    user_message = message.get("message")
 
-                    elif message_type == "chat":
-                        # Stream chat response
-                        agent_id = message.get("agent_id")
-                        thread_id = message.get("thread_id")
-                        user_message = message.get("message")
-
-                        if not agent_id or not user_message:
-                            await websocket.send_json({
-                                "type": "error",
-                                "error": "Missing agent_id or message"
-                            })
-                            continue
-
-                        # Process and stream response
-                        async for chunk in ws_service.process_streaming_message(
-                            agent_id=agent_id,
-                            thread_id=thread_id,
-                            message=user_message,
-                            websocket=websocket
-                        ):
-                            await websocket.send_json(chunk)
-
-                    else:
+                    if not agent_id or not user_message:
                         await websocket.send_json({
                             "type": "error",
-                            "error": f"Unknown message type: {message_type}"
+                            "error": "Missing agent_id or message"
                         })
+                        continue
 
-                except json.JSONDecodeError:
+                    # Process and stream response
+                    async for chunk in ws_service.process_streaming_message(
+                        agent_id=agent_id,
+                        thread_id=thread_id,
+                        message=user_message,
+                        websocket=websocket
+                    ):
+                        await websocket.send_json(chunk)
+
+                else:
                     await websocket.send_json({
                         "type": "error",
-                        "error": "Invalid JSON message"
-                    })
-                except Exception as msg_error:
-                    logger.error(f"Error processing WebSocket message: {msg_error}", exc_info=True)
-                    await websocket.send_json({
-                        "type": "error",
-                        "error": str(msg_error)
+                        "error": f"Unknown message type: {message_type}"
                     })
 
-        finally:
-            db.close()
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "error": "Invalid JSON message"
+                })
+            except Exception as msg_error:
+                logger.error(f"Error processing WebSocket message: {msg_error}", exc_info=True)
+                await websocket.send_json({
+                    "type": "error",
+                    "error": str(msg_error)
+                })
 
     except WebSocketDisconnect:
         logger.info(f"Playground WebSocket disconnected for user {user_id}")

@@ -17,7 +17,12 @@ from models import VectorStoreInstance, Agent
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_VENDORS = {"mongodb", "pinecone", "qdrant"}
+# BUG-652: `chroma` is the zero-config, in-process default vector store — it
+# should be accepted by the wizard even though it doesn't have a dedicated
+# container manager (so it's NOT auto-provisionable — users who pick "chroma"
+# are opting into the embedded fallback). Rejecting the literal string here
+# surfaced as a 400 {"detail": "Unsupported vendor: chroma..."} in the wizard.
+SUPPORTED_VENDORS = {"mongodb", "pinecone", "qdrant", "chroma"}
 AUTO_PROVISIONABLE_VENDORS = {"mongodb", "qdrant"}
 DEFAULT_SETUP_VECTOR_STORE_VENDOR = "qdrant"
 DEFAULT_SETUP_VECTOR_STORE_NAME = "Qdrant (Default)"

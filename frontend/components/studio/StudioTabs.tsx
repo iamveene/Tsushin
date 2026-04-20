@@ -70,6 +70,16 @@ const STUDIO_TABS: StudioTab[] = [
     prefixMatch: true,
   },
   {
+    href: '/agents/communication',
+    label: 'A2A Communications',
+    iconColor: 'text-cyan-400',
+    gradient: 'from-cyan-500 to-teal-400',
+    paths: [
+      // Two-way arrow icon — source→target permission wiring
+      'M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4-4m-4 4l4 4',
+    ],
+  },
+  {
     href: '/agents/builder',
     label: 'Builder',
     iconColor: 'text-indigo-400',

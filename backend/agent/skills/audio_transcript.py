@@ -123,7 +123,18 @@ class AudioTranscriptSkill(BaseSkill):
             try:
                 # Validate configuration - check database first, then config
                 tenant_id = config.get("tenant_id")
-                api_key = get_api_key("openai", db, tenant_id=tenant_id) or config.get("api_key")
+                api_key = None
+
+                provider_instance_id = config.get("provider_instance_id")
+                if provider_instance_id and tenant_id:
+                    from services.provider_instance_service import ProviderInstanceService
+                    instance = ProviderInstanceService.get_instance(provider_instance_id, tenant_id, db)
+                    if instance and instance.vendor == "openai" and instance.is_active:
+                        api_key = ProviderInstanceService.resolve_api_key(instance, db)
+
+                if not api_key:
+                    api_key = get_api_key("openai", db, tenant_id=tenant_id) or config.get("api_key")
+
                 if not api_key:
                     return SkillResult(
                         success=False,

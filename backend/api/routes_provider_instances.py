@@ -9,13 +9,13 @@ servers, Ollama instances, or custom LLM gateways).
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import logging
 import time
 
-from models import ProviderInstance, ProviderConnectionAudit
+from models import ProviderInstance, ProviderConnectionAudit, Agent
 from models_rbac import User
 from auth_dependencies import (
     TenantContext,
@@ -166,6 +166,132 @@ def _sanitize_test_error(err_str: str, test_model: str) -> str:
     if "permission" in lower or "403" in err_str:
         return "Access denied — check API key permissions for this model"
     return f"Connection test failed: {err_str[:200]}"
+
+
+async def _background_test_instance(instance_id: int, user_id: int) -> None:
+    """Run a connection test in the background after create/update.
+
+    Without this, cloud LLM provider instances sit at health_status='unknown'
+    (gray dot in the Hub UI) until the user explicitly clicks Test Connection,
+    even though the credentials may be perfectly valid. Mirrors the logic of
+    the test_provider_connection endpoint but runs in a fresh DB session
+    because the request session is closed by the time BackgroundTasks fires.
+    """
+    if _engine is None:
+        logger.warning("Auto-test skipped for instance %s: engine not initialized", instance_id)
+        return
+
+    from sqlalchemy.orm import sessionmaker
+    SessionLocal = sessionmaker(bind=_engine)
+    db = SessionLocal()
+    try:
+        instance = db.query(ProviderInstance).filter(ProviderInstance.id == instance_id).first()
+        if not instance:
+            return
+
+        has_instance_key = bool(_decrypt_provider_key(instance, db))
+        has_tenant_key = False
+        if not has_instance_key:
+            try:
+                from services.api_key_service import get_api_key
+                has_tenant_key = bool(get_api_key(instance.vendor, db, tenant_id=instance.tenant_id))
+            except Exception:
+                pass
+        if not has_instance_key and not has_tenant_key and instance.vendor != "ollama":
+            return
+
+        from api.routes_integrations import PROVIDER_TEST_MODELS
+        test_model = None
+        if instance.available_models:
+            test_model = instance.available_models[0]
+        if not test_model:
+            test_model = PROVIDER_TEST_MODELS.get(instance.vendor)
+        if not test_model and instance.vendor == "ollama":
+            test_model = "llama3.2"
+        if not test_model and instance.vendor == "custom":
+            test_model = "default"
+        if not test_model:
+            return
+
+        start_time = time.time()
+        error_message: Optional[str] = None
+        success = False
+        resolved_ip: Optional[str] = None
+
+        try:
+            from agent.ai_client import AIClient
+            from analytics.token_tracker import TokenTracker
+            tracker = TokenTracker(db, instance.tenant_id)
+
+            client = AIClient(
+                provider=instance.vendor if instance.vendor != "custom" else "openai",
+                model_name=test_model,
+                db=db,
+                token_tracker=tracker,
+                tenant_id=instance.tenant_id,
+                provider_instance_id=instance.id,
+                max_tokens=20,
+            )
+            _disable_sdk_retries(client)
+
+            result = await client.generate(
+                system_prompt="You are a test assistant. Respond with exactly: OK",
+                user_message="Test connection. Reply with OK.",
+                operation_type="connection_test",
+            )
+            if result.get("error"):
+                error_message = str(result["error"])
+            else:
+                success = True
+
+            if instance.base_url:
+                try:
+                    from urllib.parse import urlparse
+                    import socket
+                    parsed = urlparse(instance.base_url)
+                    if parsed.hostname:
+                        resolved_ip = socket.gethostbyname(parsed.hostname)
+                except Exception:
+                    pass
+        except Exception as e:
+            error_message = _sanitize_test_error(str(e), test_model)
+            logger.warning("Auto-test failed for instance %s: %s", instance_id, e)
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        instance.health_status = "healthy" if success else "unavailable"
+        instance.health_status_reason = None if success else error_message
+        instance.last_health_check = datetime.utcnow()
+
+        audit = ProviderConnectionAudit(
+            tenant_id=instance.tenant_id,
+            user_id=user_id,
+            provider_instance_id=instance.id,
+            action="auto_test_on_save",
+            resolved_ip=resolved_ip,
+            base_url=instance.base_url,
+            success=success,
+            error_message=error_message,
+        )
+        db.add(audit)
+        db.commit()
+        logger.info(
+            "Auto-test for instance %s (%s) -> %s (%dms)",
+            instance_id, instance.vendor,
+            "healthy" if success else "unavailable", latency_ms,
+        )
+    except Exception as e:
+        logger.error("Auto-test for instance %s crashed: %s", instance_id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
 
 # Curated suggestions shown in the UI as model-name autocomplete.
 # Providers with a live /models endpoint (openai/groq/grok/deepseek/openrouter via
@@ -435,6 +561,7 @@ def list_provider_instances(
 @router.post("/provider-instances", response_model=ProviderInstanceResponse, status_code=201)
 def create_provider_instance(
     data: ProviderInstanceCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -520,6 +647,15 @@ def create_provider_instance(
     db.commit()
     db.refresh(instance)
     logger.info(f"Created provider instance '{data.instance_name}' (vendor={vendor}) for tenant {ctx.tenant_id}")
+
+    # Auto-run a connection test in the background so the Hub UI dot reflects
+    # real connectivity instead of staying gray ('unknown') until the user
+    # clicks Test Connection. Skip when no credentials are configured (the
+    # test would just fail with "no api key") — except ollama, which can run
+    # keyless against a local daemon.
+    if (api_key_to_store or vendor == "ollama") and instance.available_models:
+        background_tasks.add_task(_background_test_instance, instance.id, current_user.id)
+
     return _to_response(instance, db)
 
 
@@ -562,6 +698,7 @@ def get_provider_instance(
 def update_provider_instance(
     instance_id: int,
     data: ProviderInstanceUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -620,8 +757,11 @@ def update_provider_instance(
                 raise HTTPException(status_code=500, detail="Failed to encrypt API key")
             instance.api_key_encrypted = encrypted
         else:
-            # Empty string = clear the key
+            # Empty string = clear the key. Reset health so the dot doesn't
+            # keep showing a stale 'healthy' from a previous test.
             instance.api_key_encrypted = None
+            instance.health_status = "unknown"
+            instance.health_status_reason = None
 
     if data.available_models is not None:
         instance.available_models = data.available_models
@@ -646,6 +786,21 @@ def update_provider_instance(
     db.commit()
     db.refresh(instance)
     logger.info(f"Updated provider instance {instance_id} for tenant {instance.tenant_id}")
+
+    # Re-test in the background when something connectivity-relevant changed
+    # (key, base URL, vendor-specific config, or model list). Skip pure metadata
+    # edits like rename or default-toggle so we don't burn provider quota for
+    # no reason.
+    connectivity_changed = (
+        (data.api_key is not None and data.api_key != "")
+        or data.base_url is not None
+        or data.extra_config is not None
+        or data.available_models is not None
+    )
+    can_test = bool(instance.api_key_encrypted) or instance.vendor == "ollama"
+    if connectivity_changed and can_test and instance.is_active and instance.available_models:
+        background_tasks.add_task(_background_test_instance, instance.id, current_user.id)
+
     return _to_response(instance, db)
 
 
@@ -1216,3 +1371,396 @@ def validate_provider_url(
         return UrlValidationResponse(valid=True)
     except SSRFValidationError as e:
         return UrlValidationResponse(valid=False, error=str(e))
+
+
+# ==================================================================
+# Ollama Auto-Provisioning Endpoints (v0.6.0-patch.5)
+# ==================================================================
+
+import threading as _threading  # noqa: E402  (kept local to Ollama endpoints)
+from typing import Literal as _Literal  # noqa: E402
+
+
+class ProvisionRequest(BaseModel):
+    gpu_enabled: bool = False
+    mem_limit: str = "4g"
+
+
+class ModelPullRequest(BaseModel):
+    model: str
+
+
+class PullJobResponse(BaseModel):
+    job_id: str
+    status: str  # pulling | done | error
+    percent: int = 0
+    bytes_downloaded: int = 0
+    bytes_total: int = 0
+    error: Optional[str] = None
+
+
+class ContainerStatusResponse(BaseModel):
+    status: str
+    container_name: Optional[str] = None
+    container_port: Optional[int] = None
+    image: Optional[str] = None
+    volume: Optional[str] = None
+    pulled_models: List[str] = []
+
+
+def _require_ollama_instance(
+    instance_id: int, ctx: TenantContext, db: Session
+) -> ProviderInstance:
+    """Load a tenant-owned Ollama ProviderInstance or raise HTTP 404."""
+    instance = db.query(ProviderInstance).filter(
+        ProviderInstance.id == instance_id
+    ).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Provider instance not found")
+    if not ctx.can_access_resource(instance.tenant_id):
+        raise HTTPException(status_code=404, detail="Provider instance not found")
+    if instance.vendor != "ollama":
+        raise HTTPException(
+            status_code=400,
+            detail="Container operations only supported for Ollama instances",
+        )
+    return instance
+
+
+@router.post(
+    "/provider-instances/{instance_id}/provision",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def provision_ollama_container(
+    instance_id: int,
+    data: ProvisionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Start provisioning an Ollama container for this tenant. Returns 202
+    immediately; poll `/container/status` for progress.
+    """
+    instance = _require_ollama_instance(instance_id, ctx, db)
+
+    # Reject obviously in-progress states so a double-click doesn't spawn two
+    # concurrent provisioners racing over the same DB row.
+    if instance.container_status in ("provisioning",):
+        return {"status": "provisioning"}
+
+    from services.provider_instance_service import ProviderInstanceService
+    try:
+        ProviderInstanceService.provision_container(
+            instance_id=instance_id,
+            tenant_id=instance.tenant_id,
+            db=db,
+            gpu_enabled=data.gpu_enabled,
+            mem_limit=data.mem_limit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    tenant_id = instance.tenant_id
+
+    def _bg():
+        try:
+            from db import get_global_engine
+            from sqlalchemy.orm import sessionmaker
+            engine = get_global_engine()
+            if engine is None:
+                logger.error("provision: no global engine available")
+                return
+            BgSession = sessionmaker(bind=engine)
+            bg_db = BgSession()
+            try:
+                bg_inst = bg_db.query(ProviderInstance).filter(
+                    ProviderInstance.id == instance_id,
+                    ProviderInstance.tenant_id == tenant_id,
+                ).first()
+                if not bg_inst:
+                    logger.warning(
+                        f"provision background: instance {instance_id} missing"
+                    )
+                    return
+                from services.ollama_container_manager import OllamaContainerManager
+                OllamaContainerManager().provision(bg_inst, bg_db)
+            finally:
+                try:
+                    bg_db.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.error(
+                f"provision background error (instance={instance_id}): {exc}",
+                exc_info=True,
+            )
+
+    _threading.Thread(
+        target=_bg,
+        daemon=True,
+        name=f"ollama-provision-{instance_id}",
+    ).start()
+
+    return {"status": "provisioning"}
+
+
+@router.post("/provider-instances/{instance_id}/deprovision")
+def deprovision_ollama_container(
+    instance_id: int,
+    remove_volume: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Stop and remove this tenant's Ollama container. Pass ``remove_volume=true``
+    to also delete the model cache (irreversible).
+    """
+    instance = _require_ollama_instance(instance_id, ctx, db)
+    from services.ollama_container_manager import OllamaContainerManager
+    try:
+        OllamaContainerManager().deprovision(
+            instance_id, instance.tenant_id, db, remove_volume=remove_volume
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Deprovision failed for instance {instance_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Deprovision failed: {e}")
+    return {"status": "deprovisioned", "remove_volume": remove_volume}
+
+
+@router.post("/provider-instances/{instance_id}/container/{action}")
+def ollama_container_action(
+    instance_id: int,
+    action: _Literal["start", "stop", "restart"],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    instance = _require_ollama_instance(instance_id, ctx, db)
+    from services.ollama_container_manager import OllamaContainerManager
+    mgr = OllamaContainerManager()
+    try:
+        if action == "start":
+            result = mgr.start_container(instance_id, instance.tenant_id, db)
+        elif action == "stop":
+            result = mgr.stop_container(instance_id, instance.tenant_id, db)
+        else:
+            result = mgr.restart_container(instance_id, instance.tenant_id, db)
+        return {"status": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Container {action} failed for instance {instance_id}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Container {action} failed: {e}"
+        )
+
+
+@router.get(
+    "/provider-instances/{instance_id}/container/status",
+    response_model=ContainerStatusResponse,
+)
+def ollama_container_status(
+    instance_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    instance = _require_ollama_instance(instance_id, ctx, db)
+    from services.ollama_container_manager import OllamaContainerManager
+    try:
+        info = OllamaContainerManager().get_status(
+            instance_id, instance.tenant_id, db
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return ContainerStatusResponse(**info)
+
+
+@router.get("/provider-instances/{instance_id}/container/logs")
+def ollama_container_logs(
+    instance_id: int,
+    tail: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    instance = _require_ollama_instance(instance_id, ctx, db)
+    from services.ollama_container_manager import OllamaContainerManager
+    try:
+        tail_clamped = max(1, min(int(tail or 100), 5000))
+        logs = OllamaContainerManager().get_logs(
+            instance_id, instance.tenant_id, db, tail=tail_clamped
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"logs": logs}
+
+
+@router.post("/provider-instances/{instance_id}/models/pull")
+def ollama_model_pull_start(
+    instance_id: int,
+    data: ModelPullRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """Start a background Ollama model pull. Returns a job_id to poll."""
+    instance = _require_ollama_instance(instance_id, ctx, db)
+    from services.ollama_model_service import OllamaModelService
+    try:
+        job_id = OllamaModelService.start_pull(
+            instance_id=instance_id,
+            tenant_id=instance.tenant_id,
+            model_name=data.model,
+            db=db,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"job_id": job_id, "status": "pulling"}
+
+
+@router.get(
+    "/provider-instances/{instance_id}/models/pull/{job_id}",
+    response_model=PullJobResponse,
+)
+def ollama_model_pull_status(
+    instance_id: int,
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """Poll an in-flight model pull. Tenant-scoped by instance_id."""
+    instance = _require_ollama_instance(instance_id, ctx, db)
+    from services.ollama_model_service import OllamaModelService
+    state = OllamaModelService.get_pull_status(job_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Pull job not found or expired")
+
+    # Cross-check tenant: a job_id minted for another tenant must not leak out.
+    if state.get("tenant_id") != instance.tenant_id or state.get(
+        "instance_id"
+    ) != instance.id:
+        raise HTTPException(status_code=404, detail="Pull job not found or expired")
+
+    return PullJobResponse(
+        job_id=job_id,
+        status=state.get("status", "error"),
+        percent=int(state.get("percent") or 0),
+        bytes_downloaded=int(state.get("bytes_downloaded") or 0),
+        bytes_total=int(state.get("bytes_total") or 0),
+        error=state.get("error"),
+    )
+
+
+@router.delete("/provider-instances/{instance_id}/models/{model_name}")
+def ollama_model_delete(
+    instance_id: int,
+    model_name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    instance = _require_ollama_instance(instance_id, ctx, db)
+    from services.ollama_model_service import OllamaModelService
+    try:
+        result = OllamaModelService.delete_model(
+            instance_id, instance.tenant_id, model_name, db
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return result
+
+
+@router.get("/provider-instances/{instance_id}/models")
+def ollama_list_models(
+    instance_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    instance = _require_ollama_instance(instance_id, ctx, db)
+    from services.ollama_model_service import OllamaModelService
+    try:
+        models = OllamaModelService.list_models(
+            instance_id, instance.tenant_id, db
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"models": models, "count": len(models)}
+
+
+# ==================================================================
+# Assign provider instance to agent (wizard convenience endpoint)
+# ==================================================================
+
+
+class AssignProviderToAgentRequest(BaseModel):
+    agent_id: int
+    model_name: str
+
+
+@router.post("/provider-instances/{instance_id}/assign-to-agent")
+def assign_provider_instance_to_agent(
+    instance_id: int,
+    data: AssignProviderToAgentRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Wire an agent to use this provider instance (model backend). Used by the
+    Ollama setup wizard so users don't have to jump to Agent Studio to repoint
+    the agent at the new provider.
+
+    Updates Agent.provider_instance_id, Agent.model_name, and Agent.model_provider
+    in one shot. Tenant isolation is enforced on BOTH the provider instance and
+    the target agent.
+    """
+    # 1. Load and verify the provider instance is in this tenant
+    instance = db.query(ProviderInstance).filter(
+        ProviderInstance.id == instance_id
+    ).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Provider instance not found")
+    if not ctx.can_access_resource(instance.tenant_id):
+        raise HTTPException(status_code=404, detail="Provider instance not found")
+
+    # 2. Validate requested model is part of the instance's known model list
+    #    (when the list has been populated — empty list = accept anything)
+    model_name = (data.model_name or "").strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="model_name is required")
+
+    # 3. Load and verify the agent is in this tenant
+    agent = db.query(Agent).filter(Agent.id == data.agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent {data.agent_id} not found")
+    if not ctx.can_access_resource(agent.tenant_id):
+        raise HTTPException(status_code=404, detail=f"Agent {data.agent_id} not found")
+
+    # 4. Apply the update
+    agent.provider_instance_id = instance.id
+    agent.model_name = model_name
+    agent.model_provider = instance.vendor
+    agent.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(agent)
+
+    logger.info(
+        f"Assigned provider instance {instance_id} ({instance.vendor}/{model_name}) "
+        f"to agent {agent.id} (tenant={ctx.tenant_id})"
+    )
+
+    return {
+        "agent_id": agent.id,
+        "provider_instance_id": agent.provider_instance_id,
+        "model_name": agent.model_name,
+        "model_provider": agent.model_provider,
+    }
