@@ -187,5 +187,65 @@ def test_predefined_models_single_source():
     )
 
 
+# ---------------------------------------------------------------------------
+# Guard 5 — Channel catalog drift
+# ---------------------------------------------------------------------------
+
+def test_channel_catalog_frontend_fallback_matches_backend():
+    """
+    Every channel registered in ``backend/channels/catalog.CHANNEL_CATALOG``
+    must also appear in the frontend fallback array inside
+    ``frontend/components/agent-wizard/steps/StepChannels.tsx``. The frontend
+    uses that array when the live ``/api/channels`` fetch fails; drift means
+    an outage would hide a channel that the wizard otherwise supports.
+
+    Also asserts every backend entry carries a non-empty display_name so a
+    silently-blank UI card can't ship.
+    """
+    from channels.catalog import CHANNEL_CATALOG
+
+    assert CHANNEL_CATALOG, "CHANNEL_CATALOG is empty — registration broken?"
+
+    backend_ids: Set[str] = set()
+    for ch in CHANNEL_CATALOG:
+        assert ch.id, "Channel with missing id in CHANNEL_CATALOG"
+        assert ch.display_name and ch.display_name.strip(), (
+            f"Channel {ch.id!r} has empty display_name — every wizard card "
+            f"needs a human-readable label."
+        )
+        backend_ids.add(ch.id)
+
+    step_path = FRONTEND / "components" / "agent-wizard" / "steps" / "StepChannels.tsx"
+    assert step_path.exists(), f"StepChannels.tsx not found at {step_path}"
+    text = _read(step_path)
+
+    fallback_match = re.search(
+        r"const CHANNELS:\s*\{[^}]*\}\[\]\s*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert fallback_match, (
+        "Fallback CHANNELS array not found in StepChannels.tsx. If you "
+        "refactored the fallback shape, update this regex too."
+    )
+    frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_match.group(1)))
+
+    missing_in_frontend = backend_ids - frontend_ids
+    extra_in_frontend = frontend_ids - backend_ids
+
+    assert not missing_in_frontend, (
+        f"Channels registered in backend CHANNEL_CATALOG are missing from "
+        f"the frontend fallback in StepChannels.tsx: "
+        f"{sorted(missing_in_frontend)}. Add matching entries to the "
+        f"CHANNELS array so offline/degraded mode still renders them."
+    )
+    assert not extra_in_frontend, (
+        f"Channels present in StepChannels.tsx fallback but not in backend "
+        f"CHANNEL_CATALOG: {sorted(extra_in_frontend)}. Either register "
+        f"them in backend/channels/catalog.py or remove them from the "
+        f"frontend fallback."
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

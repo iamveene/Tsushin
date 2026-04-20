@@ -1254,6 +1254,21 @@ export interface SkillDefinition {
   auto_enabled_for?: string[]      // Agent types that force-enable + lock the skill
 }
 
+/**
+ * Channel catalog entry served by GET /api/channels. Source of truth is
+ * backend/channels/catalog.py; the wizard falls back to a static copy in
+ * StepChannels.tsx when the API is unreachable (offline/degraded mode).
+ */
+export interface ChannelCatalogEntry {
+  id: string
+  display_name: string
+  description: string
+  requires_setup: boolean
+  setup_hint: string
+  icon_hint: string
+  tenant_has_configured: boolean
+}
+
 // Phase 5.0: Knowledge Management
 export interface AgentKnowledge {
   id: number
@@ -3592,6 +3607,18 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to fetch available skills')
     const data = await res.json()
     return data.skills || []
+  },
+
+  /**
+   * Fetch the wizard channel catalog (one entry per supported channel,
+   * annotated with per-tenant configuration status). Mirrors the
+   * getAvailableSkills pattern — the frontend falls back to a hardcoded
+   * list in StepChannels.tsx if this call fails.
+   */
+  async getChannelCatalog(): Promise<ChannelCatalogEntry[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch channel catalog')
+    return res.json()
   },
 
   async getAgentSkills(agentId: number): Promise<AgentSkill[]> {

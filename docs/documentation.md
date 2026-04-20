@@ -639,7 +639,7 @@ Step graph (text agents skip step 4):
 | 4 | Voice *(audio/hybrid only)* | Capability (voice/transcript/hybrid), TTS provider (Kokoro/OpenAI/ElevenLabs), voice/language/speed/format, Kokoro container auto-provision |
 | 5 | Skills | Built-in + custom skills; `audio_*` auto-selected and locked for audio/hybrid |
 | 6 | Memory | Built-in ring buffer / built-in + semantic / external vector store; memory size slider |
-| 7 | Channels | playground / whatsapp / telegram / slack / discord / webhook |
+| 7 | Channels | playground / whatsapp / telegram / slack / discord / webhook — catalog fetched from `GET /api/channels` (source: `backend/channels/catalog.py`), with a static fallback in `StepChannels.tsx` for offline mode. Channels needing per-tenant setup render a "Needs setup" badge when the tenant has no matching instance row. |
 | 8 | Review | Per-section summary with Edit buttons that jump back |
 | 9 | Progress | Chained provisioning spinner; on success navigates to `/playground?agentId=<id>` |
 

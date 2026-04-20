@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Wizard drift prevention — StepChannels fetches backend catalog (2026-04-20)
+
+Mirrors the StepSkills pattern landed in commit `a9bfdc9`: the agent wizard's channel picker no longer hardcodes its 6-channel list.
+
+- Added `backend/channels/catalog.py` with `CHANNEL_CATALOG` (frozen `ChannelInfo` dataclass per channel: id, display_name, description, requires_setup, setup_hint, icon_hint). Seeded with playground, whatsapp, telegram, slack, discord, webhook.
+- Added `GET /api/channels` (`backend/api/routes_channels.py`) returning each catalog entry annotated with `tenant_has_configured` — checks `WhatsAppMCPInstance`, `TelegramBotInstance`, `SlackIntegration`, `DiscordIntegration`, `WebhookIntegration` rows for the caller's tenant. Playground is always considered configured; DB lookup failures degrade conservatively to `false`.
+- Registered the router in `backend/app.py`.
+- `frontend/lib/client.ts` gained `ChannelCatalogEntry` + `api.getChannelCatalog()`.
+- `frontend/components/agent-wizard/steps/StepChannels.tsx` now fetches the catalog at mount and falls back to a commented fallback-only array when the API is unreachable. Channels with `requires_setup && !tenant_has_configured` render a "Needs setup" amber badge.
+- `backend/tests/test_wizard_drift.py` extended with a Guard 5 that asserts every backend catalog id is present in the frontend fallback array and every entry has a non-empty `display_name`.
+
 ### BUG-668 — Kokoro auto-provision disconnect fix (2026-04-20, post-PR-#26 regression)
 
 Surfaced by the post-merge comprehensive regression when a QA agent actually exercised the Kokoro wizard end-to-end (earlier regression passes only clicked through the wizard UI without committing a provision). Kokoro hit the same `psycopg2.OperationalError: server closed the connection unexpectedly` + `docker-socket-proxy Read timed out` disconnect pattern BUG-663 fixed for Ollama, because the BUG-663 fix only covered `ollama_container_manager.py` and didn't include the parallel `kokoro_container_manager.py` path.

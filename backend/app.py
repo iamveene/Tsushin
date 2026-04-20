@@ -58,6 +58,7 @@ from api.routes_knowledge_base import router as knowledge_base_router, set_engin
 from api.routes_shared_memory import router as shared_memory_router, set_engine as set_shared_memory_engine
 from api.routes_memory import router as memory_router, set_engine as set_memory_engine
 from api.routes_skills import router as skills_router, set_engine as set_skills_engine
+from api.routes_channels import router as channels_router
 from api.routes_sandboxed_tools import router as sandboxed_tools_router, set_engine as set_sandboxed_tools_engine
 from api.routes_agents import router as agents_router, set_engine as set_agents_engine
 # Phase 5.1 Persona System - Import added last to avoid conflicts
@@ -1279,6 +1280,7 @@ app.include_router(knowledge_base_router, prefix="/api")
 app.include_router(shared_memory_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
+app.include_router(channels_router)  # Wizard channel catalog (/api/channels)
 app.include_router(sandboxed_tools_router, prefix="/api", tags=["Sandboxed Tools"])
 app.include_router(agents_router, prefix="/api")
 app.include_router(personas_router)  # Phase 5.1 - Persona API
