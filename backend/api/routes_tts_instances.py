@@ -273,6 +273,10 @@ async def create_tts_instance(
     # Peer review A-B2: auto-provision runs in background so the HTTP response
     # is not blocked by container startup. Caller polls /container/status.
     if data.auto_provision:
+        # BUG-651: flip is_auto_provisioned + container_status BEFORE the
+        # thread starts so _to_response() returns the truthful pending state,
+        # not the pre-provision defaults (`is_auto_provisioned: false`).
+        TTSInstanceService.mark_pending_auto_provision(instance, db)
         threading.Thread(
             target=_provision_bg,
             args=(instance.id, ctx.tenant_id),

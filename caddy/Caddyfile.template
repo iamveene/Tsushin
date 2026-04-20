@@ -63,9 +63,19 @@
 # }
 
 # --- Self-Signed Mode ---
+# NOTE (BUG-653): emit `default_sni {SSL_DOMAIN}` ONLY when SSL_DOMAIN is a
+# real hostname. For IP-literal binds, omit the global block entirely — Caddy
+# rejects IP literals in `default_sni`, and the old fallback to
+# `default_sni localhost` broke SNI-less handshakes from external clients
+# (curl / cloudflared probes got cert mismatches because Caddy would only
+# surface the cert under `localhost`). Auto-selection works fine for IP sites.
+#
+# For hostname binds:
 # {
 #     default_sni {SSL_DOMAIN}
 # }
+#
+# For IP binds: no global block at all.
 #
 # (tsushin_routes) { ... }
 #

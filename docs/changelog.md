@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Infra / install / observability — Group D bug sprint (BUG-649/650/651/652/653/654/655/658) (2026-04-19)
+
+Remediation sprint for the Group D audit findings. Regression guard at
+`backend/dev_tests/test_group_d_infra.py` (6 live tests + 2 host-only checks).
+
+- **BUG-649** (HIGH) Ollama auto-provisioning failed on chat/provision due to a
+  pooled DB connection held idle across a 60-120s health wait and silently
+  dropped by Postgres. `OllamaContainerManager.provision` now explicitly
+  `db.close()` before the health loop, runs a new `_wait_for_health_detached`
+  against the captured `base_url`, and opens a fresh session to write back
+  `container_status` / `health_status`.
+- **BUG-650** (LOW) Provisioning errors wrote raw SQL snippets + 64-char
+  container IDs into `health_status_reason`. New `_sanitize_health_reason`
+  helper strips `[SQL: ...]`, SQLAlchemy background URLs, `psycopg2.*`
+  wrappers, and long hex IDs before the text is persisted.
+- **BUG-651** (LOW) `POST /api/tts-instances` with `auto_provision=true`
+  briefly reported `is_auto_provisioned: false` in its 202 response. The route
+  now calls `TTSInstanceService.mark_pending_auto_provision` to flip
+  `is_auto_provisioned=True` + `container_status=provisioning` synchronously
+  before kicking off the background worker.
+- **BUG-652** (LOW) `POST /api/vector-stores {"vendor":"chroma", ...}`
+  returned `400 Unsupported vendor: chroma`. Added `chroma` to
+  `VectorStoreInstanceService.SUPPORTED_VENDORS` (remains absent from
+  `AUTO_PROVISIONABLE_VENDORS` — chroma is the in-process default with no container).
+- **BUG-653** (HIGH) Self-signed Caddy installs bound to bare IP literals
+  broke external TLS handshakes because the generator emitted
+  `default_sni localhost` (Caddy rejects IP literals in `default_sni`). For
+  IP-literal binds the `install.py` generator now omits the `default_sni`
+  directive entirely and lets Caddy auto-select; hostname binds keep
+  `default_sni {domain}`.
+- **BUG-654** (MEDIUM) `docker-compose.yml` declared `TSN_AUTH_RATE_LIMIT`
+  twice, shadowing the `5/minute` default with an empty string. Removed the
+  earlier duplicate.
+- **BUG-655** (MEDIUM) Toolbox image build failed on aarch64 hosts because
+  classic `docker build` never populates `TARGETARCH` in the Dockerfile, so
+  the arch-aware lines silently pulled amd64 binaries on arm64. `install.py`
+  now detects the host arch and passes `--build-arg TARGETARCH=arm64|amd64`,
+  and emits a clearer warning + a ready-to-copy rebuild command when a build
+  does fail.
+- **BUG-658** (LOW) Installer SSL-proxy health check now fails fast after
+  three consecutive TLS handshake errors (rather than burning all 20 attempts)
+  and points the operator at BUG-653 as the likely root cause.
+
 ### Flows engine — Group B bug sprint (BUG-627..637) (2026-04-19)
 
 Remediation sprint for the flows audit findings. Nine Group B bugs resolved in one commit; see `backend/dev_tests/test_flows_group_b.py` for the regression guard (9/9 passing).

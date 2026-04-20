@@ -153,13 +153,14 @@ services:
       - TSN_APP_PORT=8081
       - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
       - TSN_LOG_LEVEL=${TSN_LOG_LEVEL:-INFO}
-      - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-}
       - TSN_LOG_FORMAT=${TSN_LOG_FORMAT:-text}
       - TSN_METRICS_ENABLED=${TSN_METRICS_ENABLED:-true}
       - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
       - TSN_SECRET_BACKEND=${TSN_SECRET_BACKEND:-env}
       - TSN_CONTAINER_RUNTIME=${TSN_CONTAINER_RUNTIME:-docker}
       - TSN_POLL_INTERVAL_MS=${TSN_POLL_INTERVAL_MS:-3000}
+      # BUG-654: single authoritative declaration — the previous duplicate on
+      # line 156 shadowed this value with an empty string when the var was unset.
       - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-5/minute}
       - TSN_DISABLE_AUTH_RATE_LIMIT=${TSN_DISABLE_AUTH_RATE_LIMIT:-false}
       # Docker socket proxy (BUG-135: no direct socket mount)

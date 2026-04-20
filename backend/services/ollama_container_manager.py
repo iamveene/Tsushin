@@ -12,13 +12,14 @@ Uses threading.Lock for port-allocation safety (uvicorn runs --workers 1).
 import hashlib
 import logging
 import os
+import re
 import time
 import threading
 from datetime import datetime
 from typing import Optional, Set, Dict, Any
 
 import requests
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from services.container_runtime import (
     get_container_runtime,
@@ -53,6 +54,27 @@ def _get_container_prefix() -> str:
 
 
 _provision_lock = threading.Lock()
+
+
+# BUG-650: sanitize error text before persisting / returning to the UI.
+# Strips raw SQL fragments and long hex container IDs that leak internals.
+_HEX_ID_RE = re.compile(r"\b[a-f0-9]{12,64}\b", re.IGNORECASE)
+_SQL_NOISE_RE = re.compile(
+    r"(\[SQL:.*?\]|\(Background on this error at:.*?\)|\(psycopg2.*?\))",
+    re.DOTALL,
+)
+
+
+def _sanitize_health_reason(text: str, max_len: int = 500) -> str:
+    """Strip SQL + container-ID noise from provisioning error text."""
+    if not text:
+        return ""
+    cleaned = _SQL_NOISE_RE.sub("", str(text))
+    cleaned = _HEX_ID_RE.sub("<id>", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) > max_len:
+        cleaned = cleaned[: max_len - 1] + "\u2026"
+    return cleaned
 
 
 class OllamaContainerManager:
@@ -118,9 +140,9 @@ class OllamaContainerManager:
             if not supports_gpu:
                 instance.container_status = "error"
                 instance.health_status = "unavailable"
-                instance.health_status_reason = (
+                instance.health_status_reason = _sanitize_health_reason(
                     "GPU requested but NVIDIA Container Toolkit not detected"
-                )[:500]
+                )
                 db.commit()
                 raise RuntimeError(
                     "GPU requested but NVIDIA Container Toolkit not detected. "
@@ -226,26 +248,49 @@ class OllamaContainerManager:
             # a stale DB connection after _wait_for_health can't lose this state.
             db.commit()
 
-            # Wait for health. Can be 60–120s (Ollama image pull + serve warmup).
-            healthy = self._wait_for_health(instance)
+            # BUG-649: explicitly release the pooled DB connection BEFORE the
+            # long (up-to-120s) health wait. Holding an idle connection across
+            # that window races PostgreSQL's `idle_in_transaction_session_timeout`
+            # and server-side TCP keepalive, both of which can silently drop
+            # the socket. We capture the identifiers we need, free the pool slot,
+            # run the health loop without DB state, then re-open a fresh session
+            # for the final write-back. This is the fix the bug report asks for
+            # (`close/detach the sqlalchemy session before the long-running I/O,
+            # re-open/attach for the write-back`).
+            instance_id = instance.id
+            tenant_id_capture = instance.tenant_id
+            base_url_capture = instance.base_url
+            engine = db.get_bind()
+            db.close()
 
-            # Force a fresh connection from the pool after the long wait —
-            # the pooled connection may have been closed by the server while idle.
             try:
-                db.rollback()
-            except Exception:
-                pass
+                # Best-effort: use the instance we already have (its attributes
+                # were committed above; _check_health reads only base_url).
+                healthy = self._wait_for_health_detached(base_url_capture)
+            finally:
+                # Re-attach: open a fresh session from the same engine and
+                # re-fetch the row so subsequent writes go against a live conn.
+                SessionLocal = sessionmaker(bind=engine)
+                db_new = SessionLocal()
+                try:
+                    from models import ProviderInstance
+                    instance = db_new.query(ProviderInstance).filter(
+                        ProviderInstance.id == instance_id,
+                        ProviderInstance.tenant_id == tenant_id_capture,
+                    ).first()
+                    if instance is not None:
+                        instance.container_status = "running" if healthy else "error"
+                        instance.health_status = "healthy" if healthy else "unavailable"
+                        instance.health_status_reason = (
+                            "Auto-provisioned and healthy"
+                            if healthy
+                            else "Container started but health check failed"
+                        )
+                        instance.last_health_check = datetime.utcnow()
+                        db_new.commit()
+                finally:
+                    db_new.close()
 
-            instance.container_status = "running" if healthy else "error"
-            instance.health_status = "healthy" if healthy else "unavailable"
-            instance.health_status_reason = (
-                "Auto-provisioned and healthy"
-                if healthy
-                else "Container started but health check failed"
-            )
-            instance.last_health_check = datetime.utcnow()
-
-            db.commit()
             logger.info(
                 f"Provisioned Ollama container: {container_name} (healthy={healthy})"
             )
@@ -255,9 +300,12 @@ class OllamaContainerManager:
                 f"Failed to provision Ollama container {container_name}: {e}",
                 exc_info=True,
             )
-            # Make sure we're not on a dead connection before writing error state.
+            # BUG-649: the error path may also be entered with a dead conn
+            # (if the exception was raised from inside the long-wait window).
+            # Rebuild the session defensively rather than trusting `db`.
+            engine = db.get_bind() if db is not None else None
             try:
-                db.rollback()
+                db.close()
             except Exception:
                 pass
             # PEER REVIEW B-B3: remove the half-created container BEFORE clearing DB
@@ -267,14 +315,28 @@ class OllamaContainerManager:
             except Exception:
                 pass
 
-            instance.container_status = "error"
-            instance.container_name = None
-            instance.container_id = None
-            instance.container_port = None
-            instance.base_url = None
-            instance.health_status = "unavailable"
-            instance.health_status_reason = str(e)[:500]
-            db.commit()
+            if engine is not None:
+                SessionLocal = sessionmaker(bind=engine)
+                db_err = SessionLocal()
+                try:
+                    from models import ProviderInstance
+                    err_instance = db_err.query(ProviderInstance).filter(
+                        ProviderInstance.id == instance.id,
+                    ).first() if instance is not None else None
+                    if err_instance is not None:
+                        err_instance.container_status = "error"
+                        err_instance.container_name = None
+                        err_instance.container_id = None
+                        err_instance.container_port = None
+                        err_instance.base_url = None
+                        err_instance.health_status = "unavailable"
+                        # BUG-650: strip raw SQL + container-ID noise.
+                        err_instance.health_status_reason = _sanitize_health_reason(
+                            str(e)
+                        )
+                        db_err.commit()
+                finally:
+                    db_err.close()
             raise
 
     def start_container(self, instance_id: int, tenant_id: str, db: Session) -> str:
@@ -395,6 +457,24 @@ class OllamaContainerManager:
         while time.time() - start < HEALTH_CHECK_TIMEOUT:
             if self._check_health(instance):
                 return True
+            time.sleep(HEALTH_CHECK_INTERVAL)
+        return False
+
+    def _wait_for_health_detached(self, base_url: Optional[str]) -> bool:
+        """Same as _wait_for_health but takes base_url directly so the caller
+        can run the poll without holding a SQLAlchemy-bound instance (and thus
+        without holding a DB connection for 60-120s). See BUG-649.
+        """
+        if not base_url:
+            return False
+        start = time.time()
+        while time.time() - start < HEALTH_CHECK_TIMEOUT:
+            try:
+                resp = requests.get(f"{base_url}/api/tags", timeout=5)
+                if resp.status_code == 200:
+                    return True
+            except Exception:
+                pass
             time.sleep(HEALTH_CHECK_INTERVAL)
         return False
 

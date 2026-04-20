@@ -117,6 +117,21 @@ class TTSInstanceService:
     # ------------------------------------------------------------------ provision
 
     @staticmethod
+    def mark_pending_auto_provision(instance: TTSInstance, db: Session) -> TTSInstance:
+        """BUG-651: mirror Ollama's pattern. Flip `is_auto_provisioned=True`
+        and `container_status='provisioning'` synchronously so the immediate
+        HTTP response reports the correct state — not the pre-provision
+        defaults. Safe to call from the route before kicking off the
+        background provisioning worker.
+        """
+        instance.is_auto_provisioned = True
+        instance.container_status = "provisioning"
+        instance.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(instance)
+        return instance
+
+    @staticmethod
     def provision_instance(
         instance: TTSInstance,
         db: Session,
@@ -198,6 +213,19 @@ class TTSInstanceService:
             mem_limit=mem_limit,
             cpu_quota=cpu_quota,
         )
+
+        # BUG-651: mirror Ollama's pattern — if the caller asked to auto-provision,
+        # set `is_auto_provisioned=True` and surface a `provisioning` container
+        # status BEFORE the provisioning RPC runs. The HTTP route returns
+        # immediately after this call (or after kicking off a background worker),
+        # so without this flip the initial response reports `is_auto_provisioned:
+        # false` and only flips on the next poll.
+        if auto_provision:
+            instance.is_auto_provisioned = True
+            instance.container_status = "provisioning"
+            instance.updated_at = datetime.utcnow()
+            db.commit()
+            db.refresh(instance)
 
         warning = None
         if auto_provision:
