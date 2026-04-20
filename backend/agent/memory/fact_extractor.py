@@ -225,9 +225,12 @@ Conversation to analyze:
 
         # BUG-642 / BUG-661: Strip user turns that look like instruction
         # injection / persona override / memory-poisoning before the LLM
-        # extractor sees them. Track which user turns were dropped so we
-        # can also refuse to emit `instructions`-topic facts below.
-        sanitized_conversation, had_trusted_user_turn, dropped_count = (
+        # extractor sees them. The returned flag is True iff the
+        # conversation contains at least one assistant/system turn
+        # (a "trusted non-user origin"); we use it below to refuse
+        # persistent `instructions`-topic facts when the only content
+        # comes from user role turns.
+        sanitized_conversation, had_trusted_non_user_turn, dropped_count = (
             self._sanitize_conversation_for_extraction(conversation)
         )
 
@@ -282,7 +285,7 @@ Conversation to analyze:
             # legitimately produced one.
             facts = self._filter_untrusted_facts(
                 facts,
-                had_trusted_user_turn=had_trusted_user_turn,
+                had_trusted_non_user_turn=had_trusted_non_user_turn,
             )
 
             # Add metadata
@@ -350,7 +353,7 @@ Conversation to analyze:
         return sanitized, had_trusted, dropped
 
     def _filter_untrusted_facts(
-        self, facts: List[Dict], had_trusted_user_turn: bool
+        self, facts: List[Dict], had_trusted_non_user_turn: bool
     ) -> List[Dict]:
         """
         BUG-642 / BUG-661: Post-extraction filter.
@@ -384,7 +387,7 @@ Conversation to analyze:
                 )
                 continue
 
-            if topic == "instructions" and not had_trusted_user_turn:
+            if topic == "instructions" and not had_trusted_non_user_turn:
                 self.logger.warning(
                     "Fact extractor: dropped `instructions` fact "
                     "(key=%s) — no trusted (assistant/system) origin in "

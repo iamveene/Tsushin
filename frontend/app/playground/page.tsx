@@ -1099,13 +1099,17 @@ export default function PlaygroundPage() {
               } else {
                 console.warn('[Playground] Thread', pending, 'not in agent list — falling back to default thread selection')
                 // Stale reference — the thread doesn't belong to this agent (e.g.,
-                // agent was switched). Drop the query param so the user doesn't
-                // get stuck on a 404 loop.
+                // agent was switched OR a different user logged in on this browser
+                // and the old tenant's thread id is still in localStorage). Drop
+                // both the query param AND the localStorage key so the user
+                // doesn't get stuck on a 404 loop and foreign-tenant thread ids
+                // don't persist.
                 try {
                   const params = new URLSearchParams(window.location.search)
                   params.delete('thread')
                   const qs = params.toString()
                   window.history.replaceState(null, '', qs ? `/playground?${qs}` : '/playground')
+                  window.localStorage.removeItem('tsushin.playground.lastThreadId')
                 } catch { /* no-op */ }
               }
             }

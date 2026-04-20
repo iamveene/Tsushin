@@ -5751,11 +5751,13 @@ export const api = {
     tenantSlug?: string
     redirectAfter?: string
     invitationToken?: string
+    platform?: boolean
   }): Promise<GoogleAuthURL> {
     const params = new URLSearchParams()
     if (options?.tenantSlug) params.append('tenant_slug', options.tenantSlug)
     if (options?.redirectAfter) params.append('redirect_after', options.redirectAfter)
     if (options?.invitationToken) params.append('invitation_token', options.invitationToken)
+    if (options?.platform) params.append('platform', 'true')
 
     const res = await authenticatedFetch(`${API_URL}/api/auth/google/authorize?${params}`)
     if (!res.ok) {

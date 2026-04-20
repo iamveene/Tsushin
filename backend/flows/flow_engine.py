@@ -2797,7 +2797,13 @@ class FlowEngine:
             # to that dict instead of literal null). Individual fields
             # (`step_1.message_sent`, `step_1.raw_output`, etc.) still work
             # because `**output` is merged at the same level.
+            # BUG-632 followup: keep `**output` spread BEFORE the canonical
+            # `output` alias so handler-emitted `output` keys (string) don't
+            # overwrite the dict alias. Also re-assert the top-level
+            # bookkeeping fields AFTER the spread so they can't be clobbered
+            # by a handler that happens to emit `status`/`error`/etc.
             step_data = {
+                **output,  # Merge all output fields (raw_output, summary, tool_used, etc.)
                 "position": position,
                 "name": name,
                 "type": step_type,
@@ -2805,8 +2811,7 @@ class FlowEngine:
                 "error": step_run.error_text,
                 "execution_time_ms": step_run.execution_time_ms,
                 "retry_count": step_run.retry_count,
-                "output": output,  # canonical alias for the whole output dict
-                **output  # Merge all output fields (raw_output, summary, tool_used, etc.)
+                "output": output,  # canonical dict alias — MUST be last to survive the spread
             }
 
             # Add by position (1-based): step_1, step_2, etc.
