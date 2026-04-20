@@ -455,5 +455,80 @@ def test_ollama_curated_models_imported_from_shared_module():
         )
 
 
+# ---------------------------------------------------------------------------
+# Guard — AddIntegrationWizard provider catalog drift (search + travel)
+# ---------------------------------------------------------------------------
+
+def _addintegration_fallback_ids() -> Set[str]:
+    """
+    Parse ``frontend/components/integrations/AddIntegrationWizard.tsx`` and
+    return the set of provider ids in the ``FALLBACK_PROVIDERS`` array.
+
+    This helper is used by both the search-provider and flight-provider
+    drift guards below.
+    """
+    wizard_path = FRONTEND / "components" / "integrations" / "AddIntegrationWizard.tsx"
+    assert wizard_path.exists(), f"AddIntegrationWizard.tsx not found at {wizard_path}"
+    text = _read(wizard_path)
+
+    block = re.search(
+        r"FALLBACK_PROVIDERS:\s*ProviderMeta\[\]\s*=\s*\[(.*?)^\]",
+        text,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert block, "FALLBACK_PROVIDERS array not found in AddIntegrationWizard.tsx"
+    return set(re.findall(r"id:\s*'([^']+)'", block.group(1)))
+
+
+def test_search_providers_registered_match_wizard_fallback():
+    """
+    Every provider registered in ``SearchProviderRegistry`` must also appear
+    in the ``FALLBACK_PROVIDERS`` array of
+    ``frontend/components/integrations/AddIntegrationWizard.tsx``. The wizard
+    fetches the live catalog from ``/api/hub/search-providers`` at mount but
+    falls back to this static array when that endpoint is unreachable —
+    so the fallback must stay in lockstep with the backend registry.
+    """
+    from hub.providers.search_registry import SearchProviderRegistry
+
+    SearchProviderRegistry.initialize_providers()
+    registered = set(SearchProviderRegistry.get_registered_providers())
+    assert registered, "SearchProviderRegistry came up empty — registration broken?"
+
+    fallback_ids = _addintegration_fallback_ids()
+
+    missing_in_frontend = registered - fallback_ids
+    assert not missing_in_frontend, (
+        f"Search providers registered in backend SearchProviderRegistry are "
+        f"missing from the AddIntegrationWizard fallback array: "
+        f"{sorted(missing_in_frontend)}. Add matching rows to "
+        f"frontend/components/integrations/AddIntegrationWizard.tsx so "
+        f"offline/degraded mode still renders them."
+    )
+
+
+def test_flight_providers_registered_match_wizard_fallback():
+    """
+    Every provider registered in ``FlightProviderRegistry`` must also appear
+    in the ``FALLBACK_PROVIDERS`` array of AddIntegrationWizard. Same
+    rationale as the search-provider guard above.
+    """
+    from hub.providers.registry import FlightProviderRegistry
+
+    FlightProviderRegistry.initialize_providers()
+    registered = set(FlightProviderRegistry.get_registered_providers())
+    assert registered, "FlightProviderRegistry came up empty — registration broken?"
+
+    fallback_ids = _addintegration_fallback_ids()
+
+    missing_in_frontend = registered - fallback_ids
+    assert not missing_in_frontend, (
+        f"Flight providers registered in backend FlightProviderRegistry are "
+        f"missing from the AddIntegrationWizard fallback array: "
+        f"{sorted(missing_in_frontend)}. Add matching rows to "
+        f"frontend/components/integrations/AddIntegrationWizard.tsx."
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

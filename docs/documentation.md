@@ -2346,7 +2346,21 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
   every other API-key provider.
 - All search providers register with `SearchRegistry` and are configured
   through the Hub page via the generic **Add Integration** wizard
-  (`frontend/components/integrations/AddIntegrationWizard.tsx`).
+  (`frontend/components/integrations/AddIntegrationWizard.tsx`). Since v0.7.x
+  the wizard fetches its catalog from the live backend registries rather
+  than shipping a hardcoded list — endpoints:
+  - `GET /api/hub/search-providers` — every registered search provider
+    (`SearchProviderRegistry`) with `{id, name, description, status,
+    requires_api_key, is_free, tenant_has_configured}`.
+  - `GET /api/hub/travel-providers` — same shape for flight/travel providers
+    (`FlightProviderRegistry`).
+
+  Both require the `hub.read` permission, both are tenant-scoped, and both
+  are backed by `backend/api/routes_hub_providers.py`. The wizard keeps a
+  static `FALLBACK_PROVIDERS` array (in `AddIntegrationWizard.tsx`) as an
+  offline fallback; `backend/tests/test_wizard_drift.py` asserts both
+  registries remain in lockstep with that fallback so a new provider can
+  never ship backend-only.
 
 **Port-range allocation summary** (auto-provisioned tenant containers):
 

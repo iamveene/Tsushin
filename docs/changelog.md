@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### AddIntegrationWizard fetches providers from live registry (2026-04-20)
+
+Continuation of the wizard-drift-prevention work. `AddIntegrationWizard` (Hub > Tool APIs > Add Integration) no longer treats its hardcoded `PROVIDERS` array as canonical — the wizard now fetches the live catalog at mount and falls back to a renamed static `FALLBACK_PROVIDERS` array only when the API is unreachable.
+
+- New endpoints: `GET /api/hub/search-providers` and `GET /api/hub/travel-providers` (`backend/api/routes_hub_providers.py`) return every registered provider with `{id, name, description, status, requires_api_key, is_free, tenant_has_configured}`. Both require `hub.read`, both tenant-scope the `tenant_has_configured` check (API keys, SearXNG instances, Amadeus / Google Flights integrations are all tenant-owned).
+- Frontend typed clients `api.getSearchProviders()` / `api.getTravelProviders()` (`frontend/lib/client.ts`) return `SearchProviderInfo` / `TravelProviderInfo`. The wizard merges the live catalog with `FALLBACK_PROVIDERS` (matched by `id`) — credential-workflow fields (`credentialMode`, `skillProvider`, `apiKeyService`, `keyUrl`) stay in the fallback because they're UI-only metadata not tracked in backend registries.
+- Renamed the frontend fallback id `serpapi` → `google` to match the backend `SearchProviderRegistry` key. Label and downstream behaviour unchanged (`skillProvider: 'google'`, `apiKeyService: 'serpapi'`).
+- Drift guards: `backend/tests/test_wizard_drift.py` gains `test_search_providers_registered_match_wizard_fallback` + `test_flight_providers_registered_match_wizard_fallback`. Adding a backend provider without updating the fallback array now fails CI.
+
+No user-facing UX change — the wizard renders identically, just sourced from the API when available.
+
 ### Wizard drift prevention — ProviderInstanceModal vendors + Ollama curated models (2026-04-20)
 
 Third pass of the wizard-drift consolidation started in commits `a9bfdc9` / `28f54bb` / `d8805f0`. Two more hardcoded lists folded into single-source modules.

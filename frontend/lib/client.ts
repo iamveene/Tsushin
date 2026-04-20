@@ -1234,6 +1234,28 @@ export interface TTSProviderStatus {
   details: Record<string, any>
 }
 
+// AddIntegrationWizard catalog rows — backed by the SearchProviderRegistry and
+// FlightProviderRegistry respectively. See backend/api/routes_hub_providers.py.
+export interface SearchProviderInfo {
+  id: string
+  name: string
+  description?: string | null
+  status: string  // "available" | "coming_soon"
+  requires_api_key: boolean
+  is_free: boolean
+  tenant_has_configured: boolean
+}
+
+export interface TravelProviderInfo {
+  id: string
+  name: string
+  description?: string | null
+  status: string
+  requires_api_key: boolean
+  is_free: boolean
+  tenant_has_configured: boolean
+}
+
 export interface AgentTTSConfig {
   provider?: string
   voice?: string
@@ -3719,6 +3741,19 @@ export const api = {
   async getTTSProviderStatus(providerName: string): Promise<TTSProviderStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/tts-providers/${providerName}/status`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch TTS provider status')
+    return res.json()
+  },
+
+  // AddIntegrationWizard: live provider catalogs (search + travel).
+  async getSearchProviders(): Promise<SearchProviderInfo[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/search-providers`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch search providers')
+    return res.json()
+  },
+
+  async getTravelProviders(): Promise<TravelProviderInfo[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/travel-providers`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch travel providers')
     return res.json()
   },
 
