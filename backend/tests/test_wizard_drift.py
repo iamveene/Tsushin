@@ -332,5 +332,128 @@ def test_channel_catalog_frontend_fallback_matches_backend():
     )
 
 
+# ---------------------------------------------------------------------------
+# Guard 6 — Provider vendor catalog drift
+# ---------------------------------------------------------------------------
+
+def test_provider_vendors_frontend_fallback_matches_backend():
+    """
+    The static VENDORS fallback in ProviderInstanceModal.tsx must cover the
+    same vendor IDs as backend VALID_VENDORS / SUPPORTED_VENDORS. When the
+    live /api/providers/vendors fetch fails (offline/degraded mode), the modal
+    falls back to this array — if it drifts, a new vendor won't appear in the
+    dropdown on a degraded tenant.
+    """
+    from api.routes_provider_instances import VALID_VENDORS, VENDOR_DISPLAY_NAMES
+    from services.provider_instance_service import SUPPORTED_VENDORS
+
+    # Backend-side parity: the two backend sets must agree, and every
+    # backend vendor needs a display name so the endpoint has something to
+    # return.
+    assert set(SUPPORTED_VENDORS) == VALID_VENDORS, (
+        f"Backend vendor set drift: SUPPORTED_VENDORS={sorted(SUPPORTED_VENDORS)} "
+        f"vs VALID_VENDORS={sorted(VALID_VENDORS)}. Keep these aligned — "
+        f"VALID_VENDORS gates POST /provider-instances and SUPPORTED_VENDORS "
+        f"gates ProviderInstanceService.create_instance."
+    )
+    missing_display = VALID_VENDORS - set(VENDOR_DISPLAY_NAMES.keys())
+    assert not missing_display, (
+        f"Vendors missing from VENDOR_DISPLAY_NAMES: {sorted(missing_display)}. "
+        f"Add a human-readable label so /api/providers/vendors returns it."
+    )
+
+    modal_path = FRONTEND / "components" / "providers" / "ProviderInstanceModal.tsx"
+    assert modal_path.exists(), f"ProviderInstanceModal.tsx not found at {modal_path}"
+    text = _read(modal_path)
+
+    # Match the static fallback array entries: `{ id: 'openai', ... }`.
+    fallback_block = re.search(
+        r"const VENDORS:\s*VendorInfo\[\]\s*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert fallback_block, (
+        "Static VENDORS: VendorInfo[] fallback array not found in "
+        "ProviderInstanceModal.tsx. The modal must keep a fallback for "
+        "offline/degraded mode — if you removed it, add it back."
+    )
+    frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_block.group(1)))
+
+    missing_in_frontend = VALID_VENDORS - frontend_ids
+    extra_in_frontend = frontend_ids - VALID_VENDORS
+
+    assert not missing_in_frontend, (
+        f"Vendors in backend VALID_VENDORS missing from frontend VENDORS "
+        f"fallback: {sorted(missing_in_frontend)}. Add them to "
+        f"ProviderInstanceModal.tsx — otherwise degraded-mode users can't "
+        f"pick the vendor."
+    )
+    assert not extra_in_frontend, (
+        f"Vendors in frontend VENDORS fallback missing from backend "
+        f"VALID_VENDORS: {sorted(extra_in_frontend)}. Either register the "
+        f"vendor backend-side or drop it from the fallback."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 7 — Ollama curated models shared-module single-source
+# ---------------------------------------------------------------------------
+
+def test_ollama_curated_models_imported_from_shared_module():
+    """
+    Both the Hub Ollama panel (frontend/app/hub/page.tsx) and the Ollama
+    setup wizard (frontend/components/ollama/OllamaSetupWizard.tsx) must
+    import their curated model list from frontend/lib/ollama-curated-models
+    — not redeclare it inline. This prevents the two surfaces from offering
+    different model catalogs.
+    """
+    shared_path = FRONTEND / "lib" / "ollama-curated-models.ts"
+    assert shared_path.exists(), (
+        f"Shared Ollama curated-models module missing at {shared_path}. "
+        f"Both the Hub panel and the setup wizard depend on it."
+    )
+    shared_text = _read(shared_path)
+    assert "export const OLLAMA_CURATED_MODELS" in shared_text, (
+        "OLLAMA_CURATED_MODELS export missing from "
+        "frontend/lib/ollama-curated-models.ts."
+    )
+    # At least the historically-curated 7 models must be present.
+    shared_ids = set(re.findall(r"id:\s*'([^']+)'", shared_text))
+    expected_min = {
+        "llama3.2:1b", "llama3.2:3b", "qwen2.5:3b", "qwen2.5:7b",
+        "deepseek-r1:7b", "phi3.5:3.8b", "mistral:7b",
+    }
+    missing = expected_min - shared_ids
+    assert not missing, (
+        f"Historically-curated Ollama models missing from shared module: "
+        f"{sorted(missing)}. Don't remove the base curation without "
+        f"updating this guard."
+    )
+
+    # Both call-sites must import from the shared module (not redeclare).
+    wizard_path = FRONTEND / "components" / "ollama" / "OllamaSetupWizard.tsx"
+    hub_path = FRONTEND / "app" / "hub" / "page.tsx"
+
+    for path, expected_symbol in (
+        (wizard_path, "OLLAMA_CURATED_MODELS"),
+        (hub_path, "OLLAMA_CURATED_MODEL_IDS"),
+    ):
+        assert path.exists(), f"{path} not found"
+        text = _read(path)
+        import_ok = re.search(
+            r"from\s+['\"][^'\"]*ollama-curated-models['\"]",
+            text,
+        )
+        assert import_ok, (
+            f"{path.name} does not import from lib/ollama-curated-models. "
+            f"Redeclaring the curated model list re-introduces the drift "
+            f"this guard was written to prevent."
+        )
+        assert expected_symbol in text, (
+            f"{path.name} does not reference {expected_symbol} from the "
+            f"shared module."
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

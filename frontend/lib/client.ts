@@ -2715,6 +2715,21 @@ export interface ProviderInstanceCreate {
   is_default?: boolean
 }
 
+/**
+ * Vendor catalog entry returned by GET /api/providers/vendors.
+ *
+ * Drives the provider-instance modal's vendor dropdown — the frontend no
+ * longer keeps a parallel hardcoded VENDORS array. See
+ * backend/api/routes_provider_instances.py:VendorInfoResponse.
+ */
+export interface VendorInfo {
+  id: string
+  display_name: string
+  default_base_url: string | null
+  supports_discovery: boolean
+  tenant_has_configured: boolean
+}
+
 // ==================== Vector Store Instances (v0.6.0) ====================
 
 export interface VectorStoreInstance {
@@ -7164,6 +7179,20 @@ export const api = {
     if (!res.ok) return {}
     const data = await res.json()
     return data.models || {}
+  },
+
+  async getProviderVendors(): Promise<VendorInfo[]> {
+    // Canonical LLM vendor catalog with per-tenant "is configured"
+    // resolution. Frontend modal uses this to populate the vendor dropdown
+    // so a vendor added to backend VALID_VENDORS surfaces automatically.
+    // Returns [] on any failure — caller should fall back to its static list.
+    try {
+      const res = await authenticatedFetch(`${API_URL}/api/providers/vendors`)
+      if (!res.ok) return []
+      return res.json()
+    } catch {
+      return []
+    }
   },
 
   async discoverModelsRaw(vendor: string, apiKey: string, baseUrl?: string): Promise<string[]> {

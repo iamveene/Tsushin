@@ -2226,6 +2226,8 @@ All agent creation and configuration UIs — the `/agents` Create Agent modal, t
 
 This means: adding a new provider in Hub automatically makes it available everywhere without any code change. The shared `VENDOR_LABELS` map (`frontend/lib/client.ts`) provides human-readable vendor names.
 
+**Vendor catalog endpoint (`GET /api/providers/vendors`)** — returns every vendor from backend `VALID_VENDORS` + `VENDOR_DISPLAY_NAMES` with `{id, display_name, default_base_url, supports_discovery, tenant_has_configured}`. The **Add Provider Instance** modal (`ProviderInstanceModal.tsx`) fetches this list on open and falls back to a reduced static array only when the call fails, so a vendor added to `VALID_VENDORS` backend-side surfaces in the dropdown without any frontend edit. `tenant_has_configured` is resolved in one DB round-trip (distinct `ProviderInstance.vendor` rows for the tenant). `backend/tests/test_wizard_drift.py` Guard 6 keeps the fallback consistent with the backend set.
+
 ### 19.4 Model Discovery
 
 `backend/services/model_discovery_service.py` auto-fetches the vendor's `/models` endpoint (for OpenAI-compatible providers) and populates `available_models`. Used by the frontend Provider form to let the user pick which models to expose.
@@ -2438,7 +2440,7 @@ Five-step guided flow for provisioning an Ollama container, pulling a model, and
 
 1. **What is Ollama?** — explanation (cost, GPU optional, image/model sizes, best-for scenarios).
 2. **Configure container** — instance name, GPU checkbox (with NVIDIA Container Toolkit note), memory limit (2/4/8/16 GB).
-3. **Choose a model** — radio list of 7 curated models (llama3.2:1b, llama3.2:3b, qwen2.5:3b, qwen2.5:7b, deepseek-r1:7b, phi3.5:3.8b, mistral:7b) with params/disk/summary columns, plus a Custom option for any `namespace/model:tag`.
+3. **Choose a model** — radio list of 7 curated models (llama3.2:1b, llama3.2:3b, qwen2.5:3b, qwen2.5:7b, deepseek-r1:7b, phi3.5:3.8b, mistral:7b) with params/disk/summary columns, plus a Custom option for any `namespace/model:tag`. The curated list lives in `frontend/lib/ollama-curated-models.ts` (`OLLAMA_CURATED_MODELS` / `OLLAMA_CURATED_MODEL_IDS`) and is imported by both this wizard and the Hub Ollama panel — edits to the module propagate to both surfaces.
 4. **Link to Agent(s)** — multi-select agents; their LLM backend will switch to Ollama on the chosen model.
 5. **Review & Provision** — summary + "Provision & Pull" CTA. Progress step runs `ensureOllamaInstance` → `provisionOllamaContainer` → poll status → `pullOllamaModel` → poll pull job (2 s tick, live progress bar) → `assignOllamaInstanceToAgent` per selected agent. Three-stage indicator (Provision / Pull / Assign) with per-stage active/done states and a Retry button on error.
 

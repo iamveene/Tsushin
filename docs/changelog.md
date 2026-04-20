@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Wizard drift prevention — ProviderInstanceModal vendors + Ollama curated models (2026-04-20)
+
+Third pass of the wizard-drift consolidation started in commits `a9bfdc9` / `28f54bb` / `d8805f0`. Two more hardcoded lists folded into single-source modules.
+
+- **Vendor catalog.** `ProviderInstanceModal.tsx` used to keep a parallel 10-entry `VENDORS` array shadowing backend `VALID_VENDORS` (`routes_provider_instances.py`) and `SUPPORTED_VENDORS` (`provider_instance_service.py`). New endpoint `GET /api/providers/vendors` returns `[{id, display_name, default_base_url, supports_discovery, tenant_has_configured}, …]` for all 10 vendors (openai, anthropic, gemini, groq, grok, openrouter, deepseek, vertex_ai, ollama, custom). `tenant_has_configured` resolves in one DB round-trip per request. The modal now fetches on open and falls back to a reduced static array only on failure. `VENDOR_DISPLAY_NAMES` + `VENDORS_WITH_LIVE_DISCOVERY` added alongside `VALID_VENDORS` as the single source of truth.
+- **Ollama curated models.** Extracted the 7 editorial curated models (llama3.2:1b, llama3.2:3b, qwen2.5:3b, qwen2.5:7b, deepseek-r1:7b, phi3.5:3.8b, mistral:7b) to `frontend/lib/ollama-curated-models.ts` as `OLLAMA_CURATED_MODELS` (typed objects) + `OLLAMA_CURATED_MODEL_IDS` (tags). Both the Hub Ollama panel (`frontend/app/hub/page.tsx`) and the setup wizard (`frontend/components/ollama/OllamaSetupWizard.tsx`) now import from the shared module instead of redeclaring the list. No backend endpoint — the curation is editorial, not derived from a registry.
+- **Client types.** `frontend/lib/client.ts` gained `VendorInfo` interface + `api.getProviderVendors()` method (returns `[]` on failure, preserves offline fallback).
+- **Drift guards.** `backend/tests/test_wizard_drift.py` gets Guard 6 (vendor catalog: backend `VALID_VENDORS` ⇄ `SUPPORTED_VENDORS` ⇄ modal fallback `VENDORS: VendorInfo[]`) and Guard 7 (shared Ollama module exports + both call-sites import from it, never redeclare).
+
+Verified end-to-end on the local stack: `GET /api/providers/vendors` returns 10 rows with correct `tenant_has_configured` for the test tenant. New wizard-drift tests pass.
+
 ### Wizard drift prevention — StepChannels fetches backend catalog (2026-04-20)
 
 Mirrors the StepSkills pattern landed in commit `a9bfdc9`: the agent wizard's channel picker no longer hardcodes its 6-channel list.
