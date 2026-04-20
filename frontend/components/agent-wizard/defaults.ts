@@ -123,11 +123,14 @@ export interface BuiltInSkillDef {
   autoEnabledFor?: AgentType[]
 }
 
-// Keep roughly in sync with SKILL_DISPLAY_INFO in frontend/components/skills/skill-constants.ts.
-// Provider-based skills (flows/gmail) and channel-gated skills (shell) are intentionally
-// omitted here because they require follow-up configuration (OAuth, beacon pairing, etc.)
-// that the wizard does not collect inline — users can enable them from the agent page
-// after creation. Hidden skills (weather, web_scraping) are also excluded.
+// FALLBACK ONLY. The Agent Wizard → Step Skills now fetches its catalog live
+// from /api/skills/available (which emits `wizard_visible`, `applies_to`, and
+// `auto_enabled_for` per skill). This array is rendered only when that API
+// call fails (offline / auth issue). A CI test at
+// backend/tests/test_wizard_drift.py asserts this array stays in sync with
+// backend SkillManager and with SKILL_DISPLAY_INFO. Provider-based skills
+// (flows/gmail) and channel-gated skills (shell) are intentionally omitted —
+// they're marked wizard_visible=False on the backend.
 export const BUILT_IN_SKILLS: BuiltInSkillDef[] = [
   {
     type: 'web_search',

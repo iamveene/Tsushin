@@ -30,6 +30,9 @@ class AgentCommunicationSkill(BaseSkill):
     skill_name = "Agent Communication"
     skill_description = "Ask other agents questions, discover available agents, or delegate tasks"
     execution_mode = "tool"
+    # Hidden from the agent creation wizard: meta-skill enabled implicitly by the platform
+    # when multiple agents exist; should not be chosen piecemeal during initial setup.
+    wizard_visible = False
 
     def __init__(self):
         super().__init__()

@@ -1,16 +1,26 @@
 'use client'
 
 /**
- * Shared audio-wizard UI fragments. Two exports:
- * - AudioProviderPicker: three provider cards (Kokoro / OpenAI / ElevenLabs)
+ * Shared audio-wizard UI fragments:
+ * - AudioProviderPicker: provider cards (fetched live from /api/tts-providers,
+ *   with static fallback — see below).
  * - AudioVoiceFields: language + voice + speed + format + Kokoro container opts
+ *   (voice dropdown fetched live from /api/tts-providers/{provider}/voices).
  *
- * Both AudioAgentsWizard and the newer AgentWizard audio step consume these so
- * there's a single source of truth for the voice UX.
+ * Both AudioAgentsWizard and the AgentWizard audio step consume these.
+ *
+ * **Drift protection.** The provider card list and per-provider voice list are
+ * both fetched at runtime from the backend so that adding a new TTS provider /
+ * voice in `TTSProviderRegistry` (backend/hub/providers/tts_registry.py) or in
+ * a provider's `get_available_voices()` method surfaces here without any frontend
+ * code change. Static fallback arrays in `defaults.ts` remain as offline / degraded-
+ * mode fallback ONLY — `backend/tests/test_wizard_drift.py` asserts the fallback
+ * stays in sync with the backend registry.
  */
 
-import { useMemo } from 'react'
-import type { TTSInstance } from '@/lib/client'
+import { useEffect, useMemo, useState } from 'react'
+import { api } from '@/lib/client'
+import type { TTSInstance, TTSProviderInfo, TTSVoice } from '@/lib/client'
 import {
   KOKORO_VOICES,
   OPENAI_VOICES,
@@ -22,17 +32,54 @@ import {
 
 type ProviderStatus = 'configured' | 'available' | 'missing'
 
-function providerStatus(
-  p: AudioProvider,
+interface ProviderCardData {
+  id: AudioProvider
+  title: string
+  desc: string
+  cost: string
+  status: ProviderStatus
+  defaultVoice: string
+}
+
+const FALLBACK_PROVIDER_CARDS: ProviderCardData[] = [
+  { id: 'kokoro', title: 'Kokoro TTS', desc: 'Free, open-source, runs locally in a Docker container. Portuguese + English voices.', cost: 'Free', status: 'available', defaultVoice: 'pf_dora' },
+  { id: 'openai', title: 'OpenAI TTS', desc: 'High-quality cloud TTS. Requires an OpenAI API key (configured in Hub → AI Providers).', cost: 'Paid', status: 'missing', defaultVoice: 'nova' },
+  { id: 'elevenlabs', title: 'ElevenLabs', desc: 'Premium voice cloning and expressive TTS. Requires an ElevenLabs API key.', cost: 'Paid', status: 'missing', defaultVoice: 'nova' },
+  { id: 'gemini', title: 'Google Gemini TTS (Preview)', desc: '30 prebuilt voices from gemini-3.1-flash-tts-preview. WAV output, no speed control. Reuses your Gemini API key.', cost: 'Preview', status: 'missing', defaultVoice: 'Zephyr' },
+]
+
+// Copy descriptions / cost labels per provider id. The backend supplies id,
+// display name, default voice, requires_api_key, is_free, status, and
+// tenant_has_configured — but not the curated marketing copy rendered in the
+// card, which lives here. If a new provider lands backend-side without a copy
+// row, we fall back to the backend's display name + description.
+const PROVIDER_COPY: Partial<Record<string, { desc: string; cost: string }>> = {
+  kokoro: { desc: 'Free, open-source, runs locally in a Docker container. Portuguese + English voices.', cost: 'Free' },
+  openai: { desc: 'High-quality cloud TTS. Requires an OpenAI API key (configured in Hub → AI Providers).', cost: 'Paid' },
+  elevenlabs: { desc: 'Premium voice cloning and expressive TTS. Requires an ElevenLabs API key.', cost: 'Paid' },
+  gemini: { desc: '30 prebuilt voices from gemini-3.1-flash-tts-preview. WAV output, no speed control. Reuses your Gemini API key.', cost: 'Preview' },
+}
+
+function backendProviderToCard(
+  p: TTSProviderInfo,
   kokoroRunning: TTSInstance | undefined,
-  hasOpenAIKey: boolean,
-  hasElevenLabsKey: boolean,
-  hasGeminiKey: boolean,
-): ProviderStatus {
-  if (p === 'kokoro') return kokoroRunning ? 'configured' : 'available'
-  if (p === 'openai') return hasOpenAIKey ? 'configured' : 'missing'
-  if (p === 'gemini') return hasGeminiKey ? 'configured' : 'missing'
-  return hasElevenLabsKey ? 'configured' : 'missing'
+): ProviderCardData {
+  const copy = PROVIDER_COPY[p.id]
+  let status: ProviderStatus
+  if (p.id === 'kokoro') status = kokoroRunning ? 'configured' : 'available'
+  else if (p.is_free) status = 'configured'
+  else status = p.tenant_has_configured ? 'configured' : 'missing'
+
+  return {
+    id: p.id as AudioProvider,
+    title: p.name || p.id,
+    desc: copy?.desc || p.pricing?.cost_per_1k_chars !== undefined
+      ? copy?.desc || `${p.voice_count} voice${p.voice_count === 1 ? '' : 's'}.`
+      : copy?.desc || '',
+    cost: copy?.cost || (p.is_free ? 'Free' : p.status === 'preview' ? 'Preview' : 'Paid'),
+    status,
+    defaultVoice: p.default_voice || 'default',
+  }
 }
 
 export interface AudioProviderPickerProps {
@@ -40,8 +87,11 @@ export interface AudioProviderPickerProps {
   onChange: (provider: AudioProvider, defaultVoice: string) => void
   allowChoice?: boolean
   kokoroRunning: TTSInstance | undefined
-  hasOpenAIKey: boolean
-  hasElevenLabsKey: boolean
+  /** @deprecated Backend now resolves per-tenant via tenant_has_configured. Retained for backward compat. */
+  hasOpenAIKey?: boolean
+  /** @deprecated */
+  hasElevenLabsKey?: boolean
+  /** @deprecated */
   hasGeminiKey?: boolean
 }
 
@@ -50,56 +100,52 @@ export function AudioProviderPicker({
   onChange,
   allowChoice = true,
   kokoroRunning,
-  hasOpenAIKey,
-  hasElevenLabsKey,
-  hasGeminiKey = false,
 }: AudioProviderPickerProps) {
-  const opts: { id: AudioProvider; title: string; desc: string; cost: string }[] = [
-    { id: 'kokoro', title: 'Kokoro TTS', desc: 'Free, open-source, runs locally in a Docker container. Portuguese + English voices.', cost: 'Free' },
-    { id: 'openai', title: 'OpenAI TTS', desc: 'High-quality cloud TTS. Requires an OpenAI API key (configured in Hub → AI Providers).', cost: 'Paid' },
-    { id: 'elevenlabs', title: 'ElevenLabs', desc: 'Premium voice cloning and expressive TTS. Requires an ElevenLabs API key.', cost: 'Paid' },
-    { id: 'gemini', title: 'Google Gemini TTS (Preview)', desc: '30 prebuilt voices from gemini-3.1-flash-tts-preview. WAV output, no speed control. Reuses your Gemini API key.', cost: 'Preview' },
-  ]
+  const [cards, setCards] = useState<ProviderCardData[]>(FALLBACK_PROVIDER_CARDS)
 
-  const defaultVoiceFor = (id: AudioProvider): string => {
-    if (id === 'kokoro') return 'pf_dora'
-    if (id === 'openai') return 'nova'
-    if (id === 'gemini') return 'Zephyr'
-    return 'nova'
-  }
+  useEffect(() => {
+    let cancelled = false
+    api.getTTSProviders()
+      .then(providers => {
+        if (cancelled) return
+        const mapped = providers
+          .filter(p => p.status !== 'coming_soon')
+          .map(p => backendProviderToCard(p, kokoroRunning))
+        if (mapped.length > 0) setCards(mapped)
+      })
+      .catch(() => { /* keep fallback */ })
+    return () => { cancelled = true }
+  }, [kokoroRunning])
 
   return (
     <div className="space-y-2">
-      {opts.map(opt => {
-        const status = providerStatus(opt.id, kokoroRunning, hasOpenAIKey, hasElevenLabsKey, hasGeminiKey)
-        return (
-          <button
-            key={opt.id}
-            type="button"
-            onClick={() => onChange(opt.id, defaultVoiceFor(opt.id))}
-            disabled={!allowChoice}
-            className={`w-full text-left p-4 rounded-xl border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-              provider === opt.id
-                ? 'border-teal-400 bg-teal-500/10'
-                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <div className="text-white font-medium">{opt.title}</div>
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 text-xs rounded-full bg-white/10 text-gray-300">{opt.cost}</span>
-                {status === 'configured' && (
-                  <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Detected</span>
-                )}
-                {status === 'missing' && (
-                  <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-200 border border-amber-500/30">Needs API key</span>
-                )}
-              </div>
+      {cards.map(opt => (
+        <button
+          key={opt.id}
+          type="button"
+          onClick={() => onChange(opt.id, opt.defaultVoice)}
+          disabled={!allowChoice}
+          className={`w-full text-left p-4 rounded-xl border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            provider === opt.id
+              ? 'border-teal-400 bg-teal-500/10'
+              : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div className="text-white font-medium">{opt.title}</div>
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-0.5 text-xs rounded-full bg-white/10 text-gray-300">{opt.cost}</span>
+              {opt.status === 'configured' && (
+                <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Detected</span>
+              )}
+              {opt.status === 'missing' && (
+                <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-200 border border-amber-500/30">Needs API key</span>
+              )}
             </div>
-            <div className="text-xs text-gray-400 mt-1">{opt.desc}</div>
-          </button>
-        )
-      })}
+          </div>
+          <div className="text-xs text-gray-400 mt-1">{opt.desc}</div>
+        </button>
+      ))}
     </div>
   )
 }
@@ -119,11 +165,23 @@ export interface AudioVoiceFieldsProps {
   onChange: (patch: Partial<AudioVoiceFieldsValue>) => void
   wantsTTS: boolean
   kokoroRunning: TTSInstance | undefined
-  hasOpenAIKey: boolean
-  hasElevenLabsKey: boolean
+  /** @deprecated — Backend `tenant_has_configured` now drives this; kept for compat. */
+  hasOpenAIKey?: boolean
+  /** @deprecated */
+  hasElevenLabsKey?: boolean
+  /** @deprecated */
   hasGeminiKey?: boolean
   /** Hide the "set as default TTS" checkbox when embedded in agent wizard (single-agent flow). */
   hideDefaultTTSOption?: boolean
+}
+
+// Fallback voice list per provider — used when /api/tts-providers/{p}/voices
+// is unreachable. Kept in sync with backend registries by CI test
+// backend/tests/test_wizard_drift.py.
+function fallbackVoicesFor(provider: AudioProvider, language: string): { id: string; label: string; lang: string }[] {
+  if (provider === 'kokoro') return KOKORO_VOICES.filter(v => v.lang === language)
+  if (provider === 'gemini') return GEMINI_VOICES.map(v => ({ id: v.id, label: v.label, lang: language }))
+  return OPENAI_VOICES.map(v => ({ id: v.id, label: v.label, lang: language }))
 }
 
 export function AudioVoiceFields({
@@ -131,16 +189,57 @@ export function AudioVoiceFields({
   onChange,
   wantsTTS,
   kokoroRunning,
-  hasOpenAIKey,
-  hasElevenLabsKey,
-  hasGeminiKey = false,
   hideDefaultTTSOption,
 }: AudioVoiceFieldsProps) {
+  const [liveVoices, setLiveVoices] = useState<Record<string, TTSVoice[]>>({})
+  const [keyStatusByProvider, setKeyStatusByProvider] = useState<Record<string, boolean>>({})
+
+  // One-shot load of the provider list so we know per-tenant credential status
+  // for the "needs API key" inline warnings.
+  useEffect(() => {
+    let cancelled = false
+    api.getTTSProviders()
+      .then(providers => {
+        if (cancelled) return
+        const map: Record<string, boolean> = {}
+        for (const p of providers) map[p.id] = !!p.tenant_has_configured
+        setKeyStatusByProvider(map)
+      })
+      .catch(() => { /* keep empty; warnings will not render */ })
+    return () => { cancelled = true }
+  }, [])
+
+  // Fetch voices for the currently-selected provider on change.
+  useEffect(() => {
+    if (!wantsTTS) return
+    if (liveVoices[value.provider]) return
+    let cancelled = false
+    api.getTTSProviderVoices(value.provider)
+      .then(voices => {
+        if (cancelled) return
+        setLiveVoices(prev => ({ ...prev, [value.provider]: voices }))
+      })
+      .catch(() => { /* fall through to static fallback */ })
+    return () => { cancelled = true }
+  }, [value.provider, wantsTTS, liveVoices])
+
   const availableVoices = useMemo(() => {
-    if (value.provider === 'kokoro') return KOKORO_VOICES.filter(v => v.lang === value.language)
-    if (value.provider === 'gemini') return GEMINI_VOICES.map(v => ({ id: v.id, label: v.label, lang: value.language }))
-    return OPENAI_VOICES.map(v => ({ id: v.id, label: v.label, lang: value.language }))
-  }, [value.provider, value.language])
+    const live = liveVoices[value.provider]
+    if (live && live.length > 0) {
+      // Kokoro voices have language metadata — filter. Other providers treat language as auto.
+      if (value.provider === 'kokoro') {
+        return live
+          .filter(v => !v.language || v.language === value.language)
+          .map(v => ({ id: v.voice_id, label: `${v.name}${v.description ? ` — ${v.description}` : ''}`, lang: v.language || value.language }))
+      }
+      return live.map(v => ({ id: v.voice_id, label: `${v.name}${v.description ? ` — ${v.description}` : ''}`, lang: value.language }))
+    }
+    return fallbackVoicesFor(value.provider, value.language)
+  }, [value.provider, value.language, liveVoices])
+
+  const hasOpenAIKey = keyStatusByProvider['openai'] ?? false
+  const hasElevenLabsKey = keyStatusByProvider['elevenlabs'] ?? false
+  const hasGeminiKey = keyStatusByProvider['gemini'] ?? false
 
   return (
     <div className="space-y-5">

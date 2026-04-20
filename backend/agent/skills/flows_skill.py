@@ -63,6 +63,9 @@ class FlowsSkill(BaseSkill):
     skill_name = "Flows"
     skill_description = "Schedule reminders, AI-driven conversations, and manage scheduled events"
     execution_mode = "tool"
+    # Hidden from the agent creation wizard: provider selection (Google Calendar / Asana / built-in)
+    # is done post-creation via the agent's Skills panel or the Flows page.
+    wizard_visible = False
 
     def __init__(self):
         """Initialize with wrapped skills and provider support"""

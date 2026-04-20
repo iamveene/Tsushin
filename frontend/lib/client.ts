@@ -1211,7 +1211,7 @@ export interface TTSProviderInfo {
   supported: boolean
   requires_api_key: boolean
   is_free: boolean
-  status: string  // "available" | "coming_soon"
+  status: string  // "available" | "preview" | "coming_soon"
   voice_count: number
   default_voice: string
   supported_formats: string[]
@@ -1221,6 +1221,8 @@ export interface TTSProviderInfo {
     currency?: string
     is_free?: boolean
   }
+  /** Backend resolves per-tenant; lets the wizard skip a follow-up API-key check. */
+  tenant_has_configured?: boolean
 }
 
 export interface TTSProviderStatus {
@@ -1246,6 +1248,10 @@ export interface SkillDefinition {
   skill_description: string
   config_schema: Record<string, any>
   default_config?: Record<string, any>
+  /** Wizard-facing metadata (emitted by backend SkillManager.list_available_skills). */
+  wizard_visible?: boolean
+  applies_to?: string[]            // Agent types this skill is relevant for
+  auto_enabled_for?: string[]      // Agent types that force-enable + lock the skill
 }
 
 // Phase 5.0: Knowledge Management
