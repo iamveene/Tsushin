@@ -18,7 +18,7 @@
 
 import { useState, useEffect } from 'react'
 import Modal from '@/components/ui/Modal'
-import { api, authenticatedFetch, Agent } from '@/lib/client'
+import { api, authenticatedFetch, Agent, SearchProviderInfo, TravelProviderInfo } from '@/lib/client'
 
 interface Props {
   isOpen: boolean
@@ -33,7 +33,11 @@ interface Props {
 type Step = 1 | 2 | 3 | 4 | 5
 
 type CategoryId = 'web_search' | 'travel'
-type ProviderId = 'brave' | 'tavily' | 'serpapi' | 'searxng' | 'amadeus' | 'google_flights'
+// Provider ids MUST match the backend registry keys (SearchProviderRegistry /
+// FlightProviderRegistry) — the drift test enforces that. 'google' here is
+// the SerpAPI-powered Google search provider (skillProvider is also 'google');
+// 'google_flights' is a separate travel provider.
+type ProviderId = 'brave' | 'tavily' | 'google' | 'searxng' | 'amadeus' | 'google_flights'
 
 interface ProviderMeta {
   id: ProviderId
@@ -50,7 +54,24 @@ interface ProviderMeta {
   disabledReason?: string
 }
 
-const PROVIDERS: ProviderMeta[] = [
+// -----------------------------------------------------------------------------
+// FALLBACK PROVIDER CATALOG.
+//
+// This array is the STATIC FALLBACK rendered only when the live catalog fetch
+// to /api/hub/search-providers + /api/hub/travel-providers fails (e.g., backend
+// down, offline install, first-run boot). The source of truth at runtime is
+// the backend registries (SearchProviderRegistry + FlightProviderRegistry).
+//
+// Keep credential-workflow fields (credentialMode / skillProvider /
+// apiKeyService / keyUrl) here — they are UI metadata and do NOT live on the
+// backend registries. Live backend rows are merged with entries here (matched
+// by `id`) at render time.
+//
+// backend/tests/test_wizard_drift.py asserts every backend-registered provider
+// id has a matching row here, so adding a provider to the backend without
+// updating this fallback will fail CI.
+// -----------------------------------------------------------------------------
+const FALLBACK_PROVIDERS: ProviderMeta[] = [
   // --- Web Search ---
   {
     id: 'brave',
@@ -73,7 +94,7 @@ const PROVIDERS: ProviderMeta[] = [
     skillProvider: 'searxng',
   },
   {
-    id: 'serpapi',
+    id: 'google',
     label: 'SerpAPI (Google)',
     category: 'web_search',
     description: 'Live Google SERP; paid after free quota.',
@@ -138,10 +159,44 @@ interface AssignmentResult {
   message?: string
 }
 
-const PROVIDER_TO_CATEGORY: Record<ProviderId, CategoryId> = PROVIDERS.reduce(
+const PROVIDER_TO_CATEGORY: Record<ProviderId, CategoryId> = FALLBACK_PROVIDERS.reduce(
   (acc, p) => ({ ...acc, [p.id]: p.category }),
   {} as Record<ProviderId, CategoryId>,
 )
+
+/**
+ * Merge the live backend catalog with FALLBACK_PROVIDERS.
+ *
+ * Rules:
+ *  - FALLBACK_PROVIDERS entry supplies credential-workflow fields
+ *    (credentialMode / skillProvider / apiKeyService / keyUrl) — these don't
+ *    exist on the backend registry.
+ *  - Live row supplies fresh label + description (human-editable server-side).
+ *  - Live-only rows (backend adds a new provider before the fallback array
+ *    gets updated) are skipped — we can't render credential UI we don't know.
+ *    The drift test blocks this case from landing in CI anyway.
+ *  - Fallback-only rows (backend disabled / not yet initialized) are kept so
+ *    the wizard still renders the familiar options offline.
+ */
+function mergeCatalog(
+  search: SearchProviderInfo[] | null,
+  travel: TravelProviderInfo[] | null,
+): ProviderMeta[] {
+  const liveById = new Map<string, { name: string; description?: string | null; status?: string }>()
+  for (const p of search ?? []) liveById.set(p.id, { name: p.name, description: p.description, status: p.status })
+  for (const p of travel ?? []) liveById.set(p.id, { name: p.name, description: p.description, status: p.status })
+
+  return FALLBACK_PROVIDERS.map((fb) => {
+    const live = liveById.get(fb.id)
+    if (!live) return fb
+    return {
+      ...fb,
+      label: live.name || fb.label,
+      description: live.description || fb.description,
+      disabled: fb.disabled || live.status === 'coming_soon',
+    }
+  })
+}
 
 export default function AddIntegrationWizard({
   isOpen,
@@ -182,6 +237,27 @@ export default function AddIntegrationWizard({
   const [assignmentResults, setAssignmentResults] = useState<AssignmentResult[]>([])
   const [assigning, setAssigning] = useState(false)
 
+  // Live catalog — mirrors StepSkills.tsx. Falls back to FALLBACK_PROVIDERS if
+  // either endpoint fails so the wizard still works offline / pre-boot.
+  const [providers, setProviders] = useState<ProviderMeta[]>(FALLBACK_PROVIDERS)
+
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    Promise.all([
+      api.getSearchProviders().catch(() => null),
+      api.getTravelProviders().catch(() => null),
+    ])
+      .then(([search, travel]) => {
+        if (cancelled) return
+        // If BOTH fetches failed, stay on the static fallback.
+        if (search === null && travel === null) return
+        setProviders(mergeCatalog(search, travel))
+      })
+      .catch(() => { /* swallow — fallback already set */ })
+    return () => { cancelled = true }
+  }, [isOpen])
+
   useEffect(() => {
     if (!isOpen) return
     setStep(startingStep)
@@ -210,8 +286,8 @@ export default function AddIntegrationWizard({
     api.getAgents(true).then(setAgents).finally(() => setAgentsLoading(false))
   }, [step, agents.length])
 
-  const meta = PROVIDERS.find((p) => p.id === provider)!
-  const categoryProviders = PROVIDERS.filter((p) => p.category === category)
+  const meta = (providers.find((p) => p.id === provider) ?? FALLBACK_PROVIDERS.find((p) => p.id === provider))!
+  const categoryProviders = providers.filter((p) => p.category === category)
 
   const saveCredentials = async (): Promise<boolean> => {
     setSavingCredentials(true)
@@ -399,7 +475,7 @@ export default function AddIntegrationWizard({
         <button
           onClick={() => {
             // Reset to first provider of chosen category when stepping forward.
-            const first = PROVIDERS.find((p) => p.category === category && !p.disabled)
+            const first = providers.find((p) => p.category === category && !p.disabled)
             if (first) setProvider(first.id)
             setStep(2)
           }}
