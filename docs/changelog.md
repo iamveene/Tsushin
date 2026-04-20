@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### AddIntegrationWizard fetches providers from live registry (2026-04-20)
+
+Continuation of the wizard-drift-prevention work. `AddIntegrationWizard` (Hub > Tool APIs > Add Integration) no longer treats its hardcoded `PROVIDERS` array as canonical — the wizard now fetches the live catalog at mount and falls back to a renamed static `FALLBACK_PROVIDERS` array only when the API is unreachable.
+
+- New endpoints: `GET /api/hub/search-providers` and `GET /api/hub/travel-providers` (`backend/api/routes_hub_providers.py`) return every registered provider with `{id, name, description, status, requires_api_key, is_free, tenant_has_configured}`. Both require `hub.read`, both tenant-scope the `tenant_has_configured` check (API keys, SearXNG instances, Amadeus / Google Flights integrations are all tenant-owned).
+- Frontend typed clients `api.getSearchProviders()` / `api.getTravelProviders()` (`frontend/lib/client.ts`) return `SearchProviderInfo` / `TravelProviderInfo`. The wizard merges the live catalog with `FALLBACK_PROVIDERS` (matched by `id`) — credential-workflow fields (`credentialMode`, `skillProvider`, `apiKeyService`, `keyUrl`) stay in the fallback because they're UI-only metadata not tracked in backend registries.
+- Renamed the frontend fallback id `serpapi` → `google` to match the backend `SearchProviderRegistry` key. Label and downstream behaviour unchanged (`skillProvider: 'google'`, `apiKeyService: 'serpapi'`).
+- Drift guards: `backend/tests/test_wizard_drift.py` gains `test_search_providers_registered_match_wizard_fallback` + `test_flight_providers_registered_match_wizard_fallback`. Adding a backend provider without updating the fallback array now fails CI.
+
+No user-facing UX change — the wizard renders identically, just sourced from the API when available.
+
+### Wizard drift prevention — ProviderInstanceModal vendors + Ollama curated models (2026-04-20)
+
+Third pass of the wizard-drift consolidation started in commits `a9bfdc9` / `28f54bb` / `d8805f0`. Two more hardcoded lists folded into single-source modules.
+
+- **Vendor catalog.** `ProviderInstanceModal.tsx` used to keep a parallel 10-entry `VENDORS` array shadowing backend `VALID_VENDORS` (`routes_provider_instances.py`) and `SUPPORTED_VENDORS` (`provider_instance_service.py`). New endpoint `GET /api/providers/vendors` returns `[{id, display_name, default_base_url, supports_discovery, tenant_has_configured}, …]` for all 10 vendors (openai, anthropic, gemini, groq, grok, openrouter, deepseek, vertex_ai, ollama, custom). `tenant_has_configured` resolves in one DB round-trip per request. The modal now fetches on open and falls back to a reduced static array only on failure. `VENDOR_DISPLAY_NAMES` + `VENDORS_WITH_LIVE_DISCOVERY` added alongside `VALID_VENDORS` as the single source of truth.
+- **Ollama curated models.** Extracted the 7 editorial curated models (llama3.2:1b, llama3.2:3b, qwen2.5:3b, qwen2.5:7b, deepseek-r1:7b, phi3.5:3.8b, mistral:7b) to `frontend/lib/ollama-curated-models.ts` as `OLLAMA_CURATED_MODELS` (typed objects) + `OLLAMA_CURATED_MODEL_IDS` (tags). Both the Hub Ollama panel (`frontend/app/hub/page.tsx`) and the setup wizard (`frontend/components/ollama/OllamaSetupWizard.tsx`) now import from the shared module instead of redeclaring the list. No backend endpoint — the curation is editorial, not derived from a registry.
+- **Client types.** `frontend/lib/client.ts` gained `VendorInfo` interface + `api.getProviderVendors()` method (returns `[]` on failure, preserves offline fallback).
+- **Drift guards.** `backend/tests/test_wizard_drift.py` gets Guard 6 (vendor catalog: backend `VALID_VENDORS` ⇄ `SUPPORTED_VENDORS` ⇄ modal fallback `VENDORS: VendorInfo[]`) and Guard 7 (shared Ollama module exports + both call-sites import from it, never redeclare).
+
+Verified end-to-end on the local stack: `GET /api/providers/vendors` returns 10 rows with correct `tenant_has_configured` for the test tenant. New wizard-drift tests pass.
+
+### Wizard drift prevention — StepChannels fetches backend catalog (2026-04-20)
+
+Mirrors the StepSkills pattern landed in commit `a9bfdc9`: the agent wizard's channel picker no longer hardcodes its 6-channel list.
+
+- Added `backend/channels/catalog.py` with `CHANNEL_CATALOG` (frozen `ChannelInfo` dataclass per channel: id, display_name, description, requires_setup, setup_hint, icon_hint). Seeded with playground, whatsapp, telegram, slack, discord, webhook.
+- Added `GET /api/channels` (`backend/api/routes_channels.py`) returning each catalog entry annotated with `tenant_has_configured` — checks `WhatsAppMCPInstance`, `TelegramBotInstance`, `SlackIntegration`, `DiscordIntegration`, `WebhookIntegration` rows for the caller's tenant. Playground is always considered configured; DB lookup failures degrade conservatively to `false`.
+- Registered the router in `backend/app.py`.
+- `frontend/lib/client.ts` gained `ChannelCatalogEntry` + `api.getChannelCatalog()`.
+- `frontend/components/agent-wizard/steps/StepChannels.tsx` now fetches the catalog at mount and falls back to a commented fallback-only array when the API is unreachable. Channels with `requires_setup && !tenant_has_configured` render a "Needs setup" amber badge.
+- `backend/tests/test_wizard_drift.py` extended with a Guard 5 that asserts every backend catalog id is present in the frontend fallback array and every entry has a non-empty `display_name`.
+
 ### BUG-668 — Kokoro auto-provision disconnect fix (2026-04-20, post-PR-#26 regression)
 
 Surfaced by the post-merge comprehensive regression when a QA agent actually exercised the Kokoro wizard end-to-end (earlier regression passes only clicked through the wizard UI without committing a provision). Kokoro hit the same `psycopg2.OperationalError: server closed the connection unexpectedly` + `docker-socket-proxy Read timed out` disconnect pattern BUG-663 fixed for Ollama, because the BUG-663 fix only covered `ollama_container_manager.py` and didn't include the parallel `kokoro_container_manager.py` path.
