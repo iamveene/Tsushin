@@ -232,6 +232,25 @@ export default function AgentStudioTab() {
         {selectedAgentId ? (
           <>
             <StudioLeftPanel studioData={studioData} builder={builder} onSave={handleSave} />
+            {/* BUG-597: Hold a spinner over the canvas until React Flow has
+                at least one node to render. The dagre layout is async — during
+                cold-load the selector and sidebar hydrate first, then the
+                layout Promise resolves and node generation completes a tick
+                later. Previously the user saw an empty canvas for ~500ms–5s
+                depending on CPU / layout complexity. Now the spinner holds
+                until `builder.nodes.length > 0` (or studioData.loading clears
+                for an agent with zero attached components). */}
+            {(builder.nodes.length === 0 && studioData.agent?.id === selectedAgentId) && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                <div className="text-center">
+                  <div className="relative w-10 h-10 mx-auto mb-3">
+                    <div className="absolute inset-0 rounded-full border-4 border-tsushin-surface"></div>
+                    <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-tsushin-indigo animate-spin"></div>
+                  </div>
+                  <p className="text-tsushin-slate font-medium text-sm">Rendering agent graph...</p>
+                </div>
+              </div>
+            )}
             <StudioCanvasComponent
               nodes={builder.nodes} edges={builder.edges} onNodesChange={builder.onNodesChange}
               onDrop={handleDrop} onDeleteSelected={handleDeleteSelected}

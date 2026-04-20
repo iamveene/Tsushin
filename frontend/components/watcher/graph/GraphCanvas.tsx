@@ -1006,10 +1006,19 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
       // Build a lookup of skill-node-id → skillType so we can scope skill-edge glow
       // to the specific skill the agent actually invoked (not every skill it owns).
       const skillTypeByNodeId = new Map<string, string>()
+      // BUG-621: Also build a lookup of skill-category-node-id → [skillTypes] so
+      // the Agent→Category edge only glows when the invoked skill actually lives
+      // in that category. The previous logic lit EVERY category edge for any
+      // skill use (and even for plain greetings that invoked nothing), badly
+      // over-reporting activity.
+      const categorySkillTypesByNodeId = new Map<string, string[]>()
       getNodes().forEach(n => {
         if (n.data.type === 'skill') {
           const sd = n.data as SkillNodeData
           skillTypeByNodeId.set(n.id, sd.skillType)
+        } else if (n.data.type === 'skill-category') {
+          const cd = n.data as SkillCategoryNodeData
+          categorySkillTypesByNodeId.set(n.id, (cd.skills || []).map(s => s.skillType))
         }
       })
       // Match the skill-node's skillType to the recent-use skillType, accounting for
@@ -1075,11 +1084,17 @@ const GraphCanvasInner = forwardRef<GraphCanvasRef, GraphCanvasProps>(
               className = isFading ? 'edge-fading-teal' : 'edge-active-teal'
             }
           } else if (target.startsWith('skill-category-')) {
-            // Agent → Category edge glows only when a skill in that category is in use
-            // (matches the existing skill-category node isActive logic, which already does
-            //  the category-level match). Treat any recent skill use as a hit; the child
-            //  skill edge below narrows it to the exact invocation.
-            if (skillUse) {
+            // BUG-621: Agent → Category edge glows ONLY when the invoked skill
+            // actually lives in that category. Plain greetings (no skillUse)
+            // leave every category edge dark; a `skills.summarize` invocation
+            // only lights the "special" category edge (not media/automation/other).
+            // Mirrors the existing skill-category node isActive logic at 953-956.
+            const categorySkillTypes = categorySkillTypesByNodeId.get(target) || []
+            const usedType = skillUse?.skillType
+            const usedMatchesCategory = !!usedType && categorySkillTypes.some(t =>
+              t === usedType || (usedType === 'flows' && t === 'scheduler')
+            )
+            if (usedMatchesCategory) {
               className = isFading ? 'edge-fading-teal' : 'edge-active-teal'
             }
           } else if (target.startsWith('knowledge-summary-')) {

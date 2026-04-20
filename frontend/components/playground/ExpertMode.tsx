@@ -565,12 +565,20 @@ export default function ExpertMode({
               </CollapsibleNavSection>
 
               {/* Threads Section - Accordion (conditionally rendered) */}
-              {selectedAgentId && threads && threads.length > 0 && (
+              {selectedAgentId && threads && threads.length > 0 && (() => {
+                // BUG-619: Apply project-scope filter client-side. When the user
+                // is inside a project session, only show threads that belong to
+                // that project (match on `project_name`) and scope the badge to
+                // the filtered count. Outside a project, behavior is unchanged.
+                const scopedThreads = projectSession?.is_in_project && projectSession.project_name
+                  ? threads.filter(t => (t as any).project_name === projectSession.project_name)
+                  : threads
+                return (
                 <CollapsibleNavSection
                   id="threads"
                   icon={<MessageIcon size={16} />}
                   title="Threads"
-                  count={threads.length}
+                  count={scopedThreads.length}
                   isExpanded={expandedSection === 'threads'}
                   onToggle={handleSectionToggle}
                   preview={getThreadsPreview()}
@@ -586,15 +594,37 @@ export default function ExpertMode({
                         <span>New Thread</span>
                       </button>
                     )}
-                    {threads.slice(0, 10).map(thread => (
+                    {projectSession?.is_in_project && (
+                      <div className="px-2 py-1 mb-1 text-[10px] text-[var(--pg-text-muted)] italic">
+                        Scoped to {projectSession.project_name} · {scopedThreads.length} thread{scopedThreads.length === 1 ? '' : 's'}
+                      </div>
+                    )}
+                    {scopedThreads.slice(0, 10).map(thread => (
                       <div
                         key={thread.id}
-                        className={`thread-item-with-menu relative flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
+                        className={`thread-item-with-menu group relative flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
                           thread.id === activeThreadId
                             ? 'bg-[var(--pg-accent-soft)] text-[var(--pg-accent)]'
                             : 'text-[var(--pg-text-secondary)] hover:bg-[var(--pg-surface)]/50 hover:text-[var(--pg-text)]'
                         }`}
-                        onClick={() => onThreadSelect && onThreadSelect(thread.id)}
+                        onClick={(e) => {
+                          // BUG-625: Ignore clicks that originate inside the
+                          // kebab menu button. The kebab has `stopPropagation`
+                          // already, but belt-and-braces: if any inner control
+                          // (with a `data-no-row-click` attr) bubbles to us,
+                          // don't trigger row-select. This makes the row
+                          // single-purpose: click row => select thread,
+                          // click kebab/right-click => open context menu.
+                          const tgt = e.target as HTMLElement | null
+                          if (tgt?.closest('[data-no-row-click="true"]')) return
+                          onThreadSelect && onThreadSelect(thread.id)
+                        }}
+                        onContextMenu={(e) => {
+                          // BUG-625: Native right-click opens the context menu.
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setThreadContextMenu({ threadId: thread.id, x: e.clientX, y: e.clientY })
+                        }}
                         title={thread.title || 'Untitled'}
                       >
                         <span className="text-sm flex-shrink-0 flex items-center justify-center w-4 h-4">{thread.is_archived ? <ArchiveIcon size={14} /> : <MessageIcon size={14} />}</span>
@@ -603,13 +633,15 @@ export default function ExpertMode({
                           <span className="text-[10px] text-[var(--pg-text-muted)] flex-shrink-0">{thread.message_count}</span>
                         )}
                         <button
+                          data-no-row-click="true"
                           onClick={(e) => {
                             e.stopPropagation()
                             setThreadContextMenu({ threadId: thread.id, x: e.clientX, y: e.clientY })
                           }}
-                          className="thread-menu-btn flex-shrink-0 p-1 hover:bg-[var(--pg-surface)] rounded transition-all"
-                          title="Thread options"
-                          style={{ opacity: 0.3 }}
+                          /* BUG-625: kebab is hidden until the row is hovered so
+                             row-body clicks can't accidentally land on it. */
+                          className="thread-menu-btn flex-shrink-0 p-1 hover:bg-[var(--pg-surface)] rounded opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+                          title="Thread options (or right-click row)"
                         >
                           <svg className="w-3.5 h-3.5 text-[var(--pg-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
@@ -619,7 +651,8 @@ export default function ExpertMode({
                     ))}
                   </div>
                 </CollapsibleNavSection>
-              )}
+                )
+              })()}
 
               {/* Quick Tools Section - Accordion */}
               <CollapsibleNavSection
