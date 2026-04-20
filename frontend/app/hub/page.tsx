@@ -420,8 +420,6 @@ export default function HubPage() {
   const [instanceMenuOpen, setInstanceMenuOpen] = useState<number | null>(null)
 
   // Local Services state (Ollama & Kokoro management)
-  const [kokoroContainerStatus, setKokoroContainerStatus] = useState<{ status: string; name?: string; image?: string; message?: string } | null>(null)
-  const [kokoroActionLoading, setKokoroActionLoading] = useState(false)
   // v0.7.0: Per-tenant Kokoro auto-provisioning (Hub-consolidated, replaces /settings/tts)
   const [kokoroInstances, setKokoroInstances] = useState<TTSInstance[]>([])
   const [kokoroDefault, setKokoroDefault] = useState<{ default_tts_instance_id: number | null; instance: TTSInstance | null } | null>(null)
@@ -752,7 +750,6 @@ export default function HubPage() {
         fetchAPIKeys(),
         fetchOllamaHealth(),
         fetchKokoroHealth(),
-        fetchKokoroContainerStatus(),
         refreshKokoroInstances(),  // v0.7.0: per-tenant Kokoro (Hub-consolidated)
         loadHubIntegrations(),
         loadMcpInstances(),
@@ -1001,86 +998,18 @@ export default function HubPage() {
 
   // ==================== Kokoro Container Management ====================
 
-  const fetchKokoroContainerStatus = async () => {
-    try {
-      const data = await api.getKokoroStatus()
-      setKokoroContainerStatus(data)
-    } catch (error) {
-      setKokoroContainerStatus({ status: 'error', message: 'Cannot reach backend' })
-    }
-  }
-
-  const handleStartKokoro = async () => {
-    setKokoroActionLoading(true)
-    try {
-      const result = await api.startKokoro()
-      if (!result.success) {
-        toast.error(result.message)
-        setKokoroActionLoading(false)
-        return
-      }
-      toast.success('Kokoro container started — waiting for service to initialize...')
-      // Update container status immediately
-      await fetchKokoroContainerStatus()
-      // Poll health with retries (Kokoro needs time to load models)
-      const maxRetries = 20
-      const retryInterval = 3000 // 3 seconds
-      for (let i = 0; i < maxRetries; i++) {
-        await new Promise(r => setTimeout(r, retryInterval))
-        const apiUrl = ''
-        try {
-          const resp = await authenticatedFetch(`${apiUrl}/api/tts-providers/kokoro/status`)
-          if (resp.ok) {
-            const data = await resp.json()
-            if (data.available) {
-              setKokoroHealth(data)
-              toast.success('Kokoro TTS is ready!')
-              setKokoroActionLoading(false)
-              return
-            }
-          }
-        } catch { /* keep retrying */ }
-      }
-      // Final fetch even if not healthy yet
-      await fetchKokoroHealth()
-      toast.error('Kokoro container is running but service is still initializing. Click "Refresh Status" to check again.')
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to start Kokoro')
-    } finally {
-      setKokoroActionLoading(false)
-    }
-  }
-
-  const handleStopKokoro = async () => {
-    setKokoroActionLoading(true)
-    try {
-      const result = await api.stopKokoro()
-      if (result.success) {
-        toast.success(result.message)
-      } else {
-        toast.error(result.message)
-      }
-      await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to stop Kokoro')
-    } finally {
-      setKokoroActionLoading(false)
-    }
-  }
-
-  // Auto-poll Kokoro health when container is running but service not yet available
+  // Auto-poll Kokoro health periodically while the service is not yet available.
+  // Per-tenant Kokoro instances (v0.7.0) are managed via the dedicated wizard;
+  // this legacy-panel poll is purely for visibility into any out-of-band compose
+  // install that the tenant may still be running.
   useEffect(() => {
-    if (
-      kokoroContainerStatus?.status === 'running' &&
-      !kokoroHealth?.available &&
-      !kokoroActionLoading
-    ) {
+    if (!kokoroHealth?.available) {
       const interval = setInterval(async () => {
         await fetchKokoroHealth()
       }, 5000) // poll every 5s
       return () => clearInterval(interval)
     }
-  }, [kokoroContainerStatus?.status, kokoroHealth?.available, kokoroActionLoading])
+  }, [kokoroHealth?.available])
 
   // ==================== Per-tenant Kokoro Instance Management (v0.7.0) ====================
 
@@ -3561,54 +3490,29 @@ export default function HubPage() {
                         {kokoroLegacyExpanded && (
                           <div className="mt-3 p-3 bg-tsushin-ink/30 border border-white/5 rounded-lg space-y-2">
                             <p className="text-[11px] text-tsushin-muted">
-                              The original single shared Kokoro service defined in docker-compose. Prefer per-tenant instances above; this fallback remains for installs still using the <code className="text-tsushin-accent font-mono">tts</code> compose profile.
+                              The original single shared Kokoro service defined in docker-compose. Removed as a managed control surface in v0.7.0 — prefer per-tenant instances above. This panel only shows whether a legacy endpoint is still reachable for installs that continue to run the <code className="text-tsushin-accent font-mono">tts</code> compose profile out-of-band.
                             </p>
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-1.5">
                                 <div className={`w-2 h-2 rounded-full ${
-                                  kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
+                                  kokoroHealth?.available
                                     ? 'bg-tsushin-success animate-pulse'
-                                    : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
-                                      ? 'bg-yellow-400 animate-pulse'
-                                      : kokoroContainerStatus?.status === 'not_installed' || kokoroContainerStatus?.status === 'error'
-                                        ? 'bg-tsushin-vermilion'
-                                        : 'bg-tsushin-slate'
+                                    : 'bg-tsushin-slate'
                                 }`} />
                                 <span className="text-[11px] text-tsushin-slate capitalize">
-                                  {kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
-                                    ? 'Running'
-                                    : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
-                                      ? 'Initializing...'
-                                      : kokoroContainerStatus?.status === 'exited'
-                                        ? 'Stopped'
-                                        : kokoroContainerStatus?.status === 'not_installed'
-                                          ? 'Not Installed'
-                                          : kokoroContainerStatus?.status === 'error'
-                                            ? 'Error'
-                                            : kokoroHealth?.available ? 'Online' : 'Offline'}
+                                  {kokoroHealth?.available ? 'Online' : 'Offline'}
                                 </span>
                               </div>
-                              {canEditSettings && kokoroContainerStatus?.status !== 'not_installed' && (
-                                <ToggleSwitch
-                                  checked={kokoroContainerStatus?.status === 'running'}
-                                  onChange={async (checked) => {
-                                    if (checked) await handleStartKokoro()
-                                    else await handleStopKokoro()
-                                  }}
-                                  disabled={kokoroActionLoading}
-                                  title={kokoroContainerStatus?.status === 'running' ? 'Stop legacy Kokoro' : 'Start legacy Kokoro'}
-                                />
-                              )}
                             </div>
                             {kokoroHealth?.available && (
                               <p className="text-[11px] font-mono text-tsushin-accent">{kokoroHealth.details?.service_url || 'http://localhost:8880'}</p>
                             )}
-                            {kokoroContainerStatus?.status === 'not_installed' && (
-                              <p className="text-[11px] text-tsushin-slate">No Kokoro instance yet. Click <span className="font-semibold text-tsushin-accent">Setup with Wizard</span> above to auto-provision one.</p>
+                            {!kokoroHealth?.available && (
+                              <p className="text-[11px] text-tsushin-slate">No reachable legacy Kokoro endpoint. Click <span className="font-semibold text-tsushin-accent">Setup with Wizard</span> above to auto-provision a per-tenant instance.</p>
                             )}
                             <button
                               onClick={async () => {
-                                await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
+                                await fetchKokoroHealth()
                               }}
                               className="text-[11px] text-tsushin-accent hover:text-white"
                             >

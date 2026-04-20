@@ -595,91 +595,83 @@ class ChannelHealthService:
             ).set(_STATE_GAUGE_MAP.get(new_state, 0))
 
         # 2. Write ChannelHealthEvent record (use isolated session to avoid
-        #    contaminating the caller's session on failure)
-        audit_db = None
+        #    contaminating the caller's session on failure).
+        #    BUG-665: scope the session via `with` so the connection is
+        #    released back to the pool before any `await` below.
         try:
             from models import ChannelHealthEvent
-            audit_db = self.get_db_session()
-            event = ChannelHealthEvent(
-                tenant_id=tenant_id,
-                channel_type=channel_type,
-                instance_id=instance_id,
-                event_type=f"{old_state.value}_to_{new_state.value}",
-                old_state=old_state.value,
-                new_state=new_state.value,
-                reason=detail,
-                health_status=health_status,
-                latency_ms=latency_ms,
-            )
-            audit_db.add(event)
-            audit_db.commit()
+            with self._db_session_scope() as audit_db:
+                try:
+                    event = ChannelHealthEvent(
+                        tenant_id=tenant_id,
+                        channel_type=channel_type,
+                        instance_id=instance_id,
+                        event_type=f"{old_state.value}_to_{new_state.value}",
+                        old_state=old_state.value,
+                        new_state=new_state.value,
+                        reason=detail,
+                        health_status=health_status,
+                        latency_ms=latency_ms,
+                    )
+                    audit_db.add(event)
+                    audit_db.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to write ChannelHealthEvent: {e}")
+                    try:
+                        audit_db.rollback()
+                    except Exception:
+                        pass
         except ImportError:
             logger.debug("ChannelHealthEvent model not yet available - skipping DB write")
-        except Exception as e:
-            logger.warning(f"Failed to write ChannelHealthEvent: {e}")
-            if audit_db:
-                try:
-                    audit_db.rollback()
-                except Exception:
-                    pass
-        finally:
-            if audit_db:
-                try:
-                    audit_db.close()
-                except Exception:
-                    pass
 
         # 2.5 BUG-293: Persist circuit breaker state to the instance DB columns
         #     so state survives backend restarts.
-        persist_db = None
-        try:
-            persist_db = self.get_db_session()
-            _MODEL_MAP = {
-                "whatsapp": WhatsAppMCPInstance,
-                "telegram": TelegramBotInstance,
-            }
-            # Lazy-import optional channel models
+        #     BUG-665: scope the session via `with` so the connection is
+        #     released back to the pool before any `await` below.
+        with self._db_session_scope() as persist_db:
             try:
-                from models import SlackIntegration
-                _MODEL_MAP["slack"] = SlackIntegration
-            except ImportError:
-                pass
-            try:
-                from models import DiscordIntegration
-                _MODEL_MAP["discord"] = DiscordIntegration
-            except ImportError:
-                pass
-            try:
-                from models import WebhookIntegration
-                _MODEL_MAP["webhook"] = WebhookIntegration
-            except ImportError:
-                pass
+                _MODEL_MAP = {
+                    "whatsapp": WhatsAppMCPInstance,
+                    "telegram": TelegramBotInstance,
+                }
+                # Lazy-import optional channel models
+                try:
+                    from models import SlackIntegration
+                    _MODEL_MAP["slack"] = SlackIntegration
+                except ImportError:
+                    pass
+                try:
+                    from models import DiscordIntegration
+                    _MODEL_MAP["discord"] = DiscordIntegration
+                except ImportError:
+                    pass
+                try:
+                    from models import WebhookIntegration
+                    _MODEL_MAP["webhook"] = WebhookIntegration
+                except ImportError:
+                    pass
 
-            model_cls = _MODEL_MAP.get(channel_type)
-            if model_cls:
-                inst = persist_db.query(model_cls).filter(model_cls.id == instance_id).first()
-                if inst:
-                    inst.circuit_breaker_state = new_state.value
-                    inst.circuit_breaker_failure_count = cb.failure_count
-                    inst.circuit_breaker_opened_at = cb.opened_at
-                    persist_db.commit()
-                    logger.debug(
-                        f"Persisted CB state for {channel_type}/{instance_id}: "
-                        f"{new_state.value} (failures={cb.failure_count})"
-                    )
-        except Exception as e:
-            logger.warning(f"Failed to persist circuit breaker state: {e}")
-            if persist_db:
+                model_cls = _MODEL_MAP.get(channel_type)
+                if model_cls:
+                    inst = persist_db.query(model_cls).filter(model_cls.id == instance_id).first()
+                    if inst:
+                        inst.circuit_breaker_state = new_state.value
+                        inst.circuit_breaker_failure_count = cb.failure_count
+                        inst.circuit_breaker_opened_at = cb.opened_at
+                        persist_db.commit()
+                        logger.debug(
+                            f"Persisted CB state for {channel_type}/{instance_id}: "
+                            f"{new_state.value} (failures={cb.failure_count})"
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to persist circuit breaker state: {e}")
                 try:
                     persist_db.rollback()
                 except Exception:
                     pass
-        finally:
-            if persist_db:
-                try:
-                    persist_db.close()
-                except Exception:
-                    pass
+
+        # BUG-665: both DB sessions above are now closed; the pool slot is
+        # released before we re-enter the event loop with `await` / `create_task`.
 
         # 3. Emit via WatcherActivityService (if available)
         if self.watcher_activity_service:

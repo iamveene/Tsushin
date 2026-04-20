@@ -7167,22 +7167,7 @@ export const api = {
     return res.json()
   },
 
-  // ==================== Hub Local Services (Kokoro TTS) ====================
-
-  async startKokoro(): Promise<{ success: boolean; message: string }> {
-    const res = await authenticatedFetch(`${API_URL}/api/services/kokoro/start`, { method: 'POST' })
-    return res.json()
-  },
-
-  async stopKokoro(): Promise<{ success: boolean; message: string }> {
-    const res = await authenticatedFetch(`${API_URL}/api/services/kokoro/stop`, { method: 'POST' })
-    return res.json()
-  },
-
-  async getKokoroStatus(): Promise<{ status: string; name?: string; image?: string; message?: string }> {
-    const res = await authenticatedFetch(`${API_URL}/api/services/kokoro/status`)
-    return res.json()
-  },
+  // ==================== Hub Local Services (Ollama) ====================
 
   async getOllamaHealth(): Promise<OllamaHealthResponse> {
     // BUG-507: Ollama is optional and the agents/hub surfaces call this on

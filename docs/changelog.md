@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fresh-install regression sweep — BUG-662/663/664/665 closed + BUG-666 surfaced (2026-04-20)
+
+Four open bugs from the 2026-04-20 Ubuntu VM fresh-install audit closed in one pass, plus one new bug surfaced by a newly-added Hub API-key validation regression test.
+
+**BUG-662 (High) — Fresh install on stock Docker 28.2.2 + missing buildx.**
+- `install.py` probes `docker buildx version` in `check_prerequisites()` and stores a `self.buildx_available` flag. When False, both `run_docker_compose()` and `build_additional_images()` strip `DOCKER_BUILDKIT=1` / `COMPOSE_DOCKER_CLI_BUILD=1` from the child env so Docker Compose falls back to the legacy inline builder and `docker build` for the WhatsApp MCP + toolbox images succeeds.
+- `backend/containers/Dockerfile.toolbox` drops the `# syntax=docker/dockerfile:1.4` parser directive and converts all five `RUN --mount=type=cache,target=...` blocks to plain `RUN` with `mkdir -p /tmp/pd-cache` prepended, so the ProjectDiscovery download paths exist under the legacy builder.
+
+**BUG-663 (High) — Cold Ollama auto-provision failed on first wizard run.**
+- `backend/services/ollama_container_manager.py` `provision()` closes the DB session BEFORE the blocking `create_container()` (which can run `docker pull` for up to 20 min) and reopens a fresh short-lived session afterwards to write `container_id` + `base_url`. Eliminates the `psycopg2.OperationalError: server closed the connection unexpectedly` mid-pull failure family.
+- `backend/api/routes_provider_instances.py` gates `_background_test_instance` to skip when `is_auto_provisioned and not base_url`, so the auto-test no longer fires during provisioning with a null base URL and falls through to `host.docker.internal:11434` connection-refused on Linux.
+- `backend/services/provider_instance_service.py` adds a thread-safe cached `_resolve_ollama_host()` helper (tries `host.docker.internal`, falls back to `172.17.0.1` — Docker default-bridge gateway — on Linux hosts without `host-gateway`) and a lazy `get_vendor_default_base_url(vendor)` accessor. `VENDOR_DEFAULT_BASE_URLS["ollama"]` is now `None` at module-import time so no DNS call can block backend startup. `backend/agent/ai_client.py` and `backend/services/model_discovery_service.py` switched to the lazy accessor.
+
+**BUG-664 (Medium) — Hub still called the removed `/api/services/kokoro/status` (HTTP 410 noise).**
+- `frontend/lib/client.ts` removed `getKokoroStatus()` and `startKokoro()`.
+- `frontend/app/hub/page.tsx` removed `fetchKokoroContainerStatus`, `handleStartKokoro`, `handleStopKokoro`, the `kokoroActionLoading` / `kokoroContainerStatus` state + setters, and the legacy-panel Start/Stop toggle. The legacy panel now shows a binary "Online" / "Offline" status sourced exclusively from `/api/tts-providers/kokoro/status`. Per-tenant Kokoro lifecycle lives in the main per-tenant card (v0.7.0).
+- `backend/api/routes_services.py:71-80` (HTTP 410 Gone for `/api/services/kokoro/status`) intentionally retained as a regression canary for any external caller still pointing at the removed path.
+
+**BUG-665 (Critical) — BUG-588 regression: QueuePool exhaustion + idle-in-transaction partial outage.**
+- `backend/services/channel_health_service.py` `_handle_transition` now uses `with self._db_session_scope()` for both the audit and persist sessions, with all `await` calls and `asyncio.create_task(...)` moved AFTER both `with` blocks exit so the pool slots are released before async suspension.
+- `backend/services/mcp_server_health_service.py` `_reconnect_server` splits into three short-lived scoped sessions (pre-validate → network call → record result). Timeout reduced from 30s to 10s on the health-loop speculative reconnect to bound worst-case pool hold. Added an end-of-`_monitor_loop` `pg_stat_activity` idle-in-transaction probe that updates a Prometheus gauge.
+- `backend/db.py` `pool_recycle` dropped from 1800s → 300s. Registered SQLAlchemy pool `checkout`/`checkin` event hooks feeding a new `tsn_db_pool_checked_out` gauge.
+- `backend/services/metrics_service.py` registers `tsn_db_pool_checked_out` + `tsn_db_idle_in_transaction` gauges under `METRICS_ENABLED`.
+- Verified via breadth-smoke (75 concurrent API calls): `idle_in_transaction` stayed at 1, `tsn_db_pool_checked_out` stayed at 1.0, zero QueuePool timeouts in backend logs over 5 min.
+
+**BUG-666 (Medium) — OPENED by the regression's new Hub API-key validation test.** The Hub Tool-API Edit/Save path writes the submitted key to the backend and immediately marks the card "Active" without validating against the provider. A bogus key like `bogus-key-for-regression-test-12345` round-trips silently; the user discovers it only on first live call. Scope-separated from this PR — tracked for the next sprint.
+
+**Regression evidence:** Phase-5 in-place full regression green on the local stack: 28/29 tests passing in `backend/tests/test_api_v1_e2e.py` (1 pre-existing flaky test unrelated to this work — `test_list_agents_shows_description` 409 name collision from second-level `int(time.time())` uniqueness), 75-call concurrent breadth smoke clean, Playwright browser sweep green for Dashboard / Hub / Add Integration wizard (all 6 provider paths: Brave / Tavily / SerpAPI / SearXNG auto-provision / Google Flights / Amadeus) / legacy Kokoro panel binary state. Evidence under `output/playwright/bugfix-phase5-regression/`. Ubuntu VM fresh install + local fresh install + restore regressions pending as separate validation workstreams.
+
 ### Gemini 3.x preview models + Gemini TTS provider (2026-04-20, v0.6.0 addendum)
 
 Adds first-class support for Google's Gemini 3.x preview line across every wizard,

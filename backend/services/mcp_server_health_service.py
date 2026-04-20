@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker, Session
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,39 @@ class MCPServerHealthCheckService:
                 await self._check_all_servers()
             except Exception as e:
                 logger.error("Health check cycle error: %s", e, exc_info=True)
+
+            # BUG-665 instrumentation: lightweight probe of idle-in-transaction
+            # sessions so we can watch pool hygiene over time.
+            try:
+                with self._db_session_scope() as db:
+                    idle_count = db.execute(
+                        text(
+                            "SELECT count(*) FROM pg_stat_activity "
+                            "WHERE state = 'idle in transaction'"
+                        )
+                    ).scalar()
+                idle_count = int(idle_count or 0)
+                logger.info(
+                    "pg_stat_activity idle-in-transaction count: %d", idle_count
+                )
+                # Feed the Prometheus gauge if metrics are enabled.
+                try:
+                    import settings as _settings
+                    if _settings.METRICS_ENABLED:
+                        from services.metrics_service import (
+                            TSN_DB_IDLE_IN_TRANSACTION,
+                        )
+                        TSN_DB_IDLE_IN_TRANSACTION.set(idle_count)
+                except Exception:
+                    pass
+            except Exception as probe_err:
+                # SQLite / permission-denied / any other backend that doesn't
+                # expose pg_stat_activity — swallow so the monitor loop keeps
+                # running.
+                logger.debug(
+                    "idle-in-transaction probe skipped: %s", probe_err
+                )
+
             await asyncio.sleep(self.CHECK_INTERVAL_SECONDS)
 
     # ------------------------------------------------------------------
@@ -221,14 +255,73 @@ class MCPServerHealthCheckService:
     async def _reconnect_server(
         self, manager, server_id: int, server_name: str
     ) -> bool:
-        """Attempt to reconnect a disconnected server and record the result."""
+        """Attempt to reconnect a disconnected server and record the result.
+
+        BUG-665: pre-validate the server row and extract any primitives we
+        need into plain Python variables BEFORE the 30s-bounded network
+        call, so our own DB session is released back to the pool and is not
+        held "idle in transaction" across the await. The connection manager
+        still needs a session for its own internal work (config lookup,
+        container ensure, status commit), so we hand it a dedicated
+        short-lived session that is scoped only around that call. The
+        result is recorded through yet another fresh short-lived session.
+        Mirrors the BUG-663 Ollama write-back pattern.
+        """
         t0 = time.monotonic()
+
+        # Step 1: pre-validate & extract primitives under a very short session.
+        from models import MCPServerConfig
         try:
             with self._db_session_scope() as db:
+                row = (
+                    db.query(MCPServerConfig)
+                    .filter(MCPServerConfig.id == server_id)
+                    .first()
+                )
+                if row is None:
+                    logger.warning(
+                        "Reconnect skipped: MCP server %s (id=%d) not found",
+                        server_name, server_id,
+                    )
+                    return False
+                if not row.is_active:
+                    logger.debug(
+                        "Reconnect skipped: MCP server %s (id=%d) inactive",
+                        server_name, server_id,
+                    )
+                    return False
+                # Refresh the display name in case it changed.
+                server_name = row.server_name or server_name
+        except Exception as e:
+            logger.warning(
+                "Pre-validation failed for MCP server %s (id=%d): %s",
+                server_name, server_id, e,
+            )
+            # Fall through — we still try the reconnect attempt below.
+
+        # Step 2: perform the network call with a dedicated short-lived
+        # session. `manager.get_or_connect` needs the session for its full
+        # duration (DB read of MCPServerConfig → toolbox bootstrap for stdio
+        # transports → DB write of `connection_status` post-connect), so the
+        # pool slot IS held across the `await transport.connect()`.
+        #
+        # To bound the worst-case hold we shortened the timeout to 10s
+        # (from 30s): a health-loop speculative reconnect that needs >10s
+        # is almost certainly going to fail anyway, and the user-path
+        # reconnect (which still uses `get_or_connect` directly) is
+        # unaffected.
+        #
+        # TODO(follow-up): refactor `MCPConnectionManager.get_or_connect`
+        # itself to split read → await → write into three sessions so the
+        # pool slot is genuinely released across the blocking connect.
+        try:
+            with self._db_session_scope() as conn_db:
                 await asyncio.wait_for(
-                    manager.get_or_connect(server_id, db), timeout=30
+                    manager.get_or_connect(server_id, conn_db), timeout=10
                 )
             latency_ms = int((time.monotonic() - t0) * 1000)
+
+            # Step 3: open a fresh short-lived session to record success.
             with self._db_session_scope() as db:
                 self._record_health(db, server_id, check_type="reconnect",
                                     success=True, latency_ms=latency_ms)
@@ -238,7 +331,8 @@ class MCPServerHealthCheckService:
 
         except asyncio.TimeoutError:
             latency_ms = int((time.monotonic() - t0) * 1000)
-            error_msg = "Reconnect timed out (30s)"
+            error_msg = "Reconnect timed out (10s)"
+            # Fresh short-lived session for the failure write-back.
             with self._db_session_scope() as db:
                 manager.record_failure(server_id, db, error=error_msg)
                 self._record_health(db, server_id, check_type="reconnect",

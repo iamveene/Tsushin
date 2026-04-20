@@ -653,8 +653,14 @@ def create_provider_instance(
     # clicks Test Connection. Skip when no credentials are configured (the
     # test would just fail with "no api key") — except ollama, which can run
     # keyless against a local daemon.
+    # BUG-663: for an auto-provisioned Ollama instance that doesn't yet have
+    # a base_url (provisioning is still running — docker pull can take 20min
+    # on first use), skip the test. The provisioning path writes base_url +
+    # health_status itself once the container is ready; kicking off a test
+    # against a None URL here just logs a misleading 'unavailable' immediately.
     if (api_key_to_store or vendor == "ollama") and instance.available_models:
-        background_tasks.add_task(_background_test_instance, instance.id, current_user.id)
+        if not (instance.is_auto_provisioned and not instance.base_url):
+            background_tasks.add_task(_background_test_instance, instance.id, current_user.id)
 
     return _to_response(instance, db)
 
