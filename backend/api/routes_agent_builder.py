@@ -34,6 +34,7 @@ from auth_dependencies import (
     TenantContext,
 )
 from services.whatsapp_binding_service import apply_whatsapp_binding_policy, parse_enabled_channels
+from constants.agent_config import MEMORY_ISOLATION_MODES
 
 router = APIRouter(prefix="/api/v2/agents", tags=["agent-builder"])
 
@@ -593,7 +594,7 @@ async def save_builder_data(
                     raise HTTPException(status_code=400, detail="memory_size must be between 1 and 5000")
                 agent.memory_size = data.agent.memory_size
             if data.agent.memory_isolation_mode is not None:
-                if data.agent.memory_isolation_mode not in ("isolated", "shared", "channel_isolated"):
+                if data.agent.memory_isolation_mode not in MEMORY_ISOLATION_MODES:
                     raise HTTPException(status_code=400, detail="Invalid memory_isolation_mode")
                 agent.memory_isolation_mode = data.agent.memory_isolation_mode
             if data.agent.enable_semantic_search is not None:
