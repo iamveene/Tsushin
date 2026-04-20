@@ -8,11 +8,15 @@ Uses the SearchProviderRegistry to support multiple providers:
 """
 
 import logging
-from typing import Dict, Any, Optional
+import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
 from .base import BaseSkill, InboundMessage, SkillResult
 from hub.providers import SearchProviderRegistry, SearchRequest
+from hub.providers.search_provider import SearchResponse, SearchResult
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +85,62 @@ class SearchSkill(BaseSkill):
 
         # Initialize providers
         SearchProviderRegistry.initialize_providers()
+
+    @staticmethod
+    def _reference_now() -> datetime:
+        return datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    def _normalize_relative_dates(self, text: str) -> str:
+        """Expand relative date phrases into explicit dates or ranges."""
+        now = self._reference_now()
+        normalized = text
+
+        replacements = {
+            r"\bhoje\b": now.strftime("%d/%m/%Y"),
+            r"\btoday\b": now.strftime("%Y-%m-%d"),
+            r"\bontem\b": (now - timedelta(days=1)).strftime("%d/%m/%Y"),
+            r"\byesterday\b": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
+        }
+
+        start_of_week = now - timedelta(days=now.weekday())
+        last_week_start = start_of_week - timedelta(days=7)
+        last_week_end = start_of_week - timedelta(days=1)
+        replacements[r"\bsemana passada\b"] = (
+            f"semana de {last_week_start.strftime('%d/%m/%Y')} "
+            f"a {last_week_end.strftime('%d/%m/%Y')}"
+        )
+        replacements[r"\blast week\b"] = (
+            f"week from {last_week_start.strftime('%Y-%m-%d')} "
+            f"to {last_week_end.strftime('%Y-%m-%d')}"
+        )
+
+        for pattern, replacement in replacements.items():
+            normalized = re.sub(pattern, replacement, normalized, flags=re.IGNORECASE)
+
+        return normalized
+
+    async def _get_agent_ai_client(self):
+        """Create an AI client using the agent's configured LLM."""
+        from agent.ai_client import AIClient
+        from models import Agent
+
+        provider = 'gemini'
+        model = 'gemini-2.5-flash'
+
+        if self._db_session and hasattr(self, '_agent_id') and self._agent_id:
+            agent = self._db_session.query(Agent).filter(Agent.id == self._agent_id).first()
+            if agent:
+                provider = agent.model_provider or 'gemini'
+                model = agent.model_name or 'gemini-2.5-flash'
+                logger.debug(f"Using agent's LLM: {provider}/{model}")
+
+        return AIClient(
+            provider=provider,
+            model_name=model,
+            db=self._db_session,
+            token_tracker=self._token_tracker,
+            tenant_id=self._resolve_tenant_id()
+        )
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
@@ -230,22 +290,12 @@ class SearchSkill(BaseSkill):
                     metadata={'error': response.error, 'provider': provider_name}
                 )
 
-            # Format results
-            formatted_output = response.format_results()
-
-            return SkillResult(
-                success=True,
-                output=formatted_output,
-                metadata={
-                    'query': query,
-                    'provider': provider_name,
-                    'result_count': response.result_count,
-                    'request_time_ms': response.request_time_ms,
-                    'results': [
-                        {'title': r.title, 'url': r.url, 'description': r.description}
-                        for r in response.results
-                    ]
-                }
+            return await self._build_search_result(
+                message=message,
+                config=config,
+                query=query,
+                provider_name=provider_name,
+                response=response
             )
 
         except Exception as e:
@@ -268,38 +318,21 @@ class SearchSkill(BaseSkill):
             Search query string or None if extraction fails
         """
         try:
-            from agent.ai_client import AIClient
-            from models import Agent
-
-            # Get agent's LLM configuration from database
-            provider = 'gemini'
-            model = 'gemini-2.5-flash'
-
-            if self._db_session and hasattr(self, '_agent_id') and self._agent_id:
-                agent = self._db_session.query(Agent).filter(Agent.id == self._agent_id).first()
-                if agent:
-                    provider = agent.model_provider or 'gemini'
-                    model = agent.model_name or 'gemini-2.5-flash'
-                    logger.debug(f"Using agent's LLM: {provider}/{model}")
-
-            # Create AI client for parsing using agent's configured LLM
-            ai_client = AIClient(
-                provider=provider,
-                model_name=model,
-                db=self._db_session,
-                token_tracker=self._token_tracker,
-                tenant_id=self._resolve_tenant_id()
-            )
+            ai_client = await self._get_agent_ai_client()
 
             system_prompt = """You are a search query extractor. Parse user requests and return ONLY the search query, nothing else."""
 
             user_prompt = f"""Extract the search query from this message. Return ONLY the search query text, nothing else.
+
+Current date in Sao Paulo, Brazil: {self._reference_now().strftime("%Y-%m-%d")}
+If the user uses relative dates like today, yesterday, or last week, resolve them to absolute dates in the query.
 
 Examples:
 - "Search for best restaurants in New York" → best restaurants in New York
 - "Pesquise sobre inteligência artificial" → inteligência artificial
 - "Can you look up weather in London?" → weather in London
 - "Find information about Python programming" → Python programming
+- "quais os numeros da megasena da semana passada" → números mega-sena semana de 06/04/2026 a 12/04/2026
 
 User message: "{message}"
 
@@ -315,15 +348,163 @@ Search query:"""
             query = response.get('answer', '').strip()
 
             if query and len(query) > 2:
+                query = self._normalize_relative_dates(query)
                 logger.info(f"Extracted search query: {query}")
                 return query
 
             # Fallback
             return self._simple_query_extraction(message)
-
         except Exception as e:
             logger.error(f"Query extraction failed: {e}", exc_info=True)
             return self._simple_query_extraction(message)
+
+    @staticmethod
+    def _compact_result(result: SearchResult) -> Dict[str, str]:
+        return {
+            'title': result.title,
+            'url': result.url,
+            'description': result.description or ''
+        }
+
+    def _fallback_answer_from_results(self, query: str, response: SearchResponse) -> str:
+        """Return a concise, direct answer without relying on another LLM call."""
+        if not response.results:
+            return f"Não encontrei resultados relevantes para: {query}"
+
+        top = response.results[0]
+        summary = (top.description or top.title or "").strip()
+        if not summary:
+            summary = f"Encontrei resultados sobre: {query}"
+
+        lines = [summary]
+        source_count = min(2, len(response.results))
+        if source_count > 0:
+            lines.append("")
+            lines.append("Fontes:")
+            for result in response.results[:source_count]:
+                lines.append(f"- {result.title}: {result.url}")
+        return "\n".join(lines)
+
+    def _extract_lottery_numbers_from_results(
+        self,
+        original_message: str,
+        response: SearchResponse,
+    ) -> Optional[str]:
+        """Extract obvious lottery number sequences directly from snippets."""
+        message_lower = original_message.lower()
+        if not any(token in message_lower for token in ["mega-sena", "megasena", "dezenas", "números", "numeros"]):
+            return None
+
+        number_sequence_pattern = re.compile(r"(?<!\d)(\d{1,2}(?:[\s,.-]+\d{1,2}){5})(?!\d)")
+
+        for result in response.results[:5]:
+            haystack = " ".join(part for part in [result.title, result.description or ""] if part)
+            match = number_sequence_pattern.search(haystack)
+            if not match:
+                continue
+
+            raw_numbers = re.findall(r"\d{1,2}", match.group(1))
+            if len(raw_numbers) != 6:
+                continue
+
+            numbers = ", ".join(num.zfill(2) for num in raw_numbers)
+            source_lines = [
+                f"- {src.title}: {src.url}"
+                for src in response.results[:2]
+            ]
+            return (
+                f"Os números encontrados foram: {numbers}\n\n"
+                f"Fontes:\n" + "\n".join(source_lines)
+            )
+
+        return None
+
+    async def _synthesize_answer_from_results(
+        self,
+        original_message: str,
+        query: str,
+        response: SearchResponse,
+    ) -> Optional[str]:
+        """Turn raw search results into a direct answer with a small source list."""
+        if not response.results:
+            return None
+
+        try:
+            ai_client = await self._get_agent_ai_client()
+            results_payload = "\n\n".join(
+                [
+                    f"Result {idx}:\n"
+                    f"Title: {result.title}\n"
+                    f"URL: {result.url}\n"
+                    f"Snippet: {result.description or '(none)'}"
+                    for idx, result in enumerate(response.results[:5], 1)
+                ]
+            )
+
+            system_prompt = (
+                "You answer user questions using web search results.\n"
+                "Rules:\n"
+                "- Answer in the same language as the user.\n"
+                "- Give the direct answer first, in 1-3 short sentences.\n"
+                "- Use only the provided search results.\n"
+                "- Respect the exact time period asked by the user. Do not silently replace it with a newer or older period.\n"
+                "- If the answer is uncertain or partial, say so plainly.\n"
+                "- If the user asks for numbers, values, dates, names, or versions and they appear in the results, include them explicitly.\n"
+                "- After the answer, include 'Fontes:' and 1-2 source links.\n"
+                "- Keep the response compact and natural for chat apps.\n"
+                "- Do not dump all search results.\n"
+            )
+
+            user_prompt = (
+                f"Original user message: {original_message}\n"
+                f"Search query used: {query}\n\n"
+                f"Search results:\n{results_payload}\n\n"
+                "Write the final answer for the user now."
+            )
+
+            synthesis = await ai_client.generate(system_prompt, user_prompt)
+            if synthesis.get('error'):
+                logger.warning(f"Search answer synthesis error: {synthesis['error']}")
+                return None
+
+            answer = (synthesis.get('answer') or "").strip()
+            return answer or None
+        except Exception as e:
+            logger.warning(f"Search answer synthesis failed: {e}")
+            return None
+
+    async def _build_search_result(
+        self,
+        message: InboundMessage,
+        config: Dict[str, Any],
+        query: str,
+        provider_name: str,
+        response: SearchResponse,
+    ) -> SkillResult:
+        """Format provider output into a direct end-user answer."""
+        lottery_numbers = self._extract_lottery_numbers_from_results(message.body, response)
+        if lottery_numbers:
+            formatted_output = lottery_numbers
+        else:
+            synthesized = await self._synthesize_answer_from_results(
+                original_message=message.body,
+                query=query,
+                response=response,
+            )
+            formatted_output = synthesized or self._fallback_answer_from_results(query, response)
+
+        return SkillResult(
+            success=True,
+            output=formatted_output,
+            metadata={
+                'query': query,
+                'provider': provider_name,
+                'result_count': response.result_count,
+                'request_time_ms': response.request_time_ms,
+                'results': [self._compact_result(r) for r in response.results],
+                'presentation': 'direct_answer_with_sources'
+            }
+        )
 
     def _simple_query_extraction(self, message: str) -> Optional[str]:
         """
@@ -336,8 +517,6 @@ Search query:"""
         Returns:
             Cleaned query or None
         """
-        import re
-
         # Remove common trigger phrases
         patterns = [
             r'^(search\s+for|search|look\s+up|find|busque|pesquise|procure)\s+',
@@ -350,6 +529,7 @@ Search query:"""
             query = re.sub(pattern, '', query, flags=re.IGNORECASE)
 
         query = query.strip()
+        query = self._normalize_relative_dates(query)
         return query if len(query) > 2 else None
 
     @classmethod
@@ -615,22 +795,12 @@ Search query:"""
                     metadata={"error": response.error, "provider": provider_name}
                 )
 
-            # Format results
-            formatted_output = response.format_results()
-
-            return SkillResult(
-                success=True,
-                output=formatted_output,
-                metadata={
-                    "query": query,
-                    "provider": provider_name,
-                    "result_count": response.result_count,
-                    "request_time_ms": response.request_time_ms,
-                    "results": [
-                        {"title": r.title, "url": r.url, "description": r.description}
-                        for r in response.results
-                    ]
-                }
+            return await self._build_search_result(
+                message=message,
+                config=config,
+                query=query,
+                provider_name=provider_name,
+                response=response
             )
 
         except Exception as e:
