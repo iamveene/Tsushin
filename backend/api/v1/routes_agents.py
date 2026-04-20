@@ -21,6 +21,9 @@ from api.sanitizers import strip_html_tags, sanitize_text_field
 from api.v1.schemas import (
     PaginationMeta, StatusResponse, COMMON_RESPONSES, NOT_FOUND_RESPONSE, VALIDATION_RESPONSE,
 )
+from constants.agent_config import MEMORY_ISOLATION_MODES
+
+_MEMORY_ISOLATION_MODE_PATTERN = "^(" + "|".join(MEMORY_ISOLATION_MODES) + ")$"
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -104,7 +107,7 @@ class AgentCreateRequest(BaseModel):
     enabled_channels: List[str] = Field(default_factory=lambda: ["playground"])
     avatar: Optional[str] = None
     memory_size: Optional[int] = Field(None, ge=1, le=5000)
-    memory_isolation_mode: Optional[str] = Field(None, pattern="^(isolated|shared|channel_isolated)$")
+    memory_isolation_mode: Optional[str] = Field(None, pattern=_MEMORY_ISOLATION_MODE_PATTERN)
     trigger_dm_enabled: Optional[bool] = None
     enable_semantic_search: Optional[bool] = None
     is_active: bool = True
@@ -167,7 +170,7 @@ class AgentUpdateRequest(BaseModel):
     enabled_channels: Optional[List[str]] = None
     avatar: Optional[str] = None
     memory_size: Optional[int] = Field(None, ge=1, le=5000)
-    memory_isolation_mode: Optional[str] = Field(None, pattern="^(isolated|shared|channel_isolated)$")
+    memory_isolation_mode: Optional[str] = Field(None, pattern=_MEMORY_ISOLATION_MODE_PATTERN)
     trigger_dm_enabled: Optional[bool] = None
     enable_semantic_search: Optional[bool] = None
     is_active: Optional[bool] = None

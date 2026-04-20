@@ -367,7 +367,10 @@ class Agent(Base):
     # Per-Agent Configuration (NULL = use system default)
     # Memory Configuration
     memory_size = Column(Integer, nullable=True)  # Ring buffer size per sender (NULL = use system default)
-    memory_isolation_mode = Column(String(20), default="isolated")  # "isolated" | "shared" | "channel_isolated"
+    # Values constrained to constants.agent_config.MEMORY_ISOLATION_MODES
+    # (currently: "isolated" | "shared" | "channel_isolated"). Default kept
+    # here as a literal so Alembic autogenerate does not trip on imports.
+    memory_isolation_mode = Column(String(20), default="isolated")
 
     # Trigger Configuration
     trigger_dm_enabled = Column(Boolean, nullable=True)  # Enable DM auto-response (NULL = use system default)

@@ -22,6 +22,7 @@ from models import (
 )
 from api.api_auth import ApiCaller, require_api_permission
 from api.v1.schemas import COMMON_RESPONSES, NOT_FOUND_RESPONSE, VALIDATION_RESPONSE
+from constants.agent_config import MEMORY_ISOLATION_MODES
 from services.whatsapp_binding_service import apply_agent_whatsapp_binding_policy, parse_enabled_channels
 
 logger = logging.getLogger(__name__)
@@ -445,7 +446,7 @@ async def save_builder_data(
             if data.agent.memory_size is not None:
                 agent.memory_size = data.agent.memory_size
             if data.agent.memory_isolation_mode is not None:
-                if data.agent.memory_isolation_mode not in ("isolated", "shared", "channel_isolated"):
+                if data.agent.memory_isolation_mode not in MEMORY_ISOLATION_MODES:
                     raise HTTPException(status_code=400, detail="Invalid memory_isolation_mode")
                 agent.memory_isolation_mode = data.agent.memory_isolation_mode
             if data.agent.enable_semantic_search is not None:

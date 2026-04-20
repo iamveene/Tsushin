@@ -1234,6 +1234,28 @@ export interface TTSProviderStatus {
   details: Record<string, any>
 }
 
+// AddIntegrationWizard catalog rows — backed by the SearchProviderRegistry and
+// FlightProviderRegistry respectively. See backend/api/routes_hub_providers.py.
+export interface SearchProviderInfo {
+  id: string
+  name: string
+  description?: string | null
+  status: string  // "available" | "coming_soon"
+  requires_api_key: boolean
+  is_free: boolean
+  tenant_has_configured: boolean
+}
+
+export interface TravelProviderInfo {
+  id: string
+  name: string
+  description?: string | null
+  status: string
+  requires_api_key: boolean
+  is_free: boolean
+  tenant_has_configured: boolean
+}
+
 export interface AgentTTSConfig {
   provider?: string
   voice?: string
@@ -1252,6 +1274,21 @@ export interface SkillDefinition {
   wizard_visible?: boolean
   applies_to?: string[]            // Agent types this skill is relevant for
   auto_enabled_for?: string[]      // Agent types that force-enable + lock the skill
+}
+
+/**
+ * Channel catalog entry served by GET /api/channels. Source of truth is
+ * backend/channels/catalog.py; the wizard falls back to a static copy in
+ * StepChannels.tsx when the API is unreachable (offline/degraded mode).
+ */
+export interface ChannelCatalogEntry {
+  id: string
+  display_name: string
+  description: string
+  requires_setup: boolean
+  setup_hint: string
+  icon_hint: string
+  tenant_has_configured: boolean
 }
 
 // Phase 5.0: Knowledge Management
@@ -2700,6 +2737,21 @@ export interface ProviderInstanceCreate {
   is_default?: boolean
 }
 
+/**
+ * Vendor catalog entry returned by GET /api/providers/vendors.
+ *
+ * Drives the provider-instance modal's vendor dropdown — the frontend no
+ * longer keeps a parallel hardcoded VENDORS array. See
+ * backend/api/routes_provider_instances.py:VendorInfoResponse.
+ */
+export interface VendorInfo {
+  id: string
+  display_name: string
+  default_base_url: string | null
+  supports_discovery: boolean
+  tenant_has_configured: boolean
+}
+
 // ==================== Vector Store Instances (v0.6.0) ====================
 
 export interface VectorStoreInstance {
@@ -3594,6 +3646,18 @@ export const api = {
     return data.skills || []
   },
 
+  /**
+   * Fetch the wizard channel catalog (one entry per supported channel,
+   * annotated with per-tenant configuration status). Mirrors the
+   * getAvailableSkills pattern — the frontend falls back to a hardcoded
+   * list in StepChannels.tsx if this call fails.
+   */
+  async getChannelCatalog(): Promise<ChannelCatalogEntry[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch channel catalog')
+    return res.json()
+  },
+
   async getAgentSkills(agentId: number): Promise<AgentSkill[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/skills`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch agent skills')
@@ -3677,6 +3741,19 @@ export const api = {
   async getTTSProviderStatus(providerName: string): Promise<TTSProviderStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/tts-providers/${providerName}/status`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch TTS provider status')
+    return res.json()
+  },
+
+  // AddIntegrationWizard: live provider catalogs (search + travel).
+  async getSearchProviders(): Promise<SearchProviderInfo[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/search-providers`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch search providers')
+    return res.json()
+  },
+
+  async getTravelProviders(): Promise<TravelProviderInfo[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/travel-providers`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch travel providers')
     return res.json()
   },
 
@@ -7137,6 +7214,20 @@ export const api = {
     if (!res.ok) return {}
     const data = await res.json()
     return data.models || {}
+  },
+
+  async getProviderVendors(): Promise<VendorInfo[]> {
+    // Canonical LLM vendor catalog with per-tenant "is configured"
+    // resolution. Frontend modal uses this to populate the vendor dropdown
+    // so a vendor added to backend VALID_VENDORS surfaces automatically.
+    // Returns [] on any failure — caller should fall back to its static list.
+    try {
+      const res = await authenticatedFetch(`${API_URL}/api/providers/vendors`)
+      if (!res.ok) return []
+      return res.json()
+    } catch {
+      return []
+    }
   },
 
   async discoverModelsRaw(vendor: string, apiKey: string, baseUrl?: string): Promise<string[]> {
