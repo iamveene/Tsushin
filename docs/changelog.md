@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### BUG-653b — IP-only HTTPS handshake fix (2026-04-20)
+
+After the 2026-04-19 VM regression pass, curl / browser HTTPS against IP-only self-signed installs still failed with `TLSv1 alert internal error` even though `openssl s_client -servername <IP>` correctly served the Caddy-internal cert with an IP SAN. Root cause: curl (and mainstream browsers) do NOT send SNI for IP-literal hosts per RFC 3546 §3.1, so with a domain-matching site block `{IP} { tls internal ... }` Caddy had no way to pick a site on SNI-less connections and aborted the handshake.
+
+`install.py` now emits a port-only `:443 { tls internal ... }` site block for IP-literal bindings. Port-only matching serves the internal cert on any TLS connection regardless of SNI, and Caddy's internal CA automatically issues the cert with an IP SAN for the bound IP. Hostname installs are unchanged — they keep the existing `default_sni {domain}` + domain-matching block. `caddy/Caddyfile.template` docstring updated with both patterns side-by-side.
+
+### Bug-remediation follow-up regression patch (2026-04-20)
+
+An independent post-sprint review surfaced **six concrete regressions** introduced by the 2026-04-19 remediation campaign. All six were fixed in commit `ba751a2`.
+
+- **Flow gate-binding silent neutralization** (`backend/flows/flow_engine.py _build_step_context`): the dict literal `{"output": output, **output}` let the `**output` spread overwrite the canonical dict alias with whatever the handler emitted — a string for Slash, Skill, BrowserAutomation, and Message handlers. The BUG-632 fix was silently undone for those four handler types. Reordered to `{**output, ..., "output": output}` so the dict alias wins, and re-asserted the top-level bookkeeping fields (`position`, `name`, `type`, `status`, `error`, `execution_time_ms`, `retry_count`) after the spread so a misbehaving handler can't clobber them either.
+- **Primary tenant SSO login broken** (`frontend/app/auth/login/LoginClient.tsx`): `handleGoogleSignIn()` called `loginWithGoogle()` with no arguments. After the BUG-647 guard enforced explicit scope, every unauthenticated user hitting the public login page got `400` on click. Now passes `{platform: true}` — the correct scope per the backend docstring ("Required for global-admin flows and any login page not bound to a tenant"). `AuthContext.loginWithGoogle` type signature + `api.getGoogleAuthURL()` client method extended to accept the `platform` flag.
+- **Stale tenant-less JWTs bypassed the tenant-hopping guard** (`backend/api/shell_websocket.py`): pre-multi-tenant tokens without a `tenant_id` claim were falling back to `tenant_id = "default"` and then carved out of the guard (`tenant_id not in ("default",)`). Any stale JWT could subscribe to any tenant's shell/beacon feed until it expired naturally. Now rejects such tokens outright with `4003 "Missing tenant claim — please re-login"` and the `"default"` carve-out is removed.
+- **Beacon auth tenant-check silently fell through on exception** (`backend/api/shell_websocket.py authenticate_beacon`): the deleted_at / emergency_stop check was wrapped in a bare `except Exception` that logged and continued to the happy path. Security-critical checks must never default-allow on error. Now fails CLOSED with an explicit `auth_failed` response and `return None` on any tenant-state-check exception.
+- **Ollama error-path used stale ORM reference** (`backend/services/ollama_container_manager.py provision`): the except branch referenced `instance.id` after `db.close()` — technically `DetachedInstanceError` territory even though loaded PKs usually survive in `__dict__`. Now captures `err_instance_id` + `err_tenant_id_capture` before the close (mirroring the happy-path pattern at line 260) and filters by both columns on the fresh session for tenant safety.
+- **Cross-tenant `lastThreadId` leak** (`frontend/app/playground/page.tsx`): when `initializeThreads` detected a stale `?thread=` param that didn't belong to the current agent's thread list, it stripped the URL param but left `localStorage['tsushin.playground.lastThreadId']` pointing at the stale id. On a shared browser that id bled across agent switches and (in the worst case) across tenants. Now clears the localStorage key alongside the URL param.
+- **Fact-extractor parameter rename for security clarity** (`backend/agent/memory/fact_extractor.py`): the parameter named `had_trusted_user_turn` actually carries "had trusted non-user turn" (assistant/system role present). Renamed to `had_trusted_non_user_turn` throughout — no behavior change, pure readability / correctness-of-reasoning fix so the security invariant matches the variable name.
+
+Post-follow-up regression: 319+ assertions across 7 suites still green (sentinel_fast_benchmark 248/248 with zero false positives; group-level pytest suites 37+ pass standalone; UI-first API + source regression audit GREEN across all 10 checkpoints).
+
 ### Massive Bug Remediation Campaign — summary (52 open → 2 deferred) (2026-04-19)
 
 A full triage + debate + group-fix sweep of every open entry in `BUGS.md`

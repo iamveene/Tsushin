@@ -63,23 +63,31 @@
 # }
 
 # --- Self-Signed Mode ---
-# NOTE (BUG-653): emit `default_sni {SSL_DOMAIN}` ONLY when SSL_DOMAIN is a
-# real hostname. For IP-literal binds, omit the global block entirely — Caddy
-# rejects IP literals in `default_sni`, and the old fallback to
-# `default_sni localhost` broke SNI-less handshakes from external clients
-# (curl / cloudflared probes got cert mismatches because Caddy would only
-# surface the cert under `localhost`). Auto-selection works fine for IP sites.
+# NOTE (BUG-653 + BUG-653b):
+#   BUG-653 originally fixed `default_sni localhost` breaking IP-literal
+#   TLS handshakes. BUG-653b (2026-04-20 VM regression) found that even
+#   without `default_sni`, IP-only installs still failed curl/browser HTTPS
+#   because curl does NOT send SNI for IP-literal hosts (per RFC 3546 §3.1).
+#   Caddy then has no way to match a domain-bound site block and responds
+#   with `TLSv1 alert internal error`.
 #
-# For hostname binds:
+# For hostname binds (`SSL_DOMAIN` is a DNS name):
 # {
 #     default_sni {SSL_DOMAIN}
 # }
 #
-# For IP binds: no global block at all.
-#
-# (tsushin_routes) { ... }
-#
 # {SSL_DOMAIN} {
+#     tls internal
+#     import tsushin_routes
+# }
+#
+# For IP-literal binds (`SSL_DOMAIN` is an IPv4/IPv6 literal):
+#   * OMIT the global `default_sni` block (Caddy rejects IP literals there).
+#   * Use a PORT-ONLY site matcher `:443` — Caddy serves the internal cert
+#     on any TLS connection regardless of SNI and issues a cert with an IP
+#     SAN for the bound IP.
+#
+# :443 {
 #     tls internal
 #     import tsushin_routes
 # }

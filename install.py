@@ -1114,24 +1114,39 @@ class TsushinInstaller:
             )
 
         elif ssl_mode == 'selfsigned':
-            # BUG-653: previous implementation emitted `default_sni localhost`
-            # whenever the bound domain was an IP literal (Caddy rejects IP
-            # literals in `default_sni`). That combination BROKE the external
-            # TLS handshake for any IP-only client because Caddy would only
-            # surface the self-signed cert under the SNI name `localhost`.
-            # Fix: for IP-bound installs, OMIT the `default_sni` directive
-            # entirely and let Caddy auto-select the matching site block from
-            # the connection's destination IP. For real hostnames, keep the
-            # explicit `default_sni {domain}` so bare-IP curl/cloudflared probes
-            # still receive the right certificate.
+            # BUG-653 / BUG-653b: for IP-literal bindings, Caddy rejects IP
+            # literals in `default_sni` AND curl/browsers do NOT send SNI for
+            # IP-literal hosts (per RFC 3546 §3.1). A domain-matching site
+            # block like `10.211.55.5 { tls internal }` therefore has no way
+            # to match SNI-less handshakes — Caddy errors with
+            # "TLSv1 alert internal error" and external clients fail.
+            #
+            # Fix: for IP-bound installs, use port-only matching `:443` which
+            # serves the internal cert on any TLS connection regardless of
+            # SNI. Caddy's internal CA automatically issues a cert with an IP
+            # SAN for the bound IP. For hostname installs, keep the original
+            # `default_sni {domain}` pattern so bare-IP probes against a
+            # hostname-bound install still get the correct cert.
             if self._is_ip(domain):
                 global_block = ""
+                site_block = (
+                    ":443 {\n"
+                    "    tls internal\n"
+                    "    import tsushin_routes\n"
+                    "}\n\n"
+                )
             else:
                 global_block = f"{{\n    default_sni {domain}\n}}\n\n"
+                site_block = (
+                    f"{domain} {{\n"
+                    f"    tls internal\n"
+                    f"    import tsushin_routes\n"
+                    f"}}\n\n"
+                )
             caddyfile_content = (
                 f"{global_block}"
                 f"{snippet_block}\n\n"
-                f"{domain} {{\n    tls internal\n    import tsushin_routes\n}}\n\n"
+                f"{site_block}"
                 f"{remote_access_block}\n"
             )
 
