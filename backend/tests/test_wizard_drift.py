@@ -188,6 +188,91 @@ def test_predefined_models_single_source():
 
 
 # ---------------------------------------------------------------------------
+# Guard 4 — memory_isolation_mode literal consolidation
+# ---------------------------------------------------------------------------
+
+# Sites that historically hardcoded the literal tuple/regex for
+# memory_isolation_mode. After consolidation they must import from
+# constants.agent_config instead of repeating the literal tuple.
+# Paths are relative to the backend package root — resolved against the
+# host repo layout (`REPO_ROOT/backend/...`) or the container layout
+# (`/app/...`, i.e. the parent of this test file's dir) at runtime.
+_MEMORY_ISOLATION_SITES = (
+    "api/v1/routes_studio.py",
+    "api/routes_agent_builder.py",
+    "api/v1/routes_agents.py",
+    "models.py",
+)
+
+
+def _resolve_backend_site(rel_path: str) -> Path:
+    """Return the absolute path to ``rel_path`` inside the backend package,
+    regardless of whether the test runs from the host repo or inside the
+    backend container (where the backend lives at ``/app``)."""
+    # Host layout: <repo_root>/backend/<rel_path>
+    host_path = REPO_ROOT / "backend" / rel_path
+    if host_path.exists():
+        return host_path
+    # Container layout: parent of tests dir == backend package root (/app)
+    container_path = Path(__file__).resolve().parents[1] / rel_path
+    return container_path
+
+
+# Regex intentionally tolerant of single OR double quotes and whitespace
+# variations; matches the historical tuple literal regardless of style.
+_MEMORY_ISOLATION_TUPLE_RE = re.compile(
+    r"\(\s*['\"]isolated['\"]\s*,\s*['\"]shared['\"]\s*,\s*['\"]channel_isolated['\"]\s*\)"
+)
+
+# Historical regex-form used in the Pydantic Field pattern.
+_MEMORY_ISOLATION_REGEX_LITERAL = re.compile(
+    r"\^\(\s*isolated\s*\|\s*shared\s*\|\s*channel_isolated\s*\)\$"
+)
+
+
+def test_memory_isolation_modes_constant_source_of_truth():
+    """
+    MEMORY_ISOLATION_MODES must be the single source of truth. The constant
+    itself must remain exactly ("isolated", "shared", "channel_isolated") —
+    if you're adding a 4th mode, update this test and every consumer in one
+    sweep so nothing silently diverges.
+    """
+    from constants.agent_config import MEMORY_ISOLATION_MODES
+
+    assert MEMORY_ISOLATION_MODES == ("isolated", "shared", "channel_isolated"), (
+        f"MEMORY_ISOLATION_MODES drifted: {MEMORY_ISOLATION_MODES!r}. "
+        f"Update this test and audit all consumers if adding/removing a mode."
+    )
+
+
+def test_memory_isolation_literal_not_duplicated():
+    """
+    The 4 historical sites that hardcoded ('isolated', 'shared',
+    'channel_isolated') — inline validation guards in routes, the Pydantic
+    Field pattern, and the models.py column comment — must now reference
+    MEMORY_ISOLATION_MODES instead of repeating the literal tuple / regex.
+    """
+    for rel_path in _MEMORY_ISOLATION_SITES:
+        path = _resolve_backend_site(rel_path)
+        assert path.exists(), f"Expected {path} to exist (rel={rel_path})"
+        text = _read(path)
+
+        tuple_hits = _MEMORY_ISOLATION_TUPLE_RE.findall(text)
+        assert not tuple_hits, (
+            f"{rel_path} still hardcodes the memory_isolation_mode literal "
+            f"tuple ('isolated', 'shared', 'channel_isolated'). Import "
+            f"MEMORY_ISOLATION_MODES from constants.agent_config instead."
+        )
+
+        regex_hits = _MEMORY_ISOLATION_REGEX_LITERAL.findall(text)
+        assert not regex_hits, (
+            f"{rel_path} still hardcodes the memory_isolation_mode pattern "
+            f"regex '^(isolated|shared|channel_isolated)$'. Build it "
+            f"dynamically from MEMORY_ISOLATION_MODES instead."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Guard 5 — Channel catalog drift
 # ---------------------------------------------------------------------------
 
