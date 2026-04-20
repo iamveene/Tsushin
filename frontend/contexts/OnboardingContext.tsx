@@ -243,7 +243,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       ...prev,
       isActive: true,
       currentStep: 1,
-      isMinimized: false
+      isMinimized: false,
+      hasCompletedOnboarding: false,
     }))
   }
 
