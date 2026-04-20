@@ -316,6 +316,11 @@ export default function HubPage() {
 
   const toast = useToast()
   const { isGlobalAdmin, hasPermission } = useAuth()
+  // BUG-610 FIX: Gate every Hub mutation control (connect, disconnect,
+  // delete, edit, add) on ``hub.write``. Tenants with only ``hub.read``
+  // should see the catalog of configured integrations but must not be
+  // offered action buttons that the backend would 403 on anyway.
+  const canWriteHub = hasPermission('hub.write')
   // BUG-322: Use forceOpenWizard so the wizard always opens when explicitly triggered from Hub,
   // even if the user previously dismissed it.
   const { forceOpenWizard: openWhatsAppWizard } = useWhatsAppWizard()
@@ -2527,7 +2532,7 @@ export default function HubPage() {
             <p className="font-mono text-xs text-tsushin-accent">{configuredInstance.api_key_preview}</p>
           </div>
         )}
-        {!isComingSoon && (
+        {!isComingSoon && canWriteHub && (
           <div className="flex gap-2">
             {apiKey ? (
               <>
@@ -2598,6 +2603,25 @@ export default function HubPage() {
       </div>
 
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 pb-8 space-y-6">
+        {/* BUG-610 read-only banner: surfaces why Connect/Add/Disconnect
+            buttons are missing for non-admins. Without this the page
+            looks broken ("why are there no actions?") — with it the
+            user knows to ask an admin for hub.write. */}
+        {!canWriteHub && (
+          <div
+            className="p-4 bg-tsushin-warning/10 border border-tsushin-warning/30 rounded-xl text-tsushin-warning flex items-center gap-3"
+            data-testid="hub-readonly-banner"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+            </svg>
+            <div className="text-sm">
+              <span className="font-medium">Read-only view.</span>{' '}
+              Your role does not have <code className="font-mono">hub.write</code>{' '}
+              — you can browse configured integrations but cannot add, edit, or disconnect them. Ask an owner/admin for access.
+            </div>
+          </div>
+        )}
         {/* Alerts */}
         {successMessage && (
           <div className="p-4 bg-tsushin-success/10 border border-tsushin-success/30 rounded-xl text-tsushin-success flex justify-between items-center animate-fade-in-down">
@@ -3886,12 +3910,14 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <PlaneIcon size={18} /> Telegram Bots
                     </h3>
-                    <button
-                      onClick={() => setShowTelegramModal(true)}
-                      className="px-4 py-2 bg-blue-600/20 text-blue-400 border border-blue-600/50 rounded hover:bg-blue-600/30 text-sm"
-                    >
-                      + Create Bot
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowTelegramModal(true)}
+                        className="px-4 py-2 bg-blue-600/20 text-blue-400 border border-blue-600/50 rounded hover:bg-blue-600/30 text-sm"
+                      >
+                        + Create Bot
+                      </button>
+                    )}
                   </div>
 
                   {telegramInstances.length === 0 ? (
@@ -3901,12 +3927,14 @@ export default function HubPage() {
                       </div>
                       <h3 className="text-lg font-semibold text-white mb-2">No Telegram Bots</h3>
                       <p className="text-tsushin-slate mb-4">Create a bot to connect Telegram</p>
-                      <button
-                        onClick={() => setShowTelegramModal(true)}
-                        className="btn-primary"
-                      >
-                        Create Bot
-                      </button>
+                      {canWriteHub && (
+                        <button
+                          onClick={() => setShowTelegramModal(true)}
+                          className="btn-primary"
+                        >
+                          Create Bot
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -3966,12 +3994,14 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <SlackIcon size={18} className="text-purple-400" /> Slack
                     </h3>
-                    <button
-                      onClick={() => setShowSlackSetupModal(true)}
-                      className="px-4 py-2 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded hover:bg-purple-600/30 text-sm"
-                    >
-                      + Connect Workspace
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowSlackSetupModal(true)}
+                        className="px-4 py-2 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded hover:bg-purple-600/30 text-sm"
+                      >
+                        + Connect Workspace
+                      </button>
+                    )}
                   </div>
 
                   {slackIntegrations.length === 0 ? (
@@ -3981,12 +4011,14 @@ export default function HubPage() {
                       </div>
                       <h3 className="text-lg font-semibold text-white mb-2">No Slack Workspaces</h3>
                       <p className="text-tsushin-slate mb-4">Connect a Slack workspace to enable bot messaging</p>
-                      <button
-                        onClick={() => setShowSlackSetupModal(true)}
-                        className="btn-primary"
-                      >
-                        Connect Workspace
-                      </button>
+                      {canWriteHub && (
+                        <button
+                          onClick={() => setShowSlackSetupModal(true)}
+                          className="btn-primary"
+                        >
+                          Connect Workspace
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -4047,12 +4079,14 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <DiscordIcon size={18} className="text-indigo-400" /> Discord
                     </h3>
-                    <button
-                      onClick={() => setShowDiscordSetupModal(true)}
-                      className="px-4 py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 rounded hover:bg-indigo-600/30 text-sm"
-                    >
-                      + Connect Bot
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowDiscordSetupModal(true)}
+                        className="px-4 py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 rounded hover:bg-indigo-600/30 text-sm"
+                      >
+                        + Connect Bot
+                      </button>
+                    )}
                   </div>
 
                   {discordIntegrations.length === 0 ? (
@@ -4062,12 +4096,14 @@ export default function HubPage() {
                       </div>
                       <h3 className="text-lg font-semibold text-white mb-2">No Discord Bots</h3>
                       <p className="text-tsushin-slate mb-4">Connect a Discord bot to enable messaging in your servers</p>
-                      <button
-                        onClick={() => setShowDiscordSetupModal(true)}
-                        className="btn-primary"
-                      >
-                        Connect Bot
-                      </button>
+                      {canWriteHub && (
+                        <button
+                          onClick={() => setShowDiscordSetupModal(true)}
+                          className="btn-primary"
+                        >
+                          Connect Bot
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -4131,12 +4167,14 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <WebhookIcon size={18} className="text-cyan-400" /> Webhook Integrations
                     </h3>
-                    <button
-                      onClick={() => setShowWebhookSetupModal(true)}
-                      className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
-                    >
-                      + New Webhook
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowWebhookSetupModal(true)}
+                        className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
+                      >
+                        + New Webhook
+                      </button>
+                    )}
                   </div>
 
                   {webhookIntegrations.length === 0 ? (
@@ -4148,12 +4186,14 @@ export default function HubPage() {
                       <p className="text-tsushin-slate mb-4">
                         Connect external HTTP systems (CRMs, Zapier, custom apps) via HMAC-signed webhooks
                       </p>
-                      <button
-                        onClick={() => setShowWebhookSetupModal(true)}
-                        className="btn-primary"
-                      >
-                        Create Webhook
-                      </button>
+                      {canWriteHub && (
+                        <button
+                          onClick={() => setShowWebhookSetupModal(true)}
+                          className="btn-primary"
+                        >
+                          Create Webhook
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -4818,12 +4858,14 @@ export default function HubPage() {
                     <h2 className="text-lg font-display font-semibold text-white">MCP Servers</h2>
                     <p className="text-sm text-tsushin-slate">Connect external Model Context Protocol servers for tool discovery</p>
                   </div>
-                  <button
-                    onClick={() => setShowMcpServerModal(true)}
-                    className="btn-primary"
-                  >
-                    + Add Server
-                  </button>
+                  {canWriteHub && (
+                    <button
+                      onClick={() => setShowMcpServerModal(true)}
+                      className="btn-primary"
+                    >
+                      + Add Server
+                    </button>
+                  )}
                 </div>
 
                 {/* MCP Server Cards */}
@@ -4839,12 +4881,14 @@ export default function HubPage() {
                     </div>
                     <h3 className="text-white font-semibold mb-2">No MCP Servers</h3>
                     <p className="text-tsushin-slate text-sm mb-4">Add an MCP server to discover and use external tools</p>
-                    <button
-                      onClick={() => setShowMcpServerModal(true)}
-                      className="btn-primary"
-                    >
-                      + Add Server
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowMcpServerModal(true)}
+                        className="btn-primary"
+                      >
+                        + Add Server
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

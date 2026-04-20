@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import Modal from '@/components/ui/Modal'
 import { api, VENDOR_LABELS } from '@/lib/client'
 import type { Agent, ProviderInstance } from '@/lib/client'
@@ -17,6 +18,7 @@ interface StudioAgentSelectorProps {
 }
 
 export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSelect, onAgentCreated }: StudioAgentSelectorProps) {
+  const router = useRouter()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newAgentKind, setNewAgentKind] = useState<NewAgentKind>('text')
@@ -85,6 +87,14 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
     setCreating(true); setCreateError('')
     try {
       const defaultContactId = agents[0]?.contact_id || 1
+      // BUG-602 FIX: Unify the create-agent payload with the main Agents
+      // page modal (frontend/app/agents/page.tsx::handleCreate). The two
+      // flows used to produce visibly different agents — the studio
+      // path omitted ``keywords`` / ``tone_preset_id`` / ``custom_tone``
+      // / ``persona_id``, so agents created from Studio came out
+      // persona-less and tone-less while agents created from /agents
+      // inherited tenant smart-defaults. Now both flows send the same
+      // explicit-null shape and the backend applies the SAME defaults.
       const agent = await api.createAgent({
         contact_id: defaultContactId,
         system_prompt: `You are ${newAgentName.trim()}, a helpful AI assistant.`,
@@ -92,10 +102,24 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
         model_name: newAgentModel,
         provider_instance_id: newAgentInstanceId ?? undefined,
         is_active: true,
-      })
+        persona_id: null,
+        tone_preset_id: null,
+        custom_tone: null,
+        keywords: [],
+        is_default: false,
+      } as any)
       setShowCreateModal(false); setNewAgentName(''); onAgentCreated(agent.id)
     } catch (err) { setCreateError(err instanceof Error ? err.message : 'Failed to create agent') }
     finally { setCreating(false) }
+  }
+
+  // BUG-602 FIX: Offer a shortcut to the full /agents create modal for
+  // users who need persona/tone/keywords — keeps the studio quick-create
+  // for the 80% "I just need a bot" case while routing advanced needs
+  // into the single canonical create-agent surface.
+  const goToFullCreateFlow = () => {
+    setShowCreateModal(false)
+    router.push('/agents?create=1')
   }
 
   return (
@@ -125,9 +149,19 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
         <svg className="w-4 h-4 text-tsushin-slate" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.5v15m7.5-7.5h-15" /></svg>
       </button>
       <Modal isOpen={showCreateModal} onClose={() => setShowCreateModal(false)} title="Create New Agent" size="md"
-        footer={<div className="flex justify-end gap-3">
-          <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 text-sm text-tsushin-slate hover:text-white transition-colors">Cancel</button>
-          <button onClick={handleCreate} disabled={creating} className="px-4 py-2 text-sm bg-tsushin-indigo text-white rounded-lg hover:bg-tsushin-indigo/90 disabled:opacity-50 transition-all">{creating ? 'Creating...' : (newAgentKind === 'text' ? 'Create Agent' : 'Continue in Audio Wizard →')}</button>
+        footer={<div className="flex justify-between items-center gap-3 w-full">
+          <button
+            type="button"
+            onClick={goToFullCreateFlow}
+            className="text-xs text-teal-400 hover:text-teal-300 transition-colors"
+            title="Open the full Agent Studio create flow (persona, tone, keywords)"
+          >
+            Need persona / tone / keywords? Open full create flow →
+          </button>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 text-sm text-tsushin-slate hover:text-white transition-colors">Cancel</button>
+            <button onClick={handleCreate} disabled={creating} className="px-4 py-2 text-sm bg-tsushin-indigo text-white rounded-lg hover:bg-tsushin-indigo/90 disabled:opacity-50 transition-all">{creating ? 'Creating...' : (newAgentKind === 'text' ? 'Create Agent' : 'Continue in Audio Wizard →')}</button>
+          </div>
         </div>}>
         <div className="space-y-4">
           <div>

@@ -6,11 +6,14 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
+import { useAuth } from '@/contexts/AuthContext'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import StudioTabs from '@/components/studio/StudioTabs'
 import { api, Agent, TonePreset, Contact, Persona, ProviderInstance, VENDOR_LABELS } from '@/lib/client'
 import { useToast } from '@/contexts/ToastContext'
+import { useAgentWizard, useAgentWizardComplete } from '@/contexts/AgentWizardContext'
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import EmptyState from '@/components/EmptyState'
 import {
@@ -43,6 +46,14 @@ interface AgentFormData {
 
 export default function AgentsPage() {
   const toast = useToast()
+  // BUG-610 FIX: Read-only members (no agents.write) were seeing and
+  // clicking create / delete / set-default / toggle buttons. The backend
+  // rejected those with 403 but the buttons still rendered — confusing
+  // UX and a noisy signal in audit logs. Gate every mutation control on
+  // ``canWriteAgents``.
+  const { hasPermission } = useAuth()
+  const canWriteAgents = hasPermission('agents.write')
+  const searchParams = useSearchParams()
   const [agents, setAgents] = useState<Agent[]>([])
   const [tones, setTones] = useState<TonePreset[]>([])
   const [personas, setPersonas] = useState<Persona[]>([])
@@ -79,6 +90,65 @@ export default function AgentsPage() {
   const [useCustomTone, setUseCustomTone] = useState(false)
   const [useCustomModel, setUseCustomModel] = useState(false)
   const [customModelName, setCustomModelName] = useState('')
+  const [showGuidedPrefillBanner, setShowGuidedPrefillBanner] = useState(false)
+
+  // Agent Wizard (Guided mode) — the Create button dispatches here by default.
+  const agentWizard = useAgentWizard()
+  useAgentWizardComplete(() => loadData())
+
+  const openCreateUI = () => {
+    if (!canWriteAgents) return
+    const mode = agentWizard.getMode()
+    if (mode === 'advanced') {
+      setShowCreateModal(true)
+    } else {
+      agentWizard.openWizard()
+    }
+  }
+
+  // Legacy modal pre-fill from a persisted Guided draft (set when the user
+  // switched from Guided → Advanced mid-wizard). Reads from localStorage
+  // directly so the callback works even when captured as a stale closure.
+  const applyPersistedDraft = () => {
+    let draft: any = null
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('tsushin:agentWizardDraft') : null
+      if (raw) draft = JSON.parse(raw)
+    } catch { /* ignore */ }
+    if (!draft) return false
+    const patch: Partial<AgentFormData> = {}
+    if (draft.basics?.agent_name) patch.agent_name = draft.basics.agent_name
+    if (draft.basics?.agent_phone) patch.agent_phone = draft.basics.agent_phone
+    if (draft.basics?.model_provider) patch.model_provider = draft.basics.model_provider
+    if (draft.basics?.model_name) patch.model_name = draft.basics.model_name
+    if (draft.personality?.system_prompt) patch.system_prompt = draft.personality.system_prompt
+    if (draft.personality?.persona_id) patch.persona_id = draft.personality.persona_id
+    if (draft.personality?.tone_preset_id) patch.tone_preset_id = draft.personality.tone_preset_id
+    if (draft.personality?.custom_tone) {
+      patch.custom_tone = draft.personality.custom_tone
+      setUseCustomTone(true)
+    }
+    if (Object.keys(patch).length > 0) {
+      setFormData(prev => ({ ...prev, ...patch }))
+      setShowGuidedPrefillBanner(true)
+      return true
+    }
+    return false
+  }
+
+  // Listen for the wizard's "switch to advanced" event. Uses a ref so the
+  // closure always calls the latest applyPersistedDraft.
+  const applyPersistedDraftRef = useRef(applyPersistedDraft)
+  applyPersistedDraftRef.current = applyPersistedDraft
+  useEffect(() => {
+    const onOpenAdvanced = () => {
+      setShowCreateModal(true)
+      // Defer so showCreateModal commit completes before applying draft.
+      setTimeout(() => applyPersistedDraftRef.current(), 0)
+    }
+    window.addEventListener('tsushin:open-agent-advanced-modal', onOpenAdvanced)
+    return () => window.removeEventListener('tsushin:open-agent-advanced-modal', onOpenAdvanced)
+  }, [])
 
   // Load configured provider instances for smart defaults
   useEffect(() => {
@@ -105,6 +175,19 @@ export default function AgentsPage() {
     loadData()
     checkOllamaHealth()
   }, [])
+
+  // BUG-602 FIX: ``?create=1`` query param opens the create-agent
+  // modal. The Studio quick-create dialog routes here when the user
+  // asks for "the full flow" so both paths converge on this single
+  // canonical modal — no more parallel create implementations.
+  useEffect(() => {
+    if (!canWriteAgents) return
+    const shouldOpen = searchParams?.get('create') === '1'
+    if (shouldOpen) {
+      openCreateUI()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, canWriteAgents])
 
   useEffect(() => {
     if (formData.model_provider === 'ollama') {
@@ -347,6 +430,8 @@ export default function AgentsPage() {
 
       await api.createAgent(payload)
       setShowCreateModal(false)
+      setShowGuidedPrefillBanner(false)
+      agentWizard.clearPersistedDraft()
       setCreateError('')
       resetForm()
       await loadData()
@@ -385,15 +470,17 @@ export default function AgentsPage() {
             <h1 className="text-3xl font-display font-bold text-white mb-2">Agent Studio</h1>
             <p className="text-tsushin-slate">Configure AI agents with different personalities and capabilities</p>
           </div>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="btn-primary flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Create Agent
-          </button>
+          {canWriteAgents && (
+            <button
+              onClick={openCreateUI}
+              className="btn-primary flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Create Agent
+            </button>
+          )}
         </div>
       </div>
 
@@ -467,7 +554,11 @@ export default function AgentsPage() {
           </div>
 
           {agents.length === 0 ? (
-            <EmptyState variant="no-agents" actionLabel="Create Your First Agent" onAction={() => setShowCreateModal(true)} />
+            <EmptyState
+              variant="no-agents"
+              actionLabel={canWriteAgents ? 'Create Your First Agent' : undefined}
+              onAction={canWriteAgents ? openCreateUI : undefined}
+            />
           ) : (
             <div className="divide-y divide-tsushin-border/30">
               {agents.map((agent, index) => (
@@ -520,15 +611,17 @@ export default function AgentsPage() {
                             ) : (
                               <>
                                 <h3 className="text-lg font-semibold text-white">{agent.contact_name}</h3>
-                                <button
-                                  onClick={() => handleStartRename(agent)}
-                                  className="p-1 rounded-lg bg-tsushin-indigo/20 text-tsushin-indigo hover:bg-tsushin-indigo/30 transition-colors"
-                                  title="Rename agent"
-                                >
-                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                  </svg>
-                                </button>
+                                {canWriteAgents && (
+                                  <button
+                                    onClick={() => handleStartRename(agent)}
+                                    className="p-1 rounded-lg bg-tsushin-indigo/20 text-tsushin-indigo hover:bg-tsushin-indigo/30 transition-colors"
+                                    title="Rename agent"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                    </svg>
+                                  </button>
+                                )}
                               </>
                             )}
                           </div>
@@ -586,30 +679,34 @@ export default function AgentsPage() {
                       >
                         {expandedAgent === agent.id ? '▲ Hide' : '▼ Details'}
                       </button>
-                      <button
-                        onClick={() => handleToggleActive(agent)}
-                        className={`py-1.5 px-3 text-sm rounded-lg font-medium transition-all ${
-                          agent.is_active
-                            ? 'bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20'
-                            : 'bg-tsushin-success/10 text-tsushin-success border border-tsushin-success/30 hover:bg-tsushin-success/20'
-                        }`}
-                      >
-                        {agent.is_active ? 'Deactivate' : 'Activate'}
-                      </button>
-                      {!agent.is_default && (
-                        <button
-                          onClick={() => handleSetDefault(agent)}
-                          className="py-1.5 px-3 text-sm rounded-lg font-medium bg-tsushin-warning/10 text-tsushin-warning border border-tsushin-warning/30 hover:bg-tsushin-warning/20 transition-all"
-                        >
-                          Set Default
-                        </button>
+                      {canWriteAgents && (
+                        <>
+                          <button
+                            onClick={() => handleToggleActive(agent)}
+                            className={`py-1.5 px-3 text-sm rounded-lg font-medium transition-all ${
+                              agent.is_active
+                                ? 'bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20'
+                                : 'bg-tsushin-success/10 text-tsushin-success border border-tsushin-success/30 hover:bg-tsushin-success/20'
+                            }`}
+                          >
+                            {agent.is_active ? 'Deactivate' : 'Activate'}
+                          </button>
+                          {!agent.is_default && (
+                            <button
+                              onClick={() => handleSetDefault(agent)}
+                              className="py-1.5 px-3 text-sm rounded-lg font-medium bg-tsushin-warning/10 text-tsushin-warning border border-tsushin-warning/30 hover:bg-tsushin-warning/20 transition-all"
+                            >
+                              Set Default
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteAgent(agent.id)}
+                            className="py-1.5 px-3 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
+                          >
+                            Delete
+                          </button>
+                        </>
                       )}
-                      <button
-                        onClick={() => handleDeleteAgent(agent.id)}
-                        className="py-1.5 px-3 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
-                      >
-                        Delete
-                      </button>
                     </div>
                   </div>
 
@@ -719,18 +816,46 @@ export default function AgentsPage() {
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h2 className="text-xl font-display font-bold text-white">Create New Agent</h2>
-                <p className="text-sm text-tsushin-slate mt-1">Configure a new AI agent with custom capabilities</p>
+                <p className="text-sm text-tsushin-slate mt-1">Advanced mode — all fields in one form</p>
               </div>
-              <button
-                type="button"
-                onClick={() => { setShowCreateModal(false); resetForm() }}
-                className="btn-icon"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    agentWizard.setMode('guided')
+                    setShowCreateModal(false)
+                    setShowGuidedPrefillBanner(false)
+                    resetForm()
+                    agentWizard.openWizard()
+                  }}
+                  className="px-3 py-1.5 text-xs text-gray-400 hover:text-teal-300 transition-colors underline decoration-dotted"
+                >
+                  Switch to Guided
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowCreateModal(false); resetForm(); setShowGuidedPrefillBanner(false); agentWizard.clearPersistedDraft() }}
+                  className="btn-icon"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
+
+            {showGuidedPrefillBanner && (
+              <div className="mb-4 p-3 rounded-xl border border-teal-400/30 bg-teal-500/10 text-sm text-teal-100 flex items-center justify-between">
+                <span>Continuing from the guided wizard — fields below are pre-filled.</span>
+                <button
+                  type="button"
+                  onClick={() => setShowGuidedPrefillBanner(false)}
+                  className="text-teal-200 hover:text-white text-xs underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-6">
               <div>

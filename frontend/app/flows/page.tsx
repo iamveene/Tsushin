@@ -15,6 +15,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { useToast } from '@/contexts/ToastContext'
+import { useAuth } from '@/contexts/AuthContext'
 import {
   api,
   type FlowDefinition,
@@ -148,6 +149,11 @@ type SortDirection = 'asc' | 'desc'
 export default function FlowsPage() {
   const toast = useToast()
   const router = useRouter()
+  // BUG-610 FIX: Gate every write control (Create, From Template, Edit,
+  // Run, Delete, Bulk actions) on flows.write so a read-only user gets
+  // a clean list view instead of buttons that 403 on click.
+  const { hasPermission } = useAuth()
+  const canWriteFlows = hasPermission('flows.write')
   const [allFlows, setAllFlows] = useState<FlowDefinition[]>([])
   const [runs, setRuns] = useState<FlowRun[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
@@ -360,6 +366,27 @@ export default function FlowsPage() {
   async function handleRunFlow(flowId: number) {
     setExecutingFlowId(flowId)
     try {
+      // BUG-636 FIX: When the user opens a flow in the editor, saves a
+      // change, closes the modal, then immediately clicks Run — the row
+      // in our local ``allFlows`` state can still reflect the PRE-save
+      // is_active / node_count / step graph because ``loadData()`` is
+      // async and races against the Run click. Previously that race
+      // produced "no run" because executeFlow 400'd on the stale graph
+      // but we toasted a generic error and never refreshed. Re-fetch the
+      // freshest server-side copy BEFORE kicking off the run so the
+      // backend sees the just-saved definition and executes against it.
+      try {
+        const latest = await api.getFlow(flowId)
+        setAllFlows(prev => prev.map(f => (f.id === flowId ? { ...f, ...latest } : f)))
+        if (latest.is_active === false) {
+          toast.error('Execution Failed', 'This flow is disabled — enable it to run.')
+          return
+        }
+      } catch (refreshErr) {
+        // Non-fatal — if the refresh call itself fails we still try the
+        // execute path; worst case the backend 4xxs on its own validation.
+        console.warn('handleRunFlow: pre-execute refresh failed', refreshErr)
+      }
       const run = await api.executeFlow(flowId)
       setViewingRunId(run.id)
       loadData()
@@ -511,33 +538,35 @@ export default function FlowsPage() {
             </h1>
             <p className="text-slate-500 mt-1 text-sm">Manage automated workflows, conversations, and notifications</p>
           </div>
-          <div className="flex items-center gap-3">
-            {/* From Template Button */}
-            <button
-              onClick={() => setShowCreateFromTemplate(true)}
-              className="px-4 py-2.5 bg-teal-500/10 text-teal-300 border border-teal-500/30 font-medium rounded-lg
-                         hover:bg-teal-500/15 hover:border-teal-500/50 transition-all
-                         flex items-center gap-2"
-              title="Create a flow from a pre-built hybrid automation template"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-              From Template
-            </button>
-            {/* New Flow Button */}
-            <button
-              onClick={() => setShowCreateFlow(true)}
-              className="px-5 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white font-medium rounded-lg
-                         hover:from-teal-400 hover:to-cyan-400 transition-all shadow-lg shadow-teal-500/20
-                         flex items-center gap-2"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              New Flow
-            </button>
-          </div>
+          {canWriteFlows && (
+            <div className="flex items-center gap-3">
+              {/* From Template Button */}
+              <button
+                onClick={() => setShowCreateFromTemplate(true)}
+                className="px-4 py-2.5 bg-teal-500/10 text-teal-300 border border-teal-500/30 font-medium rounded-lg
+                           hover:bg-teal-500/15 hover:border-teal-500/50 transition-all
+                           flex items-center gap-2"
+                title="Create a flow from a pre-built hybrid automation template"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                From Template
+              </button>
+              {/* New Flow Button */}
+              <button
+                onClick={() => setShowCreateFlow(true)}
+                className="px-5 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white font-medium rounded-lg
+                           hover:from-teal-400 hover:to-cyan-400 transition-all shadow-lg shadow-teal-500/20
+                           flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                New Flow
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Enterprise Stat Cards */}
@@ -634,13 +663,15 @@ export default function FlowsPage() {
                   <p className="text-slate-500 mb-6 max-w-md mx-auto">
                     Create your first automated workflow to start managing conversations and tasks
                   </p>
-                  <button
-                    onClick={() => setShowCreateFlow(true)}
-                    className="px-5 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white font-medium rounded-lg
-                               hover:from-teal-400 hover:to-cyan-400 transition-all"
-                  >
-                    Create Your First Flow
-                  </button>
+                  {canWriteFlows && (
+                    <button
+                      onClick={() => setShowCreateFlow(true)}
+                      className="px-5 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white font-medium rounded-lg
+                                 hover:from-teal-400 hover:to-cyan-400 transition-all"
+                    >
+                      Create Your First Flow
+                    </button>
+                  )}
                 </>
               ) : (
                 <>
@@ -824,39 +855,43 @@ export default function FlowsPage() {
                         </td>
                         <td className="px-4 py-4">
                           <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={() => setEditingFlowId(flow.id)}
-                              className="p-2 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-lg transition-colors"
-                              title="Edit"
-                            >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                              </svg>
-                            </button>
-                            <button
-                              onClick={() => handleRunFlow(flow.id)}
-                              disabled={!flow.is_active || (flow.node_count || 0) === 0 || executingFlowId === flow.id}
-                              className="p-2 text-teal-400 hover:text-teal-300 hover:bg-teal-500/10 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                              title="Run"
-                            >
-                              {executingFlowId === flow.id ? (
-                                <div className="w-4 h-4 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
-                              ) : (
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                </svg>
-                              )}
-                            </button>
-                            <button
-                              onClick={() => handleDeleteFlow(flow.id)}
-                              className="p-2 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
-                              title="Delete"
-                            >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                              </svg>
-                            </button>
+                            {canWriteFlows && (
+                              <>
+                                <button
+                                  onClick={() => setEditingFlowId(flow.id)}
+                                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-lg transition-colors"
+                                  title="Edit"
+                                >
+                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                  </svg>
+                                </button>
+                                <button
+                                  onClick={() => handleRunFlow(flow.id)}
+                                  disabled={!flow.is_active || (flow.node_count || 0) === 0 || executingFlowId === flow.id}
+                                  className="p-2 text-teal-400 hover:text-teal-300 hover:bg-teal-500/10 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                  title="Run"
+                                >
+                                  {executingFlowId === flow.id ? (
+                                    <div className="w-4 h-4 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+                                  ) : (
+                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                  )}
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteFlow(flow.id)}
+                                  className="p-2 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
+                                  title="Delete"
+                                >
+                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1072,9 +1107,12 @@ export default function FlowsPage() {
           customTools={customTools}
           customSkills={customSkills}
           onClose={() => setEditingFlowId(null)}
-          onSuccess={() => {
+          onSuccess={async () => {
+            // BUG-636 FIX: await the refresh BEFORE closing the modal so
+            // the row in ``allFlows`` reflects the just-saved version by
+            // the time the user can click Run on it.
+            await loadData()
             setEditingFlowId(null)
-            loadData()
           }}
         />
       )}

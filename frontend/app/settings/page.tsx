@@ -151,7 +151,12 @@ export default function SettingsHubPage() {
       description: 'Manage subscription, payment methods, and billing history',
       icon: icons.billing,
       href: '/settings/billing',
-      permission: 'billing.manage',
+      // BUG-611 FIX: aligned to 'billing.write' to match the permission the
+      // billing subpage itself gates on (settings/billing/page.tsx:107).
+      // Previously 'billing.manage' — owners held billing.write but not
+      // billing.manage so the card was hidden from the exact role that
+      // needed it.
+      permission: 'billing.write',
     },
     {
       title: 'Audit Logs',

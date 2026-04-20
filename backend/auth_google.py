@@ -212,6 +212,7 @@ class GoogleSSOService:
         redirect_after: str = "/",
         invitation_token: Optional[str] = None,
         redirect_uri: Optional[str] = None,
+        platform: bool = False,
     ) -> str:
         """
         Generate Google OAuth authorization URL.
@@ -220,9 +221,20 @@ class GoogleSSOService:
             tenant_slug: Optional tenant slug for tenant-specific auth
             redirect_after: URL to redirect to after authentication
             invitation_token: Optional invitation token if accepting an invite
+            platform: BUG-647 FIX — when True, use the GlobalSSOConfig
+                (platform-wide OAuth app) instead of any tenant config.
+                This is the required path for the global-admin login and
+                any flow that is not bound to a specific tenant.
 
         Returns:
             Authorization URL to redirect user to
+
+        Raises:
+            GoogleSSOError: If neither a valid tenant scope nor a valid
+                platform scope is resolvable. Previously this method would
+                silently scan the DB for "any tenant with SSO enabled" and
+                use their credentials — a cross-tenant leak. That fallback
+                is gone.
         """
         # Get tenant ID from slug if provided
         tenant_id = None
@@ -233,31 +245,27 @@ class GoogleSSOService:
             ).first()
             if tenant:
                 tenant_id = tenant.id
+            else:
+                raise GoogleSSOError(
+                    f"Tenant '{tenant_slug}' not found or disabled."
+                )
 
-        # If no tenant specified, find a tenant with SSO enabled and credentials configured
-        if not tenant_id:
-            # Find any tenant with SSO enabled and Google OAuth credentials
-            sso_config = self.db.query(TenantSSOConfig).filter(
-                TenantSSOConfig.google_sso_enabled == True
-            ).first()
+        # BUG-647 FIX: The silent "first tenant with SSO enabled" fallback
+        # is REMOVED. If no tenant slug was provided, the caller MUST ask
+        # for the platform scope explicitly — otherwise we bail with a
+        # clear 400 rather than guess a tenant and leak its OAuth app.
+        if not tenant_id and not platform:
+            raise GoogleSSOError(
+                "No SSO scope resolved — provide a tenant_slug for tenant "
+                "SSO or request platform=true for global-admin / "
+                "tenant-less flows."
+            )
 
-            if sso_config:
-                # Check if this tenant has Google OAuth credentials
-                creds = self.db.query(GoogleOAuthCredentials).filter(
-                    GoogleOAuthCredentials.tenant_id == sso_config.tenant_id
-                ).first()
-                if creds and creds.client_id:
-                    tenant_id = sso_config.tenant_id
-                    # Also get tenant slug for state
-                    tenant = self.db.query(Tenant).filter(
-                        Tenant.id == tenant_id
-                    ).first()
-                    if tenant:
-                        tenant_slug = tenant.slug
-
-        # Get OAuth credentials
+        # Get OAuth credentials. When platform=True we intentionally pass
+        # tenant_id=None so get_oauth_credentials falls through the tenant
+        # lookup and reads GlobalSSOConfig / env vars instead.
         client_id, _, resolved_redirect_uri = self.get_oauth_credentials(
-            tenant_id,
+            None if platform else tenant_id,
             redirect_uri=redirect_uri,
         )
 

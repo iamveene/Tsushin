@@ -1465,6 +1465,15 @@ class SandboxedToolExecution(Base):
     __tablename__ = "sandboxed_tool_executions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    # BUG-614 FIX: tenant_id column added (alembic 0042) so the playground
+    # debug panel (routes_playground.py) can scope tool-execution history
+    # to the caller's tenant. Before this column existed the debug query
+    # silently returned zero rows OR crashed depending on the ORM version
+    # because it referenced a column that did not exist in the real
+    # PostgreSQL schema. Backfilled from ``agent_run.agent_id`` →
+    # ``agent.tenant_id`` when possible; otherwise NULL (legacy rows
+    # predate multi-tenancy).
+    tenant_id = Column(String(50), nullable=True, index=True)  # FK to tenant (soft-ref)
     agent_run_id = Column(Integer, index=True)  # FK to AgentRun (nullable for manual executions)
     tool_id = Column(Integer, nullable=False, index=True)  # FK to SandboxedTool
     command_id = Column(Integer, nullable=False, index=True)  # FK to SandboxedToolCommand

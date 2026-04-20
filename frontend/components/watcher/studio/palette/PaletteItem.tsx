@@ -32,9 +32,26 @@ export default function PaletteItem({ item, disabled, onDoubleClick }: PaletteIt
   }, [setActiveDrag])
 
   return (
-    <div draggable={!disabled} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDoubleClick={() => !disabled && onDoubleClick(item)}
+    <div
+      // BUG-601 FIX: Only allow HTML5 drag for UNATTACHED items.
+      // Previously attached items were draggable=true and the tooltip
+      // promised "drag to detach" — but the canvas has no
+      // drop-to-detach handler, so the drag is a no-op. Setting
+      // ``draggable={false}`` on attached items kills the native drag
+      // UX and the tooltip below now truthfully describes the only
+      // available action (double-click).
+      draggable={!disabled && !item.isAttached}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDoubleClick={() => !disabled && onDoubleClick(item)}
       className={`palette-item flex items-center gap-2 px-3 py-1.5 mx-1 rounded-md text-sm ${item.isAttached ? 'attached' : ''} ${disabled ? 'disabled' : ''} ${isDragging ? 'dragging' : ''}`}
-      title={disabled ? 'Limit reached for this category' : `Double-click or drag to ${item.isAttached ? 'detach' : 'attach'}`}>
+      title={
+        disabled
+          ? 'Limit reached for this category'
+          : item.isAttached
+            ? 'Double-click to detach'
+            : 'Double-click or drag to attach'
+      }>
       {/* Drag grip icon - visible on hover */}
       <svg className="drag-grip w-3 h-3 flex-shrink-0" viewBox="0 0 12 12" fill="currentColor">
         <circle cx="3.5" cy="2" r="1.2" /><circle cx="8.5" cy="2" r="1.2" />

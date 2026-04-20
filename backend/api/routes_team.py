@@ -508,6 +508,59 @@ async def cancel_invitation(
     ctx.db.commit()
 
 
+@router.post("/invitations/{invitation_id}/resend-link", response_model=InvitationResponse)
+async def regenerate_invitation_link(
+    invitation_id: int,
+    http_request: Request,
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user: User = Depends(require_permission("users.invite")),
+):
+    """
+    BUG-648 FIX: Regenerate a single-use invitation token and return the
+    fresh ``invitation_link`` WITHOUT sending an email.
+
+    Use case: the original invitation email was lost / never received, an
+    admin wants to DM the link to the invitee directly. The existing
+    ``/invitations/{id}/resend`` endpoint always sends an email, which is
+    useless for that flow and noisy for the invitee when they've already
+    got the first email.
+
+    The list endpoint (``GET /invitations``) cannot return
+    ``invitation_link`` for pre-existing rows because raw tokens are NOT
+    stored (only hashes). This endpoint rotates to a new raw token,
+    stores its hash, and returns the new link.
+
+    Requires: ``users.invite`` permission.
+    """
+    invitation = ctx.db.query(UserInvitation).filter(
+        UserInvitation.id == invitation_id,
+        UserInvitation.tenant_id == ctx.tenant_id,
+        UserInvitation.accepted_at.is_(None)
+    ).first()
+
+    if not invitation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invitation not found"
+        )
+
+    # Rotate token — store hash, return raw.
+    raw_link_token = generate_invitation_token()
+    invitation.invitation_token = hash_token(raw_link_token)
+    # Extend expiry so the surfaced link is actually usable.
+    invitation.expires_at = datetime.utcnow() + timedelta(days=7)
+    ctx.db.commit()
+    ctx.db.refresh(invitation)
+
+    return invitation_to_response(
+        invitation,
+        ctx.db,
+        include_link=True,
+        raw_token=raw_link_token,
+        request=http_request,
+    )
+
+
 @router.post("/invitations/{invitation_id}/resend", response_model=InvitationResponse)
 async def resend_invitation(
     invitation_id: int,

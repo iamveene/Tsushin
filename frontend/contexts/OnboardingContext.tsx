@@ -118,23 +118,42 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       // BUG-325: If tour should have started but was deferred because guide was open,
       // start it now that the guide is closed — but ONLY if tour hasn't been dismissed/completed.
       // Check refs (not stale closure state) to avoid race conditions.
+      //
+      // BUG-626 FIX: The previous guard only checked two refs. If the
+      // provider remounts (tenant switch on a slow network, React Strict
+      // Mode double-invoke in dev, or a route-level error boundary
+      // recreating the tree), the refs are freshly ``false`` even though
+      // localStorage has the completion marker from the last Skip. The
+      // auto-start would then re-fire on the next guide-close and the
+      // wizard would silently reappear. Treat ``localStorage`` as the
+      // ultimate source of truth here — any completion / skip persisted
+      // against the active user must block restart unconditionally.
+      const storageKey = activeStorageKeyRef.current
+      const persistedCompleted = storageKey ? getCompletedForUser(storageKey) : false
+      if (persistedCompleted) {
+        // Resync the ref so later checks agree with localStorage.
+        tourDismissedRef.current = true
+        return
+      }
       if (!tourStartedRef.current && !tourDismissedRef.current) {
-        const storageKey = activeStorageKeyRef.current
-        const completed = storageKey ? getCompletedForUser(storageKey) : false
-        if (!completed) {
-          tourStartedRef.current = true
-          clearAutoStartTimer()
-          autoStartTimerRef.current = setTimeout(() => {
-            setState(prev => {
-              // Final check using prev state to be safe
-              if (!prev.isActive && !prev.hasCompletedOnboarding) {
-                return { ...prev, isActive: true, currentStep: 1, isMinimized: false }
-              }
-              return prev
-            })
-            autoStartTimerRef.current = null
-          }, 500)
-        }
+        tourStartedRef.current = true
+        clearAutoStartTimer()
+        autoStartTimerRef.current = setTimeout(() => {
+          // Re-read localStorage one more time at fire-time — the user
+          // may have hit Skip in the ~500 ms delay.
+          const key = activeStorageKeyRef.current
+          if (key && getCompletedForUser(key)) {
+            tourDismissedRef.current = true
+            return
+          }
+          setState(prev => {
+            if (!prev.isActive && !prev.hasCompletedOnboarding) {
+              return { ...prev, isActive: true, currentStep: 1, isMinimized: false }
+            }
+            return prev
+          })
+          autoStartTimerRef.current = null
+        }, 500)
       }
     }
     window.addEventListener('tsushin:open-user-guide', handleGuideOpen)

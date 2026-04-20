@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security / RBAC / SSO / UX — Group E bug sprint (BUG-599/601/602/610/611/612+613/614/615/624/626/636/647/648) (2026-04-19)
+
+Remediation sprint for the Group E audit findings (WS auth bypass, RBAC UI
+gates, SSO scoping, hub 500, schema gap, onboarding/guide UX). Regression
+guard at `backend/dev_tests/test_group_e_security.py` (9 live tests).
+
+- **BUG-612 + BUG-613** (HIGH) `/ws/shell/status` decoded the JWT but never
+  verified the User row. A deactivated or tombstoned user still held a valid
+  token and could keep receiving live beacon/status events. `shell_websocket.py`
+  now looks up the `User`, asserts `is_active=True` + `deleted_at IS NULL`,
+  rejects tenant-mismatched JWTs, and requires at least one `shell.*`
+  permission before sending `auth_success` (otherwise WebSocket close 4003).
+  The sister `/ws/beacon/{integration_id}` handler also now rejects beacons
+  whose tenant is deleted or in emergency stop.
+- **BUG-615** (HIGH) `GET /api/hub/integrations?refresh_health=true` was 500ing
+  across all roles when a polymorphic `HubIntegration` row pointed at a
+  deleted child (ObjectDeletedError on `hub.type` attribute access). Every
+  per-integration iteration is now wrapped in try/except; guarded `getattr`
+  calls harvest what can be surfaced and a degraded `{status:"error"}` row is
+  emitted instead of 500ing the whole list.
+- **BUG-614** (MEDIUM) Playground debug endpoint joined
+  `sandboxed_tool_executions` on a `tenant_id` column that did not exist in
+  the DB schema. Added Alembic migration `0042_add_sandboxed_tool_exec_tenant_id`
+  (nullable `VARCHAR(50)` + index, backfilled from
+  `agent_run.agent_id → agent.tenant_id`), added the column to the
+  `SandboxedToolExecution` ORM model, and threaded `self.tenant_id` into
+  `SandboxedToolService.execute_command` insertion.
+- **BUG-647** (HIGH) SSO `/api/auth/google/authorize` silently fell back to
+  "first tenant with SSO enabled" — a cross-tenant leak. New explicit
+  `platform=true` query param routes to `GlobalSSOConfig`; callers must now
+  pass either `tenant_slug=<slug>` OR `platform=true` (never both, never
+  neither) or receive a 400.
+- **BUG-648** (MEDIUM) Tenant invitation list view never returned
+  `invitation_link` (raw tokens are not stored). New admin-only
+  `POST /api/team/invitations/{id}/resend-link` endpoint rotates the
+  invitation token, extends the expiry by 7 days, and returns the
+  fresh link WITHOUT triggering a duplicate email (the existing
+  `/resend` endpoint continues to email).
+- **BUG-610** (HIGH) Read-only users saw mutation UI on Hub / Agents / Flows.
+  Added `hasPermission('agents.write' | 'flows.write' | 'hub.write')` gates
+  around every create / edit / delete / toggle / bulk-action control, plus
+  a top-of-page read-only banner on Hub.
+- **BUG-611** (MEDIUM) Settings overview hid Billing from owners — the
+  overview card gated on `billing.manage` but the billing subpage itself
+  gated on `billing.write`. Aligned both to `billing.write`.
+- **BUG-636** (MEDIUM) Flow editor edit-then-execute path produced no run.
+  `handleRunFlow` now re-fetches the latest saved flow before execute so a
+  just-edited flow is executed against its fresh definition, and the edit
+  modal's `onSuccess` awaits `loadData()` before closing the modal.
+- **BUG-624** (LOW) `UserGuidePanel` persisted in the DOM after dismissal
+  with only `translate-x-full`; assistive tech still saw a dialog role. Added
+  `aria-hidden` + `visibility: hidden` to both the backdrop and panel when
+  `isOpen` is false.
+- **BUG-626** (LOW) Onboarding tour re-appeared after Skip Tour if the
+  provider remounted. `handleGuideClose` now treats `localStorage` as the
+  source of truth — any persisted completion marker blocks restart
+  unconditionally and re-syncs `tourDismissedRef`.
+- **BUG-599** (MEDIUM) User Guide Escape key conflicted with Studio's
+  fullscreen Esc handler. UserGuide's handler now calls
+  `stopImmediatePropagation` in addition to `stopPropagation` so a single
+  Esc press cleanly closes the guide without also collapsing Studio.
+- **BUG-601** (MEDIUM) Palette items were draggable even when attached, but
+  there was no drop-to-detach handler — the tooltip promised behavior that
+  didn't exist. Attached items are now `draggable={false}` and the tooltip
+  truthfully says "Double-click to detach".
+- **BUG-602** (MEDIUM) Studio's "Create new agent" was a parallel
+  implementation that produced persona-less / tone-less agents vs. the main
+  `/agents` modal. Quick-create now emits the same explicit-null payload
+  shape as the main modal, and a new footer link routes users who need
+  persona / tone / keywords to `/agents?create=1` (AgentsPage auto-opens the
+  create flow from that query param).
+
+Touched files: `backend/api/shell_websocket.py`, `backend/api/routes_hub.py`,
+`backend/api/routes_team.py`,
+`backend/alembic/versions/0042_add_sandboxed_tool_exec_tenant_id.py` (new),
+`backend/models.py`, `backend/agent/tools/sandboxed_tool_service.py`,
+`backend/auth_routes.py`, `backend/auth_google.py`,
+`frontend/app/hub/page.tsx`, `frontend/app/agents/page.tsx`,
+`frontend/app/flows/page.tsx`, `frontend/app/settings/page.tsx`,
+`frontend/components/UserGuidePanel.tsx`,
+`frontend/contexts/OnboardingContext.tsx`,
+`frontend/components/watcher/studio/StudioAgentSelector.tsx`,
+`frontend/components/watcher/studio/palette/PaletteItem.tsx`.
+
+### Agent Creation Wizard — guided multi-step flow (2026-04-19)
+
+Creating an agent was a single modal with ~12 fields — powerful for experts, intimidating for newcomers. New **Agent Creation Wizard** branches upfront on **Text / Audio / Hybrid** and progressively discloses only the steps that matter for the chosen type. Guided is the default; Advanced (existing single-form modal) remains available for power users via a per-user toggle.
+
+**What's new**
+
+- **Guided mode.** 7–9 steps (varies by type): Type → Basics → Personality → [Voice for audio/hybrid] → Skills → Memory → Channels → Review → Progress. Circular-checkmark step indicator, per-step validation, Back-nav preserves draft.
+- **Type branching.** Text agents skip the Voice step and hide audio-only skills. Audio & Hybrid reuse the extracted `AudioProviderPicker` / `AudioVoiceFields` from the Audio Agents Wizard — single source of truth for voice UX.
+- **Advanced mode preserved.** Existing `frontend/app/agents/page.tsx` modal is unchanged in behavior; it now shows a "Switch to Guided" link and reads a pre-filled draft from `AgentWizardContext` when the user switched mid-flow.
+- **Mode preference.** Per-user `localStorage['tsushin:agentWizardMode']` — defaults to `guided`. Both directions persist the user's choice on switch.
+- **Chained provisioning.** `useCreateAgentChain` orchestrates: contact resolve → `createAgent` → `updateAgent` (memory/channels/vector store) → per-skill fan-out → custom skills → Kokoro TTS provisioning + voice binding (for audio/hybrid). On partial failure after the agent row is created, the wizard keeps the agent and surfaces the failing stage rather than rolling back.
+- **Deep-link on success.** Progress step's primary CTA navigates to `/playground?agentId=<id>` so the new agent is chattable immediately.
+
+**Extracted shared modules**
+
+- `frontend/components/audio-wizard/AudioProviderFields.tsx` — `AudioProviderPicker` + `AudioVoiceFields` (lifted from `AudioAgentsWizard` steps 2 & 3).
+- `frontend/components/agent-wizard/hooks/useKokoroPolling.ts` — Kokoro container status polling (lifted from `AudioAgentsWizard`).
+- `AudioAgentsWizard.tsx` refactored to consume both; behavior unchanged.
+
+**Touched files.** `frontend/contexts/AgentWizardContext.tsx` (new), `frontend/lib/agent-wizard/reducer.ts` (new, pure), `frontend/components/agent-wizard/*` (new — AgentWizard shell + 9 step components + 2 hooks + defaults), `frontend/components/audio-wizard/AudioProviderFields.tsx` (new extraction), `frontend/components/audio-wizard/AudioAgentsWizard.tsx` (refactor — consumes extracted modules), `frontend/app/layout.tsx` (mount `AgentWizardProvider`), `frontend/app/agents/page.tsx` (Create button dispatches by mode; "Switch to Guided" link; pre-fill banner).
+
 ### Infra / install / observability — Group D bug sprint (BUG-649/650/651/652/653/654/655/658) (2026-04-19)
 
 Remediation sprint for the Group D audit findings. Regression guard at

@@ -1546,12 +1546,28 @@ async def get_google_auth_url(
     tenant_slug: Optional[str] = Query(None, description="Tenant slug for tenant-specific auth"),
     redirect_after: str = Query("/", description="URL to redirect to after authentication"),
     invitation_token: Optional[str] = Query(None, description="Invitation token if accepting an invite"),
+    platform: bool = Query(
+        False,
+        description=(
+            "Explicit platform-scoped SSO: use the GlobalSSOConfig row "
+            "(configured via /api/admin/sso-config) instead of a tenant "
+            "config. Required for global-admin flows and any login page "
+            "not bound to a tenant."
+        ),
+    ),
     db: Session = Depends(get_db)
 ):
     """
     Get Google OAuth authorization URL.
 
     Start the OAuth flow by redirecting users to this URL.
+
+    BUG-647 FIX: Explicit ``platform=true`` switches the resolution path
+    away from ``TenantSSOConfig`` and into ``GlobalSSOConfig``. Without
+    that flag AND without a ``tenant_slug`` we now return 400 instead of
+    silently falling back to "first tenant with SSO enabled", which was
+    a multi-tenant leak (one tenant's OAuth credentials could be used to
+    sign into another tenant just because the tenant slug was missing).
     """
     # BUG-137 + BUG-141 FIX: Whitelist approach — only allow relative paths starting with /
     # This blocks javascript:, data:, http://, https://, //, and any other scheme
@@ -1563,6 +1579,28 @@ async def get_google_auth_url(
                 detail="redirect_after must be a relative path starting with /"
             )
 
+    # BUG-647 FIX: Enforce explicit scope. Either a tenant_slug OR the
+    # platform flag must be supplied — never both, and never neither.
+    # This closes the silent "first-tenant-with-SSO" fallback that the
+    # service layer used to paper over a missing scope.
+    if platform and tenant_slug:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Supply either tenant_slug OR platform=true, not both — "
+                "these resolve to different SSO client_ids."
+            ),
+        )
+    if not platform and not tenant_slug:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "SSO scope is required: pass tenant_slug=<slug> for a "
+                "tenant login, or platform=true for the global-admin / "
+                "tenant-less login page."
+            ),
+        )
+
     try:
         sso_service = get_google_sso_service(db, get_encryption_key(db))
         auth_url = sso_service.generate_authorization_url(
@@ -1570,6 +1608,7 @@ async def get_google_auth_url(
             redirect_after=redirect_after,
             invitation_token=invitation_token,
             redirect_uri=_resolve_google_sso_redirect_uri(request),
+            platform=platform,
         )
         return GoogleAuthURLResponse(auth_url=auth_url)
     except GoogleSSOError as e:

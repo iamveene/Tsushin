@@ -127,6 +127,53 @@ async def authenticate_beacon(
             })
             return None
 
+        # BUG-612 / BUG-613 FIX (sister to /ws/shell/status): Even a valid
+        # beacon API key must be rejected when the owning tenant has been
+        # suspended or hit an emergency stop. Without this guard a
+        # disconnected tenant could keep its beacons talking to the C2
+        # channel and drain commands that the UI has stopped surfacing.
+        try:
+            from models_rbac import Tenant
+            tenant = db.query(Tenant).filter(
+                Tenant.id == integration.tenant_id
+            ).first()
+            if tenant is None:
+                logger.warning(
+                    f"Beacon auth rejected: integration {integration.id} "
+                    f"references missing tenant {integration.tenant_id!r}"
+                )
+                await websocket.send_json({
+                    "type": "auth_failed",
+                    "reason": "Tenant not found",
+                })
+                return None
+            if getattr(tenant, "deleted_at", None) is not None:
+                logger.warning(
+                    f"Beacon auth rejected: tenant {integration.tenant_id} is deleted"
+                )
+                await websocket.send_json({
+                    "type": "auth_failed",
+                    "reason": "Tenant disabled",
+                })
+                return None
+            if bool(getattr(tenant, "emergency_stop", False)):
+                logger.warning(
+                    f"Beacon auth rejected: tenant {integration.tenant_id} emergency_stop=True"
+                )
+                await websocket.send_json({
+                    "type": "auth_failed",
+                    "reason": "Tenant emergency stop active",
+                })
+                return None
+        except Exception as tenant_check_err:
+            # Never 500 on the auth path — fall through to the happy path
+            # only if the check was genuinely unavailable (e.g. tenant
+            # model missing). Log loudly so this is visible.
+            logger.error(
+                f"Beacon auth tenant check error (integration {integration.id}): "
+                f"{tenant_check_err}"
+            )
+
         # Update integration with connection info
         integration.last_checkin = datetime.utcnow()
         integration.health_status = "healthy"
@@ -502,11 +549,97 @@ async def shell_status_websocket(
             tenant_id = "default"
             logger.warning(f"Shell status WebSocket: no tenant_id in token, using default")
 
+        # BUG-612 / BUG-613 FIX: A valid JWT is NOT enough — it only proves the
+        # token was issued by us at some point. A deactivated or revoked user
+        # (is_active=False, deleted_at set) still has their old JWT on disk
+        # until it expires. Without this check the revoked user could keep
+        # draining live shell/beacon status events via WebSocket long after
+        # losing account access. Enforce:
+        #   1. User row still exists and is active (not tombstoned)
+        #   2. Tenant on JWT matches the User row (no tenant hopping)
+        #   3. User holds at least one ``shell.*`` permission — the status
+        #      WebSocket is a shell-scoped feed; read-only tenant members
+        #      without shell.read MUST NOT see other users' beacons/commands.
+        from models_rbac import User
+        from rbac_middleware import check_permission
+
+        db_session = None
+        try:
+            from sqlalchemy.orm import sessionmaker
+            SessionLocal = sessionmaker(bind=_engine)
+            db_session = SessionLocal()
+
+            user = db_session.query(User).filter(User.id == user_id).first()
+            if user is None:
+                logger.warning(
+                    f"Shell status WebSocket rejected: user {user_id} not found"
+                )
+                await websocket.close(code=4003, reason="User not found")
+                return
+            if not user.is_active or user.deleted_at is not None:
+                logger.warning(
+                    f"Shell status WebSocket rejected: user {user_id} "
+                    f"is_active={user.is_active} deleted_at={user.deleted_at}"
+                )
+                await websocket.close(
+                    code=4003, reason="Account disabled"
+                )
+                return
+            # Tenant hopping guard — the JWT's tenant_id must line up with the
+            # user's actual tenant_id (or the user is a global admin who can
+            # connect against any tenant feed).
+            is_global = bool(getattr(user, "is_global_admin", False))
+            if (
+                not is_global
+                and tenant_id not in ("default",)
+                and user.tenant_id
+                and user.tenant_id != tenant_id
+            ):
+                logger.warning(
+                    f"Shell status WebSocket rejected: user {user_id} tenant "
+                    f"{user.tenant_id!r} does not match JWT tenant {tenant_id!r}"
+                )
+                await websocket.close(code=4003, reason="Tenant mismatch")
+                return
+
+            # Permission check — at least one shell.* permission must be held
+            # within the target tenant. Global admins are allowed by default
+            # (they act across tenants) to avoid locking platform operators
+            # out of troubleshooting beacons they're responding to.
+            if not is_global:
+                shell_perms = (
+                    "shell.read",
+                    "shell.write",
+                    "shell.execute",
+                    "shell.manage",
+                )
+                has_shell = any(
+                    check_permission(user, p, db_session) for p in shell_perms
+                )
+                if not has_shell:
+                    logger.warning(
+                        f"Shell status WebSocket rejected: user {user_id} "
+                        f"lacks shell.* permission in tenant {tenant_id}"
+                    )
+                    await websocket.close(
+                        code=4003, reason="Insufficient permissions"
+                    )
+                    return
+        finally:
+            if db_session is not None:
+                try:
+                    db_session.close()
+                except Exception:
+                    pass
+
         logger.info(f"Shell status WebSocket auth successful for user {user_id}, tenant {tenant_id}")
 
     except Exception as auth_error:
-        logger.error(f"Shell status WebSocket auth error: {auth_error}")
-        await websocket.close(code=4003, reason="Authentication failed")
+        logger.error(f"Shell status WebSocket auth error: {auth_error}", exc_info=True)
+        try:
+            await websocket.close(code=4003, reason="Authentication failed")
+        except Exception:
+            pass
         return
 
     # Send auth success confirmation
