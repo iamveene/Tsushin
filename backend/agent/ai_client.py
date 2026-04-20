@@ -57,12 +57,12 @@ class AIClient:
 
         # Provider Instance resolution — takes precedence over flat fields
         if provider_instance_id is not None and db is not None:
-            from services.provider_instance_service import ProviderInstanceService, VENDOR_DEFAULT_BASE_URLS
+            from services.provider_instance_service import ProviderInstanceService, get_vendor_default_base_url
             instance = ProviderInstanceService.get_instance(provider_instance_id, tenant_id, db)
             if instance and instance.is_active:
                 self.provider = instance.vendor
                 api_key = ProviderInstanceService.resolve_api_key(instance, db)
-                base_url = instance.base_url or VENDOR_DEFAULT_BASE_URLS.get(instance.vendor)
+                base_url = instance.base_url or get_vendor_default_base_url(instance.vendor)
 
                 # DNS rebinding guard at request time
                 if instance.base_url:
@@ -208,7 +208,11 @@ class AIClient:
         elif self.provider == "ollama":
             # Phase 5.2: Ollama HTTP client (API key optional for remote/secured instances)
             # Load from Config table if available, otherwise from env var
-            ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+            # BUG-663: resolve host.docker.internal with a Linux-safe fallback
+            # to the Docker default-bridge gateway (172.17.0.1).
+            from services.provider_instance_service import _resolve_ollama_host
+            ollama_default_url = f"http://{_resolve_ollama_host()}:11434"
+            ollama_base_url = os.getenv("OLLAMA_BASE_URL", ollama_default_url)
             ollama_api_key = None
 
             if db:
@@ -228,7 +232,7 @@ class AIClient:
                     self.ollama_base_url = validate_ollama_url(self.ollama_base_url)
                 except SSRFValidationError as e:
                     self.logger.error(f"SSRF blocked: Ollama base URL '{self.ollama_base_url}' rejected: {e}. Falling back to default.")
-                    self.ollama_base_url = "http://host.docker.internal:11434"
+                    self.ollama_base_url = ollama_default_url
 
             # Extended timeout for CPU inference (first load can be slow)
             headers = {}

@@ -10,6 +10,7 @@ SSRF validation uses utils/ssrf_validator.py (DNS-resolution-based IP checking).
 """
 
 import logging
+import socket
 import threading
 from typing import Optional, List
 from sqlalchemy.orm import Session
@@ -17,7 +18,61 @@ from models import ProviderInstance, ProviderConnectionAudit
 
 logger = logging.getLogger(__name__)
 
-# Default base URLs for vendors (None = SDK default)
+
+# BUG-663: Linux-safe host resolution for reaching the host Ollama daemon
+# from inside the backend container.
+#
+# `host.docker.internal` is guaranteed on Docker Desktop (macOS/Windows) and
+# on recent Linux Docker Engine when the container is started with
+# `--add-host=host.docker.internal:host-gateway`. On older Linux hosts or
+# setups without that flag it does NOT resolve, causing every Ollama call
+# to fail with gaierror. Fall back to the Docker default bridge gateway
+# (172.17.0.1), which is reachable from any container on the default bridge
+# or an attached user network.
+_resolved_ollama_host: Optional[str] = None
+_resolve_ollama_host_lock = threading.Lock()
+
+
+def _resolve_ollama_host() -> str:
+    """Return a hostname that reaches the host Ollama daemon from inside a
+    container. Resolves once per process and caches the result.
+
+    - If ``host.docker.internal`` resolves via DNS, return it.
+    - On ``socket.gaierror`` (Linux hosts without host-gateway), fall back
+      to ``172.17.0.1`` (the Docker default bridge gateway).
+    """
+    global _resolved_ollama_host
+    if _resolved_ollama_host is not None:
+        return _resolved_ollama_host
+    with _resolve_ollama_host_lock:
+        if _resolved_ollama_host is not None:
+            return _resolved_ollama_host
+        try:
+            socket.gethostbyname("host.docker.internal")
+            _resolved_ollama_host = "host.docker.internal"
+        except socket.gaierror:
+            logger.warning(
+                "_resolve_ollama_host: 'host.docker.internal' did not resolve; "
+                "falling back to Docker default-bridge gateway 172.17.0.1"
+            )
+            _resolved_ollama_host = "172.17.0.1"
+        except Exception as e:
+            # Defensive: any other socket error → same fallback so we don't
+            # crash on exotic network setups.
+            logger.warning(
+                f"_resolve_ollama_host: unexpected error resolving "
+                f"'host.docker.internal' ({e}); falling back to 172.17.0.1"
+            )
+            _resolved_ollama_host = "172.17.0.1"
+        return _resolved_ollama_host
+
+
+# Default base URLs for vendors (None = resolved at runtime / SDK default)
+# BUG-663 follow-up: the Ollama default is resolved lazily via
+# get_vendor_default_base_url("ollama") — NOT eagerly at module import —
+# so a slow/blocking `host.docker.internal` DNS lookup cannot delay backend
+# startup. Consumers that previously read VENDOR_DEFAULT_BASE_URLS["ollama"]
+# must call get_vendor_default_base_url(vendor) instead.
 VENDOR_DEFAULT_BASE_URLS = {
     "openai": None,
     "anthropic": None,
@@ -26,9 +81,22 @@ VENDOR_DEFAULT_BASE_URLS = {
     "grok": "https://api.x.ai/v1",
     "deepseek": "https://api.deepseek.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
-    "ollama": "http://host.docker.internal:11434",
+    "ollama": None,  # Lazy: get_vendor_default_base_url("ollama")
     "vertex_ai": None,  # Region-specific — resolved dynamically from credentials
 }
+
+
+def get_vendor_default_base_url(vendor: str) -> Optional[str]:
+    """Return the default base URL for a vendor, resolving Ollama lazily.
+
+    Use this instead of direct `VENDOR_DEFAULT_BASE_URLS[vendor]` for code
+    paths that need the effective fallback URL — the Ollama host depends
+    on runtime DNS (`host.docker.internal` on Docker Desktop, fallback
+    `172.17.0.1` on bare Linux).
+    """
+    if vendor == "ollama":
+        return f"http://{_resolve_ollama_host()}:11434"
+    return VENDOR_DEFAULT_BASE_URLS.get(vendor)
 
 SUPPORTED_VENDORS = list(VENDOR_DEFAULT_BASE_URLS.keys()) + ["custom"]
 
@@ -126,7 +194,11 @@ class ProviderInstanceService:
         # Derive base_url from Config table
         from models import Config
         config = db.query(Config).first()
-        base_url = config.ollama_base_url if config and config.ollama_base_url else "http://host.docker.internal:11434"
+        base_url = (
+            config.ollama_base_url
+            if config and config.ollama_base_url
+            else f"http://{_resolve_ollama_host()}:11434"
+        )
 
         return ProviderInstanceService.create_instance(
             tenant_id=tenant_id,

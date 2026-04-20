@@ -41,8 +41,8 @@ class ModelDiscoveryService:
             return PREDEFINED_MODELS[vendor]
 
         # Resolve base URL and API key
-        from services.provider_instance_service import ProviderInstanceService, VENDOR_DEFAULT_BASE_URLS
-        base_url = instance.base_url or VENDOR_DEFAULT_BASE_URLS.get(vendor)
+        from services.provider_instance_service import ProviderInstanceService, get_vendor_default_base_url
+        base_url = instance.base_url or get_vendor_default_base_url(vendor)
         if not base_url:
             return []
 

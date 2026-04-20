@@ -65,6 +65,17 @@ if settings.METRICS_ENABLED:
         ["channel_type", "reason"],
     )
 
+    # BUG-665: DB pool hygiene metrics
+    TSN_DB_POOL_CHECKED_OUT = Gauge(
+        "tsn_db_pool_checked_out",
+        "Number of DB connections currently checked out of the SQLAlchemy pool",
+    )
+
+    TSN_DB_IDLE_IN_TRANSACTION = Gauge(
+        "tsn_db_idle_in_transaction",
+        "Number of PostgreSQL backends in 'idle in transaction' state",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helpers
