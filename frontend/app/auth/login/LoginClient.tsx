@@ -147,7 +147,7 @@ export default function LoginClient({
     setGoogleLoading(true)
 
     try {
-      await loginWithGoogle()
+      await loginWithGoogle({ platform: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Google sign-in failed')
       setGoogleLoading(false)

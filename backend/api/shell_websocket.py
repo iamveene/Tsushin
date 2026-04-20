@@ -166,13 +166,25 @@ async def authenticate_beacon(
                 })
                 return None
         except Exception as tenant_check_err:
-            # Never 500 on the auth path — fall through to the happy path
-            # only if the check was genuinely unavailable (e.g. tenant
-            # model missing). Log loudly so this is visible.
+            # BUG-612 followup: fail CLOSED on any tenant-check error.
+            # Previously this block swallowed the exception and let the
+            # handshake complete, which meant an import error or DB blip
+            # silently authorised a beacon against a tenant we could not
+            # verify was active + not emergency-stopped. Security-critical
+            # checks must never default-allow on error.
             logger.error(
                 f"Beacon auth tenant check error (integration {integration.id}): "
-                f"{tenant_check_err}"
+                f"{tenant_check_err} — denying connection",
+                exc_info=True,
             )
+            try:
+                await websocket.send_json({
+                    "type": "auth_failed",
+                    "reason": "Tenant state check unavailable — try again",
+                })
+            except Exception:
+                pass
+            return None
 
         # Update integration with connection info
         integration.last_checkin = datetime.utcnow()
@@ -542,12 +554,24 @@ async def shell_status_websocket(
         # Convert to int if string
         user_id = int(user_id) if isinstance(user_id, str) else user_id
 
-        # Extract tenant_id from token
+        # Extract tenant_id from token.
+        # BUG-612 followup: tokens issued before multi-tenant migration may
+        # lack a tenant_id claim; previously we fell back to "default" and
+        # carved it out of the tenant-hopping guard, which meant an old
+        # stale token could connect to any tenant's shell/beacon feed until
+        # it expired naturally. Reject outright now — users must re-login
+        # to obtain a proper tenant-scoped JWT.
         tenant_id = payload.get("tenant_id")
         if not tenant_id:
-            # Fallback to "default" for backward compatibility with older tokens
-            tenant_id = "default"
-            logger.warning(f"Shell status WebSocket: no tenant_id in token, using default")
+            logger.warning(
+                f"Shell status WebSocket rejected: token for user {user_id} "
+                f"has no tenant_id claim (pre-migration or malformed token)"
+            )
+            await websocket.close(
+                code=4003,
+                reason="Missing tenant claim — please re-login",
+            )
+            return
 
         # BUG-612 / BUG-613 FIX: A valid JWT is NOT enough — it only proves the
         # token was issued by us at some point. A deactivated or revoked user
@@ -591,7 +615,6 @@ async def shell_status_websocket(
             is_global = bool(getattr(user, "is_global_admin", False))
             if (
                 not is_global
-                and tenant_id not in ("default",)
                 and user.tenant_id
                 and user.tenant_id != tenant_id
             ):

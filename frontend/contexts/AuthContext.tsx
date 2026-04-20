@@ -31,7 +31,7 @@ interface AuthContextType {
   user: User | null
   loading: boolean
   login: (email: string, password: string) => Promise<void>
-  loginWithGoogle: (options?: { tenantSlug?: string; redirectAfter?: string; invitationToken?: string }) => Promise<void>
+  loginWithGoogle: (options?: { tenantSlug?: string; redirectAfter?: string; invitationToken?: string; platform?: boolean }) => Promise<void>
   setAuthFromToken: (token: string) => Promise<void>
   signup: (data: {
     email: string
@@ -150,6 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     tenantSlug?: string
     redirectAfter?: string
     invitationToken?: string
+    platform?: boolean
   }) => {
     try {
       const response = await api.getGoogleAuthURL(options)

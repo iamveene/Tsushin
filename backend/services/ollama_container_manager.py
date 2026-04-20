@@ -303,6 +303,15 @@ class OllamaContainerManager:
             # BUG-649: the error path may also be entered with a dead conn
             # (if the exception was raised from inside the long-wait window).
             # Rebuild the session defensively rather than trusting `db`.
+            # BUG-649 followup: capture the primary key BEFORE closing the
+            # session so the error-path filter doesn't touch a detached ORM
+            # object. Mirrors the happy path pattern at line 260.
+            err_instance_id = (
+                getattr(instance, "id", None) if instance is not None else None
+            )
+            err_tenant_id_capture = (
+                getattr(instance, "tenant_id", None) if instance is not None else None
+            )
             engine = db.get_bind() if db is not None else None
             try:
                 db.close()
@@ -321,8 +330,9 @@ class OllamaContainerManager:
                 try:
                     from models import ProviderInstance
                     err_instance = db_err.query(ProviderInstance).filter(
-                        ProviderInstance.id == instance.id,
-                    ).first() if instance is not None else None
+                        ProviderInstance.id == err_instance_id,
+                        ProviderInstance.tenant_id == err_tenant_id_capture,
+                    ).first() if (err_instance_id is not None and err_tenant_id_capture is not None) else None
                     if err_instance is not None:
                         err_instance.container_status = "error"
                         err_instance.container_name = None
