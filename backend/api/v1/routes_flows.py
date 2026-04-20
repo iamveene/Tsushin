@@ -44,7 +44,9 @@ class FlowSummary(BaseModel):
     version: int = Field(description="Flow version number", example=1)
     execution_method: Optional[str] = Field("immediate", description="Execution method", example="immediate")
     flow_type: Optional[str] = Field("workflow", description="Flow type category", example="workflow")
-    node_count: int = Field(0, description="Number of steps in the flow", example=3)
+    node_count: int = Field(0, description="Number of steps in the flow (alias: step_count)", example=3)
+    # BUG-630: mirror `node_count` as `step_count` so v1 callers match v2 naming.
+    step_count: int = Field(0, description="Number of steps in the flow (alias: node_count)", example=3)
     created_at: Optional[str] = Field(None, description="Creation timestamp (ISO 8601)", example="2026-01-15T10:30:00")
     updated_at: Optional[str] = Field(None, description="Last update timestamp (ISO 8601)", example="2026-01-15T10:30:00")
 
@@ -58,7 +60,9 @@ class FlowDetailResponse(BaseModel):
     version: int = Field(description="Flow version number", example=1)
     execution_method: Optional[str] = Field("immediate", description="Execution method")
     flow_type: Optional[str] = Field("workflow", description="Flow type category")
-    node_count: int = Field(0, description="Number of steps")
+    node_count: int = Field(0, description="Number of steps (alias: step_count)")
+    # BUG-630: mirror `node_count` as `step_count`.
+    step_count: int = Field(0, description="Number of steps (alias: node_count)")
     steps: List[FlowStepSummary] = Field(default_factory=list, description="Flow steps ordered by position")
     created_at: Optional[str] = Field(None, description="Creation timestamp (ISO 8601)")
     updated_at: Optional[str] = Field(None, description="Last update timestamp (ISO 8601)")
@@ -274,6 +278,7 @@ def _count_flow_nodes(db: Session, flow_id: int) -> int:
 
 def _flow_to_summary(flow: FlowDefinition, db: Session) -> dict:
     """Convert FlowDefinition to a summary dict."""
+    count = _count_flow_nodes(db, flow.id)
     return {
         "id": flow.id,
         "name": flow.name,
@@ -282,7 +287,9 @@ def _flow_to_summary(flow: FlowDefinition, db: Session) -> dict:
         "version": flow.version,
         "execution_method": flow.execution_method or "immediate",
         "flow_type": flow.flow_type or "workflow",
-        "node_count": _count_flow_nodes(db, flow.id),
+        "node_count": count,
+        # BUG-630: emit both so clients can migrate incrementally.
+        "step_count": count,
         "created_at": flow.created_at.isoformat() if flow.created_at else None,
         "updated_at": (flow.updated_at or flow.created_at).isoformat() if (flow.updated_at or flow.created_at) else None,
     }
