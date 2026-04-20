@@ -18,8 +18,8 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 
-const SearchIntegrationWizard = dynamic(
-  () => import('@/components/integrations/SearchIntegrationWizard'),
+const AddIntegrationWizard = dynamic(
+  () => import('@/components/integrations/AddIntegrationWizard'),
   { ssr: false },
 )
 import { useToast } from '@/contexts/ToastContext'
@@ -343,6 +343,7 @@ export default function HubPage() {
     return requested && validTabs.includes(requested) ? requested : 'ai-providers'
   })
   const [showSearchWizard, setShowSearchWizard] = useState(false)
+  const [addIntegrationInitialProvider, setAddIntegrationInitialProvider] = useState<string | undefined>(undefined)
 
   // Sync activeTab with ?tab= query param when it changes (e.g., via soft nav back from sub-pages)
   useEffect(() => {
@@ -2557,7 +2558,21 @@ export default function HubPage() {
               </>
             ) : (
               <button
-                onClick={() => item.value === 'vertex_ai' ? setShowVertexAiModal(true) : openAddApiKeyModal(item.value)}
+                onClick={() => {
+                  if (item.value === 'vertex_ai') {
+                    setShowVertexAiModal(true)
+                    return
+                  }
+                  // Tool APIs that own a richer flow (auto-provisioning, OAuth-style credentials)
+                  // route through the generic Add Integration wizard so we share one codepath.
+                  const wizardProviders = new Set(['searxng', 'amadeus', 'google_flights'])
+                  if (type === 'tool' && wizardProviders.has(item.value)) {
+                    setAddIntegrationInitialProvider(item.value)
+                    setShowSearchWizard(true)
+                    return
+                  }
+                  openAddApiKeyModal(item.value)
+                }}
                 className="w-full btn-secondary py-2 text-sm"
               >
                 {configuredViaInstance ? 'Configure Fallback' : 'Configure'}
@@ -4832,10 +4847,10 @@ export default function HubPage() {
                     <p className="text-sm text-tsushin-slate">External APIs for agent capabilities</p>
                   </div>
                   <button
-                    onClick={() => setShowSearchWizard(true)}
+                    onClick={() => { setAddIntegrationInitialProvider(undefined); setShowSearchWizard(true) }}
                     className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors"
                   >
-                    🔎 Setup Web Search
+                    + Add Integration
                   </button>
                 </div>
 
@@ -6010,9 +6025,10 @@ export default function HubPage() {
         </div>
       )}
 
-      <SearchIntegrationWizard
+      <AddIntegrationWizard
         isOpen={showSearchWizard}
-        onClose={() => setShowSearchWizard(false)}
+        onClose={() => { setShowSearchWizard(false); setAddIntegrationInitialProvider(undefined) }}
+        initialProviderId={addIntegrationInitialProvider as any}
       />
     </div>
   )

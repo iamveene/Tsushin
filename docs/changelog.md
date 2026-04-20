@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Add Integration wizard + SearXNG auto-provisioning (2026-04-20)
+
+Addresses a post-PR-#24 regression where the Hub > Tool APIs "Setup Web Search" button
+only covered three search providers (Brave/Tavily/SerpAPI) even though the same tab
+exposed Amadeus and Google Flights cards. Also removes a hardcoded-secret/default-
+container security issue shipped in PR #24.
+
+**What changed:**
+
+- **Hub > Tool APIs — generic "Add Integration" wizard.** Renamed `SearchIntegrationWizard`
+  → `AddIntegrationWizard`. The wizard is now category-aware (Web Search / Travel) and
+  walks users through the right flow per provider — API key for Brave/Tavily/SerpAPI/
+  Google Flights, auto-provisioning toggle for SearXNG, or API key + secret + env for
+  Amadeus. The "Configure" button on SearXNG / Amadeus / Google Flights cards now routes
+  through the wizard with the provider pre-selected. Other Tool APIs still open the
+  legacy API-key modal.
+- **SearXNG now auto-provisioned per-tenant** (mirrors Kokoro/Ollama).
+  New `SearxngInstance` DB table + `SearxngContainerManager` allocate a port in
+  6500–6599, pull `ghcr.io/searxng/searxng:latest`, generate a fresh `secret_key`
+  via `secrets.token_urlsafe(48)`, and inject a tenant-specific `settings.yml`
+  into `/etc/searxng/` via Docker `put_archive` (no host-file mount). Full CRUD
+  endpoints under `/api/hub/searxng/instances`. Startup reconcile hooked up
+  alongside Kokoro/Ollama.
+- **Shipped compose service removed.** `searxng` service block and `searxng-cache`
+  volume removed from `docker-compose.yml`. The repo-root `searxng/settings.yml`
+  (which shipped with a hardcoded `secret_key: "tsushin-searxng-local-secret-change-me"`)
+  is deleted. Migration `0043` best-effort removes any lingering compose-managed
+  `<stack>-searxng` container (matched by label `tsushin.lifecycle=compose`).
+- **Existing external-SearXNG users preserved.** Migration `0043` backfills a
+  `SearxngInstance(is_auto_provisioned=False)` row for every tenant that had an
+  `ApiKey('searxng')` configured, then soft-deactivates the ApiKey. The provider
+  resolver also keeps a legacy ApiKey fallback so the user can reconfigure
+  through the wizard at their leisure.
+- **Frontend color maps updated** — `SkillProviderNode.tsx` and
+  `BuilderSkillProviderNode.tsx` gained `searxng` (teal) and `tavily` (purple)
+  entries so Agent Studio/Watcher shows the right colors instead of the default
+  slate.
+- **Auto-link** — the wizard's agent-linking step (step 4) now category-aware:
+  web_search providers upsert `AgentSkill.web_search.config.provider`; travel
+  providers use `PUT /api/flight-providers/agents/{id}/provider`.
+- **Tests + docs** — backend unit tests for the search registry and the SearXNG
+  container manager settings rendering/port allocation. Documentation section
+  updated.
+
+**Port range allocation summary:**
+
+| Service | Port range |
+|---------|------------|
+| Kokoro TTS | 6600–6699 |
+| Ollama | 6700–6799 |
+| SearXNG (new) | 6500–6599 |
+
 ## v0.6.0-patch.5 (2026-04-20)
 
 Multi-day stabilization release rolling up the v0.7.0-preview guided-wizard work, a massive bug-remediation campaign, independent-review follow-ups, and a VM fresh-install regression fix. Scope is stabilization + feature-completion on the v0.6.0 line, not a new minor release — headline features (agents, memory, flows, Sentinel) are unchanged; this patch ships the full setup-wizard track, a 51-bug remediation sweep, and six follow-up regression fixes caught by independent reviewers.

@@ -2301,14 +2301,35 @@ Anthropic supports up to four `cache_control` breakpoints per request. Tsushin u
 **Source:** `backend/hub/amadeus/amadeus_service.py`, `backend/hub/providers/amadeus_provider.py`
 Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (encrypted) and talks to the Amadeus test/production API for flight offers.
 
-### 20.4 Brave Search / SerpAPI / Google Flights
+### 20.4 Brave Search / SerpAPI / SearXNG / Google Flights
 
-**Sources:** `backend/hub/providers/brave_search_provider.py`, `backend/hub/providers/serpapi_search_provider.py`, `backend/hub/providers/google_flights_provider.py`, `backend/hub/providers/search_registry.py`, `backend/hub/providers/flight_search_provider.py`
+**Sources:** `backend/hub/providers/brave_search_provider.py`, `backend/hub/providers/serpapi_search_provider.py`, `backend/hub/providers/searxng_search_provider.py`, `backend/hub/providers/google_flights_provider.py`, `backend/hub/providers/search_registry.py`, `backend/hub/providers/flight_search_provider.py`
 
-- Brave Search: API key based web search provider (primary supported search provider in v0.6.0).
-- SerpAPI: used for both generic web search and Google Flights (Google Flights falls back to env var `SERPAPI_KEY` or `GOOGLE_FLIGHTS_API_KEY` — `google_flights_provider.py:71-74`).
-- All search providers register with `SearchRegistry` and are configured through the Hub page (`GoogleFlightsIntegration` — `models.py:3108`).
-- **Tavily:** Not supported in v0.6.0. Planned for a future release. If you need a search provider, use Brave Search.
+- **Brave Search**: API key based web search provider (primary supported search provider in v0.6.0).
+- **SerpAPI**: used for both generic web search and Google Flights (Google Flights falls back to env var `SERPAPI_KEY` or `GOOGLE_FLIGHTS_API_KEY` — `google_flights_provider.py:71-74`).
+- **SearXNG (self-hosted, auto-provisioned)** — since v0.6.0-patch.6. Per-tenant
+  `SearxngInstance` rows spawn a dedicated container in port range **6500–6599**
+  via `services/searxng_container_manager.py`, mirroring the Kokoro TTS /
+  Ollama auto-provisioning pattern. A fresh `secret_key` is generated at
+  provision time (`secrets.token_urlsafe(48)`) and injected into
+  `/etc/searxng/settings.yml` inside the container via Docker `put_archive` —
+  no host-file mount, no shipped compose service, no repo-committed secrets.
+  CRUD + lifecycle endpoints at `/api/hub/searxng/instances`. Setup flow:
+  **Hub > Tool APIs > Add Integration > Web Search > SearXNG**. External-URL
+  installs are also supported (toggle off auto-provision in the wizard).
+- All search providers register with `SearchRegistry` and are configured
+  through the Hub page via the generic **Add Integration** wizard
+  (`frontend/components/integrations/AddIntegrationWizard.tsx`).
+- **Tavily:** adapter not yet shipped; wizard records the API key for when
+  the adapter lands.
+
+**Port-range allocation summary** (auto-provisioned tenant containers):
+
+| Service | Port range | Manager |
+|---------|------------|---------|
+| Kokoro TTS | 6600–6699 | `services/kokoro_container_manager.py` |
+| Ollama | 6700–6799 | `services/ollama_container_manager.py` |
+| SearXNG | 6500–6599 | `services/searxng_container_manager.py` |
 
 ### 20.5 Browser Automation (Playwright, CDP)
 

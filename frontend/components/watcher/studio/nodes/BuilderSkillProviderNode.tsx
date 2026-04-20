@@ -14,6 +14,8 @@ const providerColors: Record<string, { text: string; bg: string; border: string 
   brave: { text: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/30' },
   google: { text: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30' },
   serpapi: { text: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30' },
+  searxng: { text: 'text-teal-400', bg: 'bg-teal-500/10', border: 'border-teal-500/30' },
+  tavily: { text: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/30' },
   default: { text: 'text-slate-400', bg: 'bg-slate-500/10', border: 'border-slate-500/30' },
 }
 
