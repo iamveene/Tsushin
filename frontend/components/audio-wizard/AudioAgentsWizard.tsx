@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import Modal from '@/components/ui/Modal'
 import { api } from '@/lib/client'
 import type { Agent, TTSInstance, TTSProviderInfo, ProviderInstance } from '@/lib/client'
@@ -8,12 +8,10 @@ import type { AudioWizardOpenOptions, AudioAgentType } from '@/contexts/AudioWiz
 import {
   VOICE_AGENT_DEFAULTS,
   TRANSCRIPT_AGENT_DEFAULTS,
-  KOKORO_VOICES,
-  OPENAI_VOICES,
-  LANGUAGES,
-  MEM_LIMITS,
   type AudioProvider,
 } from './defaults'
+import { AudioProviderPicker, AudioVoiceFields } from './AudioProviderFields'
+import { useKokoroPolling } from '@/components/agent-wizard/hooks/useKokoroPolling'
 
 interface AudioAgentsWizardProps {
   isOpen: boolean
@@ -76,7 +74,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
   const [createdAgentId, setCreatedAgentId] = useState<number | null>(null)
   const [progressStatus, setProgressStatus] = useState<'provisioning' | 'running' | 'error' | 'done' | null>(null)
   const [progressMessage, setProgressMessage] = useState('Starting...')
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const { poll: pollKokoro, cancel: cancelKokoroPolling } = useKokoroPolling()
 
   // Reset on open
   useEffect(() => {
@@ -111,15 +109,8 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
     })
   }, [isOpen, options.presetProvider])
 
-  // Cleanup poll timer
-  useEffect(() => {
-    return () => {
-      if (pollTimer.current) { clearInterval(pollTimer.current); pollTimer.current = null }
-    }
-  }, [])
-
   const close = () => {
-    if (pollTimer.current) { clearInterval(pollTimer.current); pollTimer.current = null }
+    cancelKokoroPolling()
     onClose()
   }
 
@@ -127,17 +118,6 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
   const kokoroRunning = existingTTSInstances.find(t => t.vendor === 'kokoro' && t.is_active)
   const hasOpenAIKey = providerInstances.some(p => p.vendor === 'openai' && p.api_key_configured)
   const hasElevenLabsKey = providerInstances.some(p => p.vendor === 'elevenlabs' && p.api_key_configured)
-
-  const providerStatus = (p: AudioProvider): 'configured' | 'available' | 'missing' => {
-    if (p === 'kokoro') return kokoroRunning ? 'configured' : 'available'
-    if (p === 'openai') return hasOpenAIKey ? 'configured' : 'missing'
-    return hasElevenLabsKey ? 'configured' : 'missing'
-  }
-
-  const availableVoices = useMemo(() => {
-    if (state.provider === 'kokoro') return KOKORO_VOICES.filter(v => v.lang === state.language)
-    return OPENAI_VOICES
-  }, [state.provider, state.language])
 
   // -------------------- Step indicator --------------------
   const totalSteps = 5
@@ -248,30 +228,14 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
   }
 
   const pollKokoroContainer = (instanceId: number, onReady: () => void) => {
-    if (pollTimer.current) clearInterval(pollTimer.current)
-    let ticks = 0
-    pollTimer.current = setInterval(async () => {
-      ticks++
-      try {
-        const status = await api.getTTSContainerStatus(instanceId)
-        const state = (status?.status || '').toLowerCase()
-        if (state === 'running') {
-          if (pollTimer.current) { clearInterval(pollTimer.current); pollTimer.current = null }
-          onReady()
-        } else if (state === 'error') {
-          if (pollTimer.current) { clearInterval(pollTimer.current); pollTimer.current = null }
-          setProgressStatus('error')
-          setProgressMessage('Container failed to start. Check Hub → Voice for details.')
-        } else if (state === 'creating' || state === 'provisioning') {
-          setProgressMessage('Pulling image and starting container (30–90s)...')
-        }
-      } catch { /* transient */ }
-      if (ticks > 120) {
-        if (pollTimer.current) { clearInterval(pollTimer.current); pollTimer.current = null }
+    pollKokoro(instanceId, {
+      onReady,
+      onError: (msg) => {
         setProgressStatus('error')
-        setProgressMessage('Provisioning timed out after 6 minutes. Check Hub → Voice.')
-      }
-    }, 3000)
+        setProgressMessage(msg)
+      },
+      onProgress: (msg) => setProgressMessage(msg),
+    })
   }
 
   const handleFinalize = async () => {
@@ -402,18 +366,12 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
         <button onClick={() => setStep(1)} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">← Back</button>
         <button
           onClick={() => setStep(3)}
-          disabled={allowsProviderChoice && providerStatus(state.provider) === 'missing' && state.provider !== 'kokoro' ? false : false}
           className="px-4 py-2 text-sm bg-teal-500 hover:bg-teal-400 text-white rounded-lg transition-colors"
         >
           Next: Configure voice →
         </button>
       </div>
     )
-    const opts: { id: AudioProvider; title: string; desc: string; cost: string }[] = [
-      { id: 'kokoro', title: 'Kokoro TTS', desc: 'Free, open-source, runs locally in a Docker container. Portuguese + English voices.', cost: 'Free' },
-      { id: 'openai', title: 'OpenAI TTS', desc: 'High-quality cloud TTS. Requires an OpenAI API key (configured in Hub → AI Providers).', cost: 'Paid' },
-      { id: 'elevenlabs', title: 'ElevenLabs', desc: 'Premium voice cloning and expressive TTS. Requires an ElevenLabs API key.', cost: 'Paid' },
-    ]
     return (
       <Modal isOpen={isOpen} onClose={close} title="Set up an Audio Agent" footer={footer} size="lg">
         <div className="space-y-5">
@@ -427,37 +385,14 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
             <h3 className="text-lg font-semibold text-white mb-2">Choose a TTS provider</h3>
             <p className="text-sm text-gray-300">This determines where the audio is synthesized.</p>
           </div>
-          <div className="space-y-2">
-            {opts.map(opt => {
-              const status = providerStatus(opt.id)
-              return (
-                <button
-                  key={opt.id}
-                  onClick={() => setState(s => ({ ...s, provider: opt.id, voice: opt.id === 'kokoro' ? 'pf_dora' : 'nova' }))}
-                  disabled={!allowsProviderChoice}
-                  className={`w-full text-left p-4 rounded-xl border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                    state.provider === opt.id
-                      ? 'border-teal-400 bg-teal-500/10'
-                      : 'border-white/10 bg-white/[0.02] hover:border-white/20'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="text-white font-medium">{opt.title}</div>
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 text-xs rounded-full bg-white/10 text-gray-300">{opt.cost}</span>
-                      {status === 'configured' && (
-                        <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Detected</span>
-                      )}
-                      {status === 'missing' && (
-                        <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-200 border border-amber-500/30">Needs API key</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-xs text-gray-400 mt-1">{opt.desc}</div>
-                </button>
-              )
-            })}
-          </div>
+          <AudioProviderPicker
+            provider={state.provider}
+            onChange={(provider, defaultVoice) => setState(s => ({ ...s, provider, voice: defaultVoice }))}
+            allowChoice={allowsProviderChoice}
+            kokoroRunning={kokoroRunning}
+            hasOpenAIKey={hasOpenAIKey}
+            hasElevenLabsKey={hasElevenLabsKey}
+          />
         </div>
       </Modal>
     )
@@ -494,106 +429,22 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
             </h3>
           </div>
 
-          {/* Language first (affects voice list) */}
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Language</label>
-            <select
-              value={state.language}
-              onChange={(e) => setState(s => ({ ...s, language: e.target.value }))}
-              className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
-            >
-              {LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
-            </select>
-          </div>
-
-          {wantsTTS && (
-            <>
-              {/* Voice */}
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Voice</label>
-                <select
-                  value={state.voice}
-                  onChange={(e) => setState(s => ({ ...s, voice: e.target.value }))}
-                  className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
-                >
-                  {availableVoices.length === 0 && <option value="">(no voices available for this language)</option>}
-                  {availableVoices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Speed</label>
-                  <input
-                    type="number" min={0.5} max={2.0} step={0.1}
-                    value={state.speed}
-                    onChange={(e) => setState(s => ({ ...s, speed: parseFloat(e.target.value) || 1.0 }))}
-                    className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Format</label>
-                  <select
-                    value={state.format}
-                    onChange={(e) => setState(s => ({ ...s, format: e.target.value }))}
-                    className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
-                  >
-                    <option value="opus">Opus (recommended)</option>
-                    <option value="mp3">MP3</option>
-                    <option value="wav">WAV</option>
-                  </select>
-                </div>
-              </div>
-
-              {state.provider === 'kokoro' && !kokoroRunning && (
-                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 space-y-3">
-                  <div className="text-sm text-white font-medium">Kokoro container</div>
-                  <div className="text-xs text-gray-400">A Docker container will be auto-provisioned for this tenant. Takes ~30–90 seconds.</div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Memory limit</label>
-                    <select
-                      value={state.memLimit}
-                      onChange={(e) => setState(s => ({ ...s, memLimit: e.target.value }))}
-                      className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
-                    >
-                      {MEM_LIMITS.map(m => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                  </div>
-                  <label className="flex items-center gap-2 text-xs text-gray-300">
-                    <input type="checkbox" checked={state.setAsDefaultTTS} onChange={(e) => setState(s => ({ ...s, setAsDefaultTTS: e.target.checked }))} />
-                    Set as tenant-default TTS instance
-                  </label>
-                </div>
-              )}
-
-              {state.provider === 'kokoro' && kokoroRunning && (
-                <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-sm text-emerald-200">
-                  Reusing existing Kokoro instance: <span className="font-mono">{kokoroRunning.instance_name}</span>. No container provisioning needed.
-                </div>
-              )}
-
-              {state.provider === 'openai' && !hasOpenAIKey && (
-                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
-                  No OpenAI API key detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
-                </div>
-              )}
-
-              {state.provider === 'elevenlabs' && !hasElevenLabsKey && (
-                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
-                  No ElevenLabs API key detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
-                </div>
-              )}
-            </>
-          )}
-
-          {!wantsTTS && (
-            <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
-              Transcription uses OpenAI Whisper. Ensure an OpenAI API key is configured in Hub → AI Providers.
-              {!hasOpenAIKey && (
-                <div className="mt-2 text-amber-200">⚠ No OpenAI API key detected.</div>
-              )}
-            </div>
-          )}
+          <AudioVoiceFields
+            value={{
+              provider: state.provider,
+              voice: state.voice,
+              language: state.language,
+              speed: state.speed,
+              format: state.format,
+              memLimit: state.memLimit,
+              setAsDefaultTTS: state.setAsDefaultTTS,
+            }}
+            onChange={(patch) => setState(s => ({ ...s, ...patch }))}
+            wantsTTS={wantsTTS}
+            kokoroRunning={kokoroRunning}
+            hasOpenAIKey={hasOpenAIKey}
+            hasElevenLabsKey={hasElevenLabsKey}
+          />
         </div>
       </Modal>
     )
