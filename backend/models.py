@@ -3796,6 +3796,70 @@ class TTSInstance(Base):
 
 
 # ============================================================================
+# v0.6.0-patch.6: SearXNG Instance (Auto-Provisioned Self-Hosted Metasearch)
+# Per-tenant SearXNG container lifecycle — mirrors the Kokoro/Ollama pattern.
+# Replaces the shipped-by-default compose service introduced in PR #24.
+# ============================================================================
+
+class SearxngInstance(Base):
+    """Per-tenant SearXNG provider instance with optional auto-provisioned Docker container.
+
+    Mirrors TTSInstance/VectorStoreInstance shape. Vendor='searxng' only.
+
+    When is_auto_provisioned=True, tsushin manages the container lifecycle via
+    SearxngContainerManager. The SearXNG web-search provider resolves base_url
+    from the active SearxngInstance row per tenant.
+
+    extra_config stores:
+      - secret_key: generated at provision time (token_urlsafe), injected into
+        the container's /etc/searxng/settings.yml via put_archive (never on disk)
+      - instance_name: cosmetic SearXNG label
+    """
+    __tablename__ = "searxng_instance"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+
+    vendor = Column(String(20), nullable=False, default="searxng")
+    instance_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Connection — base_url populated post-provision with DNS alias URL, or
+    # left as user-provided external URL when is_auto_provisioned=False.
+    base_url = Column(String(500), nullable=True)
+
+    # Per-instance runtime config (secret_key, tuning flags)
+    extra_config = Column(JSON, default=dict)
+
+    # Health monitoring
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+
+    # Flags
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    # Auto-provisioning (Docker-managed containers)
+    is_auto_provisioned = Column(Boolean, default=False, nullable=False)
+    container_name = Column(String(200), nullable=True)
+    container_id = Column(String(80), nullable=True)
+    container_port = Column(Integer, nullable=True)
+    container_status = Column(String(20), default="none", nullable=False)  # none|creating|running|stopped|error
+    container_image = Column(String(200), nullable=True)
+    volume_name = Column(String(150), nullable=True)
+    mem_limit = Column(String(20), nullable=True)
+    cpu_quota = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "instance_name", name="uq_searxng_instance_tenant_name"),
+        Index("idx_sxi_tenant_vendor", "tenant_id", "vendor"),
+    )
+
+
+# ============================================================================
 # Backward Compatibility Aliases (deprecated - use Sandboxed* names instead)
 # Skills-as-Tools Phase 6: CustomTools renamed to SandboxedTools
 # ============================================================================

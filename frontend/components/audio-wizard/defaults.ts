@@ -6,7 +6,7 @@
  * so users opting in get sensible defaults.
  */
 
-export type AudioProvider = 'kokoro' | 'openai' | 'elevenlabs'
+export type AudioProvider = 'kokoro' | 'openai' | 'elevenlabs' | 'gemini'
 export type AudioAgentType = 'voice' | 'transcript' | 'hybrid'
 
 export interface VoiceAgentDefaults {
@@ -80,6 +80,15 @@ export const VOICE_AGENT_DEFAULTS: Record<AudioProvider, VoiceAgentDefaults> = {
     channels: ['playground', 'whatsapp'],
     response_template: '@{agent_name}: {response}',
   },
+  gemini: {
+    name: 'Voice Assistant',
+    description: 'Voice assistant with Google Gemini TTS (preview)',
+    system_prompt: OPENAI_PROMPT,
+    memory_size: 20,
+    keywords: ['@voice'],
+    channels: ['playground', 'whatsapp'],
+    response_template: '@{agent_name}: {response}',
+  },
 }
 
 export const TRANSCRIPT_AGENT_DEFAULTS: VoiceAgentDefaults = {
@@ -116,6 +125,41 @@ export const OPENAI_VOICES: { id: string; label: string }[] = [
   { id: 'fable', label: 'Fable — Expressive (male)' },
   { id: 'onyx', label: 'Onyx — Deep (male)' },
   { id: 'shimmer', label: 'Shimmer — Soft (female)' },
+]
+
+// Google Gemini TTS (gemini-3.1-flash-tts-preview). 30 prebuilt voices.
+// Voice names are case-sensitive — must be sent to the API as proper nouns.
+export const GEMINI_VOICES: { id: string; label: string }[] = [
+  { id: 'Zephyr', label: 'Zephyr — Bright' },
+  { id: 'Puck', label: 'Puck — Upbeat' },
+  { id: 'Charon', label: 'Charon — Informative' },
+  { id: 'Kore', label: 'Kore — Firm' },
+  { id: 'Fenrir', label: 'Fenrir — Excitable' },
+  { id: 'Leda', label: 'Leda — Youthful' },
+  { id: 'Orus', label: 'Orus — Firm' },
+  { id: 'Aoede', label: 'Aoede — Breezy' },
+  { id: 'Callirrhoe', label: 'Callirrhoe — Easy-going' },
+  { id: 'Autonoe', label: 'Autonoe — Bright' },
+  { id: 'Enceladus', label: 'Enceladus — Breathy' },
+  { id: 'Iapetus', label: 'Iapetus — Clear' },
+  { id: 'Umbriel', label: 'Umbriel — Easy-going' },
+  { id: 'Algieba', label: 'Algieba — Smooth' },
+  { id: 'Despina', label: 'Despina — Smooth' },
+  { id: 'Erinome', label: 'Erinome — Clear' },
+  { id: 'Algenib', label: 'Algenib — Gravelly' },
+  { id: 'Rasalgethi', label: 'Rasalgethi — Informative' },
+  { id: 'Laomedeia', label: 'Laomedeia — Upbeat' },
+  { id: 'Achernar', label: 'Achernar — Soft' },
+  { id: 'Alnilam', label: 'Alnilam — Firm' },
+  { id: 'Schedar', label: 'Schedar — Even' },
+  { id: 'Gacrux', label: 'Gacrux — Mature' },
+  { id: 'Pulcherrima', label: 'Pulcherrima — Forward' },
+  { id: 'Achird', label: 'Achird — Friendly' },
+  { id: 'Zubenelgenubi', label: 'Zubenelgenubi — Casual' },
+  { id: 'Vindemiatrix', label: 'Vindemiatrix — Gentle' },
+  { id: 'Sadachbia', label: 'Sadachbia — Lively' },
+  { id: 'Sadaltager', label: 'Sadaltager — Knowledgeable' },
+  { id: 'Sulafat', label: 'Sulafat — Warm' },
 ]
 
 export const LANGUAGES = [

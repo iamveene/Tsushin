@@ -155,6 +155,8 @@ from api.routes_provider_instances import router as provider_instances_router, s
 from api.routes_vector_stores import router as vector_stores_router, set_engine as set_vector_stores_engine
 # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
 from api.routes_tts_instances import router as tts_instances_router, set_engine as set_tts_instances_engine
+# v0.6.0-patch.6: SearXNG Instance Management (per-tenant SearXNG auto-provisioning)
+from api.routes_searxng_instances import router as searxng_instances_router, set_engine as set_searxng_instances_engine
 # Phase 22: Custom Skills Foundation
 from api.routes_custom_skills import router as custom_skills_router, set_engine as set_custom_skills_engine
 # Phase 22.4: MCP Server Integration
@@ -234,6 +236,8 @@ async def lifespan(app: FastAPI):
     set_vector_stores_engine(engine)
     # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
     set_tts_instances_engine(engine)
+    # v0.6.0-patch.6: SearXNG Instance Management (per-tenant SearXNG auto-provisioning)
+    set_searxng_instances_engine(engine)
 
     # Phase 22: Custom Skills Foundation
     set_custom_skills_engine(engine)
@@ -878,7 +882,20 @@ async def lifespan(app: FastAPI):
             reconcile_db.close()
         logging.info("Kokoro TTS instances reconciled at startup")
     except Exception as e:
-        logging.error(f"Kokoro TTS startup reconcile failed (non-fatal): {e}", exc_info=True)
+        logging.warning(f"Kokoro TTS reconcile failed at startup: {e}")
+
+    # v0.6.0-patch.6: Reconcile SearXNG instances stuck in 'creating'
+    try:
+        from services.searxng_container_manager import startup_reconcile as searxng_startup_reconcile
+        ReconcileSession = sessionmaker(bind=engine)
+        reconcile_db = ReconcileSession()
+        try:
+            searxng_startup_reconcile(reconcile_db)
+        finally:
+            reconcile_db.close()
+        logging.info("SearXNG instances reconciled at startup")
+    except Exception as e_searxng_reconcile:
+        logging.warning(f"SearXNG startup reconcile failed (non-fatal): {e_searxng_reconcile}")
 
     yield
 
@@ -1312,6 +1329,7 @@ app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel 
 app.include_router(provider_instances_router, prefix="/api", tags=["Provider Instances"])  # Phase 21: Provider Instance Management
 app.include_router(vector_stores_router, prefix="/api", tags=["Vector Stores"])  # v0.6.0: Vector Store Instance Management
 app.include_router(tts_instances_router, prefix="/api", tags=["TTS Instances"])  # v0.6.0-patch.5: Per-tenant Kokoro TTS auto-provisioning
+app.include_router(searxng_instances_router, prefix="/api", tags=["SearXNG Instances"])  # v0.6.0-patch.6: Per-tenant SearXNG auto-provisioning
 app.include_router(custom_skills_router, prefix="/api", tags=["Custom Skills"])  # Phase 22: Custom Skills Foundation
 app.include_router(mcp_servers_router, prefix="/api", tags=["MCP Servers"])  # Phase 22.4: MCP Server Integration
 app.include_router(services_router)  # Hub Local Services (Kokoro TTS container management)

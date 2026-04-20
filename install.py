@@ -220,6 +220,7 @@ class TsushinInstaller:
         # from an existing .env. If False and the postgres volume already
         # exists, the installer would crash with FATAL auth — BUG-582.
         self._preserved_existing_postgres_password = False
+        self.buildx_available = True  # flipped to False by check_prerequisites() if buildx missing/broken
 
     @staticmethod
     def _normalize_ssl_mode(value: str) -> str:
@@ -451,6 +452,21 @@ class TsushinInstaller:
                 print_error("Docker Compose v2 is not installed")
                 print_info("Install Docker Compose v2: https://docs.docker.com/compose/install/")
                 sys.exit(1)
+
+        try:
+            result = subprocess.run(
+                ["docker", "buildx", "version"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                print_success(f"Docker Buildx: {result.stdout.strip().splitlines()[0]}")
+            else:
+                raise subprocess.CalledProcessError(result.returncode, "docker buildx version")
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            self.buildx_available = False
+            print_warning("Docker Buildx plugin not found — BuildKit cache mounts will be disabled.")
+            print_info("For full performance, install it: sudo apt-get install -y docker-buildx-plugin")
+            print_info("Continuing with legacy builder (all features remain functional).")
 
         # Check Python version
         python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
@@ -1587,6 +1603,9 @@ NEXT_PUBLIC_API_URL={backend_url}
         # Docker Compose v2 (bundled with Docker Desktop >=20.10) enables BuildKit
         # by default. docker-compose v1 is no longer supported.
         compose_env = os.environ.copy()
+        if not self.buildx_available:
+            compose_env["DOCKER_BUILDKIT"] = "0"
+            compose_env["COMPOSE_DOCKER_CLI_BUILD"] = "0"
 
         # Build compose command with SSL override if enabled
         ssl_mode = self.config.get('SSL_MODE', 'disabled')
@@ -1649,7 +1668,11 @@ NEXT_PUBLIC_API_URL={backend_url}
 
         # BuildKit required for backend/Dockerfile cache mounts (v0.6.0+).
         build_env = os.environ.copy()
-        build_env.setdefault("DOCKER_BUILDKIT", "1")
+        if self.buildx_available:
+            build_env.setdefault("DOCKER_BUILDKIT", "1")
+        else:
+            build_env.pop("DOCKER_BUILDKIT", None)
+            build_env.pop("COMPOSE_DOCKER_CLI_BUILD", None)
 
         # BUG-655: detect the host arch so we can forward it as --build-arg
         # TARGETARCH. Without BuildKit/buildx, `TARGETARCH` is NEVER populated

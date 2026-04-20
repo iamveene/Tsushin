@@ -200,12 +200,31 @@ class OllamaContainerManager:
                 )
                 device_requests = None
 
+        # BUG-663: capture ALL primitives needed downstream BEFORE the blocking
+        # `create_container()` call. `docker pull` can block for up to 20
+        # minutes on first use; holding a pooled DB session across that window
+        # races PostgreSQL's idle_in_transaction_session_timeout and TCP
+        # keepalive, which silently drops the socket and corrupts subsequent
+        # writes. Extract primitives, close the session, do the blocking I/O
+        # without any DB state, then re-open a fresh session for the write-back.
+        instance_id = instance.id
+        tenant_id_capture = instance.tenant_id
+        internal_port = config["internal_port"]
+        image = config["image"]
+        volume_bind = config["volume_bind"]
+        engine = db.get_bind()
+        # Bind to err_* names too so the except-path can use them after close.
+        err_instance_id = instance_id
+        err_tenant_id_capture = tenant_id_capture
+        db.close()
+
+        container = None
         try:
             container = self.runtime.create_container(
-                image=config["image"],
+                image=image,
                 name=container_name,
-                volumes={volume_name: {"bind": config["volume_bind"], "mode": "rw"}},
-                ports={f'{config["internal_port"]}/tcp': ("127.0.0.1", port)},
+                volumes={volume_name: {"bind": volume_bind, "mode": "rw"}},
+                ports={f"{internal_port}/tcp": ("127.0.0.1", port)},
                 network=network_name,
                 restart_policy={"Name": "unless-stopped"},
                 mem_limit=mem_limit,
@@ -214,13 +233,13 @@ class OllamaContainerManager:
                     "tsushin.service": "ollama",
                     "tsushin.vendor": "ollama",
                     "tsushin.tenant": tenant_id,
-                    "tsushin.instance_id": str(instance.id),
+                    "tsushin.instance_id": str(instance_id),
                 },
                 detach=True,
                 device_requests=device_requests,
             )
 
-            instance.container_id = (
+            container_id = (
                 container.id if hasattr(container, "id") else str(container)
             )
 
@@ -242,30 +261,29 @@ class OllamaContainerManager:
                 )
 
             # base_url points at the DNS alias, not the host port.
-            instance.base_url = f"http://{dns_alias}:{config['internal_port']}"
+            base_url_capture = f"http://{dns_alias}:{internal_port}"
 
-            # Persist base_url + container fields BEFORE the long health wait so
-            # a stale DB connection after _wait_for_health can't lose this state.
-            db.commit()
-
-            # BUG-649: explicitly release the pooled DB connection BEFORE the
-            # long (up-to-120s) health wait. Holding an idle connection across
-            # that window races PostgreSQL's `idle_in_transaction_session_timeout`
-            # and server-side TCP keepalive, both of which can silently drop
-            # the socket. We capture the identifiers we need, free the pool slot,
-            # run the health loop without DB state, then re-open a fresh session
-            # for the final write-back. This is the fix the bug report asks for
-            # (`close/detach the sqlalchemy session before the long-running I/O,
-            # re-open/attach for the write-back`).
-            instance_id = instance.id
-            tenant_id_capture = instance.tenant_id
-            base_url_capture = instance.base_url
-            engine = db.get_bind()
-            db.close()
+            # BUG-663: open a FRESH session to persist container_id + base_url
+            # now that `create_container()` (blocking docker pull) has returned.
+            # The original session was closed before the pull.
+            SessionLocal = sessionmaker(bind=engine)
+            db_post_create = SessionLocal()
+            try:
+                from models import ProviderInstance
+                inst_row = db_post_create.query(ProviderInstance).filter(
+                    ProviderInstance.id == instance_id,
+                    ProviderInstance.tenant_id == tenant_id_capture,
+                ).first()
+                if inst_row is not None:
+                    inst_row.container_id = container_id
+                    inst_row.base_url = base_url_capture
+                    db_post_create.commit()
+            finally:
+                db_post_create.close()
 
             try:
-                # Best-effort: use the instance we already have (its attributes
-                # were committed above; _check_health reads only base_url).
+                # Run health poll WITHOUT a live DB connection so the 60-120s
+                # wait cannot hold a pooled session.
                 healthy = self._wait_for_health_detached(base_url_capture)
             finally:
                 # Re-attach: open a fresh session from the same engine and
@@ -300,23 +318,9 @@ class OllamaContainerManager:
                 f"Failed to provision Ollama container {container_name}: {e}",
                 exc_info=True,
             )
-            # BUG-649: the error path may also be entered with a dead conn
-            # (if the exception was raised from inside the long-wait window).
-            # Rebuild the session defensively rather than trusting `db`.
-            # BUG-649 followup: capture the primary key BEFORE closing the
-            # session so the error-path filter doesn't touch a detached ORM
-            # object. Mirrors the happy path pattern at line 260.
-            err_instance_id = (
-                getattr(instance, "id", None) if instance is not None else None
-            )
-            err_tenant_id_capture = (
-                getattr(instance, "tenant_id", None) if instance is not None else None
-            )
-            engine = db.get_bind() if db is not None else None
-            try:
-                db.close()
-            except Exception:
-                pass
+            # BUG-663: the original `db` session is already closed (we released
+            # it before the blocking pull). Use the primitives captured above
+            # and rebuild a fresh session for the error write-back.
             # PEER REVIEW B-B3: remove the half-created container BEFORE clearing DB
             # fields so we never orphan a container we can no longer find by name.
             try:

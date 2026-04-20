@@ -39,9 +39,39 @@ def get_engine(database_url: str):
             pool_size=20,
             max_overflow=30,
             pool_pre_ping=True,
-            pool_recycle=1800,
+            # BUG-665: shorten recycle window from 30min to 5min so stale
+            # pooled connections are rotated before PG-side idle timeouts
+            # (idle_in_transaction_session_timeout, tcp_keepalive) or NAT
+            # midboxes drop them underneath SQLAlchemy.
+            pool_recycle=300,
             connect_args=connect_args,
         )
+
+        # BUG-665: wire pool checkout/checkin to a Prometheus gauge so we can
+        # watch pool utilization in Grafana and catch leaks early. Guarded
+        # by METRICS_ENABLED so unit tests that spin up an in-memory engine
+        # without metrics stay unaffected.
+        if settings.METRICS_ENABLED:
+            try:
+                from services.metrics_service import TSN_DB_POOL_CHECKED_OUT
+
+                @event.listens_for(engine, "checkout")
+                def _on_pool_checkout(dbapi_conn, connection_record, connection_proxy):  # noqa: ARG001
+                    try:
+                        TSN_DB_POOL_CHECKED_OUT.inc()
+                    except Exception:
+                        pass
+
+                @event.listens_for(engine, "checkin")
+                def _on_pool_checkin(dbapi_conn, connection_record):  # noqa: ARG001
+                    try:
+                        TSN_DB_POOL_CHECKED_OUT.dec()
+                    except Exception:
+                        pass
+            except Exception:
+                # If the metrics module isn't importable for any reason,
+                # the engine should still function normally.
+                pass
     else:
         # SQLite fallback (local dev / legacy)
         db_path = database_url.replace("sqlite:///", "")
@@ -1583,6 +1613,14 @@ def init_database(engine):
                 group_filters=[],
                 number_filters=[],
                 dm_auto_mode=True,  # Enable DM auto-reply by default for fresh installs
+                # BUG-663: this string is persisted to the DB as a one-time
+                # seed; we intentionally do NOT call `_resolve_ollama_host()`
+                # here so the seeded value stays portable across environments.
+                # On Linux hosts without `host.docker.internal` (no
+                # host-gateway), set OLLAMA_BASE_URL (e.g. http://172.17.0.1:11434)
+                # before first start, or edit the Config row afterwards. The
+                # ai_client / provider_instance_service runtime paths resolve
+                # the correct host dynamically.
                 ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
             )
             session.add(default_config)

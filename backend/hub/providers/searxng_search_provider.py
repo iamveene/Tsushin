@@ -42,24 +42,50 @@ class SearXNGSearchProvider(SearchProvider):
         self._load_base_url()
 
     def _load_base_url(self):
-        """Load SearXNG base URL from the encrypted ApiKey table."""
-        if self.db:
-            configured_url = get_api_key("searxng", self.db, tenant_id=self.tenant_id)
-            if configured_url:
-                try:
-                    self._base_url = validate_url(configured_url.rstrip("/"), allow_private=True).rstrip("/")
-                    self.logger.info(
-                        f"Loaded SearXNG base URL from database (tenant: {self.tenant_id or 'system'})"
-                    )
-                except SSRFValidationError as e:
-                    self.logger.warning(f"SearXNG URL failed validation: {e}")
-                except Exception as e:
-                    self.logger.warning(f"Could not normalize SearXNG URL: {e}")
+        """Load SearXNG base URL from the active SearxngInstance row for this tenant.
+
+        v0.6.0-patch.6: resolver shifted from ApiKey('searxng') (legacy) to
+        per-tenant SearxngInstance rows, which match the Kokoro/Ollama pattern
+        and carry container lifecycle state. The old ApiKey path still exists
+        for audit purposes but is marked inactive by migration 0043.
+        """
+        if not self.db or not self.tenant_id:
+            self._base_url = None
+            return
+
+        configured_url: Optional[str] = None
+        try:
+            from services.searxng_instance_service import SearxngInstanceService
+            inst = SearxngInstanceService.get_active_for_tenant(self.tenant_id, self.db)
+            if inst and inst.base_url:
+                configured_url = inst.base_url
+        except Exception as e:
+            self.logger.warning(f"Could not query SearxngInstance: {e}")
+
+        # Legacy-install safety net: if the migration decrypt path couldn't
+        # backfill a URL, fall back once to the old ApiKey so existing setups
+        # keep working until the user re-runs the wizard.
+        if not configured_url:
+            try:
+                configured_url = get_api_key("searxng", self.db, tenant_id=self.tenant_id)
+            except Exception:
+                configured_url = None
+
+        if configured_url:
+            try:
+                self._base_url = validate_url(configured_url.rstrip("/"), allow_private=True).rstrip("/")
+                self.logger.info(
+                    f"Loaded SearXNG base URL from DB (tenant: {self.tenant_id or 'system'})"
+                )
+            except SSRFValidationError as e:
+                self.logger.warning(f"SearXNG URL failed validation: {e}")
+            except Exception as e:
+                self.logger.warning(f"Could not normalize SearXNG URL: {e}")
 
         if not self._base_url:
             self.logger.warning(
                 f"SearXNG base URL not configured (tenant: {self.tenant_id}). "
-                "Configure via Hub -> Tool APIs."
+                "Configure via Hub -> Tool APIs > SearXNG."
             )
 
     def get_provider_name(self) -> str:

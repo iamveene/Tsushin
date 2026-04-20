@@ -28,7 +28,7 @@ export default function SetupPage() {
   // predefined-models endpoint is unreachable). Live list is fetched
   // on mount and merged into PROVIDERS_STATE below.
   const PROVIDERS_META: Record<string, { label: string; field: string; placeholder: string; fallbackModels: string[]; defaultModel: string }> = {
-    gemini:     { label: 'Google Gemini',    field: 'gemini_api_key',     placeholder: 'AIza...',    fallbackModels: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'], defaultModel: 'gemini-2.5-flash' },
+    gemini:     { label: 'Google Gemini',    field: 'gemini_api_key',     placeholder: 'AIza...',    fallbackModels: ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'], defaultModel: 'gemini-2.5-flash' },
     openai:     { label: 'OpenAI',           field: 'openai_api_key',     placeholder: 'sk-...',     fallbackModels: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o4-mini'], defaultModel: 'gpt-4o-mini' },
     anthropic:  { label: 'Anthropic Claude', field: 'anthropic_api_key',  placeholder: 'sk-ant-...', fallbackModels: ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-6'], defaultModel: 'claude-haiku-4-5' },
     groq:       { label: 'Groq',             field: 'groq_api_key',       placeholder: 'gsk_...',    fallbackModels: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'], defaultModel: 'llama-3.3-70b-versatile' },

@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.4
 # Tsushin Backend Dockerfile
 # Phase 9: Application Containerization
 #
@@ -29,16 +28,17 @@ WORKDIR /build
 # Copy requirements files
 COPY requirements-base.txt requirements-app.txt requirements-optional.txt requirements-phase4.txt requirements-dev.txt ./
 
-# Install tiered dependencies with BuildKit cache mounts for fast iterative rebuilds
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
+# Install tiered dependencies. BUG-662 follow-up: --mount=type=cache cache
+# mounts were removed so this Dockerfile builds cleanly on stock Docker 28.x
+# without buildx (where the legacy builder errors on --mount). Dev machines
+# with BuildKit pay a small cold-build pip-download cost; warm builds still
+# hit the Docker layer cache.
+RUN pip install --upgrade pip && \
     pip install -r requirements-base.txt
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements-app.txt
+RUN pip install -r requirements-app.txt
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "$INSTALL_OPTIONAL_DEPS" = "true" ]; then \
+RUN if [ "$INSTALL_OPTIONAL_DEPS" = "true" ]; then \
         pip install -r requirements-optional.txt; \
     fi
 
@@ -47,18 +47,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # python -m pytest ...`. These are tiny pure-Python packages (~3MB total) with
 # no runtime startup cost; the convenience of not having to `pip install` them
 # before every regression outweighs the marginal image-size bump.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements-dev.txt
+RUN pip install -r requirements-dev.txt
 
 # CPU-only torch wheel — skips ~4.3GB of NVIDIA/CUDA/triton binaries.
 # Embeddings (sentence-transformers) run on CPU via asyncio.to_thread().
 # Must be installed BEFORE requirements-phase4.txt so sentence-transformers
 # finds the CPU torch wheel already satisfied.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --index-url https://download.pytorch.org/whl/cpu torch
+RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements-phase4.txt
+RUN pip install -r requirements-phase4.txt
 
 # ============================================================================
 # Stage 2: Runtime - Minimal production image
@@ -178,17 +175,13 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 # Install Playwright browser (Chromium only for smaller image size)
 # BUG-315 fix: Use shared path so non-root tsushin user can find browsers at runtime
-# Item 3 build perf: BuildKit cache mount on /opt/pw-cache avoids re-downloading
-# the ~1.1GB Chromium binary on every cold rebuild — only a fast local copy occurs
-# on warm builds. Gated by INSTALL_PLAYWRIGHT ARG.
+# BUG-662 follow-up: BuildKit cache mount removed so the image builds on stock
+# Docker 28.x without buildx. Cold builds re-download the ~1.1GB Chromium
+# binary; warm builds still hit the Docker layer cache.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN --mount=type=cache,target=/opt/pw-cache \
-    if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
-        PLAYWRIGHT_BROWSERS_PATH=/opt/pw-cache playwright install chromium && \
-        playwright install-deps chromium && \
-        mkdir -p /opt/playwright-browsers && \
-        cp -r /opt/pw-cache/. /opt/playwright-browsers/ && \
-        chmod -R 755 /opt/playwright-browsers; \
+RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+        playwright install chromium && \
+        playwright install-deps chromium; \
     fi
 
 # Set working directory

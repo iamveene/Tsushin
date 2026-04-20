@@ -36,12 +36,14 @@ export default function StepAudio() {
   const kokoroRunning = ttsInstances.find(t => t.vendor === 'kokoro' && t.is_active)
   const hasOpenAIKey = providerInstances.some(p => p.vendor === 'openai' && p.api_key_configured)
   const hasElevenLabsKey = providerInstances.some(p => p.vendor === 'elevenlabs' && p.api_key_configured)
+  const hasGeminiKey = providerInstances.some(p => p.vendor === 'gemini' && p.api_key_configured)
 
   const wantsTTS = audio ? (audio.capability === 'voice' || audio.capability === 'hybrid') : false
   const providerOK = !wantsTTS
     || audio?.provider === 'kokoro'
     || (audio?.provider === 'openai' && hasOpenAIKey)
     || (audio?.provider === 'elevenlabs' && hasElevenLabsKey)
+    || (audio?.provider === 'gemini' && hasGeminiKey)
 
   useEffect(() => {
     markStepComplete('audio', isAudioValid(audio ?? null) && providerOK)
@@ -90,6 +92,7 @@ export default function StepAudio() {
             kokoroRunning={kokoroRunning}
             hasOpenAIKey={hasOpenAIKey}
             hasElevenLabsKey={hasElevenLabsKey}
+            hasGeminiKey={hasGeminiKey}
           />
         </div>
       )}
@@ -110,6 +113,7 @@ export default function StepAudio() {
           kokoroRunning={kokoroRunning}
           hasOpenAIKey={hasOpenAIKey}
           hasElevenLabsKey={hasElevenLabsKey}
+          hasGeminiKey={hasGeminiKey}
           hideDefaultTTSOption={false}
         />
       </div>

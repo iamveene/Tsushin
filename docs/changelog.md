@@ -7,6 +7,181 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fresh-install regression sweep — BUG-662/663/664/665 closed + BUG-666 surfaced (2026-04-20)
+
+Four open bugs from the 2026-04-20 Ubuntu VM fresh-install audit closed in one pass, plus one new bug surfaced by a newly-added Hub API-key validation regression test.
+
+**BUG-662 (High) — Fresh install on stock Docker 28.2.2 + missing buildx.**
+- `install.py` probes `docker buildx version` in `check_prerequisites()` and stores a `self.buildx_available` flag. When False, both `run_docker_compose()` and `build_additional_images()` strip `DOCKER_BUILDKIT=1` / `COMPOSE_DOCKER_CLI_BUILD=1` from the child env so Docker Compose falls back to the legacy inline builder and `docker build` for the WhatsApp MCP + toolbox images succeeds.
+- `backend/containers/Dockerfile.toolbox` drops the `# syntax=docker/dockerfile:1.4` parser directive and converts all five `RUN --mount=type=cache,target=...` blocks to plain `RUN` with `mkdir -p /tmp/pd-cache` prepended, so the ProjectDiscovery download paths exist under the legacy builder.
+
+**BUG-663 (High) — Cold Ollama auto-provision failed on first wizard run.**
+- `backend/services/ollama_container_manager.py` `provision()` closes the DB session BEFORE the blocking `create_container()` (which can run `docker pull` for up to 20 min) and reopens a fresh short-lived session afterwards to write `container_id` + `base_url`. Eliminates the `psycopg2.OperationalError: server closed the connection unexpectedly` mid-pull failure family.
+- `backend/api/routes_provider_instances.py` gates `_background_test_instance` to skip when `is_auto_provisioned and not base_url`, so the auto-test no longer fires during provisioning with a null base URL and falls through to `host.docker.internal:11434` connection-refused on Linux.
+- `backend/services/provider_instance_service.py` adds a thread-safe cached `_resolve_ollama_host()` helper (tries `host.docker.internal`, falls back to `172.17.0.1` — Docker default-bridge gateway — on Linux hosts without `host-gateway`) and a lazy `get_vendor_default_base_url(vendor)` accessor. `VENDOR_DEFAULT_BASE_URLS["ollama"]` is now `None` at module-import time so no DNS call can block backend startup. `backend/agent/ai_client.py` and `backend/services/model_discovery_service.py` switched to the lazy accessor.
+
+**BUG-664 (Medium) — Hub still called the removed `/api/services/kokoro/status` (HTTP 410 noise).**
+- `frontend/lib/client.ts` removed `getKokoroStatus()` and `startKokoro()`.
+- `frontend/app/hub/page.tsx` removed `fetchKokoroContainerStatus`, `handleStartKokoro`, `handleStopKokoro`, the `kokoroActionLoading` / `kokoroContainerStatus` state + setters, and the legacy-panel Start/Stop toggle. The legacy panel now shows a binary "Online" / "Offline" status sourced exclusively from `/api/tts-providers/kokoro/status`. Per-tenant Kokoro lifecycle lives in the main per-tenant card (v0.7.0).
+- `backend/api/routes_services.py:71-80` (HTTP 410 Gone for `/api/services/kokoro/status`) intentionally retained as a regression canary for any external caller still pointing at the removed path.
+
+**BUG-665 (Critical) — BUG-588 regression: QueuePool exhaustion + idle-in-transaction partial outage.**
+- `backend/services/channel_health_service.py` `_handle_transition` now uses `with self._db_session_scope()` for both the audit and persist sessions, with all `await` calls and `asyncio.create_task(...)` moved AFTER both `with` blocks exit so the pool slots are released before async suspension.
+- `backend/services/mcp_server_health_service.py` `_reconnect_server` splits into three short-lived scoped sessions (pre-validate → network call → record result). Timeout reduced from 30s to 10s on the health-loop speculative reconnect to bound worst-case pool hold. Added an end-of-`_monitor_loop` `pg_stat_activity` idle-in-transaction probe that updates a Prometheus gauge.
+- `backend/db.py` `pool_recycle` dropped from 1800s → 300s. Registered SQLAlchemy pool `checkout`/`checkin` event hooks feeding a new `tsn_db_pool_checked_out` gauge.
+- `backend/services/metrics_service.py` registers `tsn_db_pool_checked_out` + `tsn_db_idle_in_transaction` gauges under `METRICS_ENABLED`.
+- Verified via breadth-smoke (75 concurrent API calls): `idle_in_transaction` stayed at 1, `tsn_db_pool_checked_out` stayed at 1.0, zero QueuePool timeouts in backend logs over 5 min.
+
+**BUG-666 (Medium) — OPENED by the regression's new Hub API-key validation test.** The Hub Tool-API Edit/Save path writes the submitted key to the backend and immediately marks the card "Active" without validating against the provider. A bogus key like `bogus-key-for-regression-test-12345` round-trips silently; the user discovers it only on first live call. Scope-separated from this PR — tracked for the next sprint.
+
+**Regression evidence:** Phase-5 in-place full regression green on the local stack: 28/29 tests passing in `backend/tests/test_api_v1_e2e.py` (1 pre-existing flaky test unrelated to this work — `test_list_agents_shows_description` 409 name collision from second-level `int(time.time())` uniqueness), 75-call concurrent breadth smoke clean, Playwright browser sweep green for Dashboard / Hub / Add Integration wizard (all 6 provider paths: Brave / Tavily / SerpAPI / SearXNG auto-provision / Google Flights / Amadeus) / legacy Kokoro panel binary state. Evidence under `output/playwright/bugfix-phase5-regression/`. Ubuntu VM fresh install + local fresh install + restore regressions pending as separate validation workstreams.
+
+### Gemini 3.x preview models + Gemini TTS provider (2026-04-20, v0.6.0 addendum)
+
+Adds first-class support for Google's Gemini 3.x preview line across every wizard,
+picker, pricing table, and skill config surface. Folded into v0.6.0 since the
+release has not been publicly announced yet.
+
+**New LLMs** (already listed in `PREDEFINED_MODELS`, now wired into pricing + UI):
+
+- `gemini-3-flash-preview` — flagship Flash for agents; first Flash-tier with
+  native `computer_use` tool support. 1M input / 65K output context.
+- `gemini-3.1-flash-lite-preview` — cheapest 3.x multimodal tier. Same 1M/65K
+  context; drops Live API, adds Maps grounding.
+
+**New TTS provider** — `gemini-3.1-flash-tts-preview` as the 4th TTS backend
+alongside OpenAI, Kokoro, and ElevenLabs:
+
+- Registered as `"gemini"` in `TTSProviderRegistry` with status `preview`.
+- Uses standard `generateContent` with `response_modalities=["AUDIO"]` + a
+  `SpeechConfig` block. 30 prebuilt voices (Zephyr, Puck, Charon, Kore, …).
+- Reuses the tenant's existing Gemini API key (no new credential flow).
+- Wraps Google's raw 24 kHz / 16-bit / mono PCM response in a WAV container
+  using stdlib `wave` before persisting — the skill layer always gets a
+  playable `.wav` file path.
+- Implements the documented retry for the preview-quirk where the model
+  occasionally returns text tokens instead of audio (up to 2 retries).
+- No per-tenant container needed — pure API call.
+
+**Image skill** — adds `gemini-3.1-flash-image-preview` as a new option on
+`ImageSkill.SUPPORTED_MODELS` (alongside the existing `gemini-2.5-flash-image`
+and `gemini-3-pro-image-preview`). Pricing seeded in `MODEL_PRICING`.
+
+**Wizards updated** (per directive — "all affected wizards must be updated"):
+
+- **Setup Wizard** (`frontend/app/setup/page.tsx`) — 3.x previews prepended to
+  Gemini fallback model list.
+- **Playground ConfigPanel** (`frontend/components/playground/ConfigPanel.tsx`) —
+  new 3.x entries in `MODEL_OPTIONS` + pricing table.
+- **Audio Agents Wizard** (`frontend/components/audio-wizard/`) — Gemini provider
+  card with "Preview" badge; new `GEMINI_VOICES` dropdown (30 voices); speed
+  slider hidden for Gemini; format locked to WAV.
+- **Agent Wizard → Step Audio** (`frontend/components/agent-wizard/steps/StepAudio.tsx`) —
+  Gemini wired through the shared `AudioProviderPicker` + `AudioVoiceFields`.
+
+**Backend**:
+
+- `backend/analytics/token_tracker.py` — pricing rows for
+  `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`,
+  `gemini-3.1-flash-tts-preview`, `gemini-3.1-flash-image-preview` + matching
+  OpenRouter aliases. All marked with `TODO confirm` pending Google's pricing
+  announcement.
+- `backend/agent/ai_client.py` (`_call_gemini`) — default
+  `generation_config.max_output_tokens` now lifts to **65,536** when the model
+  name starts with `gemini-3-` or `gemini-3.1-` (vs. 8,192 on 2.x), matching
+  the 3.x Flash context window.
+- `backend/hub/providers/gemini_tts_provider.py` — new provider class.
+- `backend/hub/providers/tts_registry.py` — registers the new provider.
+- `backend/agent/skills/image_skill.py` — `SUPPORTED_MODELS` extended.
+
+**Playground ConfigPanel polish** (post-QA, 2026-04-20):
+
+- Chat-model dropdown now filters out TTS-only models (anything ending in
+  `-tts-preview` or `-tts`), so `gemini-3.1-flash-tts-preview` no longer
+  appears as a selectable chat model — it would fail at call time since the
+  model only emits audio.
+- Instance-sourced model IDs are now enriched with friendly labels from
+  `MODEL_OPTIONS` when a match exists (e.g. `gemini-3-flash-preview` renders
+  as "Gemini 3 Flash (Preview)" instead of the raw ID). Unknown model IDs
+  still fall back to the raw ID so new models surface without code changes.
+
+**Regression evidence** (2026-04-20):
+
+- `gemini-3-flash-preview` text chat via `/api/v1/agents/{id}/chat` → 200,
+  response `"PONG-3-FLASH"`, 6.9s.
+- `gemini-3.1-flash-lite-preview` text chat → 200, response `"PONG-31-LITE"`,
+  2.1s.
+- Direct Gemini TTS synthesize with `voice=Zephyr` → success, 213 KB output,
+  valid RIFF/WAVE header (`b'RIFF\\xa4@\\x03\\x00WAVE'`).
+- `ImageSkill.SUPPORTED_MODELS` introspection confirms all three image
+  models (including the new `gemini-3.1-flash-image-preview`) appear in both
+  the MCP tool definition enum and the skill config schema.
+- Browser QA (Playwright): Audio Agents Wizard Step 2 renders all four
+  provider cards; Step 3 for Gemini renders 30 voices, speed slider hidden
+  with explanatory note, format locked to WAV.
+
+### Tavily search provider (2026-04-20)
+
+- New `TavilySearchProvider` wrapping `https://api.tavily.com/search`.
+  Registered in `SearchProviderRegistry` as `tavily` (`requires_api_key=True`).
+- Wizard: removed the "Coming soon" placeholder on Tavily — the provider step
+  now saves the key and the runtime adapter actually uses it.
+- Motivation: Hub card previously showed "Active" for any saved API key row
+  even when no backend adapter existed, which was misleading. With the adapter
+  shipped, "Active" is now truthful for Tavily.
+
+### Add Integration wizard + SearXNG auto-provisioning (2026-04-20)
+
+Addresses a post-PR-#24 regression where the Hub > Tool APIs "Setup Web Search" button
+only covered three search providers (Brave/Tavily/SerpAPI) even though the same tab
+exposed Amadeus and Google Flights cards. Also removes a hardcoded-secret/default-
+container security issue shipped in PR #24.
+
+**What changed:**
+
+- **Hub > Tool APIs — generic "Add Integration" wizard.** Renamed `SearchIntegrationWizard`
+  → `AddIntegrationWizard`. The wizard is now category-aware (Web Search / Travel) and
+  walks users through the right flow per provider — API key for Brave/Tavily/SerpAPI/
+  Google Flights, auto-provisioning toggle for SearXNG, or API key + secret + env for
+  Amadeus. The "Configure" button on SearXNG / Amadeus / Google Flights cards now routes
+  through the wizard with the provider pre-selected. Other Tool APIs still open the
+  legacy API-key modal.
+- **SearXNG now auto-provisioned per-tenant** (mirrors Kokoro/Ollama).
+  New `SearxngInstance` DB table + `SearxngContainerManager` allocate a port in
+  6500–6599, pull `ghcr.io/searxng/searxng:latest`, generate a fresh `secret_key`
+  via `secrets.token_urlsafe(48)`, and inject a tenant-specific `settings.yml`
+  into `/etc/searxng/` via Docker `put_archive` (no host-file mount). Full CRUD
+  endpoints under `/api/hub/searxng/instances`. Startup reconcile hooked up
+  alongside Kokoro/Ollama.
+- **Shipped compose service removed.** `searxng` service block and `searxng-cache`
+  volume removed from `docker-compose.yml`. The repo-root `searxng/settings.yml`
+  (which shipped with a hardcoded `secret_key: "tsushin-searxng-local-secret-change-me"`)
+  is deleted. Migration `0043` best-effort removes any lingering compose-managed
+  `<stack>-searxng` container (matched by label `tsushin.lifecycle=compose`).
+- **Existing external-SearXNG users preserved.** Migration `0043` backfills a
+  `SearxngInstance(is_auto_provisioned=False)` row for every tenant that had an
+  `ApiKey('searxng')` configured, then soft-deactivates the ApiKey. The provider
+  resolver also keeps a legacy ApiKey fallback so the user can reconfigure
+  through the wizard at their leisure.
+- **Frontend color maps updated** — `SkillProviderNode.tsx` and
+  `BuilderSkillProviderNode.tsx` gained `searxng` (teal) and `tavily` (purple)
+  entries so Agent Studio/Watcher shows the right colors instead of the default
+  slate.
+- **Auto-link** — the wizard's agent-linking step (step 4) now category-aware:
+  web_search providers upsert `AgentSkill.web_search.config.provider`; travel
+  providers use `PUT /api/flight-providers/agents/{id}/provider`.
+- **Tests + docs** — backend unit tests for the search registry and the SearXNG
+  container manager settings rendering/port allocation. Documentation section
+  updated.
+
+**Port range allocation summary:**
+
+| Service | Port range |
+|---------|------------|
+| Kokoro TTS | 6600–6699 |
+| Ollama | 6700–6799 |
+| SearXNG (new) | 6500–6599 |
+
 ## v0.6.0-patch.5 (2026-04-20)
 
 Multi-day stabilization release rolling up the v0.7.0-preview guided-wizard work, a massive bug-remediation campaign, independent-review follow-ups, and a VM fresh-install regression fix. Scope is stabilization + feature-completion on the v0.6.0 line, not a new minor release — headline features (agents, memory, flows, Sentinel) are unchanged; this patch ships the full setup-wizard track, a 51-bug remediation sweep, and six follow-up regression fixes caught by independent reviewers.
@@ -19,6 +194,12 @@ Multi-day stabilization release rolling up the v0.7.0-preview guided-wizard work
 - VM fresh-install fix (BUG-653b) — IP-only HTTPS now works via port-only `:443` site matcher so curl and mainstream browsers (which don't send SNI for IP-literal hosts per RFC 3546) complete the handshake.
 
 **Regression** — 319+ assertions, 13/13 phases green, 0 ship-blockers. See the detailed per-group entries below.
+
+### Ubuntu VM fresh-install re-audit (2026-04-20)
+
+Completed a second UI-first/API regression audit against a disposable Ubuntu 24.04 VM clone (`~/tsushin-v060-audit-20260420`) using the interactive installer, self-signed HTTPS on `https://10-211-55-5.sslip.io`, headed Playwright, direct backend truth checks, and an exported/generated API v1 client. The install path and `/setup` both succeeded. Hosted-provider setup passed for Gemini, OpenAI, Anthropic, and Vertex AI plus Brave Search, Tavily, and SerpAPI. The pass also revalidated working baseline behavior for Watcher graph glow, knowledge-base grounding, fact CRUD, isolated/shared memory, Sentinel/MemGuard detections, API v1 OAuth + direct-key auth, sync/async chat, `/api/v1/openapi.json`, generated-client auth, and `/api/v2/agents/graph-preview`.
+
+This session was audit-only: no product code changed. It revalidated two pre-existing open findings — BUG-538 (`tsushin-toolbox:base` still absent at runtime on the fresh VM) and BUG-592 (`GET /api/v2/agents/` still returns 500) — and logged four new internal findings: BUG-662 (stock Docker 28.2.2 missing/broken buildx leaves WhatsApp MCP and toolbox images unavailable during install), BUG-663 (cold Ollama auto-provision still fails on the first wizard run), BUG-664 (Hub still calls the removed `/api/services/kokoro/status` endpoint and emits 410 noise), and BUG-665 (BUG-588 regression: late-session QueuePool / `idle in transaction` partial outage during moderate audit breadth). Because BUG-665 wedged backend truth endpoints mid-run, the remaining custom-skill, MCP, webhook, shell-registration, and template-flow creation checks were blocked without manual intervention. The deployment playbook now includes a new post-breadth stability checkpoint so future audits fail explicitly when this class of regression reappears.
 
 ### BUG-653b — IP-only HTTPS handshake fix (2026-04-20)
 
