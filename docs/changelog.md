@@ -7,6 +7,145 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Massive Bug Remediation Campaign — summary (52 open → 2 deferred) (2026-04-19)
+
+A full triage + debate + group-fix sweep of every open entry in `BUGS.md`
+at the start of the sprint (52 bugs). Triage closed 5 as false-positives
+after code audit (BUG-598/622/623/659/660), rescoped 4 where the
+description didn't match the real root cause (BUG-642/643/647/661), and
+shipped 51 fixes across six parallel groups (F, A, B, C, D, E).
+
+Two bugs remain deferred (BUG-616 — test-harness, not backend seed;
+BUG-657 — referenced route file does not exist; wizard status lives in
+`auth_routes.py` which is already hardened). All other open bugs closed
+or fixed.
+
+Post-sprint regression (319+ assertions across 7 suites):
+- `sentinel_fast_benchmark.py` — 248/248, 0 false positives across all
+  4 aggressiveness levels.
+- `backend/tests/test_api_v1_e2e.py` — 28/29 (1 test-isolation case
+  pre-dates this sprint, tracked under BUG-638 fixture cleanup helper).
+- `backend/tests/test_playground_memory_regressions.py` — 6/6.
+- `backend/dev_tests/test_sentinel_rescoped_bugs.py` — 13/13.
+- `backend/dev_tests/test_flows_group_b.py` — 9/9.
+- `backend/dev_tests/test_group_e_security.py` — 9/9.
+- `backend/dev_tests/test_group_d_infra.py` — 6/6 (+2 host-only skipped).
+- WhatsApp round-trip: tester → bot → tester verified end-to-end on the
+  live stack (02:36:48 ping → 02:36:52 reply).
+- Sandboxed-tool API: 200 OK for `/api/v1/agents/17/chat` with a tool
+  command.
+- Post-regression container logs: no new backend/frontend ERROR lines
+  (only pre-existing env noise: Qdrant DNS when Qdrant isn't configured,
+  Vertex AI credential gaps for unconfigured providers).
+
+### Sentinel / Memory hardening — Group A (BUG-642/643/644/646/656/661) (2026-04-19)
+
+Critical prompt-injection hardening: the fact extractor was promoting
+adversarial "remember this" user turns (including credential-poisoning
+and behavior-prefix payloads) into persistent, high-confidence long-term
+facts whenever Sentinel was in `detect_only` mode or missed the attack.
+Sentinel itself was empirically under-blocking at level-1 and was
+a complete no-op without an LLM provider key (fail-open for `detect_only`,
+fail-closed for `block`). Three-layer fix:
+
+- **BUG-642 + BUG-661** — `backend/agent/memory/fact_extractor.py` gains
+  `_sanitize_conversation_for_extraction` (drops user turns matching
+  injection markers before the LLM extractor sees them) and
+  `_filter_untrusted_facts` (refuses any `instructions`-topic fact
+  unless a trusted assistant/system turn exists, drops facts whose
+  value or context looks injection-like, caps any surviving
+  `instructions` fact at confidence 0.9). User content is treated as
+  quotation, not instruction.
+- **BUG-643 + BUG-656** — new `backend/agent/sentinel/heuristics.py` +
+  `SentinelService._heuristic_floor_result`, wired into `_analyze_unified`
+  BEFORE the LLM call AND in the LLM-error fallback. Provider-independent
+  regex floor covering `prompt_injection`, `agent_takeover`,
+  `memory_poisoning` (credential + behavior-prefix), `agent_escalation`,
+  `vector_store_poisoning`, `shell_malicious`, `browser_ssrf`. Fires
+  in block / warn_only / detect_only modes, respects per-profile
+  detection toggles, logs with `llm_provider="heuristic"`. Zero LLM
+  key required — Sentinel is no longer a no-op on LLM-less installs.
+- **BUG-644** — `UNIFIED_CLASSIFICATION_PROMPT[1]` and `[3]` in
+  `backend/services/sentinel_detections.py` rewritten. Level-1 tightened
+  with explicit MUST-block phrasings per family; level-3 rebuilt as a
+  strict superset of level-1, always catching every level-1 trigger
+  plus the three aggressiveness regressions (`attack-ssrf`,
+  `attack-memory-cred-a`, `attack-vs-poisoning`). Benign carve-outs
+  (preferences, roleplay games, educational questions) preserved.
+- **BUG-646** — `frontend/app/playground/page.tsx` +
+  `frontend/components/playground/ExpertMode.tsx` now render a
+  distinctive red-bordered inline card with the threat family pill
+  and full `threat_reason` when Sentinel blocks a turn, instead of
+  showing only a generic error state. Also handles the legacy
+  "🛡️ Your message was blocked…" prefix in persisted history.
+
+Regression guard: `backend/dev_tests/test_sentinel_rescoped_bugs.py`
+(13/13 passing).
+
+### Test infrastructure — Group F (BUG-638/639/640/641) (2026-04-19)
+
+- **BUG-641** — `backend/Dockerfile` now installs
+  `backend/requirements-dev.txt` (pytest, pytest-asyncio, pytest-cov)
+  into `/opt/venv` in the builder stage so the runtime image has the
+  full test harness. `docker exec tsushin-backend python -m pytest
+  --collect-only tests/` now collects 270 tests without module-not-found.
+- **BUG-640** — `backend/tests/test_sentinel_detection_mode_fix.py`
+  imports `models_rbac` so `User` is registered on `Base.metadata`
+  before `ApiClient.created_by` FK resolution, and narrows
+  `db_engine` to the Sentinel-only tables so SQLite doesn't compile
+  Postgres-only JSONB columns. 10 tests collect; 10 tests pass.
+- **BUG-639** — `test_scheduler_message_with_no_threat_llm` now sets
+  `timeout_seconds=5.0` and `max_input_chars=5000` on the MagicMock
+  so `asyncio.wait_for`/prompt slicing no longer crash on
+  TypeError.
+- **BUG-638** — new `backend/dev_tests/cleanup_reg_fixtures.py` helper
+  + `test_fixture_cleanup.py` — resolves the tenant by
+  email/id/slug, finds agents whose linked `Contact.friendly_name`
+  starts with `reg-`, respects an `--older-than-hours` guard, and
+  cascades agent + contact deletion. Dry-run by default, `--apply`
+  to commit.
+
+### Playground & Studio state/threading — Group C (BUG-597/600/617/618/619/620/621/625/645) (2026-04-19)
+
+Playground UX hardening sprint focused on state persistence, race
+conditions, and misleading graph affordances.
+
+- **BUG-597** — Agent Builder cold-load blank-canvas fixed via a React
+  Flow overlay spinner in `AgentStudioTab.tsx` that holds until
+  `builder.nodes.length > 0` for the selected agent.
+- **BUG-600** — A2A Network ghost peer nodes no longer dropped. Instead
+  of `commEnabledAgents.filter`, `useAgentBuilder.ts` iterates
+  `peerIds` directly and synthesizes `"Agent #N"` placeholders when
+  the comm-enabled payload omits a peer.
+- **BUG-617** — Rapid double-click on "+ New Thread" now produces exactly
+  one thread. `handleNewThread` gains a `creatingThreadRef` in-flight
+  guard; second click is dropped until the first `createThread`
+  request settles.
+- **BUG-618** — Hard refresh no longer loses the active Playground
+  thread. `activeThreadId` hydrates from `?thread=<id>` then
+  `localStorage['tsushin.playground.lastThreadId']`; a dedicated
+  effect mirrors state back via `window.history.replaceState`
+  without triggering a client remount.
+- **BUG-619** — Project-scope thread filter now applied. `ExpertMode.tsx`
+  computes `scopedThreads` client-side when `projectSession?.is_in_project`
+  and the Threads badge reflects the scope.
+- **BUG-620** — `[WebSocket] Connection error: Event` log noise quieted.
+  `websocket.ts` onerror now logs structured diagnostics
+  (`readyState`, `readyStateLabel`, `url`, `type`) once per
+  close-cycle as `warn`; clean closes (code 1000) are `debug`.
+- **BUG-621** — Watcher Graph-Glow no longer lights every skill-category
+  edge. `GraphCanvas.tsx` builds `categorySkillTypesByNodeId` and only
+  glows Agent→Category edges when the invoked skill's type matches one
+  of that category's skill types.
+- **BUG-625** — Thread context menu no longer opens on whole-row click.
+  Row `onClick` ignores events originating inside `[data-no-row-click]`;
+  kebab is `opacity-0 group-hover:opacity-100`; right-click adds
+  explicit `onContextMenu` for the menu.
+- **BUG-645** — "Thread N not found" crash replaced with self-healing
+  WS `onError` handler: detects the specific pattern, drops the stale
+  id, clears URL/localStorage, reloads the thread list, suppresses the
+  error banner. User can retry immediately.
+
 ### Security / RBAC / SSO / UX — Group E bug sprint (BUG-599/601/602/610/611/612+613/614/615/624/626/636/647/648) (2026-04-19)
 
 Remediation sprint for the Group E audit findings (WS auth bypass, RBAC UI
