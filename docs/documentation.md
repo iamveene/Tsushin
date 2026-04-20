@@ -601,6 +601,19 @@ Invitations are the primary way to onboard both tenant-scoped users and platform
 
 Platform-wide Google SSO is stored in the `global_sso_config` singleton (since 2026-04-18) and managed via `/api/admin/sso-config`. Per-tenant SSO remains in `TenantSSOConfig` + `GoogleOAuthCredentials`. See §22.3 for fields and the UI; see the credential-resolution order in that section. The two scopes are fully independent — changing one does not affect the other. Auto-provisioning of global admins is not enabled by default; global admins are created exclusively via invitation.
 
+`GET /api/auth/google/authorize` requires explicit scope selection — either `tenant_slug=<slug>` for tenant-scoped SSO or `platform=true` for global-admin SSO. Requests without scope return `400` (previously they silently fell back to the first tenant with SSO enabled). Combining `tenant_slug` with `platform=true` also returns `400`.
+
+### 6.7 WebSocket authentication guarantees
+
+The `/ws/shell/status` and beacon-status handlers (`backend/api/shell_websocket.py`) perform the full auth chain on every JWT-authenticated connection:
+
+1. JWT signature + expiry.
+2. `User.is_active == True` AND `User.deleted_at IS NULL` (deactivated users are rejected even with a non-expired token).
+3. `tenant_id` claim matches the User's current tenant.
+4. At least one `shell.*` permission granted in the tenant scope.
+
+Failures close the socket with code `4003` (forbidden). API-key-authenticated beacon connections additionally verify the tenant is not `deleted_at`-tombstoned and not emergency-stopped. This closes the vectors previously tracked under BUG-612 + BUG-613.
+
 ---
 
 
@@ -610,10 +623,42 @@ Agents are AI assistants scoped to a tenant, each linked to a `Contact` record (
 
 Source: `backend/models.py:300-392` (Agent model)
 
-### 7.1 Create / Edit Agent Form
+### 7.1 Creating Agents — Guided vs Advanced Mode
+
+Studio → Agents ships **two creation surfaces**, toggled per-user via `localStorage['tsushin:agentWizardMode']` (default: `guided`).
+
+**Guided Mode (default)** — multi-step wizard branching on agent type. Source: `frontend/components/agent-wizard/AgentWizard.tsx` and `steps/*`, provider at `frontend/contexts/AgentWizardContext.tsx`, pure reducer at `frontend/lib/agent-wizard/reducer.ts`.
+
+Step graph (text agents skip step 4):
+
+| # | Step | Purpose |
+|---|---|---|
+| 1 | Type | Text / Audio / Hybrid — branch selector |
+| 2 | Basics | Name, optional phone, model provider + model |
+| 3 | Personality | Persona + tone OR custom system prompt (with starter-role chips per type) |
+| 4 | Voice *(audio/hybrid only)* | Capability (voice/transcript/hybrid), TTS provider (Kokoro/OpenAI/ElevenLabs), voice/language/speed/format, Kokoro container auto-provision |
+| 5 | Skills | Built-in + custom skills; `audio_*` auto-selected and locked for audio/hybrid |
+| 6 | Memory | Built-in ring buffer / built-in + semantic / external vector store; memory size slider |
+| 7 | Channels | playground / whatsapp / telegram / slack / discord / webhook |
+| 8 | Review | Per-section summary with Edit buttons that jump back |
+| 9 | Progress | Chained provisioning spinner; on success navigates to `/playground?agentId=<id>` |
+
+**Chained API calls** (from `useCreateAgentChain`):
+1. Contact resolve/create (case-insensitive by `friendly_name`).
+2. `POST /api/agents` with minimal payload (contact_id, system_prompt, persona_id / tone_preset_id, model_provider, model_name).
+3. `PUT /api/agents/{id}` with extended config (memory_size, memory_isolation_mode, enable_semantic_search, enabled_channels, vector_store_instance_id, vector_store_mode).
+4. Per-skill fan-out: `PUT /api/agents/{id}/skills/{type}` sequentially.
+5. Custom skills: `POST /api/agents/{id}/custom-skills` per selected id.
+6. Audio (audio/hybrid only): Kokoro → `POST /api/tts-instances`, poll `GET /api/tts-instances/{id}/container-status`, then `POST /api/tts-instances/{id}/assign-to-agent`. OpenAI/ElevenLabs → `PUT /api/agents/{id}/skills/audio_tts` with provider config only.
+
+**Partial-failure handling.** If any stage after step 2 fails, the agent row is preserved; the Progress step surfaces the failing stage and links to `/agents/{id}` in Studio rather than cascading a rollback delete.
+
+**Advanced Mode** — the pre-existing single-form modal at `frontend/app/agents/page.tsx:~749-1069` with all fields on one page. Includes a "Switch to Guided" link in its header. When the user switches from Guided → Advanced mid-wizard, the current draft is read from `AgentWizardContext.persistedDraft` and pre-filled into the form (dismissible banner announces the pre-fill).
+
+### 7.1a Create / Edit Agent Form (Advanced Mode)
 
 The "Create New Agent" modal on Studio → Agents exposes the fields below.
-Source: `frontend/app/agents/page.tsx:22-36` (form interface) and `:726-990` (form JSX).
+Source: `frontend/app/agents/page.tsx:22-36` (form interface) and `:749-1069` (form JSX).
 
 | Field | Type | Notes | Source |
 |---|---|---|---|
@@ -1240,6 +1285,32 @@ Custom profiles per tenant are allowed via `SentinelProfile` records and cloning
 
 - **detection_mode**: `off` | `warn_only` | `detect_only` | `block`
 - **aggressiveness_level**: 0 (off) | 1 (moderate) | 2 (aggressive) | 3 (extra aggressive). Controls which `DEFAULT_PROMPTS` template is used per detection (Source: `sentinel_detections.py:146-196`).
+- **Strict-superset guarantee:** level-3 (`UNIFIED_CLASSIFICATION_PROMPT[3]`) is built to always catch every level-1 trigger plus additional aggressive phrasings. Promotions to level-3 never lose coverage versus level-1 (`sentinel_detections.py`).
+
+### 12.3a Heuristic Floor (provider-independent)
+
+A regex/keyword layer runs BEFORE any LLM call in `SentinelService._analyze_unified` and also in the LLM-error fallback path. Defined in `backend/agent/sentinel/heuristics.py` and invoked via `SentinelService._heuristic_floor_result`. Families covered:
+
+- `prompt_injection` — "ignore previous instructions", "ignore prior rules", "disregard all above", "start fresh", "developer mode", DAN/jailbreak tokens.
+- `agent_takeover` — "you are now X", "from now on you are", "act as the system", persona-override phrasings.
+- `agent_escalation` — "delegate to another agent and bypass", "have another agent", escalation-to-privileged-agent phrasings.
+- `memory_poisoning` (credential) — "remember forever the production api key", "embed this sentence as a high-priority fact", "store this as a system instruction".
+- `memory_poisoning` (behavior prefix) — "always start every future reply with X", permanent-behavior-override phrasings.
+- `vector_store_poisoning` — persistent-marker injections aimed at semantic/vector memory.
+- `shell_malicious` — classic shell-injection phrasings.
+- `browser_ssrf` — link-metadata / 169.254 / localhost-browsing phrasings.
+
+The heuristic logs with `llm_provider="heuristic"`. It fires in `block`, `warn_only`, and `detect_only` modes and respects per-profile detection toggles. Result: Sentinel is no longer a no-op on installs without an LLM API key, and fail-closed timeouts in block mode are rarer because the heuristic short-circuits common attack phrasings before the LLM is called.
+
+### 12.3b Fact-Extractor Untrusted-Content Guard
+
+`backend/agent/memory/fact_extractor.py` now treats user-turn content as *quotation*, not instruction. Before the LLM fact-extraction call, `_sanitize_conversation_for_extraction` drops user turns that match prompt-injection markers. After extraction, `_filter_untrusted_facts`:
+
+- Refuses any `instructions`-topic fact unless a trusted assistant/system turn is present.
+- Drops facts whose `value` or `context` text itself matches injection markers.
+- Caps any surviving `instructions`-topic fact at `confidence=0.9` (previously 0.95–0.98).
+
+This is the primary defence against stored prompt-injection via memory poisoning, and runs regardless of which detection mode Sentinel is in.
 
 ### 12.4 Notifications & WhatsApp Alerts
 
