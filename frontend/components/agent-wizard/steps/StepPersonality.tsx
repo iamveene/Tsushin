@@ -13,6 +13,18 @@ export default function StepPersonality() {
   const [tonePresets, setTonePresets] = useState<TonePreset[]>([])
   const [loaded, setLoaded] = useState(false)
 
+  // Seed the default system prompt synchronously on mount so the Next button
+  // is enabled as soon as this step renders (previously the seed happened inside
+  // the Promise.then below, leaving the step invalid until the API resolved and
+  // forcing users to re-click the already-selected "Use persona + tone" pill to
+  // trigger a re-render after the seed had landed).
+  useEffect(() => {
+    if (!state.draft.personality.system_prompt && state.draft.type) {
+      patchPersonality({ system_prompt: DEFAULT_SYSTEM_PROMPT[state.draft.type] })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     Promise.all([
       api.getPersonas().catch(() => []),
@@ -21,10 +33,6 @@ export default function StepPersonality() {
       setPersonas(p)
       setTonePresets(t)
       setLoaded(true)
-      // Seed the system prompt with the type default if empty
-      if (!state.draft.personality.system_prompt && state.draft.type) {
-        patchPersonality({ system_prompt: DEFAULT_SYSTEM_PROMPT[state.draft.type] })
-      }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

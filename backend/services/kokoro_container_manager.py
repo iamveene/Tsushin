@@ -143,15 +143,34 @@ class KokoroContainerManager:
         instance.is_auto_provisioned = True
         db.commit()
 
+        # BUG-668 follow-up (same pattern as BUG-663 fix on Ollama): the
+        # subsequent `create_container()` call blocks on `docker pull` for
+        # minutes on first run, during which docker-socket-proxy / PG can
+        # kill the idle pooled connection ("psycopg2.OperationalError:
+        # server closed the connection unexpectedly" + docker-socket-proxy
+        # Read timed out). Capture all primitives we need post-create,
+        # close the session BEFORE the blocking docker call, then reopen
+        # a fresh short-lived session to persist container_id + base_url.
+        instance_id = instance.id
+        tenant_id_capture = instance.tenant_id
+        internal_port = config["internal_port"]
+        volume_bind = config["volume_bind"]
+        engine = db.get_bind()
+
         # Short DNS alias for inter-container resolution
         dns_alias = f"tts-kokoro-{tenant_hash}-{instance.id}"
+
+        try:
+            db.close()
+        except Exception:
+            pass
 
         try:
             container = self.runtime.create_container(
                 image=image,
                 name=container_name,
-                volumes={volume_name: {"bind": config["volume_bind"], "mode": "rw"}},
-                ports={f'{config["internal_port"]}/tcp': ("127.0.0.1", port)},
+                volumes={volume_name: {"bind": volume_bind, "mode": "rw"}},
+                ports={f'{internal_port}/tcp': ("127.0.0.1", port)},
                 network=network_name,
                 restart_policy={"Name": "unless-stopped"},
                 mem_limit=mem_limit,
@@ -165,7 +184,7 @@ class KokoroContainerManager:
                 detach=True,
             )
 
-            instance.container_id = container.id if hasattr(container, 'id') else str(container)
+            container_id = container.id if hasattr(container, 'id') else str(container)
 
             # Add a short DNS alias so other containers on tsushin-network can
             # resolve the service with a guaranteed-short hostname.
@@ -178,45 +197,56 @@ class KokoroContainerManager:
             except Exception as alias_err:
                 logger.warning(f"Could not set DNS alias '{dns_alias}': {alias_err}")
 
-            # Build base_url using the short DNS alias (safe for DNS labels)
-            instance.base_url = f"http://{dns_alias}:{config['internal_port']}"
+            base_url = f"http://{dns_alias}:{internal_port}"
 
-            # Build base_url BEFORE health check so we can persist it even if
-            # the DB connection goes stale during the health wait. Commit now,
-            # then rollback+use a fresh connection for the final status update.
-            db.commit()
+            # Open a fresh short-lived session to persist container_id + base_url
+            # before kicking off the (potentially multi-minute) health wait.
+            from sqlalchemy.orm import sessionmaker
+            from models import TTSInstance
+            Session_fresh = sessionmaker(bind=engine)
+            db_post_create = Session_fresh()
+            try:
+                row = db_post_create.query(TTSInstance).filter(
+                    TTSInstance.id == instance_id,
+                    TTSInstance.tenant_id == tenant_id_capture,
+                ).first()
+                if row:
+                    row.container_id = container_id
+                    row.base_url = base_url
+                    db_post_create.commit()
+            finally:
+                db_post_create.close()
 
-            # Wait for service to become healthy. This can take 30–90s during
-            # which the DB connection may go idle and get closed by the server.
-            # We intentionally do NOT hold an open transaction during this wait.
+            # Reflect on the detached ORM instance so callers see up-to-date state.
+            instance.container_id = container_id
+            instance.base_url = base_url
+
+            # Health wait with NO live DB session held.
             healthy = self._wait_for_health(instance)
 
-            # Force a fresh connection from the pool after the long wait.
-            # SQLAlchemy's rollback() discards the stale connection; subsequent
-            # operations get a healthy one.
+            # Final status write on another fresh short-lived session.
+            db_final = Session_fresh()
             try:
-                db.rollback()
-            except Exception:
-                pass
+                row = db_final.query(TTSInstance).filter(
+                    TTSInstance.id == instance_id,
+                    TTSInstance.tenant_id == tenant_id_capture,
+                ).first()
+                if row:
+                    row.container_status = "running" if healthy else "error"
+                    row.health_status = "healthy" if healthy else "unavailable"
+                    row.health_status_reason = (
+                        "Auto-provisioned and healthy"
+                        if healthy
+                        else "Container started but health check failed"
+                    )
+                    row.last_health_check = datetime.utcnow()
+                    db_final.commit()
+            finally:
+                db_final.close()
 
-            instance.container_status = "running" if healthy else "error"
-            instance.health_status = "healthy" if healthy else "unavailable"
-            instance.health_status_reason = (
-                "Auto-provisioned and healthy"
-                if healthy
-                else "Container started but health check failed"
-            )
-            instance.last_health_check = datetime.utcnow()
-
-            db.commit()
             logger.info(f"Provisioned kokoro container: {container_name} (healthy={healthy})")
 
         except Exception as e:
-            # Make sure we're not on a broken connection before writing error state.
-            try:
-                db.rollback()
-            except Exception:
-                pass
             # Peer review A-B3: clean up orphan container before nulling DB fields
             if container_name:
                 try:
@@ -225,13 +255,33 @@ class KokoroContainerManager:
                     # Swallow cleanup errors — best-effort only
                     pass
 
-            instance.container_status = "error"
-            instance.container_name = None
-            instance.container_id = None
-            instance.container_port = None
-            instance.health_status = "unavailable"
-            instance.health_status_reason = str(e)[:500]
-            db.commit()
+            # Write error state on a fresh short-lived session (the original
+            # `db` was closed before create_container, and the fresh ones
+            # above may also be closed or broken at this point).
+            try:
+                from sqlalchemy.orm import sessionmaker
+                from models import TTSInstance
+                Session_err = sessionmaker(bind=engine)
+                db_err = Session_err()
+                try:
+                    row = db_err.query(TTSInstance).filter(
+                        TTSInstance.id == instance_id,
+                        TTSInstance.tenant_id == tenant_id_capture,
+                    ).first()
+                    if row:
+                        row.container_status = "error"
+                        row.container_name = None
+                        row.container_id = None
+                        row.container_port = None
+                        row.health_status = "unavailable"
+                        row.health_status_reason = str(e)[:500]
+                        db_err.commit()
+                finally:
+                    db_err.close()
+            except Exception as write_err:
+                logger.error(
+                    f"Could not write Kokoro provision error state: {write_err}"
+                )
             logger.error(f"Failed to provision kokoro container: {e}", exc_info=True)
             raise
 

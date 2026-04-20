@@ -123,6 +123,11 @@ export interface BuiltInSkillDef {
   autoEnabledFor?: AgentType[]
 }
 
+// Keep roughly in sync with SKILL_DISPLAY_INFO in frontend/components/skills/skill-constants.ts.
+// Provider-based skills (flows/gmail) and channel-gated skills (shell) are intentionally
+// omitted here because they require follow-up configuration (OAuth, beacon pairing, etc.)
+// that the wizard does not collect inline — users can enable them from the agent page
+// after creation. Hidden skills (weather, web_scraping) are also excluded.
 export const BUILT_IN_SKILLS: BuiltInSkillDef[] = [
   {
     type: 'web_search',
@@ -134,6 +139,60 @@ export const BUILT_IN_SKILLS: BuiltInSkillDef[] = [
     type: 'agent_switcher',
     label: 'Agent Switcher',
     description: 'Allow seamless handoff between agents mid-conversation.',
+    appliesTo: ['text', 'audio', 'hybrid'],
+  },
+  {
+    type: 'image',
+    label: 'Image Generation',
+    description: 'Generate and edit images with Gemini Nano Banana / Pro.',
+    appliesTo: ['text', 'audio', 'hybrid'],
+  },
+  {
+    type: 'image_analysis',
+    label: 'Image Analysis',
+    description: 'Describe, analyze, or answer questions about an incoming image.',
+    appliesTo: ['text', 'audio', 'hybrid'],
+  },
+  {
+    type: 'browser_automation',
+    label: 'Browser Automation',
+    description: 'Drive a web browser to perform automated web interactions.',
+    appliesTo: ['text', 'hybrid'],
+  },
+  {
+    type: 'sandboxed_tools',
+    label: 'Sandboxed Tools',
+    description: 'Run security / network tools (nmap, dig, nuclei, etc.) in a sandbox.',
+    appliesTo: ['text', 'audio', 'hybrid'],
+  },
+  {
+    type: 'automation',
+    label: 'Automation',
+    description: 'Multi-step workflow automation for complex tasks.',
+    appliesTo: ['text', 'hybrid'],
+  },
+  {
+    type: 'flight_search',
+    label: 'Flight Search',
+    description: 'Look up flights via Amadeus or Google Flights (SerpAPI).',
+    appliesTo: ['text', 'audio', 'hybrid'],
+  },
+  {
+    type: 'knowledge_sharing',
+    label: 'Knowledge Sharing',
+    description: 'Integrate and share knowledge-base content across conversations.',
+    appliesTo: ['text', 'audio', 'hybrid'],
+  },
+  {
+    type: 'adaptive_personality',
+    label: 'Adaptive Personality',
+    description: 'Dynamically adapt the agent tone based on conversation context.',
+    appliesTo: ['text', 'audio', 'hybrid'],
+  },
+  {
+    type: 'okg_term_memory',
+    label: 'OKG Term Memory',
+    description: 'Structured long-term memory with ontological metadata.',
     appliesTo: ['text', 'audio', 'hybrid'],
   },
   {
