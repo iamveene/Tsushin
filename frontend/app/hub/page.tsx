@@ -24,6 +24,7 @@ const AddIntegrationWizard = dynamic(
 )
 import { useToast } from '@/contexts/ToastContext'
 import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance } from '@/lib/client'
+import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
 // V060-CHN-002: SlackSetupModal/DiscordSetupModal replaced by guided wizards.
@@ -271,17 +272,11 @@ const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; desc
 
 const NOTIFICATION_SERVICES: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = []
 
-// v0.6.x: Curated list of Ollama models for per-tenant auto-provisioning
-const CURATED_OLLAMA_MODELS = [
-  'llama3.2:1b',
-  'llama3.2:3b',
-  'qwen2.5:3b',
-  'qwen2.5:7b',
-  'deepseek-r1:7b',
-  'phi3.5:3.8b',
-  'mistral:7b',
-  'custom',
-]
+// v0.6.x: Curated list of Ollama models for per-tenant auto-provisioning.
+// The curated IDs live in lib/ollama-curated-models (shared with
+// OllamaSetupWizard); 'custom' is appended here because this panel supports
+// pulling arbitrary tags, whereas the wizard offers it via a separate flow.
+const CURATED_OLLAMA_MODELS = [...OLLAMA_CURATED_MODEL_IDS, 'custom']
 
 export default function HubPage() {
   // OAuth popup handoff. The Google OAuth callback at /api/hub/google/oauth/callback

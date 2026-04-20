@@ -58,6 +58,7 @@ from api.routes_knowledge_base import router as knowledge_base_router, set_engin
 from api.routes_shared_memory import router as shared_memory_router, set_engine as set_shared_memory_engine
 from api.routes_memory import router as memory_router, set_engine as set_memory_engine
 from api.routes_skills import router as skills_router, set_engine as set_skills_engine
+from api.routes_channels import router as channels_router
 from api.routes_sandboxed_tools import router as sandboxed_tools_router, set_engine as set_sandboxed_tools_engine
 from api.routes_agents import router as agents_router, set_engine as set_agents_engine
 # Phase 5.1 Persona System - Import added last to avoid conflicts
@@ -157,6 +158,8 @@ from api.routes_vector_stores import router as vector_stores_router, set_engine 
 from api.routes_tts_instances import router as tts_instances_router, set_engine as set_tts_instances_engine
 # v0.6.0-patch.6: SearXNG Instance Management (per-tenant SearXNG auto-provisioning)
 from api.routes_searxng_instances import router as searxng_instances_router, set_engine as set_searxng_instances_engine
+# Hub Providers catalog (AddIntegrationWizard — live registry)
+from api.routes_hub_providers import router as hub_providers_router
 # Phase 22: Custom Skills Foundation
 from api.routes_custom_skills import router as custom_skills_router, set_engine as set_custom_skills_engine
 # Phase 22.4: MCP Server Integration
@@ -1279,6 +1282,7 @@ app.include_router(knowledge_base_router, prefix="/api")
 app.include_router(shared_memory_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
+app.include_router(channels_router)  # Wizard channel catalog (/api/channels)
 app.include_router(sandboxed_tools_router, prefix="/api", tags=["Sandboxed Tools"])
 app.include_router(agents_router, prefix="/api")
 app.include_router(personas_router)  # Phase 5.1 - Persona API
@@ -1330,6 +1334,7 @@ app.include_router(provider_instances_router, prefix="/api", tags=["Provider Ins
 app.include_router(vector_stores_router, prefix="/api", tags=["Vector Stores"])  # v0.6.0: Vector Store Instance Management
 app.include_router(tts_instances_router, prefix="/api", tags=["TTS Instances"])  # v0.6.0-patch.5: Per-tenant Kokoro TTS auto-provisioning
 app.include_router(searxng_instances_router, prefix="/api", tags=["SearXNG Instances"])  # v0.6.0-patch.6: Per-tenant SearXNG auto-provisioning
+app.include_router(hub_providers_router)  # AddIntegrationWizard live catalogs (search + travel)
 app.include_router(custom_skills_router, prefix="/api", tags=["Custom Skills"])  # Phase 22: Custom Skills Foundation
 app.include_router(mcp_servers_router, prefix="/api", tags=["MCP Servers"])  # Phase 22.4: MCP Server Integration
 app.include_router(services_router)  # Hub Local Services (Kokoro TTS container management)

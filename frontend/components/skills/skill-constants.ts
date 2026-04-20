@@ -83,6 +83,13 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
     configType: 'standard',
     icon: RocketIcon,
   },
+  image_analysis: {
+    displayName: 'Image Analysis',
+    description: 'Describe, analyze, or answer questions about an incoming image.',
+    category: 'audio_media',
+    configType: 'standard',
+    icon: RocketIcon,
+  },
   shell: {
     displayName: 'Shell',
     description: 'Execute remote shell commands on connected beacons. Supports programmatic and agentic modes.',
@@ -121,6 +128,13 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   agent_switcher: {
     displayName: 'Agent Switcher',
     description: 'Allow users to switch between different agents in direct messages.',
+    category: 'intelligence',
+    configType: 'standard',
+    icon: BotIcon,
+  },
+  agent_communication: {
+    displayName: 'Agent Communication',
+    description: 'Ask other agents questions, discover available agents, or delegate tasks.',
     category: 'intelligence',
     configType: 'standard',
     icon: BotIcon,

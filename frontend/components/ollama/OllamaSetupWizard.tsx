@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import Modal from '@/components/ui/Modal'
 import { api, Agent, ProviderInstance } from '@/lib/client'
+import { OLLAMA_CURATED_MODELS } from '@/lib/ollama-curated-models'
 
 interface OllamaSetupWizardProps {
   isOpen: boolean
@@ -16,7 +17,7 @@ interface WizardConfig {
   instance_name: string
   gpu_enabled: boolean
   mem_limit: string
-  model_choice: string  // id from CURATED_MODELS or 'custom'
+  model_choice: string  // id from OLLAMA_CURATED_MODELS or 'custom'
   custom_model: string
 }
 
@@ -28,24 +29,8 @@ const DEFAULT_CONFIG: WizardConfig = {
   custom_model: '',
 }
 
-// Curated model list (matches Hub Ollama panel)
-interface CuratedModel {
-  id: string
-  name: string
-  params: string
-  disk: string
-  summary: string
-}
-
-const CURATED_MODELS: CuratedModel[] = [
-  { id: 'llama3.2:1b',    name: 'Llama 3.2 1B',   params: '1B',    disk: '1.3 GB', summary: 'Smallest/fastest — basic tasks' },
-  { id: 'llama3.2:3b',    name: 'Llama 3.2 3B',   params: '3B',    disk: '2.0 GB', summary: 'Balanced — general use' },
-  { id: 'qwen2.5:3b',     name: 'Qwen 2.5 3B',    params: '3B',    disk: '1.9 GB', summary: 'Multilingual' },
-  { id: 'qwen2.5:7b',     name: 'Qwen 2.5 7B',    params: '7B',    disk: '4.7 GB', summary: 'Stronger reasoning' },
-  { id: 'deepseek-r1:7b', name: 'DeepSeek R1 7B', params: '7B',    disk: '4.7 GB', summary: 'Reasoning / math' },
-  { id: 'phi3.5:3.8b',    name: 'Phi 3.5 3.8B',   params: '3.8B',  disk: '2.2 GB', summary: 'Code-focused' },
-  { id: 'mistral:7b',     name: 'Mistral 7B',     params: '7B',    disk: '4.1 GB', summary: 'General-purpose' },
-]
+// Curated model list — single source of truth in lib/ollama-curated-models.
+// The Hub Ollama panel imports the same list so the two surfaces never drift.
 
 const MEM_LIMITS = [
   { value: '2g',  label: '2 GB — minimal' },
@@ -486,7 +471,7 @@ export default function OllamaSetupWizard({ isOpen, onClose, onComplete }: Ollam
           </p>
 
           <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1">
-            {CURATED_MODELS.map(m => (
+            {OLLAMA_CURATED_MODELS.map(m => (
               <label
                 key={m.id}
                 className={`flex items-start gap-3 p-3 rounded-lg cursor-pointer transition-colors border ${

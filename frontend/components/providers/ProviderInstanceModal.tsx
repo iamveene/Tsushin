@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { api, ProviderInstance, ProviderInstanceCreate } from '@/lib/client'
+import { api, ProviderInstance, ProviderInstanceCreate, VendorInfo } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import {
   CheckCircleIcon,
@@ -18,19 +18,25 @@ interface Props {
   defaultVendor?: string
 }
 
-// LLM provider instances only — ElevenLabs is a TTS provider configured separately
-// via Hub > TTS Providers > API Keys, not as a provider instance.
-const VENDORS = [
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'gemini', label: 'Google Gemini' },
-  { value: 'groq', label: 'Groq' },
-  { value: 'grok', label: 'Grok (xAI)' },
-  { value: 'openrouter', label: 'OpenRouter' },
-  { value: 'deepseek', label: 'DeepSeek' },
-  { value: 'vertex_ai', label: 'Vertex AI (Google Cloud)' },
-  { value: 'ollama', label: 'Ollama' },
-  { value: 'custom', label: 'Custom' },
+// LLM provider instances only — ElevenLabs is a TTS provider configured
+// separately via Hub > TTS Providers > API Keys, not as a provider instance.
+//
+// Static FALLBACK only — the live list comes from GET /api/providers/vendors
+// so a vendor added to backend VALID_VENDORS surfaces here automatically.
+// This array is used only when the fetch fails (offline / degraded mode);
+// the wizard-drift guard (backend/tests/test_wizard_drift.py) asserts this
+// list stays consistent with backend VALID_VENDORS.
+const VENDORS: VendorInfo[] = [
+  { id: 'openai',     display_name: 'OpenAI',                     default_base_url: 'https://api.openai.com/v1',            supports_discovery: true,  tenant_has_configured: false },
+  { id: 'anthropic',  display_name: 'Anthropic',                  default_base_url: 'https://api.anthropic.com',            supports_discovery: false, tenant_has_configured: false },
+  { id: 'gemini',     display_name: 'Google Gemini',              default_base_url: 'https://generativelanguage.googleapis.com', supports_discovery: true,  tenant_has_configured: false },
+  { id: 'groq',       display_name: 'Groq',                       default_base_url: 'https://api.groq.com/openai/v1',       supports_discovery: true,  tenant_has_configured: false },
+  { id: 'grok',       display_name: 'Grok (xAI)',                 default_base_url: 'https://api.x.ai/v1',                  supports_discovery: true,  tenant_has_configured: false },
+  { id: 'openrouter', display_name: 'OpenRouter',                 default_base_url: 'https://openrouter.ai/api/v1',         supports_discovery: true,  tenant_has_configured: false },
+  { id: 'deepseek',   display_name: 'DeepSeek',                   default_base_url: 'https://api.deepseek.com/v1',          supports_discovery: true,  tenant_has_configured: false },
+  { id: 'vertex_ai',  display_name: 'Vertex AI (Google Cloud)',   default_base_url: null,                                   supports_discovery: false, tenant_has_configured: false },
+  { id: 'ollama',     display_name: 'Ollama',                     default_base_url: 'http://localhost:11434',               supports_discovery: false, tenant_has_configured: false },
+  { id: 'custom',     display_name: 'Custom',                     default_base_url: null,                                   supports_discovery: false, tenant_has_configured: false },
 ]
 
 const VENDOR_DEFAULT_URLS: Record<string, string> = {
@@ -91,6 +97,11 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
   // Curated model suggestions per vendor (populated once on mount)
   const [predefinedModels, setPredefinedModels] = useState<Record<string, string[]>>({})
 
+  // Live vendor catalog from /api/providers/vendors. Falls back to the
+  // static VENDORS array if the fetch fails — UX is unchanged in the
+  // happy path, still works offline.
+  const [vendors, setVendors] = useState<VendorInfo[]>(VENDORS)
+
   // Live-discovered model list when user has typed an API key pre-save.
   // Overrides the static predefined list for the current vendor.
   const [liveModels, setLiveModels] = useState<string[]>([])
@@ -107,6 +118,18 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
     if (Object.keys(predefinedModels).length > 0) return
     api.getPredefinedModels().then(setPredefinedModels).catch(() => {})
   }, [predefinedModels])
+
+  // Fetch the canonical vendor catalog once per modal open. Any failure
+  // leaves the static VENDORS fallback in place so the dropdown always
+  // renders something sensible.
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    api.getProviderVendors().then(list => {
+      if (!cancelled && list.length > 0) setVendors(list)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [isOpen])
 
   // When the user has typed an API key, debounce a live /models fetch
   // so the datalist reflects what the provider actually exposes right now.
@@ -435,8 +458,8 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
             disabled={isEditing}
             className="w-full px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {VENDORS.map(v => (
-              <option key={v.value} value={v.value}>{v.label}</option>
+            {vendors.map(v => (
+              <option key={v.id} value={v.id}>{v.display_name}</option>
             ))}
           </select>
           {isEditing && (
@@ -697,7 +720,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
           <div>
             <div className="text-sm font-medium text-white">Default instance</div>
             <div className="text-xs text-tsushin-slate">
-              Set as the default instance for {VENDORS.find(v => v.value === vendor)?.label || vendor}. Only one instance per vendor can be the default.
+              Set as the default instance for {vendors.find(v => v.id === vendor)?.display_name || vendor}. Only one instance per vendor can be the default.
             </div>
           </div>
         </label>

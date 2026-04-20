@@ -127,9 +127,48 @@ class UrlValidationResponse(BaseModel):
     error: Optional[str] = None
 
 
+class VendorInfoResponse(BaseModel):
+    """Single vendor entry for the /api/providers/vendors catalog.
+
+    Drives the frontend provider-instance modal vendor dropdown — lets the
+    modal fetch the canonical vendor list rather than keeping a hardcoded
+    copy that silently drifts from VALID_VENDORS / VENDOR_DEFAULT_BASE_URLS.
+    """
+    id: str
+    display_name: str
+    default_base_url: Optional[str] = None
+    # Whether the vendor supports GET /v1beta/models or /v1/models live
+    # discovery via discover-models-raw. Matches the LIVE_SUPPORTED set used
+    # on the frontend to decide if the API-key input should trigger discovery.
+    supports_discovery: bool = False
+    # True when this tenant has at least one active ProviderInstance for this
+    # vendor (same resolution pattern as /api/tts-providers:tenant_has_configured).
+    tenant_has_configured: bool = False
+
+
 # ==================== Helpers ====================
 
 VALID_VENDORS = {"openai", "anthropic", "gemini", "groq", "grok", "deepseek", "openrouter", "ollama", "vertex_ai", "custom"}
+
+# Display names for the vendor dropdown — the frontend modal previously
+# hardcoded these in parallel; surfaced via /api/providers/vendors so adding
+# a vendor only requires a VALID_VENDORS + VENDOR_DISPLAY_NAMES edit.
+VENDOR_DISPLAY_NAMES = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "gemini": "Google Gemini",
+    "groq": "Groq",
+    "grok": "Grok (xAI)",
+    "openrouter": "OpenRouter",
+    "deepseek": "DeepSeek",
+    "vertex_ai": "Vertex AI (Google Cloud)",
+    "ollama": "Ollama",
+    "custom": "Custom",
+}
+
+# Vendors whose /models endpoint is supported by discover-models-raw.
+# Mirrors the LIVE_SUPPORTED set in ProviderInstanceModal.tsx.
+VENDORS_WITH_LIVE_DISCOVERY = {"gemini", "openai", "groq", "grok", "deepseek", "openrouter"}
 
 
 def _disable_sdk_retries(ai_client) -> None:
@@ -421,6 +460,71 @@ def get_predefined_models():
     model-name autocomplete suggestions.
     """
     return {"models": PREDEFINED_MODELS}
+
+
+@router.get("/providers/vendors", response_model=List[VendorInfoResponse])
+def list_provider_vendors(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Return the canonical list of LLM vendors the platform supports, with
+    per-tenant "is configured" resolution. Backs the provider-instance modal
+    vendor dropdown so the frontend never has to keep a hardcoded VENDORS
+    array in sync with backend VALID_VENDORS / VENDOR_DEFAULT_BASE_URLS.
+
+    Requires: org.settings.read permission (same gate as list_provider_instances).
+    """
+    # Per-tenant configured lookup — one DB round-trip, vendor-aggregated.
+    tenant_id = ctx.tenant_id
+    configured_vendors: set[str] = set()
+    if tenant_id:
+        rows = (
+            db.query(ProviderInstance.vendor)
+            .filter(
+                ProviderInstance.tenant_id == tenant_id,
+                ProviderInstance.is_active == True,  # noqa: E712
+            )
+            .distinct()
+            .all()
+        )
+        configured_vendors = {r[0] for r in rows if r and r[0]}
+
+    # Stable order: keep the historical frontend ordering so the dropdown
+    # looks identical to the pre-refactor UX.
+    ordered = [
+        "openai", "anthropic", "gemini", "groq", "grok",
+        "openrouter", "deepseek", "vertex_ai", "ollama", "custom",
+    ]
+    # Defensive: any vendor added to VALID_VENDORS but missing from the
+    # ordering list lands at the end (still surfaces, just unordered).
+    for v in sorted(VALID_VENDORS):
+        if v not in ordered:
+            ordered.append(v)
+
+    # Deferred import — the service module imports from this router at
+    # startup for PREDEFINED_MODELS re-export, so a top-level import here
+    # would be circular.
+    from services.provider_instance_service import get_vendor_default_base_url
+
+    out: List[VendorInfoResponse] = []
+    for vendor_id in ordered:
+        if vendor_id not in VALID_VENDORS:
+            continue
+        # Resolve default base URL — lazy for Ollama (DNS-sensitive).
+        try:
+            default_url = get_vendor_default_base_url(vendor_id)
+        except Exception:
+            default_url = None
+        out.append(VendorInfoResponse(
+            id=vendor_id,
+            display_name=VENDOR_DISPLAY_NAMES.get(vendor_id, vendor_id),
+            default_base_url=default_url,
+            supports_discovery=vendor_id in VENDORS_WITH_LIVE_DISCOVERY,
+            tenant_has_configured=vendor_id in configured_vendors,
+        ))
+    return out
 
 
 @router.post("/provider-instances/discover-models-raw")
