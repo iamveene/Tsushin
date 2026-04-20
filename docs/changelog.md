@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.0-patch.5 (2026-04-20)
+
+Multi-day stabilization release rolling up the v0.7.0-preview guided-wizard work, a massive bug-remediation campaign, independent-review follow-ups, and a VM fresh-install regression fix. Scope is stabilization + feature-completion on the v0.6.0 line, not a new minor release — headline features (agents, memory, flows, Sentinel) are unchanged; this patch ships the full setup-wizard track, a 51-bug remediation sweep, and six follow-up regression fixes caught by independent reviewers.
+
+**Highlights**
+- Full guided-wizard suite across Gmail, Google Calendar, Shell Beacon, Sandboxed Tools, Search (Brave/Tavily/SerpAPI), and Audio Agents (Kokoro TTS + Whisper transcript). Reusable primitives (`CopyableBlock`, `GoogleAppCredentialsStep`, `BeaconInstallInstructions`) extracted for future wizards.
+- Tenant-isolation hardening of `/api/skill-integrations` and `/api/skill-providers/{skill_type}` (BUG-608/609).
+- 51 bugs closed in a single parallel-group campaign (Groups F test-infra, A Sentinel, B Flows, C Playground, D Install/Infra, E Security/RBAC/SSO/UX).
+- 6 concrete follow-up regressions caught and closed by post-sprint independent review (gate-binding spread overwrite, SSO login 400, WS default-tenant bypass, beacon auth exception swallow, stale ORM ref, localStorage cross-tenant leak).
+- VM fresh-install fix (BUG-653b) — IP-only HTTPS now works via port-only `:443` site matcher so curl and mainstream browsers (which don't send SNI for IP-literal hosts per RFC 3546) complete the handshake.
+
+**Regression** — 319+ assertions, 13/13 phases green, 0 ship-blockers. See the detailed per-group entries below.
+
 ### BUG-653b — IP-only HTTPS handshake fix (2026-04-20)
 
 After the 2026-04-19 VM regression pass, curl / browser HTTPS against IP-only self-signed installs still failed with `TLSv1 alert internal error` even though `openssl s_client -servername <IP>` correctly served the Caddy-internal cert with an IP SAN. Root cause: curl (and mainstream browsers) do NOT send SNI for IP-literal hosts per RFC 3546 §3.1, so with a domain-matching site block `{IP} { tls internal ... }` Caddy had no way to pick a site on SNI-less connections and aborted the handshake.
