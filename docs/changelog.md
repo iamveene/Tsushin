@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Flows engine — Group B bug sprint (BUG-627..637) (2026-04-19)
+
+Remediation sprint for the flows audit findings. Nine Group B bugs resolved in one commit; see `backend/dev_tests/test_flows_group_b.py` for the regression guard (9/9 passing).
+
+- **BUG-627** (template credential pre-flight). `POST /api/flows/templates/{id}/instantiate` now runs `_check_required_credentials` against the tenant's `ApiKey` rows before building the flow. Missing credentials return `400 {error: "missing_credentials", missing_credentials: [...]}`. Pass `skip_credential_check: true` in params to bypass (integration tests).
+- **BUG-628** (template detail endpoint). New `GET /api/flows/templates/{id}` returns the template summary plus best-effort `preview_steps` for UI previews.
+- **BUG-629** (`StepType` vocabulary). `schemas.StepType` now exposes `custom_skill` and `browser_automation` so typed `POST /api/flows/create` accepts the full runtime vocabulary. Enum change is additive — `FlowNode.type` is stored as a string, no DB migration required. A runtime test asserts every `StepType` value has a handler registered.
+- **BUG-630** (step_count / node_count alias). `FlowResponse` (v2), `FlowDefinitionResponse` (legacy), and the v1 summary dict now populate **both** `step_count` and `node_count`, mirrored via validators. Clients can migrate between legacy and v2 endpoints without field-name handling.
+- **BUG-631** (empty-flow guard). Template instantiation refuses to persist a flow with zero steps (returns 500 with `error: template_produced_empty_flow`). Runtime also marks empty FlowRuns as `noop` (see BUG-637) as defence in depth.
+- **BUG-632 / BUG-633** (Gate binding). `_build_step_context` now exposes the previous step's whole output dict under the literal key `output`, so Gate conditions bound with `field: "step_1.output"` resolve to actual data instead of literal `"null"`. Both programmatic and agentic gate modes benefit — the fix is at the context layer.
+- **BUG-634** (Summarization auto-bind). `SummarizationStepHandler` now walks three layers to find a conversation `thread_id` when neither `thread_id` nor `source_step` is set: immediate previous step → earlier steps in the context dict → `ConversationThread.flow_step_run_id` DB lookup within the same FlowRun. Raw-text fallback only triggers when all three layers return nothing. The `output` dict (new in BUG-632) is NOT treated as source text, so summarization doesn't garbage-summarize step JSON.
+- **BUG-635** (skill error surfacing). `SkillStepHandler` now includes a top-level `error` field on failure; the executor's `step_run.error_text` fallback reads `output.error → metadata.error → metadata.message → output.message → output.output (if str)` before landing on the generic message. Skill failures now carry actionable detail to the run UI.
+- **BUG-637** (zero-step status). `run_flow` marks a FlowRun as `status=noop` (not `completed`) when `total_steps == 0 and completed_steps == 0 and failed_steps == 0`. Includes an `error_text` explaining the no-op.
+
+**Touched files.** `backend/flows/flow_engine.py` (context builder, gate binding, skill/summarization handlers, run-completion status), `backend/api/routes_flows.py` (credential pre-flight, template detail endpoint, empty-step guard, FlowDefinitionResponse alias), `backend/api/v1/routes_flows.py` (FlowSummary / FlowDetailResponse alias), `backend/schemas.py` (`StepType` additions, `FlowResponse.node_count` mirror), `backend/dev_tests/test_flows_group_b.py` (new test suite, gitignored).
+
+**Deferred.** BUG-636 (edit-then-execute from the flow editor) is a frontend concern in `frontend/app/flows/page.tsx` — deferred to Group E.
+
 ### Emergency Stop split into tenant + global scopes (2026-04-19)
 
 The header emergency-stop toggle was a single control writing a **singleton** flag on `config.emergency_stop`. That made it a GLOBAL kill switch in practice — any tenant owner with `org.settings.write` could halt every tenant on the instance. Functional for defence, wrong for multi-tenant separation of concerns.

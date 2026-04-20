@@ -118,6 +118,10 @@ class FlowDefinitionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     node_count: int = 0
+    # BUG-630: expose `step_count` alongside legacy `node_count` for clients
+    # migrating between legacy and v2 endpoints. Mirrored in the validator
+    # below so either field can be supplied when constructing the model.
+    step_count: int = 0
     # Phase 8.0 fields (optional for backward compat)
     execution_method: Optional[str] = "immediate"
     scheduled_at: Optional[datetime] = None
@@ -128,6 +132,13 @@ class FlowDefinitionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    # Keep node_count / step_count in sync so callers can read either.
+    def model_post_init(self, __context):  # type: ignore[override]
+        if self.node_count and not self.step_count:
+            self.step_count = self.node_count
+        elif self.step_count and not self.node_count:
+            self.node_count = self.step_count
 
 
 class FlowNodeCreate(BaseModel):
@@ -278,6 +289,7 @@ def count_flow_nodes(db: Session, flow_id: int) -> int:
 
 def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionResponse:
     """Convert FlowDefinition to response model."""
+    count = count_flow_nodes(db, flow.id)
     return FlowDefinitionResponse(
         id=flow.id,
         name=flow.name,
@@ -286,7 +298,9 @@ def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionRespons
         version=flow.version,
         created_at=flow.created_at,
         updated_at=flow.updated_at or flow.created_at,
-        node_count=count_flow_nodes(db, flow.id),
+        node_count=count,
+        # BUG-630: populate both fields so clients can migrate incrementally.
+        step_count=count,
         execution_method=flow.execution_method or "immediate",
         scheduled_at=flow.scheduled_at,
         flow_type=flow.flow_type or "workflow",
@@ -996,6 +1010,41 @@ def list_flow_templates():
     return [t.to_summary() for t in list_templates()]
 
 
+@router.get("/templates/{template_id}", dependencies=[Depends(require_permission("flows.read"))])
+def get_flow_template(template_id: str):
+    """BUG-628: per-template detail endpoint. Returns the template summary
+    plus any builder metadata the UI can use to preview the step graph."""
+    from services.flow_template_seeding import get_template
+    tmpl = get_template(template_id)
+    if tmpl is None:
+        raise HTTPException(status_code=404, detail=f"Unknown template: {template_id}")
+    summary = tmpl.to_summary()
+    # Attach a shallow preview: the step types / names the builder will emit
+    # when instantiated with defaults (for UI previews). We don't actually
+    # persist anything — just build in a dry-run spirit.
+    preview = None
+    try:
+        preview_params = {
+            spec.key: spec.default for spec in tmpl.params_schema if spec.default is not None
+        }
+        # Required params we cannot guess (agent_id, recipient, etc.) are
+        # left out. The preview builder is best-effort.
+        preview_params.setdefault("agent_id", 0)
+        preview_params.setdefault("recipient", "+0000000000")
+        draft = tmpl.build(preview_params, tenant_id="__preview__")
+        preview = [
+            {"position": s.position, "type": s.type.value, "name": s.name}
+            for s in (draft.steps or [])
+        ]
+    except Exception as exc:
+        # Never fail the detail endpoint because the preview couldn't be
+        # generated — just omit it.
+        logger.debug(f"Template preview generation failed for {template_id}: {exc}")
+        preview = None
+    summary["preview_steps"] = preview
+    return summary
+
+
 def _validate_template_params(template, params: Dict[str, Any]) -> Dict[str, Any]:
     """Enforce the template's declared params_schema (required / options / min / max).
 
@@ -1088,6 +1137,30 @@ def _validate_tenant_refs(db: Session, tenant_id: str, flow_create) -> None:
             _check_tool(step.config.tool_name)
 
 
+def _check_required_credentials(db: Session, tenant_id: str, required: List[str]) -> List[str]:
+    """BUG-627: pre-flight check that every required credential declared by a
+    template is configured for the tenant. Returns the list of missing
+    credentials (empty list means all present).
+
+    Credentials live in `ApiKey.service` (per-tenant) — e.g. 'gmail',
+    'google_calendar'. System-wide keys (tenant_id IS NULL) satisfy the
+    requirement too, so a shared Gmail credential works for any tenant.
+    """
+    if not required:
+        return []
+    from models import ApiKey
+    missing: List[str] = []
+    for service in required:
+        row = db.query(ApiKey.id).filter(
+            ApiKey.service == service,
+            ApiKey.is_active == True,  # noqa: E712
+            (ApiKey.tenant_id == tenant_id) | (ApiKey.tenant_id.is_(None)),
+        ).first()
+        if not row:
+            missing.append(service)
+    return missing
+
+
 @router.post(
     "/templates/{template_id}/instantiate",
     response_model=FlowTemplateInstantiateResponse,
@@ -1111,6 +1184,26 @@ def instantiate_flow_template(
     # 1. Validate + sanitize params against template's declared schema
     cleaned_params = _validate_template_params(tmpl, req.params)
 
+    # BUG-627: pre-flight credential check. If the caller opts in with
+    # `skip_credential_check=true` in the request body (for integration tests
+    # or when the tenant plans to configure credentials later), we still let
+    # the instantiate through, but the default is strict.
+    skip_cred_check = bool((req.params or {}).get("skip_credential_check")) if hasattr(req, "params") else False
+    missing = _check_required_credentials(db, tenant_context.tenant_id, tmpl.required_credentials)
+    if missing and not skip_cred_check:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "missing_credentials",
+                "missing_credentials": missing,
+                "message": (
+                    f"Template '{template_id}' requires credentials that are not configured for this tenant: "
+                    f"{', '.join(missing)}. Configure them in Settings → Integrations, or pass "
+                    f"`skip_credential_check: true` in params to bypass this check."
+                ),
+            },
+        )
+
     # 2. Run builder
     try:
         flow_create = tmpl.build(cleaned_params, tenant_context.tenant_id)
@@ -1121,6 +1214,28 @@ def instantiate_flow_template(
     except Exception:
         logger.exception(f"Template build failed for {template_id}")
         raise HTTPException(status_code=500, detail="Template build failed")
+
+    # BUG-631: reject template builds that produced an empty step list.
+    # Templates should always emit ≥1 step; an empty result indicates a
+    # builder bug (silently dropped steps) or a mis-configured template.
+    # Returning 500 here surfaces the defect instead of persisting an empty
+    # flow that "runs successfully" with 0 steps (which also caused BUG-637).
+    if not (flow_create.steps or []):
+        logger.error(
+            f"Template '{template_id}' build returned 0 steps; refusing to persist empty flow "
+            f"(tenant={tenant_context.tenant_id})"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "template_produced_empty_flow",
+                "template_id": template_id,
+                "message": (
+                    "Template build returned zero steps. This is a server-side "
+                    "template defect — please file a bug. The flow was not persisted."
+                ),
+            },
+        )
 
     # 3. Enforce multi-tenant isolation on every referenced resource
     _validate_tenant_refs(db, tenant_context.tenant_id, flow_create)
