@@ -57,6 +57,10 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
   const userPositions = useRef<Map<string, { x: number; y: number }>>(new Map())
   const structuralFingerprint = useRef<string>('')
   const layoutVersion = useRef(0)
+  // Tracks the currently-pending layout request. Promise resolutions only commit
+  // if their captured version matches — avoids discarding a valid in-flight layout
+  // when an unrelated re-render triggers the effect but no new layout is kicked off.
+  const layoutRequestVersion = useRef(0)
 
   // A2A: detect when agent_communication skill is attached
   const hasA2ASkill = state.attachedSkills.some(s => s.skillType === 'agent_communication')
@@ -70,28 +74,39 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
 
   // A2A: compute ghost nodes from peer agents that have permissions with the current agent
   const ghostNodes = useMemo<Node<BuilderNodeData>[]>(() => {
-    if (!state.agentId || !hasA2ASkill || !state.showA2ANetwork || commEnabledAgents.length === 0) return []
+    if (!state.agentId || !hasA2ASkill || !state.showA2ANetwork) return []
 
     const linkedPerms = a2aPermissions.filter(p =>
       p.source_agent_id === state.agentId || p.target_agent_id === state.agentId
     )
+    if (linkedPerms.length === 0) return []
+
     const peerIds = new Set(linkedPerms.map(p =>
       p.source_agent_id === state.agentId ? p.target_agent_id : p.source_agent_id
     ))
-    const ghostAgents = commEnabledAgents
-      .filter(a => peerIds.has(a.id))
-      .map(a => {
-        const outPerm = linkedPerms.find(p => p.source_agent_id === state.agentId && p.target_agent_id === a.id)
-        const inPerm = linkedPerms.find(p => p.source_agent_id === a.id && p.target_agent_id === state.agentId)
-        const direction = outPerm && inPerm ? 'bidirectional' : outPerm ? 'outbound' : 'inbound'
-        return {
-          agentId: a.id,
-          agentName: a.name,
-          avatar: a.avatar ?? null,
-          permissionId: outPerm?.id ?? inPerm?.id,
-          direction: direction as 'outbound' | 'inbound' | 'bidirectional',
-        }
-      })
+    // BUG-600: The `commEnabledAgents` payload occasionally omits peer agent
+    // records (agents with enabled permissions but not listed in the response's
+    // `agents` array — typical when the peer doesn't have the agent_communication
+    // skill attached on their side). The previous implementation filtered
+    // `commEnabledAgents.filter(a => peerIds.has(a.id))` and silently dropped
+    // every missing peer, yielding zero ghost nodes even though the toggle was
+    // active. Fix: synthesize a placeholder record for any peer in the
+    // permissions list that the agent catalog doesn't include — we still know
+    // its id and can label it "Agent #<id>" so the graph reflects the topology.
+    const commAgentById = new Map(commEnabledAgents.map(a => [a.id, a]))
+    const ghostAgents = Array.from(peerIds).map(peerId => {
+      const known = commAgentById.get(peerId)
+      const outPerm = linkedPerms.find(p => p.source_agent_id === state.agentId && p.target_agent_id === peerId)
+      const inPerm = linkedPerms.find(p => p.source_agent_id === peerId && p.target_agent_id === state.agentId)
+      const direction = outPerm && inPerm ? 'bidirectional' : outPerm ? 'outbound' : 'inbound'
+      return {
+        agentId: peerId,
+        agentName: known?.name ?? `Agent #${peerId}`,
+        avatar: known?.avatar ?? null,
+        permissionId: outPerm?.id ?? inPerm?.id,
+        direction: direction as 'outbound' | 'inbound' | 'bidirectional',
+      }
+    })
 
     return computeGhostLayout({ existingNodes: nodesRef.current, ghostAgents }) as Node<BuilderNodeData>[]
   }, [state.agentId, hasA2ASkill, state.showA2ANetwork, commEnabledAgents, a2aPermissions])
@@ -214,6 +229,9 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
   // Load agent state from studio data
   useEffect(() => {
     if (!agentId || !studioData.agent) { setState(INITIAL_STATE); setNodes([]); setEdges([]); savedSnapshot.current = ''; userPositions.current.clear(); return }
+    // Guard against stale studioData.agent during agentId transition: if the payload
+    // doesn't match the requested agentId, wait for the matching fetch to land.
+    if (studioData.agent.id !== agentId) return
     const agent = studioData.agent
     const agentAssignment = studioData.sentinelAssignments.find(a => a.agent_id === agentId && !a.skill_type)
     // Validate persona reference: clear if persona doesn't exist in available list
@@ -459,22 +477,24 @@ export function useAgentBuilder(agentId: number | null, studioData: UseStudioDat
     }
     pendingDropPositions.current.clear()
 
-    // Always use tree layout (top-down) for consistent TB handle routing
-    let cancelled = false
+    // Always use tree layout (top-down) for consistent TB handle routing.
+    // Version-ref cancellation (not a cleanup flag): old layouts are only discarded
+    // when a newer layout is started. An effect re-run that early-returns (e.g. because
+    // the fingerprint hasn't changed, or because an unmemoized callback in deps changed
+    // ref) does not cancel the pending layout — preventing empty-canvas on first load.
+    const myLayoutVersion = ++layoutRequestVersion.current
 
     calculateDagreBuilderLayout(agentNode, groupedCategories, directNodes, userPositions.current, providerNodes, providerEdges)
       .then(layout => {
-        if (!cancelled) { setNodes(layout.nodes); setEdges(layout.edges) }
+        if (myLayoutVersion !== layoutRequestVersion.current) return
+        setNodes(layout.nodes); setEdges(layout.edges)
       })
       .catch(err => {
         console.error('[Agent Studio] Tree layout failed, falling back to radial:', err)
-        if (!cancelled) {
-          const fallback = calculateGroupedRadialLayout(agentNode, groupedCategories, directNodes)
-          setNodes(fallback.nodes); setEdges(fallback.edges)
-        }
+        if (myLayoutVersion !== layoutRequestVersion.current) return
+        const fallback = calculateGroupedRadialLayout(agentNode, groupedCategories, directNodes)
+        setNodes(fallback.nodes); setEdges(fallback.edges)
       })
-
-    return () => { cancelled = true }
   }, [currentFingerprint, state, studioData.personas, studioData.skills, studioData.tools, studioData.sentinelProfiles, studioData.knowledge, setNodes, expandedCategories, expandedSkills, expandedKnowledge, toggleCategoryExpand, toggleSkillExpand, toggleKnowledgeExpand, updateAvatar, detachProfile])
 
   const isDirty = useMemo(() => {

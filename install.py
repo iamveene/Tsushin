@@ -308,12 +308,6 @@ class TsushinInstaller:
         if not env_vars.get('TSN_SSL_MODE'):
             updates['TSN_SSL_MODE'] = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
 
-        desired_kokoro_url = self._get_default_kokoro_service_url()
-        if not env_vars.get('KOKORO_SERVICE_URL'):
-            updates['KOKORO_SERVICE_URL'] = desired_kokoro_url
-        elif env_vars.get('KOKORO_SERVICE_URL') == 'http://kokoro-tts:8880':
-            replacements['KOKORO_SERVICE_URL'] = desired_kokoro_url
-
         if not updates and not replacements:
             return
 
@@ -338,9 +332,6 @@ class TsushinInstaller:
             "Updated existing .env with runtime defaults: "
             + ", ".join(changed_keys)
         )
-
-    def _get_default_kokoro_service_url(self) -> str:
-        return f"http://{self._get_stack_name()}-kokoro-tts:8880"
 
     def check_existing_installation(self) -> str:
         """
@@ -1123,17 +1114,39 @@ class TsushinInstaller:
             )
 
         elif ssl_mode == 'selfsigned':
-            # default_sni ensures Caddy serves the cert even when clients don't
-            # send SNI (e.g., curl/browsers connecting via bare IP address).
-            # Caddy rejects IP literals in `default_sni` — fall back to
-            # `localhost` when the domain is an IP. The site-block label is
-            # still the IP (Caddy accepts IPs as site addresses).
-            sni_target = 'localhost' if self._is_ip(domain) else domain
-            global_block = f"{{\n    default_sni {sni_target}\n}}\n\n"
+            # BUG-653 / BUG-653b: for IP-literal bindings, Caddy rejects IP
+            # literals in `default_sni` AND curl/browsers do NOT send SNI for
+            # IP-literal hosts (per RFC 3546 §3.1). A domain-matching site
+            # block like `10.211.55.5 { tls internal }` therefore has no way
+            # to match SNI-less handshakes — Caddy errors with
+            # "TLSv1 alert internal error" and external clients fail.
+            #
+            # Fix: for IP-bound installs, use port-only matching `:443` which
+            # serves the internal cert on any TLS connection regardless of
+            # SNI. Caddy's internal CA automatically issues a cert with an IP
+            # SAN for the bound IP. For hostname installs, keep the original
+            # `default_sni {domain}` pattern so bare-IP probes against a
+            # hostname-bound install still get the correct cert.
+            if self._is_ip(domain):
+                global_block = ""
+                site_block = (
+                    ":443 {\n"
+                    "    tls internal\n"
+                    "    import tsushin_routes\n"
+                    "}\n\n"
+                )
+            else:
+                global_block = f"{{\n    default_sni {domain}\n}}\n\n"
+                site_block = (
+                    f"{domain} {{\n"
+                    f"    tls internal\n"
+                    f"    import tsushin_routes\n"
+                    f"}}\n\n"
+                )
             caddyfile_content = (
                 f"{global_block}"
                 f"{snippet_block}\n\n"
-                f"{domain} {{\n    tls internal\n    import tsushin_routes\n}}\n\n"
+                f"{site_block}"
                 f"{remote_access_block}\n"
             )
 
@@ -1447,7 +1460,8 @@ HTTPS_PORT=443
 NEXT_PUBLIC_API_URL={backend_url}
 
 # Optional local services
-KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
+# Kokoro TTS: auto-provisioned per-tenant via Hub → Kokoro TTS → Setup with Wizard.
+# The legacy KOKORO_SERVICE_URL / docker compose --profile tts path has been removed.
 """
 
         # Write .env file
@@ -1635,20 +1649,41 @@ KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
 
         # BuildKit required for backend/Dockerfile cache mounts (v0.6.0+).
         build_env = os.environ.copy()
+        build_env.setdefault("DOCKER_BUILDKIT", "1")
+
+        # BUG-655: detect the host arch so we can forward it as --build-arg
+        # TARGETARCH. Without BuildKit/buildx, `TARGETARCH` is NEVER populated
+        # inside the Dockerfile and the ARM-aware `ARCH=$([ "$TARGETARCH" =
+        # "arm64" ] && echo "arm64" || echo "amd64")` line silently falls back
+        # to amd64 — which then downloads amd64 binaries on aarch64 hosts and
+        # fails to install (nuclei/katana/httpx/subfinder all `exec format
+        # error` at the chmod step). Passing TARGETARCH explicitly fixes both
+        # classic `docker build` and buildx installs.
+        import platform as _platform
+        machine = (_platform.machine() or "").lower()
+        if machine in ("aarch64", "arm64"):
+            target_arch = "arm64"
+        elif machine in ("x86_64", "amd64"):
+            target_arch = "amd64"
+        else:
+            # Unknown host arch — let BuildKit figure it out. Omit the build-arg.
+            target_arch = None
 
         images_to_build = [
             {
                 "name": "WhatsApp MCP",
                 "image": "tsushin/whatsapp-mcp:latest",
                 "context": self.root_dir / "backend" / "whatsapp-mcp",
-                "dockerfile": None  # Uses default Dockerfile
+                "dockerfile": None,  # Uses default Dockerfile
+                "build_args": {},
             },
             {
                 "name": "Toolbox (Sandboxed Tools)",
                 "image": "tsushin-toolbox:base",
                 "context": self.root_dir,
-                "dockerfile": self.root_dir / "backend" / "containers" / "Dockerfile.toolbox"
-            }
+                "dockerfile": self.root_dir / "backend" / "containers" / "Dockerfile.toolbox",
+                "build_args": {"TARGETARCH": target_arch} if target_arch else {},
+            },
         ]
 
         for img in images_to_build:
@@ -1665,6 +1700,12 @@ KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
                 # Add dockerfile path if specified
                 if img['dockerfile']:
                     cmd.extend(["-f", str(img['dockerfile'])])
+
+                # BUG-655: forward per-image build args (TARGETARCH for toolbox).
+                for k, v in (img.get("build_args") or {}).items():
+                    if v is None:
+                        continue
+                    cmd.extend(["--build-arg", f"{k}={v}"])
 
                 cmd.append(str(img['context']))
 
@@ -1692,7 +1733,23 @@ KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
                 if process.returncode == 0:
                     print_success(f"{img['name']} image built successfully")
                 else:
-                    print_warning(f"{img['name']} image build failed (non-critical)")
+                    # BUG-655: toolbox image failures are the #1 cause of
+                    # noisy installer output on aarch64 hosts. Give users a
+                    # clearer, more actionable warning rather than the generic
+                    # "non-critical" message. The installer continues — the
+                    # toolbox is only needed for Sandboxed Tools features.
+                    print_warning(
+                        f"{img['name']} image build failed — continuing. "
+                        "This feature will be unavailable until the image is rebuilt."
+                    )
+                    if img['name'].startswith("Toolbox"):
+                        print_info(
+                            f"  Host arch: {target_arch or 'unknown'}. "
+                            "Rebuild manually with: "
+                            f"docker build -f {img['dockerfile']} "
+                            f"--build-arg TARGETARCH={target_arch or 'amd64'} "
+                            "-t tsushin-toolbox:base ."
+                        )
 
             except Exception as e:
                 print_warning(f"Could not build {img['name']} image: {e}")
@@ -1804,7 +1861,17 @@ KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
             proxy_url = f"https://{domain}"
             print_info(f"Waiting for SSL proxy at {proxy_url}...")
             import urllib3
+            import ssl as _ssl
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+            # BUG-658: track TLS handshake failures separately from plain
+            # connection errors so we can fail fast on persistent cert/SNI
+            # misconfiguration instead of burning 40s (20 attempts * 2s)
+            # looking at a handshake that will never succeed.
+            tls_error_streak = 0
+            TLS_FAIL_FAST_STREAK = 3  # ~6 seconds of consecutive TLS errors
+            last_tls_err: Optional[str] = None
+            succeeded = False
             for i in range(20):
                 try:
                     # Local loopback health-check against Caddy `tls internal` self-signed cert.
@@ -1813,13 +1880,36 @@ KOKORO_SERVICE_URL={self._get_default_kokoro_service_url()}
                     response = requests.get(proxy_url, timeout=3, verify=False)
                     if response.status_code in [200, 308, 404]:
                         print_success("SSL proxy is healthy")
+                        succeeded = True
                         break
-                except:
-                    pass
+                    tls_error_streak = 0
+                except (_ssl.SSLError, requests.exceptions.SSLError) as tls_err:
+                    tls_error_streak += 1
+                    last_tls_err = str(tls_err)
+                    if tls_error_streak >= TLS_FAIL_FAST_STREAK:
+                        print()
+                        print_error(
+                            "SSL proxy handshake is failing repeatedly — this is "
+                            "almost certainly a Caddy cert/SNI misconfiguration "
+                            "(e.g. `default_sni` mismatch, or the proxy was bound "
+                            "to an IP the cert does not cover)."
+                        )
+                        print_info(f"Last handshake error: {last_tls_err}")
+                        print_info(
+                            "See BUG-653: for IP-literal installs the generated "
+                            "Caddyfile should OMIT `default_sni`. Re-run install.py "
+                            "to regenerate, or edit caddy/Caddyfile manually."
+                        )
+                        break
+                except Exception:
+                    tls_error_streak = 0
                 time.sleep(2)
                 print(f"  Attempt {i+1}/20...", end='\r')
-            else:
-                print_warning("SSL proxy health check failed — services may still be accessible on direct ports")
+            if not succeeded:
+                print_warning(
+                    "SSL proxy health check failed — services may still be "
+                    "accessible on direct ports"
+                )
 
         print()
 

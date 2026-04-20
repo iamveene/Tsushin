@@ -27,7 +27,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /build
 
 # Copy requirements files
-COPY requirements-base.txt requirements-app.txt requirements-optional.txt requirements-phase4.txt ./
+COPY requirements-base.txt requirements-app.txt requirements-optional.txt requirements-phase4.txt requirements-dev.txt ./
 
 # Install tiered dependencies with BuildKit cache mounts for fast iterative rebuilds
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -41,6 +41,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$INSTALL_OPTIONAL_DEPS" = "true" ]; then \
         pip install -r requirements-optional.txt; \
     fi
+
+# BUG-641: Bake pytest + pytest-asyncio + pytest-cov into the runtime image so
+# regression/preflight scripts run out of the box via `docker exec tsushin-backend
+# python -m pytest ...`. These are tiny pure-Python packages (~3MB total) with
+# no runtime startup cost; the convenience of not having to `pip install` them
+# before every regression outweighs the marginal image-size bump.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-dev.txt
 
 # CPU-only torch wheel — skips ~4.3GB of NVIDIA/CUDA/triton binaries.
 # Embeddings (sentence-transformers) run on CPU via asyncio.to_thread().

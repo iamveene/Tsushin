@@ -1,10 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import Modal from '@/components/ui/Modal'
 import { api, VENDOR_LABELS } from '@/lib/client'
 import type { Agent, ProviderInstance } from '@/lib/client'
 import { AgentAvatarIcon } from './avatars/AgentAvatars'
+import { useAudioWizard } from '@/contexts/AudioWizardContext'
+
+type NewAgentKind = 'text' | 'voice' | 'hybrid'
 
 interface StudioAgentSelectorProps {
   agents: Agent[]
@@ -14,8 +18,10 @@ interface StudioAgentSelectorProps {
 }
 
 export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSelect, onAgentCreated }: StudioAgentSelectorProps) {
+  const router = useRouter()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [newAgentKind, setNewAgentKind] = useState<NewAgentKind>('text')
   const [newAgentName, setNewAgentName] = useState('')
   const [newAgentVendor, setNewAgentVendor] = useState('')
   const [newAgentModel, setNewAgentModel] = useState('')
@@ -23,6 +29,7 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
   const [createError, setCreateError] = useState('')
   const [allInstances, setAllInstances] = useState<ProviderInstance[]>([])
   const selectedAgent = agents.find(a => a.id === selectedAgentId)
+  const { openWizard: openAudioWizard } = useAudioWizard()
 
   // Fetch all configured provider instances once on mount
   useEffect(() => {
@@ -60,11 +67,34 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
 
   const handleCreate = async () => {
     if (!newAgentName.trim()) { setCreateError('Agent name is required'); return }
+
+    // Voice/Hybrid kinds hand off to the Audio Agents wizard so TTS/transcription
+    // skills get wired correctly in a single flow.
+    if (newAgentKind === 'voice' || newAgentKind === 'hybrid') {
+      setShowCreateModal(false)
+      openAudioWizard({
+        presetMode: 'new',
+        presetAgentType: newAgentKind === 'voice' ? 'voice' : 'hybrid',
+        presetNewAgentName: newAgentName.trim(),
+      })
+      setNewAgentName('')
+      setNewAgentKind('text')
+      return
+    }
+
     if (!newAgentVendor) { setCreateError('Select a provider — configure one in Hub > AI Providers first'); return }
     if (!newAgentModel.trim()) { setCreateError('Model name is required'); return }
     setCreating(true); setCreateError('')
     try {
       const defaultContactId = agents[0]?.contact_id || 1
+      // BUG-602 FIX: Unify the create-agent payload with the main Agents
+      // page modal (frontend/app/agents/page.tsx::handleCreate). The two
+      // flows used to produce visibly different agents — the studio
+      // path omitted ``keywords`` / ``tone_preset_id`` / ``custom_tone``
+      // / ``persona_id``, so agents created from Studio came out
+      // persona-less and tone-less while agents created from /agents
+      // inherited tenant smart-defaults. Now both flows send the same
+      // explicit-null shape and the backend applies the SAME defaults.
       const agent = await api.createAgent({
         contact_id: defaultContactId,
         system_prompt: `You are ${newAgentName.trim()}, a helpful AI assistant.`,
@@ -72,10 +102,24 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
         model_name: newAgentModel,
         provider_instance_id: newAgentInstanceId ?? undefined,
         is_active: true,
-      })
+        persona_id: null,
+        tone_preset_id: null,
+        custom_tone: null,
+        keywords: [],
+        is_default: false,
+      } as any)
       setShowCreateModal(false); setNewAgentName(''); onAgentCreated(agent.id)
     } catch (err) { setCreateError(err instanceof Error ? err.message : 'Failed to create agent') }
     finally { setCreating(false) }
+  }
+
+  // BUG-602 FIX: Offer a shortcut to the full /agents create modal for
+  // users who need persona/tone/keywords — keeps the studio quick-create
+  // for the 80% "I just need a bot" case while routing advanced needs
+  // into the single canonical create-agent surface.
+  const goToFullCreateFlow = () => {
+    setShowCreateModal(false)
+    router.push('/agents?create=1')
   }
 
   return (
@@ -105,16 +149,56 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
         <svg className="w-4 h-4 text-tsushin-slate" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.5v15m7.5-7.5h-15" /></svg>
       </button>
       <Modal isOpen={showCreateModal} onClose={() => setShowCreateModal(false)} title="Create New Agent" size="md"
-        footer={<div className="flex justify-end gap-3">
-          <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 text-sm text-tsushin-slate hover:text-white transition-colors">Cancel</button>
-          <button onClick={handleCreate} disabled={creating} className="px-4 py-2 text-sm bg-tsushin-indigo text-white rounded-lg hover:bg-tsushin-indigo/90 disabled:opacity-50 transition-all">{creating ? 'Creating...' : 'Create Agent'}</button>
+        footer={<div className="flex justify-between items-center gap-3 w-full">
+          <button
+            type="button"
+            onClick={goToFullCreateFlow}
+            className="text-xs text-teal-400 hover:text-teal-300 transition-colors"
+            title="Open the full Agent Studio create flow (persona, tone, keywords)"
+          >
+            Need persona / tone / keywords? Open full create flow →
+          </button>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 text-sm text-tsushin-slate hover:text-white transition-colors">Cancel</button>
+            <button onClick={handleCreate} disabled={creating} className="px-4 py-2 text-sm bg-tsushin-indigo text-white rounded-lg hover:bg-tsushin-indigo/90 disabled:opacity-50 transition-all">{creating ? 'Creating...' : (newAgentKind === 'text' ? 'Create Agent' : 'Continue in Audio Wizard →')}</button>
+          </div>
         </div>}>
         <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-tsushin-slate mb-2">Agent Type</label>
+            <div className="grid grid-cols-3 gap-2">
+              {(['text', 'voice', 'hybrid'] as NewAgentKind[]).map(kind => (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => setNewAgentKind(kind)}
+                  className={`px-3 py-2 rounded-lg border text-xs transition-colors ${
+                    newAgentKind === kind
+                      ? 'border-teal-400 bg-teal-500/10 text-white'
+                      : 'border-tsushin-border bg-tsushin-deep text-tsushin-slate hover:border-white/20'
+                  }`}
+                >
+                  <div className="font-medium capitalize">{kind}</div>
+                  <div className="text-[10px] opacity-70 mt-0.5">
+                    {kind === 'text' && 'Chat only'}
+                    {kind === 'voice' && 'TTS replies'}
+                    {kind === 'hybrid' && 'Transcribe + TTS'}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {(newAgentKind === 'voice' || newAgentKind === 'hybrid') && (
+              <p className="text-[11px] text-tsushin-slate mt-2">
+                Audio setup continues in the Audio Agents wizard after you click Continue.
+              </p>
+            )}
+          </div>
           <div>
             <label className="block text-sm font-medium text-tsushin-slate mb-1">Agent Name</label>
             <input type="text" value={newAgentName} onChange={(e) => setNewAgentName(e.target.value)} placeholder="e.g., Customer Support Bot"
               className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo" autoFocus />
           </div>
+          {newAgentKind === 'text' && (
           <div>
             <label className="block text-sm font-medium text-tsushin-slate mb-1">Provider</label>
             {configuredVendors.length === 0 ? (
@@ -131,7 +215,8 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
               </select>
             )}
           </div>
-          {vendorInstances.length > 1 && (
+          )}
+          {newAgentKind === 'text' && vendorInstances.length > 1 && (
             <div>
               <label className="block text-sm font-medium text-tsushin-slate mb-1">Instance</label>
               <select value={newAgentInstanceId ?? ''} onChange={(e) => {
@@ -148,7 +233,7 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
               </select>
             </div>
           )}
-          {newAgentVendor && (
+          {newAgentKind === 'text' && newAgentVendor && (
             <div>
               <label className="block text-sm font-medium text-tsushin-slate mb-1">Model</label>
               {(() => {

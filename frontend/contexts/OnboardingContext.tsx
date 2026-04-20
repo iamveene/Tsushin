@@ -46,7 +46,10 @@ const OnboardingContext = createContext<OnboardingContextType | undefined>(undef
 
 // BUG-319: Reduced from 9 to 8 (step 9 "Setup Checklist" removed — it duplicated GettingStartedChecklist)
 // v0.6.0: Raised to 12 — added four "What's New in v0.6.0" showcase pages at the start
-const TOTAL_STEPS = 12
+// v0.6.0 (Playground Mini): Raised to 13 — added a step highlighting the new floating Playground Mini bubble.
+// v0.7.0-preview (Sentinel nudge): Raised to 14 — added a Sentinel/MemGuard block-mode toggle before the finale.
+// v0.7.0 (Audio Agents wizard): Raised to 15 — added an optional "Voice Capabilities" step that launches the Audio Agents wizard.
+const TOTAL_STEPS = 15
 const LEGACY_STORAGE_KEY = 'tsushin_onboarding_completed'
 const STARTED_KEY_PREFIX = 'tsushin_onboarding_started'
 
@@ -115,23 +118,42 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       // BUG-325: If tour should have started but was deferred because guide was open,
       // start it now that the guide is closed — but ONLY if tour hasn't been dismissed/completed.
       // Check refs (not stale closure state) to avoid race conditions.
+      //
+      // BUG-626 FIX: The previous guard only checked two refs. If the
+      // provider remounts (tenant switch on a slow network, React Strict
+      // Mode double-invoke in dev, or a route-level error boundary
+      // recreating the tree), the refs are freshly ``false`` even though
+      // localStorage has the completion marker from the last Skip. The
+      // auto-start would then re-fire on the next guide-close and the
+      // wizard would silently reappear. Treat ``localStorage`` as the
+      // ultimate source of truth here — any completion / skip persisted
+      // against the active user must block restart unconditionally.
+      const storageKey = activeStorageKeyRef.current
+      const persistedCompleted = storageKey ? getCompletedForUser(storageKey) : false
+      if (persistedCompleted) {
+        // Resync the ref so later checks agree with localStorage.
+        tourDismissedRef.current = true
+        return
+      }
       if (!tourStartedRef.current && !tourDismissedRef.current) {
-        const storageKey = activeStorageKeyRef.current
-        const completed = storageKey ? getCompletedForUser(storageKey) : false
-        if (!completed) {
-          tourStartedRef.current = true
-          clearAutoStartTimer()
-          autoStartTimerRef.current = setTimeout(() => {
-            setState(prev => {
-              // Final check using prev state to be safe
-              if (!prev.isActive && !prev.hasCompletedOnboarding) {
-                return { ...prev, isActive: true, currentStep: 1, isMinimized: false }
-              }
-              return prev
-            })
-            autoStartTimerRef.current = null
-          }, 500)
-        }
+        tourStartedRef.current = true
+        clearAutoStartTimer()
+        autoStartTimerRef.current = setTimeout(() => {
+          // Re-read localStorage one more time at fire-time — the user
+          // may have hit Skip in the ~500 ms delay.
+          const key = activeStorageKeyRef.current
+          if (key && getCompletedForUser(key)) {
+            tourDismissedRef.current = true
+            return
+          }
+          setState(prev => {
+            if (!prev.isActive && !prev.hasCompletedOnboarding) {
+              return { ...prev, isActive: true, currentStep: 1, isMinimized: false }
+            }
+            return prev
+          })
+          autoStartTimerRef.current = null
+        }, 500)
       }
     }
     window.addEventListener('tsushin:open-user-guide', handleGuideOpen)
@@ -204,6 +226,18 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
           // Guide is open, or the user already launched/dismissed the tour.
           return
         }
+        // BUG-595: Final localStorage re-check at timer-fire time. The initial
+        // `completed` capture above is a closure over the effect run; if the
+        // user dismissed the tour on the home page and navigated to another
+        // route before the 1s timer fired, the refs above may not be in sync
+        // across context identity shifts — but localStorage always is. Treat
+        // it as the source of truth so a dismissed tour NEVER re-opens just
+        // because the user changed routes.
+        const key = activeStorageKeyRef.current
+        if (key && getCompletedForUser(key)) {
+          tourDismissedRef.current = true
+          return
+        }
         tourStartedRef.current = true
         // BUG-536: Persist "started" state so page reloads don't restart the tour from scratch
         if (activeStorageKeyRef.current) {
@@ -228,7 +262,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       ...prev,
       isActive: true,
       currentStep: 1,
-      isMinimized: false
+      isMinimized: false,
+      hasCompletedOnboarding: false,
     }))
   }
 

@@ -648,8 +648,11 @@ class QueueWorker:
             "semantic_similarity_threshold": getattr(config, "semantic_similarity_threshold", 0.3),
         }
 
-        # Build normalized message dict (same shape as WhatsApp/Telegram)
+        # Build normalized message dict (same shape as WhatsApp/Telegram).
+        # `id` is required by AgentRouter._cache_message which hard-indexes
+        # message["id"]; reuse source_id which is already unique per inbound.
         message = {
+            "id": source_id,
             "channel": "webhook",
             "body": message_text,
             "sender": sender_id,
@@ -661,7 +664,11 @@ class QueueWorker:
         }
 
         agent_router = AgentRouter(
-            db, config_dict, mcp_reader=None, webhook_instance_id=webhook_id
+            db,
+            config_dict,
+            mcp_reader=None,
+            webhook_instance_id=webhook_id,
+            tenant_id=integration.tenant_id,
         )
         await agent_router.route_message(message, "webhook")
 

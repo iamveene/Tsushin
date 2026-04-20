@@ -78,13 +78,16 @@ class SandboxedToolService:
         # Validate and render command template
         rendered_command = self._render_command(command, parameters)
 
-        # Create execution record
+        # Create execution record.
+        # BUG-614: persist tenant_id so the playground debug endpoint can
+        # filter history by tenant (see routes_playground.py).
         execution = SandboxedToolExecution(
             agent_run_id=agent_run_id,
             tool_id=tool_id,
             command_id=command_id,
             rendered_command=rendered_command,
-            status="pending"
+            status="pending",
+            tenant_id=self.tenant_id,
         )
         self.db.add(execution)
         self.db.commit()

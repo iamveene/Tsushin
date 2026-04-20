@@ -19,6 +19,7 @@ For each active MCPServerConfig:
 import asyncio
 import logging
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 
@@ -69,6 +70,19 @@ class MCPServerHealthCheckService:
     def is_running(self) -> bool:
         return self._running
 
+    @contextmanager
+    def _db_session_scope(self):
+        """Provide a short-lived DB session for health check persistence."""
+        db: Session = self._session_factory()
+        try:
+            yield db
+        finally:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -92,47 +106,42 @@ class MCPServerHealthCheckService:
         """Query all active MCP servers and check each one."""
         from models import MCPServerConfig
 
-        db: Session = self._session_factory()
-        try:
+        with self._db_session_scope() as db:
             servers = (
                 db.query(MCPServerConfig)
                 .filter(MCPServerConfig.is_active == True)  # noqa: E712
                 .all()
             )
-            if not servers:
-                return
+            server_snapshots = [(server.id, server.server_name) for server in servers]
 
-            checked = 0
-            healthy = 0
-            for server in servers:
-                try:
-                    ok = await self._check_server(server.id, server.server_name, db)
-                    checked += 1
-                    if ok:
-                        healthy += 1
-                except Exception as e:
-                    logger.error(
-                        "Health check failed for server %s (id=%d): %s",
-                        server.server_name, server.id, e,
-                    )
-                    checked += 1
+        if not server_snapshots:
+            return
 
-            logger.info(
-                "MCP health check cycle complete: %d/%d healthy (%d checked)",
-                healthy, len(servers), checked,
-            )
-        finally:
+        checked = 0
+        healthy = 0
+        for server_id, server_name in server_snapshots:
             try:
-                db.rollback()
-            except Exception:
-                pass
-            db.close()
+                ok = await self._check_server(server_id, server_name)
+                checked += 1
+                if ok:
+                    healthy += 1
+            except Exception as e:
+                logger.error(
+                    "Health check failed for server %s (id=%d): %s",
+                    server_name, server_id, e,
+                )
+                checked += 1
+
+        logger.info(
+            "MCP health check cycle complete: %d/%d healthy (%d checked)",
+            healthy, len(server_snapshots), checked,
+        )
 
     # ------------------------------------------------------------------
     # Single-server check
     # ------------------------------------------------------------------
 
-    async def _check_server(self, server_id: int, server_name: str, db: Session) -> bool:
+    async def _check_server(self, server_id: int, server_name: str) -> bool:
         """Check a single MCP server. Returns True if healthy.
 
         Strategy:
@@ -147,25 +156,26 @@ class MCPServerHealthCheckService:
 
         if status == "degraded":
             # Server is in circuit-breaker cooldown; don't poke it.
-            self._record_health(db, server_id, check_type="ping", success=False,
-                                error_message="Server in degraded cooldown, skipped")
+            with self._db_session_scope() as db:
+                self._record_health(db, server_id, check_type="ping", success=False,
+                                    error_message="Server in degraded cooldown, skipped")
             logger.debug("Skipping degraded server %s (id=%d)", server_name, server_id)
             return False
 
         if status == "connected":
-            return await self._ping_server(manager, server_id, server_name, db)
+            return await self._ping_server(manager, server_id, server_name)
 
         # Disconnected — attempt reconnect
-        return await self._reconnect_server(manager, server_id, server_name, db)
+        return await self._reconnect_server(manager, server_id, server_name)
 
     async def _ping_server(
-        self, manager, server_id: int, server_name: str, db: Session
+        self, manager, server_id: int, server_name: str
     ) -> bool:
         """Ping an already-connected server and record the result."""
         transport = manager._connections.get(server_id)
         if not transport:
             # Stale status — treat as disconnected
-            return await self._reconnect_server(manager, server_id, server_name, db)
+            return await self._reconnect_server(manager, server_id, server_name)
 
         t0 = time.monotonic()
         try:
@@ -173,49 +183,55 @@ class MCPServerHealthCheckService:
             latency_ms = int((time.monotonic() - t0) * 1000)
 
             if alive:
-                manager.record_success(server_id)
-                self._record_health(db, server_id, check_type="ping",
-                                    success=True, latency_ms=latency_ms)
+                with self._db_session_scope() as db:
+                    manager.record_success(server_id)
+                    self._record_health(db, server_id, check_type="ping",
+                                        success=True, latency_ms=latency_ms)
                 return True
             else:
                 latency_ms = int((time.monotonic() - t0) * 1000)
-                manager.record_failure(server_id, db, error="Ping returned False")
-                self._record_health(db, server_id, check_type="ping",
-                                    success=False, latency_ms=latency_ms,
-                                    error_message="Ping returned False")
+                with self._db_session_scope() as db:
+                    manager.record_failure(server_id, db, error="Ping returned False")
+                    self._record_health(db, server_id, check_type="ping",
+                                        success=False, latency_ms=latency_ms,
+                                        error_message="Ping returned False")
                 return False
 
         except asyncio.TimeoutError:
             latency_ms = int((time.monotonic() - t0) * 1000)
-            manager.record_failure(server_id, db, error="Ping timed out (15s)")
-            self._record_health(db, server_id, check_type="ping",
-                                success=False, latency_ms=latency_ms,
-                                error_message="Ping timed out (15s)")
+            with self._db_session_scope() as db:
+                manager.record_failure(server_id, db, error="Ping timed out (15s)")
+                self._record_health(db, server_id, check_type="ping",
+                                    success=False, latency_ms=latency_ms,
+                                    error_message="Ping timed out (15s)")
             logger.warning("Ping timed out for server %s (id=%d)", server_name, server_id)
             return False
 
         except Exception as e:
             latency_ms = int((time.monotonic() - t0) * 1000)
             error_msg = f"Ping error: {e}"
-            manager.record_failure(server_id, db, error=error_msg)
-            self._record_health(db, server_id, check_type="ping",
-                                success=False, latency_ms=latency_ms,
-                                error_message=error_msg[:500])
+            with self._db_session_scope() as db:
+                manager.record_failure(server_id, db, error=error_msg)
+                self._record_health(db, server_id, check_type="ping",
+                                    success=False, latency_ms=latency_ms,
+                                    error_message=error_msg[:500])
             logger.warning("Ping failed for server %s (id=%d): %s", server_name, server_id, e)
             return False
 
     async def _reconnect_server(
-        self, manager, server_id: int, server_name: str, db: Session
+        self, manager, server_id: int, server_name: str
     ) -> bool:
         """Attempt to reconnect a disconnected server and record the result."""
         t0 = time.monotonic()
         try:
-            await asyncio.wait_for(
-                manager.get_or_connect(server_id, db), timeout=30
-            )
+            with self._db_session_scope() as db:
+                await asyncio.wait_for(
+                    manager.get_or_connect(server_id, db), timeout=30
+                )
             latency_ms = int((time.monotonic() - t0) * 1000)
-            self._record_health(db, server_id, check_type="reconnect",
-                                success=True, latency_ms=latency_ms)
+            with self._db_session_scope() as db:
+                self._record_health(db, server_id, check_type="reconnect",
+                                    success=True, latency_ms=latency_ms)
             logger.info("Reconnected MCP server %s (id=%d) in %dms",
                         server_name, server_id, latency_ms)
             return True
@@ -223,20 +239,22 @@ class MCPServerHealthCheckService:
         except asyncio.TimeoutError:
             latency_ms = int((time.monotonic() - t0) * 1000)
             error_msg = "Reconnect timed out (30s)"
-            manager.record_failure(server_id, db, error=error_msg)
-            self._record_health(db, server_id, check_type="reconnect",
-                                success=False, latency_ms=latency_ms,
-                                error_message=error_msg)
+            with self._db_session_scope() as db:
+                manager.record_failure(server_id, db, error=error_msg)
+                self._record_health(db, server_id, check_type="reconnect",
+                                    success=False, latency_ms=latency_ms,
+                                    error_message=error_msg)
             logger.warning("Reconnect timed out for server %s (id=%d)", server_name, server_id)
             return False
 
         except Exception as e:
             latency_ms = int((time.monotonic() - t0) * 1000)
             error_msg = f"Reconnect error: {e}"
-            manager.record_failure(server_id, db, error=error_msg)
-            self._record_health(db, server_id, check_type="reconnect",
-                                success=False, latency_ms=latency_ms,
-                                error_message=error_msg[:500])
+            with self._db_session_scope() as db:
+                manager.record_failure(server_id, db, error=error_msg)
+                self._record_health(db, server_id, check_type="reconnect",
+                                    success=False, latency_ms=latency_ms,
+                                    error_message=error_msg[:500])
             logger.warning("Reconnect failed for server %s (id=%d): %s",
                            server_name, server_id, e)
             return False

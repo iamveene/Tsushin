@@ -76,7 +76,7 @@ Tsushin ships as a Docker Compose stack defined in `docker-compose.yml`. The cor
 | `tsushin-docker-proxy` | `tecnativa/docker-socket-proxy:latest` | 2375 (internal) | Restricts the Docker API surface to reduce container-escape risk. Backend talks to `tcp://docker-socket-proxy:2375` rather than mounting the raw socket. | `docker-compose.yml:43-75` |
 | `tsushin-backend` | Built from `./backend/Dockerfile` | `${TSN_APP_PORT:-8081}` | FastAPI app. Agents, flows, memory, skills, channels, API v1, WebSockets. | `docker-compose.yml:80-168` |
 | `tsushin-frontend` | Built from `./frontend/Dockerfile` | `${FRONTEND_PORT:-3030}` | Next.js 16 UI (Watcher, Hub, Studio, Playground, Settings). | `docker-compose.yml:173-195` |
-| `kokoro-tts` (profile `tts`) | `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4` | 8880 | Optional local text-to-speech. | `docker-compose.yml:200-224` |
+| *(removed v0.7.0)* `kokoro-tts` | — | — | Stack-level Kokoro service removed. Kokoro runs as per-tenant auto-provisioned containers managed by `KokoroContainerManager`, configured via Hub → Kokoro TTS → Setup with Wizard. See §20.6. | `models.py` (`TTSInstance`), `backend/services/kokoro_container_manager.py` |
 
 **Network:** All services attach to the **external** bridge network `tsushin-network`. The network is declared `external: true`, so `docker compose down` does not remove it. That matters because MCP WhatsApp bot containers (spawned dynamically by `ToolboxContainerService` / `MCPContainerManager`) also join this network. Create the network once with `docker network create tsushin-network`; `install.py` handles this automatically. Source: `docker-compose.yml:229-237`.
 
@@ -288,8 +288,9 @@ docker compose logs --tail=100 backend
 # Stop without removing network (SAFE)
 docker compose stop backend
 
-# Optional profiles
-docker compose --profile tts up -d        # Add Kokoro TTS
+# Local TTS (Kokoro): no compose profile. Configure a per-tenant instance at
+#   Hub → Kokoro TTS → Setup with Wizard.
+# The legacy `docker compose --profile tts up -d` path was removed in v0.7.0.
 
 # Tester note
 # The current repo does not define a `testing` compose profile.
@@ -297,7 +298,7 @@ docker compose --profile tts up -d        # Add Kokoro TTS
 # or the active runtime tester instance for the tenant.
 ```
 
-Source: `docs/docker.md:114-169`, `docker-compose.yml:220-226` (tts profile).
+Source: `docs/docker.md:114-169`. (The `tts` compose profile was removed in v0.7.0 — Kokoro runs as per-tenant auto-provisioned instances now.)
 
 ### 4.2 Container rebuild safety (SAFE vs UNSAFE)
 
@@ -388,6 +389,45 @@ GCP provider features (`services/secret_provider.py:148-267`):
 
 ---
 
+### 4.6 Emergency Stop (tenant + global kill switches)
+
+Two independent kill switches sit in the header and gate every ingress point (WhatsApp, Telegram, Slack, Discord, webhooks, API triggers). Either switch being `true` halts processing for the messages it covers.
+
+| Scope | Storage | Permission | Endpoint (stop / resume) | What it halts |
+|---|---|---|---|---|
+| **Tenant** | `tenant.emergency_stop` | `org.settings.write` (tenant owners) | `POST /api/system/emergency-stop` / `POST /api/system/resume` | All channels/triggers for the caller's tenant only. Other tenants keep running. |
+| **Global** | `config.emergency_stop` | `is_global_admin = true` (enforced by `require_global_admin()`) | `POST /api/system/global-emergency-stop` / `POST /api/system/global-resume` | Every tenant on the instance. Reserved for platform-wide incidents. |
+
+`GET /api/system/status` returns both flags so the frontend can render the correct UI state:
+
+```json
+{
+  "emergency_stop": false,          // legacy: tenant OR global, kept for older clients
+  "tenant_emergency_stop": false,
+  "global_emergency_stop": false,
+  "is_global_admin": false,
+  "tenant_id": "tenant_...",
+  "tenant_name": "Tsushin QA",
+  "maintenance_mode": false
+}
+```
+
+**Enforcement points** (both flags checked at each; either true → block):
+- `backend/mcp_reader/filters.py` — MCP ingress filter; `MessageFilter` takes a `tenant_id` kwarg (passed from `services/watcher_manager.py` as `instance.tenant_id`).
+- `backend/agent/router.py` — router-level block; uses `self.tenant_id` already tracked on the `AgentRouter`. Log lines tagged `[EMERGENCY STOP:global]` vs `[EMERGENCY STOP:tenant]`.
+- `backend/api/routes_webhook_inbound.py` — webhook inbound ingress; reads `integration.tenant_id` and returns HTTP 503 when blocked.
+
+All three fail-open on DB errors — a transient outage never silently halts a tenant.
+
+**UI behaviour** (`frontend/components/LayoutContent.tsx`):
+- Tenant toggle (always visible for anyone with `org.settings.write`): green "Online" / red "Tenant Stopped". Confirmation modal names the tenant explicitly.
+- Global toggle (only rendered when `user.is_global_admin`): purple "Global" / amber "Global Stopped" with a shield icon. Confirmation modal titled "Halt ALL Tenants?".
+- When the global flag is true, the tenant toggle is disabled with tooltip "Blocked by GLOBAL stop" — prevents a tenant owner from resuming into a no-op.
+
+Both flags are polled from `/api/system/status` every 10 seconds.
+
+---
+
 ---
 
 ## 5. System Configuration
@@ -464,7 +504,13 @@ All authentication endpoints live under `/api/auth/` (`backend/auth_routes.py:69
 
 * Name: `tsushin_session`
 * `httpOnly=true`, `SameSite=Lax`, `max_age=86400` (24 h, matches JWT expiry)
-* `secure` flag is set when `TSN_SSL_MODE` is anything other than `""`, `off`, `none`, `disabled`.
+* `secure` flag follows the effective request scheme when the backend can see it, so local HTTP and local HTTPS entrypoints can coexist.
+* Google SSO callback URLs are resolved from the incoming request origin. When local self-signed HTTPS is enabled, loopback HTTP entrypoints such as `http://127.0.0.1:3030` hand off Google SSO to the configured HTTPS callback (`https://localhost/api/auth/google/callback`) so the same Google OAuth client works on both local origins.
+
+**Local auth recovery / pool guardrails (2026-04-18):**
+
+* Auth bootstrap now fails closed into `/auth/login?force=1&reason=session-recovery` instead of leaving protected routes stuck on `Loading Tsushin...` when `/api/auth/me` hangs or times out.
+* Backend PostgreSQL connections set `idle_in_transaction_session_timeout` from `TSN_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` (default `15000`) to keep stale browser tabs or leaked request paths from saturating the pool long enough to break login or Google SSO.
 
 ### 6.2 Multi-tenancy model
 
@@ -507,6 +553,67 @@ Full role → permission mapping is defined in `backend/migrations/add_rbac_tabl
 
 Every global-admin action is recorded in the `global_admin_audit_log` table (`models_rbac.py:217-230`).
 
+### 6.5 User Invitations (tenant + global scope)
+
+Invitations are the primary way to onboard both tenant-scoped users and platform-wide global admins. Stored in `user_invitation` (`backend/models_rbac.py:153-176`).
+
+| Field | Type | Notes |
+|---|---|---|
+| `tenant_id` | String(50), **nullable** | `NULL` for global-admin invites |
+| `role_id` | Integer, **nullable** | `NULL` for global-admin invites |
+| `is_global_admin` | Boolean NOT NULL default false | When true, acceptance creates `User.is_global_admin=true` with no `UserRole` row |
+| `auth_provider` | VARCHAR(16) NOT NULL default `'local'` | `local` (invitee sets a password) or `google` (invitee must accept via Google SSO; email must match) |
+| `invitation_token` | VARCHAR(255) unique | SHA-256 **hash** of the token; the raw token is sent by email and returned by the invite endpoint |
+| `expires_at` | Timestamp | 7 days by default |
+| `accepted_at` | Timestamp, nullable | Set on successful accept |
+
+**Invariants** (enforced both in ORM and via PostgreSQL CHECK constraints):
+- `ck_invitation_scope` — `(is_global_admin=TRUE AND tenant_id IS NULL AND role_id IS NULL)` XOR `(is_global_admin=FALSE AND tenant_id IS NOT NULL AND role_id IS NOT NULL)`.
+- `ck_invitation_auth_provider` — `auth_provider IN ('local', 'google')`.
+- Partial unique index `uq_invitation_tenant_email_pending ON (tenant_id, email) WHERE accepted_at IS NULL` — prevents duplicate pending invites while allowing re-invites after accept/cancel.
+
+**Endpoints.**
+
+| Caller | Method | Path | Notes |
+|---|---|---|---|
+| Tenant owner (users.invite) | POST | `/api/team/invite` | Tenant-scoped only; body accepts `auth_provider` |
+| Tenant owner | GET/DELETE/POST | `/api/team/invitations[/{id}][/resend]` | List / cancel / resend |
+| Global admin | POST | `/api/admin/invitations` | Body: `{email, tenant_id?, role?, is_global_admin, auth_provider, message?}`; returns the raw invitation link |
+| Global admin | GET | `/api/admin/invitations` | Filters: `is_global_admin`, `tenant_id`, `email_contains`, `page`, `page_size` |
+| Global admin | DELETE | `/api/admin/invitations/{id}` | Cancels a pending invite |
+| Unauthenticated | GET | `/api/auth/invitation/{token}` | Returns invite info for the accept page — nullable `tenant_name`/`role_display_name` for global-admin invites, plus `auth_provider` and `is_global_admin` |
+| Unauthenticated | POST | `/api/auth/invitation/{token}/accept` | Password-accept path. Rejects `auth_provider=google` invites with HTTP 400 |
+
+**Accept flow branching** (`backend/auth_routes.py:accept_invitation`, `backend/auth_google.py:find_or_create_user`):
+
+1. Token looked up by its SHA-256 hash; expired/accepted invites rejected.
+2. If `auth_provider=google` and the caller is using the password form → HTTP 400 "Must accept via Google SSO".
+3. If `is_global_admin=true` → create `User(tenant_id=NULL, is_global_admin=True, auth_provider='local'|'google')`; do **not** create a `UserRole` row.
+4. Else (tenant-scoped) → create `User(tenant_id=invitation.tenant_id, is_global_admin=False)` + `UserRole(role_id=invitation.role_id, tenant_id=invitation.tenant_id)`.
+5. For Google SSO accept: enforce `invitation.email == google.email` (case-insensitive); if an existing user with that email already exists and the invite is global-scope, reject — invitations cannot silently upgrade an existing account.
+
+**UI entry points.**
+- Tenant owner: `/settings/team/invite` — form with email / role / **Sign-in method** radio / message. The "Google SSO" radio is disabled (with a tooltip) when the tenant has no Google SSO configured.
+- Global admin: `/system/users` → **Invite User** button. Modal leads with an explicit two-option **kind picker** — *Tenant User* (default) or *Global Admin* — to make the multi-tenant mental model unambiguous. Tenant-user path requires a non-empty Organization (dropdown labeled `{name} — {slug} ({user_count} members)`) and a role in `owner | admin | member | readonly`; Global-admin path hides tenant + role entirely. Submit button stays disabled until required fields for the active kind are filled. The same picker appears on the break-glass **+ Create User** modal. Backed by `POST /api/admin/invitations/` / `POST /api/admin/users/` (both accept `is_global_admin`).
+- Invitee: `/auth/invite/[token]` — header/body adapt to global-admin invites and Google-only invites automatically.
+
+### 6.6 Global vs tenant Google SSO independence
+
+Platform-wide Google SSO is stored in the `global_sso_config` singleton (since 2026-04-18) and managed via `/api/admin/sso-config`. Per-tenant SSO remains in `TenantSSOConfig` + `GoogleOAuthCredentials`. See §22.3 for fields and the UI; see the credential-resolution order in that section. The two scopes are fully independent — changing one does not affect the other. Auto-provisioning of global admins is not enabled by default; global admins are created exclusively via invitation.
+
+`GET /api/auth/google/authorize` requires explicit scope selection — either `tenant_slug=<slug>` for tenant-scoped SSO or `platform=true` for global-admin SSO. Requests without scope return `400` (previously they silently fell back to the first tenant with SSO enabled). Combining `tenant_slug` with `platform=true` also returns `400`.
+
+### 6.7 WebSocket authentication guarantees
+
+The `/ws/shell/status` and beacon-status handlers (`backend/api/shell_websocket.py`) perform the full auth chain on every JWT-authenticated connection:
+
+1. JWT signature + expiry.
+2. `User.is_active == True` AND `User.deleted_at IS NULL` (deactivated users are rejected even with a non-expired token).
+3. `tenant_id` claim matches the User's current tenant.
+4. At least one `shell.*` permission granted in the tenant scope.
+
+Failures close the socket with code `4003` (forbidden). API-key-authenticated beacon connections additionally verify the tenant is not `deleted_at`-tombstoned and not emergency-stopped. This closes the vectors previously tracked under BUG-612 + BUG-613.
+
 ---
 
 
@@ -516,10 +623,42 @@ Agents are AI assistants scoped to a tenant, each linked to a `Contact` record (
 
 Source: `backend/models.py:300-392` (Agent model)
 
-### 7.1 Create / Edit Agent Form
+### 7.1 Creating Agents — Guided vs Advanced Mode
+
+Studio → Agents ships **two creation surfaces**, toggled per-user via `localStorage['tsushin:agentWizardMode']` (default: `guided`).
+
+**Guided Mode (default)** — multi-step wizard branching on agent type. Source: `frontend/components/agent-wizard/AgentWizard.tsx` and `steps/*`, provider at `frontend/contexts/AgentWizardContext.tsx`, pure reducer at `frontend/lib/agent-wizard/reducer.ts`.
+
+Step graph (text agents skip step 4):
+
+| # | Step | Purpose |
+|---|---|---|
+| 1 | Type | Text / Audio / Hybrid — branch selector |
+| 2 | Basics | Name, optional phone, model provider + model |
+| 3 | Personality | Persona + tone OR custom system prompt (with starter-role chips per type) |
+| 4 | Voice *(audio/hybrid only)* | Capability (voice/transcript/hybrid), TTS provider (Kokoro/OpenAI/ElevenLabs), voice/language/speed/format, Kokoro container auto-provision |
+| 5 | Skills | Built-in + custom skills; `audio_*` auto-selected and locked for audio/hybrid |
+| 6 | Memory | Built-in ring buffer / built-in + semantic / external vector store; memory size slider |
+| 7 | Channels | playground / whatsapp / telegram / slack / discord / webhook |
+| 8 | Review | Per-section summary with Edit buttons that jump back |
+| 9 | Progress | Chained provisioning spinner; on success navigates to `/playground?agentId=<id>` |
+
+**Chained API calls** (from `useCreateAgentChain`):
+1. Contact resolve/create (case-insensitive by `friendly_name`).
+2. `POST /api/agents` with minimal payload (contact_id, system_prompt, persona_id / tone_preset_id, model_provider, model_name).
+3. `PUT /api/agents/{id}` with extended config (memory_size, memory_isolation_mode, enable_semantic_search, enabled_channels, vector_store_instance_id, vector_store_mode).
+4. Per-skill fan-out: `PUT /api/agents/{id}/skills/{type}` sequentially.
+5. Custom skills: `POST /api/agents/{id}/custom-skills` per selected id.
+6. Audio (audio/hybrid only): Kokoro → `POST /api/tts-instances`, poll `GET /api/tts-instances/{id}/container-status`, then `POST /api/tts-instances/{id}/assign-to-agent`. OpenAI/ElevenLabs → `PUT /api/agents/{id}/skills/audio_tts` with provider config only.
+
+**Partial-failure handling.** If any stage after step 2 fails, the agent row is preserved; the Progress step surfaces the failing stage and links to `/agents/{id}` in Studio rather than cascading a rollback delete.
+
+**Advanced Mode** — the pre-existing single-form modal at `frontend/app/agents/page.tsx:~749-1069` with all fields on one page. Includes a "Switch to Guided" link in its header. When the user switches from Guided → Advanced mid-wizard, the current draft is read from `AgentWizardContext.persistedDraft` and pre-filled into the form (dismissible banner announces the pre-fill).
+
+### 7.1a Create / Edit Agent Form (Advanced Mode)
 
 The "Create New Agent" modal on Studio → Agents exposes the fields below.
-Source: `frontend/app/agents/page.tsx:22-36` (form interface) and `:726-990` (form JSX).
+Source: `frontend/app/agents/page.tsx:22-36` (form interface) and `:749-1069` (form JSX).
 
 | Field | Type | Notes | Source |
 |---|---|---|---|
@@ -620,7 +759,9 @@ Two skills drive inter-agent behavior:
 
 Set the mode per-agent in Studio → Skills → Agent Switcher → Config. The schema is defined at `backend/agent/skills/agent_switcher_skill.py:505-509`.
 
-The Studio → Agent Communication page (`frontend/app/agents/communication/page.tsx`) mounts `AgentCommunicationManager` to manage inter-agent messaging permissions and monitor communication sessions.
+**A2A Communications live in Studio** (`/agents/communication`) — a first-class Studio tab sitting between Security and Builder in the Studio sub-nav. It mounts `A2APermissionsManager` (`frontend/components/studio/A2APermissionsManager.tsx`), which owns the full permission-rule CRUD: Source/Target/Max Depth/Rate Limit/Target Skills/Status/Delete table plus the Add-Permission modal. Observability (session log + statistics) lives separately in Watcher → A2A Comms (`frontend/components/watcher/CommunicationTab.tsx`), which is read-only since v0.7.2 and shows a banner pointing back to Studio for rule management.
+
+**Per-permission `allow_target_skills` toggle (v0.7.2).** Each row in `agent_communication_permission` carries an opt-in boolean, exposed in Studio → A2A Communications as an amber inline toggle in the rules table and as a checkbox in the Add-Permission modal. When `false` (default), the target runs with `disable_skills=True` on its `AgentService` — pure LLM-knowledge reply, preserving the original A2A contract. When `true`, the target loads its own skills (gmail, sandboxed_tools, shell, …) during the A2A call, which is what lets "Tsushin, ask movl for the latest emails" actually reach movl's Gmail mailbox. Recursion stays bounded by the row's `max_depth` + `rate_limit_rpm`, and Sentinel analysis + permission checks still run. Implementation: `backend/services/agent_communication_service.py::send_message` reads the permission, `_invoke_target_agent` maps it to `disable_skills=not allow_target_skills`. API contract: `PermissionCreateRequest`, `PermissionUpdateRequest`, and `PermissionResponse` all carry the field (`backend/api/routes_agent_communication.py`).
 
 ---
 
@@ -1144,6 +1285,32 @@ Custom profiles per tenant are allowed via `SentinelProfile` records and cloning
 
 - **detection_mode**: `off` | `warn_only` | `detect_only` | `block`
 - **aggressiveness_level**: 0 (off) | 1 (moderate) | 2 (aggressive) | 3 (extra aggressive). Controls which `DEFAULT_PROMPTS` template is used per detection (Source: `sentinel_detections.py:146-196`).
+- **Strict-superset guarantee:** level-3 (`UNIFIED_CLASSIFICATION_PROMPT[3]`) is built to always catch every level-1 trigger plus additional aggressive phrasings. Promotions to level-3 never lose coverage versus level-1 (`sentinel_detections.py`).
+
+### 12.3a Heuristic Floor (provider-independent)
+
+A regex/keyword layer runs BEFORE any LLM call in `SentinelService._analyze_unified` and also in the LLM-error fallback path. Defined in `backend/agent/sentinel/heuristics.py` and invoked via `SentinelService._heuristic_floor_result`. Families covered:
+
+- `prompt_injection` — "ignore previous instructions", "ignore prior rules", "disregard all above", "start fresh", "developer mode", DAN/jailbreak tokens.
+- `agent_takeover` — "you are now X", "from now on you are", "act as the system", persona-override phrasings.
+- `agent_escalation` — "delegate to another agent and bypass", "have another agent", escalation-to-privileged-agent phrasings.
+- `memory_poisoning` (credential) — "remember forever the production api key", "embed this sentence as a high-priority fact", "store this as a system instruction".
+- `memory_poisoning` (behavior prefix) — "always start every future reply with X", permanent-behavior-override phrasings.
+- `vector_store_poisoning` — persistent-marker injections aimed at semantic/vector memory.
+- `shell_malicious` — classic shell-injection phrasings.
+- `browser_ssrf` — link-metadata / 169.254 / localhost-browsing phrasings.
+
+The heuristic logs with `llm_provider="heuristic"`. It fires in `block`, `warn_only`, and `detect_only` modes and respects per-profile detection toggles. Result: Sentinel is no longer a no-op on installs without an LLM API key, and fail-closed timeouts in block mode are rarer because the heuristic short-circuits common attack phrasings before the LLM is called.
+
+### 12.3b Fact-Extractor Untrusted-Content Guard
+
+`backend/agent/memory/fact_extractor.py` now treats user-turn content as *quotation*, not instruction. Before the LLM fact-extraction call, `_sanitize_conversation_for_extraction` drops user turns that match prompt-injection markers. After extraction, `_filter_untrusted_facts`:
+
+- Refuses any `instructions`-topic fact unless a trusted assistant/system turn is present.
+- Drops facts whose `value` or `context` text itself matches injection markers.
+- Caps any surviving `instructions`-topic fact at `confidence=0.9` (previously 0.95–0.98).
+
+This is the primary defence against stored prompt-injection via memory poisoning, and runs regardless of which detection mode Sentinel is in.
 
 ### 12.4 Notifications & WhatsApp Alerts
 
@@ -1404,7 +1571,7 @@ The wizard can also be launched manually from the Hub Communication tab or auto-
 **Graph + Studio consistency:** Graph View consumes `resolved_whatsapp_integration_id`, `whatsapp_binding_status`, and `whatsapp_binding_source` from `/api/v2/agents/graph-preview`. This allows Graph to show:
 - solid edge for explicit binding
 - dashed edge for resolved-default binding
-- `WhatsApp Unassigned` warning node when the channel is enabled but ambiguous/unassigned
+- `WhatsApp Unassigned` warning node when the channel is enabled but ambiguous/unassigned — **suppressed on a truly fresh tenant** (zero WhatsApp instances *and* no agent carrying a stale `whatsapp_integration_id` pointing at a missing instance). The warning still surfaces when a real stale explicit binding exists so operators see the drift signal without first-run noise.
 
 **Getting Started Checklist:** The Watcher dashboard displays a "Getting Started" widget tracking 5 setup milestones: Configure Agent, Connect Channel, Add Contacts, Test in Playground, Create Flow. It auto-hides when all items are complete and can be dismissed.
 
@@ -1458,6 +1625,42 @@ Capability flags (`adapter.py:19-25`):
 7. **Assign to an agent** — on the agent's Channels tab, set `telegram_integration_id`.
 8. **Test** — message the bot on Telegram; it should respond via the assigned agent.
 
+### 15.2a Public Ingress Resolver
+
+**Source:** `backend/services/public_ingress_resolver.py`, `backend/api/routes_tenant_settings.py`, `frontend/components/PublicBaseUrlCard.tsx`.
+
+Slack HTTP Events, Discord Interactions, and Webhook-as-Channel all need a public HTTPS URL that reaches this backend. Three mechanisms could provide one, and before v0.6.1 they were inconsistent. The resolver unifies them.
+
+**Endpoint (tenant-facing):**
+```
+GET /api/tenant/me/public-ingress
+→ { "url": "https://...", "source": "override"|"tunnel"|"dev"|"none",
+    "warning": null|string, "override_url": null|string }
+```
+
+**Precedence (first match wins):**
+
+1. **`override`** — `tenant.public_base_url` (the Ingress Override card in Hub → Communication). Set and format-valid ⇒ this wins. Set but invalid ⇒ `source=override`, `url=null`, `warning` explains the problem (so the UI can surface the stored-but-broken state instead of silently falling through).
+2. **`tunnel`** — the global Remote Access tunnel (`/system/remote-access`) is running and has a `public_url`. **Intentionally decoupled from the `remote_access_enabled` login gate**: a tenant can receive webhooks via the shared tunnel path even when tunnel-based login is disabled for their users.
+3. **`dev`** — `TSN_DEV_PUBLIC_BASE_URL` environment variable on the backend. Dev escape hatch only; must not be set in production.
+4. **`none`** — no ingress; the UI shows a call-to-action banner.
+
+**Validation on `PATCH /api/tenant/me/settings`:**
+- Requires `https://` in production (`http://` allowed only when `TSN_DEV_PUBLIC_BASE_URL` is set).
+- Rejects credential-laced URLs (`user:pass@host`).
+- Requires a public FQDN (`localhost` and single-label hostnames rejected).
+- DNS pre-resolution (async, 2 s timeout) — typos are caught at save time.
+- Every write logged via `log_tenant_event(..., TenantAuditActions.SETTINGS_UPDATE, ...)` with userinfo scrubbed from logged old/new values.
+
+**Consumers.** `SlackSetupWizard`, `DiscordSetupWizard`, `WebhookSetupModal`, and the inline "Inbound:" copy button on the Webhook card in Hub all call `api.getMyPublicIngress()` and render a source badge ("via platform tunnel", "tenant override", "dev environment"). The **PublicBaseUrlCard** (renamed "Ingress Override (Advanced)") always displays the currently-resolved URL and its source, with a collapsible override input that auto-expands when `source === 'none'`.
+
+**Operator guidance:**
+- **SaaS deployments:** enable Remote Access globally and toggle `remote_access_enabled` per tenant for login; Slack/Discord webhooks work for every tenant without additional setup. Override is for exceptions (branded domains, corporate proxies).
+- **Self-hosted without a tunnel:** set `TSN_DEV_PUBLIC_BASE_URL` or use the tenant override. Both work.
+- **Local dev:** `TSN_DEV_PUBLIC_BASE_URL=https://<your-tunnel>.trycloudflare.com docker-compose up -d --build backend` — no tenant override needed, no global tunnel config needed.
+
+**Invitation-link consumer (since 2026-04-19):** the resolver backs `resolve_invitation_base_url(request, tenant)`, a multi-tenant-aware helper used by the tenant (`POST /api/team/invite`) and global-admin (`POST /api/admin/invitations`) invite endpoints plus the email service. Precedence for building the absolute invite URL: invitation's **own** `tenant.public_base_url` (never the calling admin's tenant) → platform tunnel → request origin (honoring `X-Forwarded-Proto` / `X-Forwarded-Host` so Cloudflare named-tunnel hostnames survive the Caddy proxy) → `FRONTEND_URL` env. This ensures the same link is portable across `https://localhost` QA, `http://localhost:3030` dev, branded tenant domains, and Cloudflare Tunnel — and safe under concurrent multi-tenant invites. Unit-tested via `backend/tests/test_invitation_link_portability.py` (9 cases).
+
 ### 15.3 Slack
 
 **Source:** `backend/channels/slack/adapter.py`
@@ -1495,7 +1698,7 @@ Capability flags (`adapter.py:20-26`):
    - For **Socket Mode** (recommended): enable Socket Mode under Settings, then generate an **App-Level Token** with the `connections:write` scope (you'll get an `xapp-...` token).
    - For **HTTP Events API**: the Tsushin UI will show you the exact Request URL after you save the integration — paste that into Event Subscriptions → Request URL. Also copy the Signing Secret and App ID from Basic Information.
 2. **Install the app** to your workspace — copy the `xoxb-` bot token from OAuth & Permissions.
-3. (HTTP mode only) Configure your tenant's **Public Base URL** in Hub → Communication first — this is the publicly-reachable HTTPS URL Slack will POST to. Socket Mode does not need this.
+3. (HTTP mode only) Ensure a **Public Ingress** is available for this tenant — either the global Remote Access tunnel (enabled via `/system/remote-access`) or an **Ingress Override** set in Hub → Communication. See §15.2a for how the resolver picks between them. Socket Mode does not need a public ingress.
 4. Navigate to **Hub → Channels → Slack** in the UI.
 5. Click **Connect Workspace** — paste the bot token plus the App-Level Token (Socket Mode) or the App ID + Signing Secret (HTTP mode). The modal will preview the exact webhook URL for HTTP mode.
 6. Set `dm_policy` — `open` to accept all DMs, `allowlist` to restrict to specific channels, or `disabled`.
@@ -1537,7 +1740,7 @@ Capability flags (`adapter.py:27-33`):
 
 **E2E setup — Discord channel:**
 
-1. Configure your tenant's **Public Base URL** in Hub → Communication first. Discord requires a publicly-reachable HTTPS URL for the Interactions endpoint — there is no Socket Mode equivalent. For local dev, run `cloudflared tunnel --url http://localhost:8081` and paste the resulting `https://*.trycloudflare.com` URL.
+1. Ensure this tenant has a **Public Ingress** — either the platform-managed Remote Access tunnel (global admin enables it in `/system/remote-access`) or an **Ingress Override** set in Hub → Communication. See §15.2a. Discord requires a publicly-reachable HTTPS URL for the Interactions endpoint — there is no Socket Mode equivalent. For local dev without a tunnel, set `TSN_DEV_PUBLIC_BASE_URL` in the backend environment and restart the container.
 2. **Create a Discord Application** at [discord.com/developers](https://discord.com/developers/applications).
 3. On **General Information**: copy the **Application ID** and the **Public Key** (64-character hex Ed25519). Both are required by Tsushin.
 4. Under **Bot**: reset and copy the bot token; enable **Message Content Intent** under Privileged Gateway Intents.
@@ -1555,7 +1758,19 @@ Capability flags (`adapter.py:27-33`):
 
 **Source:** `backend/channels/webhook/adapter.py`
 
-Bidirectional HTTP channel. Inbound: external systems POST HMAC-signed events to `/api/webhooks/{id}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound: the adapter POSTs agent responses back to the customer's `callback_url`.
+Bidirectional HTTP channel. Inbound: external systems POST HMAC-signed events to `/api/webhooks/{slug}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound: the adapter POSTs agent responses back to the customer's `callback_url`.
+
+**URI slug modes (v0.7.1):** each integration has a human-readable `slug` used in the inbound path.
+- **Auto** (default on create) — server generates `wh-{6-hex}`.
+- **Custom** — user-supplied. Validated against `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (3–64 chars, lowercase, must start with a letter, no leading/trailing/consecutive hyphens), checked against the reserved set (`inbound, rotate-secret, health, status, test, callback, docs, openapi, api, webhooks, admin, v1`), and required to be globally unique.
+- Global uniqueness is enforced because the inbound route is authenticated by HMAC *after* the row lookup — the slug is the only identifier used to resolve the tenant.
+- **Backward compatibility:** the inbound route still accepts a numeric integration id via a `slug.isdigit()` fallback, so any legacy `/api/webhooks/{id}/inbound` URL keeps working.
+- **Live availability check:** `GET /api/webhook-integrations/slug-available?slug=…[&exclude_id=…]` → `{ available, reason }` backs the UI's green-check / red-X indicator. `exclude_id` lets the edit flow check "is this slug free for me to keep or rename to?" without colliding with itself.
+
+**Lifecycle: edit / pause / delete.** Each card exposes three actions in addition to Rotate Secret:
+- **Edit** — opens `WebhookEditModal` to change the name, slug, callback URL, rate limit, and IP allowlist. Secret rotation is intentionally separate (Rotate button) to avoid mixing destructive secret operations with non-destructive config edits.
+- **Pause / Enable toggle** — flips `is_active` via `PATCH /api/webhook-integrations/{id}`. When paused, inbound `POST /api/webhooks/{slug}/inbound` returns `403` and the slug is still reserved globally; nothing else will be able to create a new integration with the same slug. **Only `DELETE` frees the slug for reuse.**
+- **Delete** — removes the integration row; agent bindings are nulled via `ON DELETE SET NULL`.
 
 Capability flags (`adapter.py:39-46`):
 - `delivery_mode=push`, text-only in v1 (`supports_media=false`), `text_chunk_limit=16000`.
@@ -1580,21 +1795,21 @@ Capability flags (`adapter.py:39-46`):
 
 **E2E setup — Webhook channel:**
 
-1. Navigate to **Hub → Channels → Webhooks** in the UI.
-2. Click **Add Integration** — provide a name and optionally a callback URL for outbound responses.
-3. The system generates an HMAC signing secret (visible once, stored encrypted). **Copy and save it.**
+1. Navigate to **Hub → Communication → Webhook Integrations** in the UI.
+2. Click **+ New Webhook** — provide a name, choose **Auto** or **Custom** URI mode (Custom gets a live-validated slug input), and optionally a callback URL for outbound responses.
+3. The system generates an HMAC signing secret. A reveal modal shows the full plaintext once with a copy button (auto-copied to clipboard) **plus a ready-to-paste `openssl`+`curl` snippet pre-filled with your secret and inbound URL** — copy the block, paste it into any shell with `openssl` + `curl`, and a successful reply (`{"status":"queued",…}`) confirms the integration end-to-end without leaving the browser. **Save the secret now** — the same modal will appear again only if you rotate the secret.
 4. Configure optional defenses: IP allowlist (CIDR ranges), rate limit (RPM), max payload size.
-5. **Assign to an agent** — on the agent's Channels tab, set `webhook_integration_id`.
-6. **Test inbound** — send a signed event to your webhook:
+5. **Assign to an agent** — on the agent's Channels tab, enable Webhook and select the integration (sets `webhook_integration_id`).
+6. **Test inbound** — send a signed event to your webhook (the absolute URL appears in the card, e.g. `https://localhost/api/webhooks/my-crm/inbound`):
 
 ```bash
 # Generate HMAC signature
 TIMESTAMP=$(date +%s)
 BODY='{"text":"Hello from webhook","sender_key":"external-user-1"}'
-SIGNATURE=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "<your_api_secret>" | awk '{print $2}')
+SIGNATURE=$(printf '%s.%s' "${TIMESTAMP}" "${BODY}" | openssl dgst -sha256 -hmac "<your_api_secret>" -hex | awk '{print $2}')
 
-# Send inbound event
-curl -X POST http://localhost:8081/api/webhooks/<webhook_id>/inbound \
+# Send inbound event (use the slug shown on the card, or the numeric id for legacy URLs)
+curl -X POST https://localhost/api/webhooks/<slug>/inbound \
   -H "Content-Type: application/json" \
   -H "X-Tsushin-Signature: sha256=${SIGNATURE}" \
   -H "X-Tsushin-Timestamp: ${TIMESTAMP}" \
@@ -1602,6 +1817,7 @@ curl -X POST http://localhost:8081/api/webhooks/<webhook_id>/inbound \
 ```
 
 7. If `callback_url` is configured, the agent's response will be POSTed there with HMAC-signed headers.
+8. **Rotate Secret** — the button on each card invalidates the previous secret and opens the same reveal modal showing the fresh plaintext. Update your external system before the next request, or it will start failing with `403`.
 
 ### 15.6 Playground
 
@@ -1865,7 +2081,91 @@ Source: `frontend/app/playground/page.tsx:98-232`, `backend/services/playground_
 
 Backend WebSocket handler: `backend/services/playground_websocket_service.py`. Fallback to HTTP polling when WS disabled.
 
-### 18.6 Async Queuing & Dead-Letter Retry
+### 18.6 Playground Mini (floating quick-test bubble)
+
+A compact companion to the full Playground, mounted globally in `frontend/app/layout.tsx` so it appears on **every authenticated page** (Watcher, Studio, Hub, Flows, Core, Settings, System). Intended for the "I just want to fire one prompt to check this agent without leaving this page" case that comes up constantly while exploring the Watcher Graph view, editing a Flow, or comparing dashboards.
+
+**Surface and placement.** Implemented under `frontend/components/playground/mini/`: `PlaygroundMini.tsx` (top-level FAB + panel wrapper), `PlaygroundMiniPanel.tsx` (the visible card), `MiniHeader.tsx`, `MiniMessageList.tsx`, `MiniStreamingMessage.tsx`, `MiniComposer.tsx`, and the `usePlaygroundMini.ts` data hook. The FAB is a 56×56 circle pinned to `bottom-6 right-6 z-[70]` with `data-testid="playground-mini"`. The panel opens to 380×560 on desktop (mobile: `inset-x-4 bottom-4 top-16`) with the `animate-scale-in` keyframe. `role="dialog"` `aria-modal="false"` — the page stays interactive behind it. Route-gated: hidden on `/playground`, `/auth/*`, `/setup`.
+
+**Controls.**
+- Agent dropdown — populated from `GET /api/playground/agents`. Switching clears the active thread and re-scopes the thread list.
+- Project dropdown — `(No project)` plus all non-archived projects from `GET /api/projects`. Selecting a project uses its name as the `folder` filter on `GET /api/playground/threads` and as the `folder` value when creating a new thread, matching the full Playground's `/enter <project>` convention.
+- Thread selector — lists threads for the current agent+project. Switching fetches messages via `GET /api/playground/threads/:id`.
+- "+" new-thread button — calls `POST /api/playground/threads` synchronously so the new thread has an id before the first send; focus moves to the composer.
+- Expand — builds `/playground?agent=<id>&thread=<id>&project=<id>`, navigates via `router.push`, and closes the panel. See handover below.
+- Close — closes the panel; focus returns to the FAB.
+
+**Composer.** Auto-grow textarea capped at 4 visible rows. `Enter = send`, `Shift+Enter = newline`, `Ctrl/Cmd+Enter = send`, `Alt+Enter` ignored. Disabled while a send is in flight.
+
+**Markdown.** Assistant messages are rendered through `react-markdown` + `remark-gfm` with a `.mini-markdown` stylesheet in `frontend/app/globals.css` (compact p / h1–h4 / strong / em / a / ul / ol / blockquote / code / pre / table / hr styles tuned for the tight bubble). Links open in a new tab with `rel="noopener noreferrer"`. User messages render as plain text to preserve user-typed formatting. Empty assistant content shows `…`.
+
+**Send path.** `POST /api/playground/chat?sync=true` — the Mini intentionally does **not** open a second WebSocket connection (the full Playground already manages the `/ws/playground` stream; running two WS consumers from the same tab would race `thread_created` / `done` events). A pending indicator (three pulsing dots in `MiniStreamingMessage`) shows while the HTTP call is in flight. On success, the assistant reply is appended. On failure, the optimistic user bubble is rolled back and an error surfaces inside the bubble.
+
+**Expand handover.** The critical promise of the Mini is that the conversation carries over to the full Playground intact. The handover is consumed inside `frontend/app/playground/page.tsx`:
+- `selectedAgentId` is seeded from `window.location.search` via a **lazy `useState` initializer** — this runs at mount, before `loadAgents()` can default-pick an agent, so `?agent=<id>` wins the race.
+- `initializeThreads` (the effect that fires when `selectedAgentId` changes) reads `window.location.search` directly (not via `useSearchParams`) and looks up `?thread=<id>` in the freshly fetched agent's thread list. On hit, it selects the thread, triggers `handleThreadSelect` to pull the messages, and strips the URL with `window.history.replaceState(null, '', '/playground')` (not `router.replace`, which would remount the page and wipe the consumption state).
+- A module-local `lastConsumedHandoverThreadRef` de-dupes repeat consumption within one session so `initializeThreads` firing twice for the same agent doesn't re-select. Expanding again with a different thread still works.
+- If the URL's `?agent=<id>` is not in the tenant's agent list (stale copy-paste, deleted agent, cross-tenant URL leak), `loadAgents` falls back to the tenant's default agent to prevent foreign-agent writes.
+
+**Persistence.** Selection state (`isOpen`, `selectedAgentId`, `selectedProjectId`, `activeThreadId`) is persisted to `sessionStorage` keyed by `tsushin:playground-mini:v1:<userId>` (`frontend/lib/playgroundMiniSessionStore.ts`). Messages are **not** persisted — they re-fetch from `api.getThread(activeThreadId)` on panel open, which re-validates tenant ownership on every call. `AuthContext.logout()` clears the per-user key (and `clearAll()` on missing userId) so a second user on the same tab starts fresh. `hasLoadedOnceRef` inside the hook is also reset when the active user changes.
+
+**Multi-tenant safety.** No new backend endpoints, no new auth paths. All data operations go through the same tenant-scoped `/api/playground/*` and `/api/projects` routes the full Playground uses. `X-Tenant-Id` enforcement on the backend and the httpOnly session cookie are the authoritative guards; the Mini is a pure UI wrapper on top of them.
+
+**Keyboard shortcuts.**
+- `Ctrl/Cmd + Shift + L` — toggle panel. Ignored when any `[role="dialog"][aria-modal="true"]` is visible so Modal/Setup/WhatsApp-wizard dialogs don't compete for the keybind.
+- `Escape` — close the panel when focus is inside it; restores focus to the FAB.
+
+**Onboarding tour integration.** `frontend/contexts/OnboardingContext.tsx` bumped `TOTAL_STEPS` from 12 to 13. `frontend/components/OnboardingWizard.tsx` added a new step ("New: Playground Mini") targeting `[data-testid="playground-mini"]`. When the step becomes active, the wizard applies both the generic `.tour-highlight` outline and the new `.playground-mini-tour-glow` keyframe — a 1.4s × 3-iterations box-shadow pulse using `tsushin-accent` + `tsushin-indigo` designed to be strong enough to grab attention without being jarring. The step's "Open Playground Mini" action button dispatches `tsushin:playground-mini:open`, which the FAB listens for, opens the panel, and re-triggers the glow. A MutationObserver on the FAB watches for `.tour-highlight` so the glow also fires if the user relaunches the tour from the header `?` button. If the user is on an excluded route (`/playground`, `/auth/*`, `/setup`) when they click the step's action, the wizard first navigates home via `router.push('/')` before dispatching the event.
+
+**Files of record:**
+- `frontend/components/playground/mini/` (all 7 files under this folder)
+- `frontend/lib/playgroundMiniSessionStore.ts`
+- `frontend/app/layout.tsx` (mount)
+- `frontend/app/playground/page.tsx` (handover)
+- `frontend/components/OnboardingWizard.tsx` (tour step)
+- `frontend/contexts/OnboardingContext.tsx` (`TOTAL_STEPS = 13`)
+- `frontend/app/globals.css` (`.playground-mini-tour-glow`, `.mini-markdown`)
+- `frontend/contexts/AuthContext.tsx` (`logout()` clears sessionStorage)
+
+### 18.6.1 Live Regression Harness
+
+For live-stack regression and diagnosis, use `backend/dev_tests/run_playground_regression_live.py`.
+
+**Purpose.** This runner validates the existing Playground / Playground Mini / Watcher Graph contracts on the currently running local HTTPS stack without introducing any new test-only product endpoints. It is intended for "the stack is already up, tell me whether full Playground, Mini, watcher activity, KB glow, provider glow, and A2A still work right now" passes.
+
+**Entry assumptions.**
+- Run from the repo root: `/Users/vinicios/code/tsushin`.
+- Target base URL: `https://localhost`.
+- Owner fixture: `test@example.com / test1234`.
+- Fixture KB document: `sample_data/acme_sales.csv`.
+
+**Covered interfaces.**
+- Auth/session: `/api/auth/login`, `/api/auth/me`
+- Playground: `/api/playground/agents`, `/api/playground/threads`, `/api/playground/threads/{id}`, `/api/playground/chat?sync=true`
+- Projects: `/api/projects`
+- Graph/Watcher discovery: `/api/v2/agents/graph-preview`, `/api/v2/agents/{id}/expand-data`, `/api/v2/agents/comm-enabled`
+- Knowledge base: `/api/agents/{id}/knowledge-base/*`
+- Watcher activity socket: `/ws/watcher/activity`
+
+**Behavior.**
+- Uses cookie auth for HTTPS requests and first-message token auth for `wss://localhost/ws/watcher/activity`.
+- Discovers the live primary/provider/A2A-capable agents from current API state instead of assuming hard-coded ids, while still preferring the common `Tsushin (1) -> Gemini1 (17)` mapping when present.
+- Uploads `sample_data/acme_sales.csv` to the chosen provider-backed agent KB, polls until `status=completed` and `num_chunks > 0`, then runs:
+  - baseline thread create -> read -> sync chat -> post-read -> explicit rename -> filtered thread list
+  - provider-backed `web_search`
+  - KB-backed answer using the uploaded CSV
+  - `agent_communication` from the primary agent to the provider-backed target
+- Captures watcher event families around each chat so the report can tie browser graph glow, watcher activity, and backend logs together with explicit correlation tokens.
+
+**Artifacts.**
+- API JSON report: `output/playwright/playground-regression-api-<timestamp>.json`
+- Intended paired browser artifact folder: `output/playwright/playground-regression-<timestamp>/`
+
+**Useful flags.**
+- Default mode cleans up the runner-created KB document and threads.
+- `--skip-cleanup` leaves the artifacts in place so a browser/Graph pass can verify the same KB node and recent regression threads before teardown.
+
+### 18.7 Async Queuing & Dead-Letter Retry
 
 Service layer: `backend/services/message_queue_service.py`, `backend/services/queue_worker.py`.
 
@@ -1929,6 +2229,8 @@ This means: adding a new provider in Hub automatically makes it available everyw
 ### 19.4 Model Discovery
 
 `backend/services/model_discovery_service.py` auto-fetches the vendor's `/models` endpoint (for OpenAI-compatible providers) and populates `available_models`. Used by the frontend Provider form to let the user pick which models to expose.
+
+**Auto health-test on save (2026-04-19).** `POST /api/provider-instances` and `PUT /api/provider-instances/{id}` schedule a connection test in a FastAPI `BackgroundTasks` after the response returns, so the Hub UI dot reflects real connectivity instead of staying gray (`unknown`) until the user clicks **Test Connection**. Same code path as the manual test (model picked from `available_models[0]` → `PROVIDER_TEST_MODELS` fallback; `AIClient.generate` with `max_tokens=20` and SDK retries disabled). Result is written to `health_status` (`healthy` / `unavailable`), `health_status_reason`, `last_health_check`, plus a `ProviderConnectionAudit` row with `action="auto_test_on_save"`. Triggers only when (a) credentials are present (or vendor is `ollama`) **and** `available_models` is non-empty; updates require a connectivity-relevant change (`api_key`, `base_url`, `extra_config`, `available_models`) — pure renames or default-toggles do not re-test. Clearing the API key (`api_key=""`) resets `health_status` back to `unknown` so the dot doesn't keep showing a stale green from the previous valid key. (`backend/api/routes_provider_instances.py` — `_background_test_instance`).
 
 ### 19.5 Model Pricing
 
@@ -2028,7 +2330,63 @@ The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate
 
 - Providers expose `get_available_voices()` → `List[VoiceInfo]` and a default voice.
 - OpenAI TTS default voice: `"nova"` (`tts_provider.py:43`).
-- Kokoro is a local/self-hosted TTS option (see `KOKORO_TTS_FIX.md`).
+- Kokoro is a local/self-hosted TTS option. **v0.7.0 removed the stack-level `kokoro-tts` compose service and the `KOKORO_SERVICE_URL` env fallback** — Kokoro now runs as per-tenant auto-provisioned containers managed by `KokoroContainerManager` and addressed via `TTSInstance.base_url`. The provider's `synthesize()` raises `RuntimeError` if called without a `base_url`; `AudioTTSSkill` resolves one from `AgentSkill.config.tts_instance_id` → `Config.default_tts_instance_id`, and surfaces a clear skill-result error if neither is set.
+
+#### 20.6.1 Kokoro TTS Setup Wizard
+
+**Component:** `frontend/components/tts/KokoroSetupWizard.tsx`
+**Entry point:** `/hub` page → AI Providers tab → Kokoro TTS card → "Setup with Wizard" button. Per-tenant Kokoro instance management is consolidated inside the Hub Kokoro card (mirroring the Ollama auto-provisioning UX). The card renders the full instance list with per-instance Start / Stop / Restart / Logs / Delete controls and a default-selector radio. (The legacy `/settings/tts` page and the compose `tts` profile toggle were removed in v0.7.0.)
+
+Four-step guided flow for creating a per-tenant Kokoro TTS container and (optionally) wiring it to agents:
+
+1. **What is Kokoro TTS?** — marketing/explanation card (languages, voice count, cost, image size, CPU-friendliness).
+2. **Configure** — instance name, auto-provision toggle, memory limit (1g/1.5g/2g), default voice (from a curated list of 14 Kokoro voices with language/gender auto-hints), default speed (0.5–2.0× slider), default language (pt/en), audio format (opus/mp3/wav), set-as-tenant-default checkbox.
+3. **Link to Agent(s)** — multi-select checkbox list of tenant agents with "Select all" / "Skip this step". Enables the `audio_response` skill on each selected agent.
+4. **Review & Create** — summary + "Create & Provision" CTA. Progress step then polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running`, auto-calls `assign-to-agent` per selected agent, and closes with a success toast. Error states surface a Retry button.
+
+**Backend support:**
+- `POST /api/tts-instances/{id}/assign-to-agent` — body `{agent_id, voice?, speed?, language?, response_format?}`. Upserts the `audio_response` AgentSkill row for the target agent. Tenant isolation double-guarded on both the TTS instance and the agent (404 on mismatch). Permission: `org.settings.write`.
+
+#### 20.6.1a Audio Agents Onboarding Wizard (v0.7.0)
+
+**Component:** `frontend/components/audio-wizard/AudioAgentsWizard.tsx`
+**Context provider:** `frontend/contexts/AudioWizardContext.tsx` (mounted globally in `app/layout.tsx` alongside `GoogleWizardProvider` and `WhatsAppWizardProvider`)
+**Entry points:**
+- **Onboarding tour step 12** — a "Voice Capabilities (optional)" step calls `useAudioWizard().openWizard()`; skippable in one click.
+- **Studio → New Agent modal** (`frontend/components/watcher/studio/StudioAgentSelector.tsx`) — a Text / Voice / Hybrid radio; picking Voice or Hybrid closes the inline create modal and calls `openWizard({ presetMode: 'new', presetAgentType, presetNewAgentName })`.
+- Any consumer can also call `useAudioWizard().openWizard({ presetProvider?, presetAgentId?, presetMode? })` directly.
+
+This wizard replaced the built-in Kokoro / Kira / Transcript seed agents (removed from `backend/services/agent_seeding.py` in v0.7.0). Existing tenants keep any already-seeded audio agents untouched; new tenants start with only the text-only defaults and create audio agents opt-in through this wizard.
+
+Five configuration steps + one progress step:
+
+1. **Intent** — three cards: *Voice responses (TTS)*, *Audio transcription only*, *Hybrid — both*. Transcription-only skips provider choice (Whisper via OpenAI is the only option).
+2. **Provider** — three cards: Kokoro (free/local), OpenAI TTS (paid), ElevenLabs (premium). Each card shows a **Detected** badge when the tenant already has that provider configured (`api.getTTSInstances()` for Kokoro, `api.getProviderInstances()` for OpenAI/ElevenLabs keys), or a **Needs API key** badge linking back to Hub → AI Providers otherwise.
+3. **Voice & credentials** — language first (filters Kokoro voices by language), then voice, speed, format. Kokoro adds a memory-limit dropdown and a "Set as tenant-default TTS" checkbox.
+4. **Agent target** — radio: *Create a new Voice Assistant* (system prompt defaults mirror the old Kira/Kokoro prompts, preserved as client-side templates in `defaults.ts`) or *Attach audio to an existing agent* (preserves other skills on the target). Existing-agent radio is disabled if the tenant has no agents yet.
+5. **Review & Create** — summary cards + skill diff (`audio_tts`, `audio_transcript`, or both) + "Create & Provision" CTA.
+
+On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running` (~30–90 s) and then calls `POST /api/tts-instances/{id}/assign-to-agent`; the OpenAI/ElevenLabs path skips the TTSInstance and directly calls `PUT /api/agents/{id}/skills/audio_tts` with `{provider, voice, language, speed, response_format}`. If intent is hybrid or transcript, `PUT /api/agents/{id}/skills/audio_transcript` is also called. New-agent mode creates a Contact (`POST /api/contacts`), an Agent (`POST /api/agents`), then an update call (`PUT /api/agents/{id}`) to apply `memory_size` / `response_template` / `enabled_channels` defaults. All orchestration is client-side — no new backend endpoint was introduced.
+
+**Events.** The provider emits `window.dispatchEvent(new CustomEvent('tsushin:audio-wizard-closed'))` on close so the onboarding tour's step 12 callback can auto-advance to step 13 (mirrors the WhatsApp wizard pattern).
+
+**Completion callbacks.** `useAudioWizardComplete(cb)` subscribes to wizard completion for the lifetime of a component — Hub / Studio pages can use this to reload their agent and TTS-instance lists.
+
+#### 20.6.2 Ollama Setup Wizard
+
+**Component:** `frontend/components/ollama/OllamaSetupWizard.tsx`
+**Entry point:** `/hub` page — "Setup with Wizard" button on the Ollama card (the inline auto-provision panel stays for power users).
+
+Five-step guided flow for provisioning an Ollama container, pulling a model, and wiring agents:
+
+1. **What is Ollama?** — explanation (cost, GPU optional, image/model sizes, best-for scenarios).
+2. **Configure container** — instance name, GPU checkbox (with NVIDIA Container Toolkit note), memory limit (2/4/8/16 GB).
+3. **Choose a model** — radio list of 7 curated models (llama3.2:1b, llama3.2:3b, qwen2.5:3b, qwen2.5:7b, deepseek-r1:7b, phi3.5:3.8b, mistral:7b) with params/disk/summary columns, plus a Custom option for any `namespace/model:tag`.
+4. **Link to Agent(s)** — multi-select agents; their LLM backend will switch to Ollama on the chosen model.
+5. **Review & Provision** — summary + "Provision & Pull" CTA. Progress step runs `ensureOllamaInstance` → `provisionOllamaContainer` → poll status → `pullOllamaModel` → poll pull job (2 s tick, live progress bar) → `assignOllamaInstanceToAgent` per selected agent. Three-stage indicator (Provision / Pull / Assign) with per-stage active/done states and a Retry button on error.
+
+**Backend support:**
+- `POST /api/provider-instances/{id}/assign-to-agent` — body `{agent_id, model_name}`. Sets `Agent.provider_instance_id`, `Agent.model_name`, and `Agent.model_provider` (to the instance vendor — typically `"ollama"`) in one call. Same double-guarded tenant isolation. Empty `model_name` returns 400. Permission: `org.settings.write`.
 
 ### 20.7 MCP Server Registration
 
@@ -2110,6 +2468,19 @@ Lists system and tenant-defined roles with display names and permission badges. 
 | Client Secret (display) | Masked | `integrations/page.tsx:206` |
 
 "Coming Soon" section (`:277`) lists planned integrations. Removing Google credentials warns that it will disconnect all Google integrations (Gmail, Calendar) and disable Google SSO (`:79`).
+
+**Guided wizards — shared with Hub.** The "Set up Gmail →" and "Set up Google Calendar →" buttons on this page open the same 6-step wizards (`GmailSetupWizard`, `GoogleCalendarSetupWizard`) that the Hub "Communication → Add Gmail Account" and "Productivity → Add Calendar Account" buttons trigger. Both live under a global `GoogleWizardProvider` (`frontend/contexts/GoogleWizardContext.tsx`) mounted in `app/layout.tsx`. The wizard:
+1. Confirms Google OAuth app credentials are configured.
+2. Opens a popup to `/api/hub/google/{gmail|calendar}/oauth/authorize` and polls `/api/hub/google/{gmail|calendar}/integrations` for the new row.
+3. Lets the user pick one or more agents and, on completion, calls `PUT /api/agents/{id}/skills/{gmail|scheduler}` + `PUT /api/agents/{id}/skill-integrations/{gmail|scheduler}` to enable the skill and bind the new `integration_id`.
+
+Either caller page can subscribe to completion via `useGoogleWizardComplete(kind, cb)` — Settings re-fetches Google credentials, Hub re-fetches `/api/hub/integrations` so the card list refreshes without a page reload.
+
+**Disconnected accounts are excluded from the wizard's Step 3 picker.** `GET /api/hub/google/{gmail|calendar}/integrations` filters out rows with `health_status='disconnected'`, matching the filter used by the Hub card list. This prevents a user from binding an agent skill to a dead integration, which would hide the resulting card in Hub and make the flow feel silently broken. To reuse a previously-disconnected email, click "Connect new account" — the OAuth callback flips the existing row back to `is_active=True` and clears the `disconnected` status, so it reappears in the picker.
+
+**OAuth popup handoff.** "Connect new account" opens the Google consent screen in a popup. After approval, Google redirects the popup to the backend OAuth callback, which in turn redirects to `/hub?integration=<kind>&status=success&id=<n>`. The Hub page detects it's loaded inside a popup (via `window.opener`) and, instead of rendering, posts a `{ source: 'tsushin-google-oauth', integration, integration_id, status }` message to the opener (same-origin) and calls `window.close()`. The wizard listens for that message in a `useEffect` gated on `isOpen`, stops its 3-second poll, re-fetches the integration list, and selects the new row. Popup-blocked fallback still works: a direct visit to `/hub?…` has no `window.opener`, so the page renders normally.
+
+**Integration type is carried through the callback.** `backend/hub/google/oauth_handler.py::handle_callback` receives `integration_type` as an explicit argument; the outer `backend/api/routes_google.py::oauth_callback` reads it from the `OAuthState.integration_type` prefix (`google_gmail` → `gmail`, `google_calendar` → `calendar`) and passes it in. The legacy fallback that parsed the type from the `redirect_url` query string is still there for the direct-redirect flow, but if neither source yields a valid type the handler raises `ValueError` rather than defaulting to calendar — the popup-driven wizard flow never sets a `redirect_url`, and silently defaulting used to cause gmail OAuth to upsert into the calendar integration tables.
 
 ### 21.5 Security & SSO (`frontend/app/settings/security/page.tsx`)
 
@@ -2310,9 +2681,37 @@ Backing service: `backend/services/audit_service.py` (global admin actions logge
 
 Global user directory — list all users across tenants, toggle `is_global_admin`, reset credentials, suspend accounts.
 
-### 22.3 Platform Integrations (`frontend/app/system/integrations/page.tsx`)
+**Invite User + Create User — explicit kind picker (since 2026-04-19).** Both modals lead with a two-option segmented control:
 
-Platform-level third-party credentials (keys that apply globally, not per-tenant). This is the global counterpart to §21.4.
+| Kind | Semantics | Required fields |
+|---|---|---|
+| **Tenant User** (default) | Belongs to exactly one organization; cannot cross tenant boundaries | email, **Organization** (required — labeled `{name} — {slug} ({user_count} members)`), **Role** (`owner | admin | member | readonly`) |
+| **Global Admin** | Platform-wide administrator, `User.is_global_admin=True`, `User.tenant_id=NULL`, no `UserRole` row | email only (tenant + role hidden) |
+
+The Organization dropdown is only shown for the Tenant-User path; when empty it surfaces a red inline helper (*"Invitees are not global admins and must belong to one tenant"*). The submit button stays disabled until required fields for the active kind are filled — the form cannot submit in an ambiguous state. Backing endpoints: `POST /api/admin/invitations/` (invite) and `POST /api/admin/users/` (direct create). Both accept the same shape: `is_global_admin=true` ⇒ no tenant_id/role; `is_global_admin=false` ⇒ both required. See §6.5.
+
+**Pending Invitations.** A second section on the same page lists outstanding invites across all tenants with scope (Global vs tenant name), role, auth provider, invited-by, expiry, and a Cancel button. Powered by `GET /api/admin/invitations` + `DELETE /api/admin/invitations/{id}`.
+
+### 22.3 Global SSO (`frontend/app/system/sso/page.tsx`)
+
+Dedicated page for platform-wide Google OAuth configuration (moved out of the retired `/system/integrations` hub in 2026-04-19). Backed by the `global_sso_config` singleton table and the `/api/admin/sso-config` endpoints. Fields:
+
+| Field | Purpose |
+|---|---|
+| `google_sso_enabled` | Master toggle for platform-scope SSO |
+| `google_client_id` | Platform OAuth 2.0 Client ID (visible) |
+| `google_client_secret` | Platform OAuth 2.0 Client Secret (Fernet-encrypted at rest, `sso_client_secret_global` identifier; never returned by default — pass `?include_secret=true`) |
+| `allowed_domains` | JSON array of domains the platform will accept Google sign-ins from |
+| `auto_provision_users` | **Disabled by default.** Creating global admins on first sign-in is an unsafe default — global admins must always be explicitly invited. This toggle is reserved for future use with a strict domain whitelist. |
+| `default_role_id` | Only consulted if `auto_provision_users=true`; shown conditionally in the UI |
+
+**Credential resolution order** (`backend/auth_google.py::get_oauth_credentials`): per-tenant `GoogleOAuthCredentials` (when a tenant context is present) → `GlobalSSOConfig` (when `google_sso_enabled=true` and credentials are complete) → env-var fallback (`GOOGLE_SSO_CLIENT_ID` / `GOOGLE_SSO_CLIENT_SECRET` in `backend/settings.py`). Global and tenant scopes are fully independent — updates at one scope do not affect the other.
+
+**`/system/integrations` is deprecated.** The old hub page (navigation cards + embedded SSO config) was split in 2026-04-19: the admin cards now live as a *System* card group inside Core (`/settings`); the SSO config moved here. The `/system/integrations` route is a redirect stub that `router.replace('/settings')` on mount so old bookmarks and email links do not 404.
+
+### 22.3.1 System group inside Core (global admin only)
+
+Starting 2026-04-19, the global-admin view no longer has a separate top-level **System** nav item. Instead, `/settings` (the **Core** hub) gains a *System* card group (role-gated on `is_global_admin`) with five cards: **Tenant Management**, **User Management**, **Plans & Limits**, **Remote Access**, **Global SSO**. This matches the tenant-view pattern where operational areas are discovered as cards under Core. Global-admin login now redirects to `/settings` (was `/system/integrations`). Top nav is identical for all roles.
 
 ### 22.4 Plans / Subscription Tiers (`frontend/app/system/plans/page.tsx`)
 
@@ -2352,7 +2751,7 @@ Remote Access exposes the whole Tsushin instance through a single Cloudflare Tun
 
 Key properties:
 - `cloudflared` runs as a supervised Python subprocess inside `tsushin-backend` (not a separate compose sidecar). A supervisor task restarts it up to 3 times with 5s/15s/30s backoff before giving up and marking `status=error`.
-- Readiness is confirmed by polling `cloudflared`'s Prometheus metrics endpoint for a `cloudflared_tunnel_ha_connections > 0` line — named mode no longer relies on a race-condition-prone sleep.
+- Readiness for **named** mode is a two-stage check (BUG-589): (1) poll `cloudflared`'s Prometheus metrics endpoint for `cloudflared_tunnel_ha_connections > 0` — proves the local subprocess has an edge connection — then (2) run a retrying `HEAD https://<tunnel_hostname>/api/health` probe (up to ~30 s, 2 s between attempts) to prove the **public hostname actually serves the app end-to-end**. Only after both pass does the snapshot transition to `state="running"`. Between stages the state is `state="verifying"` with a `"Verifying public hostname <host> is serving the app"` message. If the public probe never succeeds, the tunnel is stopped and the admin sees the real error (e.g. last HTTP status `502`) instead of a false green "running" badge. Quick-mode readiness continues to rely on `public_url` appearing on stdout.
 - Cloudflare terminates TLS at the edge. The tunnel forwards plain HTTP to the local Caddy proxy on port 80, which then routes `/api/*` and `/ws/*` to the backend and everything else to the frontend. This is why `install.py` generates a `:80` site block in every SSL mode; without it, tunnel requests would bypass Caddy's `/api` routing and the frontend's API calls would 502.
 - The tunnel token is encrypted at rest with a dedicated Fernet key (`config.remote_access_encryption_key`), which itself is wrapped with `TSN_MASTER_KEY` (SEC-006 envelope pattern). The plaintext token is never logged, never returned in any API response, and only surfaced as the boolean `tunnel_token_configured` in the GET config endpoint.
 - Optimistic concurrency on config writes: the PUT endpoint takes an `expected_updated_at` and returns HTTP 409 if the stored `updated_at` has moved since the admin last read it.
@@ -2435,7 +2834,8 @@ The Status card polls `GET /api/admin/remote-access/status` every 5 seconds whil
 |---|---|
 | `stopped` | Subprocess is not running. Default state after boot if autostart is off. |
 | `starting` | Subprocess is launching; readiness probe hasn't confirmed yet. |
-| `running` | Subprocess is up and connected to the Cloudflare edge (≥1 HA connection). |
+| `verifying` | (Named mode, BUG-589) Local cloudflared has ≥1 HA connection, now probing `HEAD https://<tunnel_hostname>/api/health` to confirm the public hostname actually serves the app. |
+| `running` | Subprocess is up, Cloudflare edge has ≥1 HA connection, AND the public hostname probe returned a non-5xx response. |
 | `stopping` | Graceful stop in progress (SIGTERM → 10s → SIGKILL → 5s ladder). |
 | `crashed` | Subprocess exited unexpectedly; supervisor may be about to restart. |
 | `error` | Supervisor gave up after 3 restart attempts — manual intervention required. |
@@ -2443,6 +2843,7 @@ The Status card polls `GET /api/admin/remote-access/status` every 5 seconds whil
 
 Common errors surfaced in `last_error`:
 - **"Named tunnel failed readiness probe (no HA connections in 15s)"** — the tunnel token is wrong, the hostname isn't bound to any route, or outbound QUIC/HTTPS is blocked by your firewall. Double-check the token and the Cloudflare Dashboard route.
+- **"Named tunnel started but public hostname `<host>` is not serving the app (last HTTP status: 502)"** — BUG-589. Cloudflared is connected to the edge but the ingress rule points at the wrong target or the target container is down. Check the route's Service URL in the Cloudflare Dashboard (it should be `http://tsushin-proxy:80`, not `frontend:3030`), and confirm `tsushin-proxy` is healthy (`docker ps --filter name=tsushin-proxy`).
 - **"Quick tunnel timed out waiting for URL"** — cloudflared couldn't reach the `trycloudflare.com` edge. Network / egress issue.
 - **"Supervisor gave up after 3 restart attempts"** — cloudflared keeps crashing. Check `docker logs tsushin-backend | grep cloudflared` for the underlying error; typical causes: invalid token, revoked route, stale DNS record.
 
@@ -3257,7 +3658,6 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `CONTAMINATION_PATTERNS_EXTRA` | `""` | Extra regex patterns for Sentinel contamination detector. | `agent/contamination_detector.py:54` |
 | `QA_PHONE_NUMBER` | `""` | Allowlist phone for QA tester. | `app.py:430` |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama endpoint from inside container. | `agent/ai_client.py:205`, `db.py:1339` |
-| `KOKORO_SERVICE_URL` | `http://${TSN_STACK_NAME:-tsushin}-kokoro-tts:8880` | Kokoro TTS service URL (stack-scoped by default). | `hub/providers/kokoro_tts_provider.py:182` |
 | `GROQ_API_KEY` / `GROK_API_KEY` / `ELEVENLABS_API_KEY` | `""` | Pass-through env for providers not configured via Hub. | `docker-compose.yml:149-151` |
 | `ASANA_ENCRYPTION_KEY` | `""` | Fernet key for Asana integration. | `docker-compose.yml:144`, `migrations/add_service_encryption_keys.py:164` |
 | `ASANA_REDIRECT_URI` | `http://localhost:3030/hub/asana/callback` | Asana OAuth callback. | `api/routes_hub.py:153` |
@@ -3274,6 +3674,8 @@ Shell-Beacon agent (separate binary installed on endpoints, not the server):
 | `TSUSHIN_SERVER_URL` | Beacon → server URL. | `shell_beacon/config.py:173` |
 | `TSUSHIN_API_KEY` | Beacon auth key. | `shell_beacon/config.py:175` |
 | `TSUSHIN_POLL_INTERVAL` / `TSUSHIN_SHELL` / `TSUSHIN_TIMEOUT` / `TSUSHIN_WORKING_DIR` / `TSUSHIN_LOG_LEVEL` / `TSUSHIN_LOG_FILE` / `TSUSHIN_AUTO_UPDATE` | Beacon config. | `shell_beacon/config.py:179-197` |
+
+**Fresh-install note — self-signed HTTPS and Shell Beacons.** The beacon uses normal TLS verification through Python `requests`; it does not automatically bypass trust failures the way a browser automation session can. If `TSUSHIN_SERVER_URL` points at an installer-generated self-signed HTTPS endpoint, the beacon host must trust that certificate (or trust the issuing CA) before registration/check-in will work. For same-host QA smoke tests only, point the beacon at local HTTP such as `http://127.0.0.1:8081/api/shell` instead of the public self-signed URL.
 
 ---
 

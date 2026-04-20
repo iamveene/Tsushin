@@ -521,7 +521,10 @@ class AsanaOAuthHandler:
         ).first()
 
         if integration:
+            # Mark health terminal so the listing filter doesn't keep the card
+            # visible via the 'unavailable → needs re-auth' branch.
             integration.is_active = False
+            integration.health_status = "disconnected"
 
         self.db.commit()
         logger.info(f"Integration {integration_id} disconnected successfully")

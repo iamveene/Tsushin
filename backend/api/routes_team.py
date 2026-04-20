@@ -9,7 +9,7 @@ must be defined BEFORE parameterized routes (e.g., /{user_id}) to avoid conflict
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from typing import Optional, List
@@ -26,6 +26,7 @@ from auth_dependencies import (
 from auth_utils import generate_invitation_token, hash_token
 from services.email_service import send_invitation
 from services.audit_service import log_admin_action, AuditActions, log_tenant_event, TenantAuditActions
+from services.public_ingress_resolver import resolve_invitation_base_url
 import logging
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,14 @@ class InvitationCreate(BaseModel):
     email: EmailStr
     role: str = "member"
     message: Optional[str] = None
+    auth_provider: str = "local"  # 'local' (password) or 'google' (SSO)
+
+    @field_validator("auth_provider")
+    @classmethod
+    def _validate_auth_provider(cls, v: str) -> str:
+        if v not in ("local", "google"):
+            raise ValueError("auth_provider must be 'local' or 'google'")
+        return v
 
 
 class InvitationResponse(BaseModel):
@@ -73,6 +82,8 @@ class InvitationResponse(BaseModel):
     expires_at: str
     created_at: str
     invitation_link: Optional[str] = None
+    auth_provider: str = "local"
+    is_global_admin: bool = False
 
     class Config:
         from_attributes = True
@@ -121,24 +132,51 @@ def user_to_response(user: User, tenant_id: str, db: Session) -> TeamMemberRespo
     )
 
 
-def invitation_to_response(invitation: UserInvitation, db: Session, include_link: bool = False) -> InvitationResponse:
-    """Convert UserInvitation model to InvitationResponse."""
-    role = db.query(Role).filter(Role.id == invitation.role_id).first()
+def invitation_to_response(
+    invitation: UserInvitation,
+    db: Session,
+    include_link: bool = False,
+    raw_token: Optional[str] = None,
+    request: Optional[Request] = None,
+) -> InvitationResponse:
+    """Convert UserInvitation model to InvitationResponse.
+
+    ``invitation.invitation_token`` stores the HASH of the token; the raw
+    token is only available at creation time. Pass ``raw_token`` when
+    building the response right after ``invite_team_member`` so the UI
+    receives a working link — otherwise the copy-from-UI link contains the
+    hashed value and acceptance fails.
+
+    When ``request`` is provided, ``invitation_link`` is an absolute URL
+    built from the invitation's tenant override / platform tunnel / request
+    origin chain (see ``resolve_invitation_base_url``). This makes the link
+    portable across https-localhost, http-localhost dev, and Cloudflare
+    named tunnels, and multi-tenant-safe (uses the invitation's OWN tenant,
+    not the calling admin's context).
+    """
+    role = db.query(Role).filter(Role.id == invitation.role_id).first() if invitation.role_id else None
     inviter = db.query(User).filter(User.id == invitation.invited_by).first()
 
     response = InvitationResponse(
         id=invitation.id,
         email=invitation.email,
-        role=role.name if role else "member",
-        role_display_name=role.display_name if role else "Member",
+        role=role.name if role else ("global_admin" if invitation.is_global_admin else "member"),
+        role_display_name=role.display_name if role else ("Global Admin" if invitation.is_global_admin else "Member"),
         invited_by_name=inviter.full_name if inviter else "Unknown",
         expires_at=invitation.expires_at.isoformat(),
         created_at=invitation.created_at.isoformat() if invitation.created_at else datetime.utcnow().isoformat() + "Z",
+        auth_provider=invitation.auth_provider or "local",
+        is_global_admin=bool(invitation.is_global_admin),
     )
 
-    if include_link:
-        # In production, this would be the actual frontend URL
-        response.invitation_link = f"/auth/invite/{invitation.invitation_token}"
+    if include_link and raw_token:
+        invite_tenant = None
+        if invitation.tenant_id:
+            invite_tenant = db.query(Tenant).filter(Tenant.id == invitation.tenant_id).first()
+        base_url = resolve_invitation_base_url(request, invite_tenant) if request is not None else None
+        response.invitation_link = (
+            f"{base_url}/auth/invite/{raw_token}" if base_url else f"/auth/invite/{raw_token}"
+        )
 
     return response
 
@@ -410,6 +448,8 @@ async def invite_team_member(
         invited_by=ctx.user.id,
         invitation_token=hash_token(raw_invitation_token),
         expires_at=datetime.utcnow() + timedelta(days=7),
+        is_global_admin=False,
+        auth_provider=request.auth_provider,
     )
     ctx.db.add(invitation)
     ctx.db.commit()
@@ -419,6 +459,12 @@ async def invite_team_member(
     tenant = ctx.db.query(Tenant).filter(Tenant.id == ctx.tenant_id).first()
     tenant_name = tenant.name if tenant else "the organization"
 
+    # Resolve the public base URL once (tenant override → tunnel → request
+    # origin → env) so the emailed link AND the UI copy-link agree and remain
+    # reachable under any ingress (https-localhost, http-localhost dev,
+    # Cloudflare named tunnels).
+    invite_base_url = resolve_invitation_base_url(http_request, tenant)
+
     # Send invitation email (use raw token, not hash)
     send_invitation(
         to_email=request.email,
@@ -427,11 +473,12 @@ async def invite_team_member(
         role_name=role.display_name,
         invitation_token=raw_invitation_token,
         personal_message=request.message,
+        base_url=invite_base_url,
     )
 
     log_tenant_event(ctx.db, ctx.tenant_id, ctx.user.id, TenantAuditActions.TEAM_INVITE, "invitation", str(invitation.id), {"email": request.email, "role": request.role}, http_request)
 
-    return invitation_to_response(invitation, ctx.db, include_link=True)
+    return invitation_to_response(invitation, ctx.db, include_link=True, raw_token=raw_invitation_token, request=http_request)
 
 
 @router.delete("/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -461,9 +508,63 @@ async def cancel_invitation(
     ctx.db.commit()
 
 
+@router.post("/invitations/{invitation_id}/resend-link", response_model=InvitationResponse)
+async def regenerate_invitation_link(
+    invitation_id: int,
+    http_request: Request,
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user: User = Depends(require_permission("users.invite")),
+):
+    """
+    BUG-648 FIX: Regenerate a single-use invitation token and return the
+    fresh ``invitation_link`` WITHOUT sending an email.
+
+    Use case: the original invitation email was lost / never received, an
+    admin wants to DM the link to the invitee directly. The existing
+    ``/invitations/{id}/resend`` endpoint always sends an email, which is
+    useless for that flow and noisy for the invitee when they've already
+    got the first email.
+
+    The list endpoint (``GET /invitations``) cannot return
+    ``invitation_link`` for pre-existing rows because raw tokens are NOT
+    stored (only hashes). This endpoint rotates to a new raw token,
+    stores its hash, and returns the new link.
+
+    Requires: ``users.invite`` permission.
+    """
+    invitation = ctx.db.query(UserInvitation).filter(
+        UserInvitation.id == invitation_id,
+        UserInvitation.tenant_id == ctx.tenant_id,
+        UserInvitation.accepted_at.is_(None)
+    ).first()
+
+    if not invitation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invitation not found"
+        )
+
+    # Rotate token — store hash, return raw.
+    raw_link_token = generate_invitation_token()
+    invitation.invitation_token = hash_token(raw_link_token)
+    # Extend expiry so the surfaced link is actually usable.
+    invitation.expires_at = datetime.utcnow() + timedelta(days=7)
+    ctx.db.commit()
+    ctx.db.refresh(invitation)
+
+    return invitation_to_response(
+        invitation,
+        ctx.db,
+        include_link=True,
+        raw_token=raw_link_token,
+        request=http_request,
+    )
+
+
 @router.post("/invitations/{invitation_id}/resend", response_model=InvitationResponse)
 async def resend_invitation(
     invitation_id: int,
+    http_request: Request,
     ctx: TenantContext = Depends(get_tenant_context),
     current_user: User = Depends(require_permission("users.invite")),
 ):
@@ -496,16 +597,19 @@ async def resend_invitation(
     role = ctx.db.query(Role).filter(Role.id == invitation.role_id).first()
     tenant = ctx.db.query(Tenant).filter(Tenant.id == ctx.tenant_id).first()
 
-    # Send invitation email
+    invite_base_url = resolve_invitation_base_url(http_request, tenant)
+
+    # Send invitation email (use RAW token, not the hash stored in the DB)
     send_invitation(
         to_email=invitation.email,
         inviter_name=ctx.user.full_name or ctx.user.email,
         tenant_name=tenant.name if tenant else "the organization",
         role_name=role.display_name if role else "Member",
-        invitation_token=invitation.invitation_token,
+        invitation_token=raw_resend_token,
+        base_url=invite_base_url,
     )
 
-    return invitation_to_response(invitation, ctx.db, include_link=True)
+    return invitation_to_response(invitation, ctx.db, include_link=True, raw_token=raw_resend_token, request=http_request)
 
 
 # ------------------------------------------------------------------------------

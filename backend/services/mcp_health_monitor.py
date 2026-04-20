@@ -14,6 +14,7 @@ Root cause addressed: WhatsApp "Keepalive timed out" errors that cause message d
 
 import asyncio
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Callable
 from sqlalchemy.orm import Session
@@ -95,26 +96,58 @@ class MCPHealthMonitorService:
 
     async def _check_all_instances(self):
         """Check health of all active MCP instances."""
+        instances = self._list_instances(
+            WhatsAppMCPInstance,
+            WhatsAppMCPInstance.status.in_(["running", "starting", "authenticated"]),
+        )
+
+        for instance in instances:
+            await self._check_instance_health(instance)
+
+    @contextmanager
+    def _db_session_scope(self):
+        """Provide a short-lived DB session for monitor-side reads and writes."""
         db = self.get_db_session()
         try:
-            # Get all active instances (running or starting)
-            instances = db.query(WhatsAppMCPInstance).filter(
-                WhatsAppMCPInstance.status.in_(["running", "starting", "authenticated"])
-            ).all()
-
-            for instance in instances:
-                await self._check_instance_health(instance, db)
-
+            yield db
         finally:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             db.close()
 
-    async def _check_instance_health(self, instance: WhatsAppMCPInstance, db: Session):
+    def _list_instances(self, model_cls, *filters):
+        """Load and detach instances so slow probes do not hold DB sessions open."""
+        with self._db_session_scope() as db:
+            query = db.query(model_cls)
+            if filters:
+                query = query.filter(*filters)
+            instances = query.all()
+            for instance in instances:
+                try:
+                    db.expunge(instance)
+                except Exception:
+                    pass
+            return instances
+
+    def _get_instance(self, instance_id: int) -> Optional[WhatsAppMCPInstance]:
+        """Load and detach a single instance for recovery-phase probes."""
+        with self._db_session_scope() as db:
+            instance = db.query(WhatsAppMCPInstance).get(instance_id)
+            if instance:
+                try:
+                    db.expunge(instance)
+                except Exception:
+                    pass
+            return instance
+
+    async def _check_instance_health(self, instance: WhatsAppMCPInstance):
         """
         Check health of a single MCP instance and trigger recovery if needed.
 
         Args:
             instance: MCP instance to check
-            db: Database session
         """
         instance_id = instance.id
 
@@ -173,20 +206,19 @@ class MCPHealthMonitorService:
 
             # Trigger recovery if needed (with cooldown)
             if needs_recovery:
-                await self._trigger_recovery(instance_id, recovery_reason, db)
+                await self._trigger_recovery(instance_id, recovery_reason)
 
         except Exception as e:
             logger.error(f"Error checking health for instance {instance_id}: {e}", exc_info=True)
             self._consecutive_failures[instance_id] = self._consecutive_failures.get(instance_id, 0) + 1
 
-    async def _trigger_recovery(self, instance_id: int, reason: str, db: Session):
+    async def _trigger_recovery(self, instance_id: int, reason: str):
         """
         Trigger recovery for an MCP instance (restart container).
 
         Args:
             instance_id: MCP instance ID
             reason: Why recovery is being triggered
-            db: Database session
         """
         # Check cooldown to prevent recovery loops
         last_recovery = self._last_recovery.get(instance_id)
@@ -214,14 +246,15 @@ class MCPHealthMonitorService:
 
             # 2. Restart the container
             try:
-                self.container_manager.restart_instance(instance_id, db)
+                with self._db_session_scope() as db:
+                    self.container_manager.restart_instance(instance_id, db)
                 logger.info(f"✅ Container restarted for instance {instance_id}")
             except Exception as e:
                 logger.error(f"Failed to restart container for instance {instance_id}: {e}")
                 raise
 
             # 3. Wait for container to be healthy
-            await self._wait_for_health(instance_id, db, timeout_seconds=60)
+            await self._wait_for_health(instance_id, timeout_seconds=60)
 
             # 4. Resume watcher
             if self.watcher_manager:
@@ -254,20 +287,19 @@ class MCPHealthMonitorService:
                 except:
                     pass
 
-    async def _wait_for_health(self, instance_id: int, db: Session, timeout_seconds: int = 60):
+    async def _wait_for_health(self, instance_id: int, timeout_seconds: int = 60):
         """
         Wait for instance to become healthy after restart.
 
         Args:
             instance_id: MCP instance ID
-            db: Database session
             timeout_seconds: Maximum time to wait
         """
         start = datetime.utcnow()
         check_interval = 5  # seconds
 
         while (datetime.utcnow() - start).total_seconds() < timeout_seconds:
-            instance = db.query(WhatsAppMCPInstance).get(instance_id)
+            instance = self._get_instance(instance_id)
             if not instance:
                 raise ValueError(f"Instance {instance_id} not found")
 

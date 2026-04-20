@@ -21,12 +21,27 @@ import logging
 from typing import Optional
 from sqlalchemy.orm import Session
 
-from models import Agent, AgentSkill
+from models import Agent, AgentSkill, Contact
 from agent.skills.shell_skill import ShellSkill
 
 logger = logging.getLogger(__name__)
 
 SHELL_SKILL_TYPE = "shell"
+
+# BUG-593: Shellboy is the purpose-built shell agent — its headline command
+# path (/shell ...) must work out of the box. Every other seeded agent keeps
+# the default-disabled posture so tenants opt-in per agent.
+SHELL_ENABLED_AGENT_NAMES = {"shellboy"}
+
+
+def _shell_is_enabled_default_for(db: Session, agent: Agent) -> bool:
+    # Agent identity lives on the linked Contact row (friendly_name).
+    contact = db.query(Contact.friendly_name).filter(
+        Contact.id == agent.contact_id
+    ).first()
+    if not contact or not contact[0]:
+        return False
+    return contact[0].strip().lower() in SHELL_ENABLED_AGENT_NAMES
 
 
 def seed_shell_skill_for_agent(
@@ -80,6 +95,10 @@ def seed_shell_skill_for_tenant(db: Session, tenant_id: str) -> int:
     """
     Seed shell skill rows for every agent belonging to the given tenant.
 
+    BUG-593: The canonical "Shellboy" agent ships with shell enabled so its
+    headline /shell commands work on fresh installs. Every other agent keeps
+    the default-disabled posture.
+
     Args:
         db: Database session
         tenant_id: Tenant ID
@@ -96,11 +115,16 @@ def seed_shell_skill_for_tenant(db: Session, tenant_id: str) -> int:
                 AgentSkill.skill_type == SHELL_SKILL_TYPE,
             ).first()
             if existing:
+                if (
+                    _shell_is_enabled_default_for(db, agent)
+                    and not existing.is_enabled
+                ):
+                    existing.is_enabled = True
                 continue
             skill = AgentSkill(
                 agent_id=agent.id,
                 skill_type=SHELL_SKILL_TYPE,
-                is_enabled=False,
+                is_enabled=_shell_is_enabled_default_for(db, agent),
                 config=ShellSkill.get_default_config(),
             )
             db.add(skill)
@@ -138,22 +162,34 @@ def backfill_shell_skill_all_tenants(db: Session) -> int:
 
         all_agents = db.query(Agent).all()
         created = 0
+        enabled_for_shellboy = 0
         for agent in all_agents:
             if agent.id in agent_ids_with_skill:
+                # BUG-593: Ensure existing Shellboy agents on upgraded
+                # installs also get the shell skill enabled.
+                if _shell_is_enabled_default_for(db, agent):
+                    existing = db.query(AgentSkill).filter(
+                        AgentSkill.agent_id == agent.id,
+                        AgentSkill.skill_type == SHELL_SKILL_TYPE,
+                    ).first()
+                    if existing and not existing.is_enabled:
+                        existing.is_enabled = True
+                        enabled_for_shellboy += 1
                 continue
             skill = AgentSkill(
                 agent_id=agent.id,
                 skill_type=SHELL_SKILL_TYPE,
-                is_enabled=False,
+                is_enabled=_shell_is_enabled_default_for(db, agent),
                 config=ShellSkill.get_default_config(),
             )
             db.add(skill)
             created += 1
 
-        if created > 0:
+        if created > 0 or enabled_for_shellboy > 0:
             db.commit()
             logger.info(
-                f"Backfill: Created shell skill row for {created} agents"
+                f"Backfill: Created shell skill row for {created} agents "
+                f"(enabled for {enabled_for_shellboy} existing Shellboy agents)"
             )
         return created
     except Exception as e:

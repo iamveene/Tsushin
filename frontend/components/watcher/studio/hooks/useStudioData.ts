@@ -26,6 +26,9 @@ export function useStudioData(agentId: number | null): UseStudioDataReturn {
   const [agentLoading, setAgentLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fetchVersion = useRef(0)
+  // Tracks the last agentId we synced against so we can detect a true id change
+  // (vs a ref-only re-trigger from agents changing) and clear stale data.
+  const lastSyncedAgentId = useRef<number | null>(null)
 
   const loadGlobalData = useCallback(async () => {
     setLoading(true); setError(null)
@@ -70,8 +73,16 @@ export function useStudioData(agentId: number | null): UseStudioDataReturn {
   useEffect(() => { loadGlobalData() }, [loadGlobalData])
 
   useEffect(() => {
+    // Clear stale per-agent state immediately when the selected agentId actually
+    // changes — prevents consumers (e.g. useAgentBuilder) from rendering with the
+    // previous agent's data during the new fetch window.
+    const agentIdChanged = lastSyncedAgentId.current !== agentId
+    if (agentIdChanged) {
+      lastSyncedAgentId.current = agentId
+      setAgent(null); setSkills([]); setKnowledge([]); setSentinelAssignments([]); setAgentTools([]); setAgentToolMappings([])
+    }
     if (agentId && agents.length > 0) { loadAgentData(agentId) }
-    else { setAgent(null); setSkills([]); setKnowledge([]); setSentinelAssignments([]); setAgentTools([]); setAgentToolMappings([]) }
+    else if (!agentIdChanged) { setAgent(null); setSkills([]); setKnowledge([]); setSentinelAssignments([]); setAgentTools([]); setAgentToolMappings([]) }
   }, [agentId, agents, loadAgentData])
 
   const refetch = useCallback(() => {

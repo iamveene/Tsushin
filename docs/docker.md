@@ -115,10 +115,9 @@ WhatsApp bridge for QA testing. The current repository does not define a `testin
 ```bash
 # Start the main stack
 docker compose up -d
-
-# Optional TTS profile
-docker compose --profile tts up -d
 ```
+
+Local TTS (Kokoro) is no longer a compose profile. Create per-tenant instances via **Hub → Kokoro TTS → Setup with Wizard**; the backend auto-provisions a dedicated container per instance.
 
 **Port:** 8088 when a standalone legacy tester container is running
 
@@ -135,10 +134,9 @@ docker compose up -d --build
 
 # Start specific service
 docker compose up -d backend
-
-# Start with optional TTS profile
-docker compose --profile tts up -d
 ```
+
+Kokoro TTS: no compose profile as of v0.7.0. Provision per-tenant instances via Hub → Kokoro TTS → Setup with Wizard.
 
 ### Stopping Services
 
@@ -222,10 +220,9 @@ Use `host.docker.internal` to access host services:
 ```bash
 # Access Ollama on host
 OLLAMA_BASE_URL=http://host.docker.internal:11434
-
-# Access Kokoro TTS on host
-KOKORO_SERVICE_URL=http://host.docker.internal:8880
 ```
+
+Kokoro TTS: the `KOKORO_SERVICE_URL` env fallback was removed in v0.7.0. Kokoro is now provisioned per tenant via Hub → Kokoro TTS → Setup with Wizard, which spawns a dedicated container and persists its URL in the `TTSInstance` row.
 
 ### Custom Networks
 

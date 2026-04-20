@@ -55,6 +55,7 @@ interface SelectedTool {
 
 interface ExpertModeProps {
   agents: PlaygroundAgentInfo[]
+  isLoadingAgents?: boolean
   projects: Project[]
   selectedAgentId: number | null
   agentName: string
@@ -162,6 +163,7 @@ function formatToolName(rawName: string): string {
 
 export default function ExpertMode({
   agents,
+  isLoadingAgents = false,
   projects,
   selectedAgentId,
   agentName,
@@ -563,12 +565,20 @@ export default function ExpertMode({
               </CollapsibleNavSection>
 
               {/* Threads Section - Accordion (conditionally rendered) */}
-              {selectedAgentId && threads && threads.length > 0 && (
+              {selectedAgentId && threads && threads.length > 0 && (() => {
+                // BUG-619: Apply project-scope filter client-side. When the user
+                // is inside a project session, only show threads that belong to
+                // that project (match on `project_name`) and scope the badge to
+                // the filtered count. Outside a project, behavior is unchanged.
+                const scopedThreads = projectSession?.is_in_project && projectSession.project_name
+                  ? threads.filter(t => (t as any).project_name === projectSession.project_name)
+                  : threads
+                return (
                 <CollapsibleNavSection
                   id="threads"
                   icon={<MessageIcon size={16} />}
                   title="Threads"
-                  count={threads.length}
+                  count={scopedThreads.length}
                   isExpanded={expandedSection === 'threads'}
                   onToggle={handleSectionToggle}
                   preview={getThreadsPreview()}
@@ -584,15 +594,37 @@ export default function ExpertMode({
                         <span>New Thread</span>
                       </button>
                     )}
-                    {threads.slice(0, 10).map(thread => (
+                    {projectSession?.is_in_project && (
+                      <div className="px-2 py-1 mb-1 text-[10px] text-[var(--pg-text-muted)] italic">
+                        Scoped to {projectSession.project_name} · {scopedThreads.length} thread{scopedThreads.length === 1 ? '' : 's'}
+                      </div>
+                    )}
+                    {scopedThreads.slice(0, 10).map(thread => (
                       <div
                         key={thread.id}
-                        className={`thread-item-with-menu relative flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
+                        className={`thread-item-with-menu group relative flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
                           thread.id === activeThreadId
                             ? 'bg-[var(--pg-accent-soft)] text-[var(--pg-accent)]'
                             : 'text-[var(--pg-text-secondary)] hover:bg-[var(--pg-surface)]/50 hover:text-[var(--pg-text)]'
                         }`}
-                        onClick={() => onThreadSelect && onThreadSelect(thread.id)}
+                        onClick={(e) => {
+                          // BUG-625: Ignore clicks that originate inside the
+                          // kebab menu button. The kebab has `stopPropagation`
+                          // already, but belt-and-braces: if any inner control
+                          // (with a `data-no-row-click` attr) bubbles to us,
+                          // don't trigger row-select. This makes the row
+                          // single-purpose: click row => select thread,
+                          // click kebab/right-click => open context menu.
+                          const tgt = e.target as HTMLElement | null
+                          if (tgt?.closest('[data-no-row-click="true"]')) return
+                          onThreadSelect && onThreadSelect(thread.id)
+                        }}
+                        onContextMenu={(e) => {
+                          // BUG-625: Native right-click opens the context menu.
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setThreadContextMenu({ threadId: thread.id, x: e.clientX, y: e.clientY })
+                        }}
                         title={thread.title || 'Untitled'}
                       >
                         <span className="text-sm flex-shrink-0 flex items-center justify-center w-4 h-4">{thread.is_archived ? <ArchiveIcon size={14} /> : <MessageIcon size={14} />}</span>
@@ -601,13 +633,15 @@ export default function ExpertMode({
                           <span className="text-[10px] text-[var(--pg-text-muted)] flex-shrink-0">{thread.message_count}</span>
                         )}
                         <button
+                          data-no-row-click="true"
                           onClick={(e) => {
                             e.stopPropagation()
                             setThreadContextMenu({ threadId: thread.id, x: e.clientX, y: e.clientY })
                           }}
-                          className="thread-menu-btn flex-shrink-0 p-1 hover:bg-[var(--pg-surface)] rounded transition-all"
-                          title="Thread options"
-                          style={{ opacity: 0.3 }}
+                          /* BUG-625: kebab is hidden until the row is hovered so
+                             row-body clicks can't accidentally land on it. */
+                          className="thread-menu-btn flex-shrink-0 p-1 hover:bg-[var(--pg-surface)] rounded opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+                          title="Thread options (or right-click row)"
                         >
                           <svg className="w-3.5 h-3.5 text-[var(--pg-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
@@ -617,7 +651,8 @@ export default function ExpertMode({
                     ))}
                   </div>
                 </CollapsibleNavSection>
-              )}
+                )
+              })()}
 
               {/* Quick Tools Section - Accordion */}
               <CollapsibleNavSection
@@ -741,6 +776,17 @@ export default function ExpertMode({
                 </div>
                 <p className="text-[var(--pg-text-secondary)] mt-4">Loading...</p>
               </div>
+            ) : isLoadingAgents ? (
+              // BUG-596: While the agent list is still hydrating (first paint
+              // after login), show a spinner instead of the misleading
+              // "Select an Agent" empty state — otherwise the user briefly
+              // sees `Agents 0` even though fetches are in flight.
+              <div className="empty-state h-full">
+                <div className="empty-state-icon animate-pulse">
+                  <div className="w-6 h-6 border-2 border-[var(--pg-accent)] border-t-transparent rounded-full animate-spin" />
+                </div>
+                <p className="text-[var(--pg-text-secondary)] mt-4">Loading agents…</p>
+              </div>
             ) : !selectedAgentId ? (
               <div className="empty-state h-full">
                 <div className="empty-state-icon"><TargetIcon size={48} /></div>
@@ -764,6 +810,63 @@ export default function ExpertMode({
                 {messages.map((msg, idx) => {
                   const isUser = msg.role === 'user'
                   const messageKey = msg.message_id || `msg_${msg.timestamp}_${idx}`
+
+                  // BUG-646: Detect Sentinel-block bubbles emitted via the
+                  // SENTINEL_BLOCK:<threat_type>:<reason> marker and also
+                  // the legacy "🛡️ Your message was blocked by security
+                  // measures: …" string shape that some assistant turns
+                  // persist to history. Either one renders as an inline
+                  // block-reason callout instead of a generic chat bubble.
+                  let sentinelBlock: { threatType: string; reason: string } | null = null
+                  if (!isUser && typeof msg.content === 'string') {
+                    if (msg.content.startsWith('SENTINEL_BLOCK:')) {
+                      const rest = msg.content.slice('SENTINEL_BLOCK:'.length)
+                      const colonIdx = rest.indexOf(':')
+                      sentinelBlock = {
+                        threatType: colonIdx > 0 ? rest.slice(0, colonIdx) : 'security_block',
+                        reason: colonIdx > 0 ? rest.slice(colonIdx + 1) : rest,
+                      }
+                    } else if (msg.content.startsWith('🛡️ Your message was blocked by security measures:')) {
+                      sentinelBlock = {
+                        threatType: 'security_block',
+                        reason: msg.content.replace('🛡️ Your message was blocked by security measures:', '').trim(),
+                      }
+                    }
+                  }
+
+                  if (sentinelBlock) {
+                    return (
+                      <div
+                        key={messageKey}
+                        data-testid="sentinel-block-banner"
+                        className="flex gap-3 animate-slide-up"
+                        style={{ animationDelay: `${idx * 15}ms` }}
+                      >
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-semibold flex-shrink-0 bg-[var(--pg-error)]/15 border border-[var(--pg-error)]/40 text-[var(--pg-error)]">
+                          🛡
+                        </div>
+                        <div className="flex flex-col gap-1 max-w-[75%]">
+                          <div className="rounded-xl rounded-tl-sm border border-[var(--pg-error)]/40 bg-[var(--pg-error)]/10 px-4 py-3 text-sm leading-relaxed text-[var(--pg-text)]">
+                            <div className="flex items-center gap-2 mb-1 text-[var(--pg-error)] font-semibold">
+                              <span>Blocked by Sentinel</span>
+                              <span className="text-[10px] uppercase tracking-wider rounded-full px-2 py-0.5 bg-[var(--pg-error)]/20 border border-[var(--pg-error)]/30">
+                                {sentinelBlock.threatType.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <div className="text-[var(--pg-text-secondary)] whitespace-pre-wrap break-words">
+                              {sentinelBlock.reason}
+                            </div>
+                          </div>
+                          <div className="px-1">
+                            <span className="text-[10px] text-[var(--pg-text-muted)]">
+                              {formatTimestamp(msg.timestamp)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  }
+
                   return (
                     <div
                       key={messageKey}

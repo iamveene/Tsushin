@@ -32,7 +32,29 @@ export default function PlaygroundPage() {
   const { user, loading } = useRequireAuth()
 
   const [agents, setAgents] = useState<PlaygroundAgentInfo[]>([])
-  const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null)
+  // BUG-596: Gate the "Select an Agent" / empty-state render on a real
+  // loading flag so the first paint doesn't flash "Agents 0" before the
+  // cached-then-fresh agent list resolves. Starts `true` and only flips
+  // `false` after `loadAgents()`'s fresh fetch settles (success or failure).
+  const [isLoadingAgents, setIsLoadingAgents] = useState(true)
+  // Seed from the URL `?agent=` query param on initial mount so Playground Mini's
+  // expand handover (`router.push('/playground?agent=X&thread=Y')`) pre-selects the
+  // right agent BEFORE `loadAgents()` runs its default-agent auto-pick — otherwise
+  // that auto-pick would race the URL and the wrong agent's threads would be fetched.
+  const [selectedAgentId, setSelectedAgentId] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const agentParam = params.get('agent')
+      if (agentParam) {
+        const n = Number(agentParam)
+        if (!Number.isNaN(n)) return n
+      }
+    } catch {
+      /* ignore */
+    }
+    return null
+  })
   const [messages, setMessages] = useState<PlaygroundMessage[]>([])
   const [isSending, setIsSending] = useState(false)
   const [isLoadingHistory, setIsLoadingHistory] = useState(false)
@@ -77,7 +99,30 @@ export default function PlaygroundPage() {
 
   // Phase 14.1: Thread Management State
   const [threads, setThreads] = useState<PlaygroundThread[]>([])
-  const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
+  // BUG-618: Hydrate `activeThreadId` from `?thread=` OR localStorage on first
+  // mount so hard-reload and deep-link navigation both restore the last-active
+  // thread. URL wins over localStorage — a shared link always takes precedence.
+  // The subsequent URL-sync effect keeps the query param in lockstep when the
+  // user switches threads in the sidebar.
+  const [activeThreadId, setActiveThreadId] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const threadParam = params.get('thread')
+      if (threadParam) {
+        const n = Number(threadParam)
+        if (!Number.isNaN(n)) return n
+      }
+      const stored = window.localStorage.getItem('tsushin.playground.lastThreadId')
+      if (stored) {
+        const n = Number(stored)
+        if (!Number.isNaN(n)) return n
+      }
+    } catch {
+      /* ignore */
+    }
+    return null
+  })
   const [activeThread, setActiveThread] = useState<PlaygroundThread | null>(null)
   const [showThreadSidebar, setShowThreadSidebar] = useState(true)
   const [isLoadingThreads, setIsLoadingThreads] = useState(false)
@@ -111,11 +156,48 @@ export default function PlaygroundPage() {
   const audioChunksRef = useRef<Blob[]>([])
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null)
   const activeThreadIdRef = useRef<number | null>(null)
+  // BUG-617: Guard against double-click on "+ New Thread" creating duplicate
+  // DB-persisted threads. Mirrors the `sendingRef` pattern used by Playground
+  // Mini — the first click sets this to true and the second click is dropped
+  // until the create-thread request settles.
+  const creatingThreadRef = useRef<boolean>(false)
 
   // Sync ref with state to avoid closure issues
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId
   }, [activeThreadId])
+
+  // BUG-618: Mirror the active thread id into `?thread=<id>` and localStorage
+  // so hard refresh restores the selected conversation (URL is the source of
+  // truth; localStorage is the fallback when no query param is present, e.g.
+  // hitting `/playground` via sidebar nav). We use `window.history.replaceState`
+  // (not router.push/replace) to avoid triggering a Next.js client nav that
+  // would re-mount this page and wipe the in-memory thread state.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      if (activeThreadId) {
+        window.localStorage.setItem('tsushin.playground.lastThreadId', String(activeThreadId))
+        const params = new URLSearchParams(window.location.search)
+        if (params.get('thread') !== String(activeThreadId)) {
+          params.set('thread', String(activeThreadId))
+          const next = `${window.location.pathname}?${params.toString()}`
+          window.history.replaceState(null, '', next)
+        }
+      }
+    } catch {
+      /* ignore — URL sync is best-effort */
+    }
+  }, [activeThreadId])
+
+  // --- Playground Mini handover (de-dupe)
+  // Tracks the last-consumed ?thread= so re-expanding with the same thread
+  // during one session doesn't re-select it on every re-render; re-expanding
+  // with a DIFFERENT thread still works. The actual URL read happens inside
+  // initializeThreads below — reading from `window.location.search` directly
+  // avoids a race with `loadAgents()` auto-selection that `useSearchParams`
+  // + a separate effect would have lost.
+  const lastConsumedHandoverThreadRef = useRef<number | null>(null)
 
   // Smart UX: Draft auto-save hook
   const { saveDraft, saveDraftImmediate, restoreDraft, clearDraft } = useDraftSave(activeThreadId, inputRef)
@@ -188,6 +270,45 @@ export default function PlaygroundPage() {
         handleThreadUpdated()
       },
       onError: (error) => {
+        // BUG-645: The WS hook emits `Thread N not found` when the client sends
+        // a chat message targeting a thread id that the backend can't locate
+        // (race: local state got ahead of the persistence round-trip, or the
+        // user switched agents mid-send, or the thread was deleted). Rather
+        // than surfacing a scary red banner, recover silently:
+        //   1. Drop the stale thread id.
+        //   2. Reload the thread list — initializeThreads() will reuse the
+        //      most-recent empty thread or create a fresh one as needed.
+        //   3. Suppress the user-facing error banner for this specific case.
+        const threadNotFoundMatch = typeof error === 'string'
+          ? error.match(/Thread\s+(\d+)\s+not\s+found/i)
+          : null
+        if (threadNotFoundMatch) {
+          const staleId = Number(threadNotFoundMatch[1])
+          console.warn('[Playground] BUG-645 recovery: dropping stale thread id', staleId)
+          if (activeThreadIdRef.current === staleId) {
+            activeThreadIdRef.current = null
+            setActiveThreadId(null)
+            setActiveThread(null)
+          }
+          // Strip stale `?thread=` from the URL so the next reload doesn't re-seed it.
+          if (typeof window !== 'undefined') {
+            try {
+              window.localStorage.removeItem('tsushin.playground.lastThreadId')
+              const params = new URLSearchParams(window.location.search)
+              if (params.get('thread') === String(staleId)) {
+                params.delete('thread')
+                const qs = params.toString()
+                window.history.replaceState(null, '', qs ? `/playground?${qs}` : '/playground')
+              }
+            } catch { /* no-op */ }
+          }
+          // Refresh the thread list so the sidebar reflects backend truth.
+          if (selectedAgentId) loadThreads(selectedAgentId)
+          setStreamingMessage(null)
+          // Don't show the raw error banner — let the user retry on a fresh thread.
+          setError(null)
+          return
+        }
         setError(error)
         setStreamingMessage(null)
       },
@@ -697,9 +818,18 @@ export default function PlaygroundPage() {
       const cachedAgents = getCachedAgents(user.id)
       if (cachedAgents) {
         setAgents(cachedAgents)
-        // Auto-select default agent (or first) if available and none selected
+        // Auto-select default agent (or first) if available. Also validate a
+        // URL-seeded `selectedAgentId` against the cached list — a stale cache
+        // can hold an agent that no longer belongs to this tenant if the user
+        // has switched tenants without refreshing the cache; the fresh fetch
+        // below will validate again authoritatively.
         if (cachedAgents.length > 0) {
-          setSelectedAgentId(currentId => currentId === null ? (cachedAgents.find(a => a.is_default) || cachedAgents[0]).id : currentId)
+          setSelectedAgentId(currentId => {
+            if (currentId !== null && cachedAgents.some(a => a.id === currentId)) {
+              return currentId
+            }
+            return (cachedAgents.find(a => a.is_default) || cachedAgents[0]).id
+          })
         }
       }
 
@@ -710,12 +840,23 @@ export default function PlaygroundPage() {
       // Update cache with fresh data
       setCachedAgents(user.id, data)
 
-      // Auto-select default agent (or first) if available and none selected
+      // Auto-select default agent (or first) if available. If a URL-seeded
+      // `selectedAgentId` does NOT belong to this tenant (e.g. a copy-pasted
+      // deep-link from a different tenant's session, or an agent that was
+      // deleted), fall back to the default so we never POST threads for a
+      // foreign agent id — the backend would either 403 or mis-scope the write.
       if (data.length > 0) {
-        setSelectedAgentId(currentId => currentId === null ? (data.find(a => a.is_default) || data[0]).id : currentId)
+        setSelectedAgentId(currentId => {
+          if (currentId !== null && data.some(a => a.id === currentId)) {
+            return currentId
+          }
+          return (data.find(a => a.is_default) || data[0]).id
+        })
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load agents')
+    } finally {
+      setIsLoadingAgents(false)
     }
   }
 
@@ -746,6 +887,17 @@ export default function PlaygroundPage() {
 
   const handleNewThread = async () => {
     if (!selectedAgentId) return
+    // BUG-617: Drop rapid double-clicks that would otherwise post two
+    // `POST /api/playground/threads` requests back-to-back and create two
+    // orphan "New Conversation" rows. Guard stays set until the request
+    // settles (success or failure) — same in-flight pattern as Mini's
+    // `sendingRef`. Use a ref (not state) so the check is synchronous and
+    // a double-click within the same render tick is caught.
+    if (creatingThreadRef.current) {
+      console.log('[Playground] handleNewThread: in-flight guard — ignoring duplicate click')
+      return
+    }
+    creatingThreadRef.current = true
     try {
       // Get agent name for thread title
       const agent = agents.find(a => a.id === selectedAgentId)
@@ -770,6 +922,8 @@ export default function PlaygroundPage() {
       await loadThreads()
     } catch (err) {
       console.error('Failed to create thread:', err)
+    } finally {
+      creatingThreadRef.current = false
     }
   }
 
@@ -903,6 +1057,66 @@ export default function PlaygroundPage() {
         if (process.env.NODE_ENV === 'development') console.log('[Phase 14.1] Loaded threads:', agentThreads.length)
 
         setThreads(agentThreads)
+
+        // BUG-618 + Playground Mini handover: restore the active thread from the
+        // URL's `?thread=<id>` (source of truth) OR fall back to localStorage
+        // (`tsushin.playground.lastThreadId`). Used by two flows:
+        //   1. Mini expand handover (`router.push('/playground?thread=Y')`).
+        //   2. Hard refresh / deep-link to `/playground?thread=Y`.
+        // We read the URL directly (not via `useSearchParams` + a separate effect)
+        // because `loadAgents()` can default-select the agent BEFORE a
+        // search-params-derived effect would fire. This block keeps the URL in
+        // place (the URL-sync effect above maintains it) so a subsequent reload
+        // still restores the thread.
+        if (typeof window !== 'undefined') {
+          try {
+            const urlParams = new URLSearchParams(window.location.search)
+            let pending: number | null = null
+            const threadParam = urlParams.get('thread')
+            if (threadParam) {
+              const n = Number(threadParam)
+              if (!Number.isNaN(n)) pending = n
+            }
+            if (pending === null) {
+              const stored = window.localStorage.getItem('tsushin.playground.lastThreadId')
+              if (stored) {
+                const n = Number(stored)
+                if (!Number.isNaN(n)) pending = n
+              }
+            }
+            if (pending !== null && lastConsumedHandoverThreadRef.current !== pending) {
+              const found = agentThreads.find(t => t.id === pending)
+              if (found) {
+                console.log('[Playground] Restoring thread from URL/localStorage —', pending)
+                lastConsumedHandoverThreadRef.current = pending
+                setActiveThreadId(found.id)
+                setActiveThread(found)
+                // Fetch full thread via the same path as sidebar selection.
+                void handleThreadSelect(found.id)
+                // BUG-618: Keep the URL in place so reload-after-reload keeps working.
+                // The URL-sync effect will normalize it on the next state tick.
+                return
+              } else {
+                console.warn('[Playground] Thread', pending, 'not in agent list — falling back to default thread selection')
+                // Stale reference — the thread doesn't belong to this agent (e.g.,
+                // agent was switched OR a different user logged in on this browser
+                // and the old tenant's thread id is still in localStorage). Drop
+                // both the query param AND the localStorage key so the user
+                // doesn't get stuck on a 404 loop and foreign-tenant thread ids
+                // don't persist.
+                try {
+                  const params = new URLSearchParams(window.location.search)
+                  params.delete('thread')
+                  const qs = params.toString()
+                  window.history.replaceState(null, '', qs ? `/playground?${qs}` : '/playground')
+                  window.localStorage.removeItem('tsushin.playground.lastThreadId')
+                } catch { /* no-op */ }
+              }
+            }
+          } catch {
+            /* non-fatal — proceed with default behavior */
+          }
+        }
 
         // BUG-335 Fix: Look for ANY empty thread (message_count === 0 or undefined),
         // not just the most recent one. This prevents creating a new orphan thread on
@@ -1130,6 +1344,25 @@ export default function PlaygroundPage() {
             }
             setMessages((prev) => [...prev, agentMsg])
           }
+        } else if (response.status === 'blocked') {
+          // BUG-646: Sentinel blocked the prompt. Surface the threat
+          // reason as an inline assistant-slot banner instead of a
+          // silent no-op. The backend puts the threat_reason in
+          // `response.message`; we prefix it with a well-known marker
+          // (`SENTINEL_BLOCK:`) so the renderer can identify the bubble
+          // and draw it with the security-block styling.
+          const threatType = (response as any).threat_type
+            || (response as any).security_detection_type
+            || 'security_block'
+          const reason = response.message || 'Message blocked for security reasons.'
+          const blockedMsgId = `msg_blocked_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+          const blockedMsg: PlaygroundMessage = {
+            role: 'assistant',
+            content: `SENTINEL_BLOCK:${threatType}:${reason}`,
+            timestamp: response.timestamp || new Date().toISOString(),
+            message_id: blockedMsgId,
+          }
+          setMessages((prev) => [...prev, blockedMsg])
         } else if (response.error) {
           setError(response.error)
         }
@@ -1724,6 +1957,7 @@ export default function PlaygroundPage() {
     <div className="h-full w-full overflow-hidden">
       <ExpertMode
         agents={agents}
+        isLoadingAgents={isLoadingAgents}
         projects={projects}
         selectedAgentId={selectedAgentId}
         agentName={agentName}

@@ -676,7 +676,16 @@ class ToolStepHandler(FlowStepHandler):
 
         tool_type = config.get("tool_type", "built_in")
         tool_name = config.get("tool_name") or config.get("tool_id") or ""
-        parameters = config.get("parameters", config.get("tool_parameters", {})) or {}
+        # BUG-605: The flows UI saves step parameters under `tool_parameters`.
+        # The original `config.get("parameters", config.get("tool_parameters", {}))`
+        # only fell back when the key was *missing*; if the UI wrote both
+        # `parameters={}` and `tool_parameters={"query": "X"}` the fallback
+        # never fired and downstream `parameters.get("query")` returned "".
+        # Merge both keys instead — later wins — so either shape resolves
+        # correctly.
+        _p = config.get("parameters") or {}
+        _tp = config.get("tool_parameters") or {}
+        parameters = {**_p, **_tp}
         timeout = step.timeout_seconds or DEFAULT_STEP_TIMEOUT
 
         # Phase 13.1: Resolve template variables in parameters
@@ -716,14 +725,36 @@ class ToolStepHandler(FlowStepHandler):
 
     async def _execute_sandboxed_tool(self, tool_id: str, parameters: Dict[str, Any], tenant_id: Optional[str] = None) -> Dict[str, Any]:
         """Execute sandboxed tool through SandboxedToolService."""
-        from models import SandboxedToolCommand
+        from models import SandboxedTool, SandboxedToolCommand
         from agent.tools.sandboxed_tool_service import SandboxedToolService
 
         try:
             if not tool_id:
                 raise ValueError("tool_id is required but was empty or None")
 
-            tool_id_int = int(tool_id)
+            # BUG-590: Flow tool nodes are authored with `tool_name` slugs
+            # (e.g. "webhook") because that is what routes_flows.py validates
+            # at create/update time. Legacy configs may still carry integer
+            # ids, so accept both forms here instead of blindly casting.
+            tool_id_str = str(tool_id).strip()
+            if tool_id_str.isdigit():
+                tool_id_int = int(tool_id_str)
+            else:
+                tool_query = self.db.query(SandboxedTool.id).filter(
+                    SandboxedTool.name == tool_id_str,
+                    SandboxedTool.is_enabled == True,  # noqa: E712
+                )
+                if tenant_id is not None:
+                    tool_query = tool_query.filter(
+                        SandboxedTool.tenant_id == tenant_id
+                    )
+                tool_row = tool_query.first()
+                if not tool_row:
+                    raise ValueError(
+                        f"Sandboxed tool '{tool_id_str}' not found or "
+                        f"disabled for tenant {tenant_id}"
+                    )
+                tool_id_int = tool_row[0]
 
             # Find the first command for this tool
             command = self.db.query(SandboxedToolCommand).filter_by(tool_id=tool_id_int).first()
@@ -1071,7 +1102,11 @@ class SkillStepHandler(FlowStepHandler):
             actual_execution_mode = "tool" if (use_tool_mode and has_execute_tool and (is_tool_enabled or config.get("use_tool_mode") is True)) else "legacy"
 
             # Return structured output for template injection
-            return {
+            # BUG-635: when the skill reports failure (result.success=False),
+            # promote any error-like text from its output/metadata to the
+            # top-level `error` field so the executor surfaces it on
+            # FlowNodeRun.error_text.
+            out: Dict[str, Any] = {
                 "skill_type": skill_type,
                 "skill_name": skill_class.skill_name,
                 "prompt": prompt,
@@ -1084,13 +1119,27 @@ class SkillStepHandler(FlowStepHandler):
                 "executed_at": datetime.utcnow().isoformat() + "Z",
                 "execution_mode": actual_execution_mode
             }
+            if not result.success:
+                metadata_err = None
+                if isinstance(result.metadata, dict):
+                    metadata_err = result.metadata.get("error") or result.metadata.get("message")
+                out["error"] = (
+                    metadata_err
+                    or (result.output if isinstance(result.output, str) else None)
+                    or f"Skill '{skill_type}' reported failure without error detail"
+                )
+            return out
 
         except Exception as e:
             logger.error(f"Skill execution failed: {e}", exc_info=True)
+            # BUG-635: surface the real error text at the top level so the
+            # executor can populate FlowNodeRun.error_text (instead of the
+            # generic "Step handler reported failure" fallback).
             return {
                 "skill_type": skill_type,
                 "prompt": prompt,
                 "success": False,
+                "error": f"{type(e).__name__}: {str(e)}",
                 "output": f"Error executing skill: {str(e)}",
                 "processed_content": None,
                 "metadata": {"error": str(e)},
@@ -1479,20 +1528,67 @@ class SummarizationStepHandler(FlowStepHandler):
                     or source_data.get("error")
                 )
 
-        # If no source_step and no thread_id, try previous_step as fallback
+        # BUG-634: Before falling through to raw-text mode, aggressively
+        # look for a conversation `thread_id`:
+        #   1. immediate previous_step output
+        #   2. any earlier step in the flow's `steps` context dict
+        #   3. DB-level: any ConversationThread linked to a prior step run
+        #      from this same FlowRun (covers the case where the conversation
+        #      handler did not echo `thread_id` back into its output dict —
+        #      e.g. single-turn mode).
+        # The thread_id branch wins over raw-text summarization so
+        # Conversation → Summarization flows produce transcript-based
+        # summaries by default instead of garbage JSON-dump summaries.
+        if not thread_id:
+            prev = input_data.get("previous_step", {})
+            if isinstance(prev, dict) and prev.get("thread_id"):
+                thread_id = prev.get("thread_id")
+        if not thread_id:
+            steps_ctx = input_data.get("steps", {})
+            if isinstance(steps_ctx, dict):
+                for _, step_data in sorted(steps_ctx.items(), reverse=True):
+                    if isinstance(step_data, dict) and step_data.get("thread_id"):
+                        thread_id = step_data.get("thread_id")
+                        logger.info(
+                            f"SummarizationStepHandler: auto-bound thread_id={thread_id} "
+                            f"from prior step context (BUG-634 fallback)"
+                        )
+                        break
+        if not thread_id and flow_run is not None:
+            try:
+                candidate = (
+                    self.db.query(ConversationThread)
+                    .join(FlowNodeRun, FlowNodeRun.id == ConversationThread.flow_step_run_id)
+                    .filter(FlowNodeRun.flow_run_id == flow_run.id)
+                    .order_by(ConversationThread.id.desc())
+                    .first()
+                )
+                if candidate:
+                    thread_id = candidate.id
+                    logger.info(
+                        f"SummarizationStepHandler: auto-bound thread_id={thread_id} "
+                        f"from FlowRun={flow_run.id} ConversationThread lookup (BUG-634 fallback)"
+                    )
+            except Exception as db_err:
+                logger.debug(f"BUG-634 ConversationThread lookup failed (non-fatal): {db_err}")
+
+        # If still no thread_id, fall back to raw-text extraction from
+        # previous_step (tool / skill outputs).
         if not thread_id and not source_text:
             prev = input_data.get("previous_step", {})
             if isinstance(prev, dict):
-                thread_id = prev.get("thread_id")
-                if not thread_id:
-                    source_text = (
-                        prev.get("raw_output")
-                        or prev.get("output")
-                        or prev.get("message")
-                        or prev.get("summary")
-                        or prev.get("search_results")
-                        or prev.get("error")
-                    )
+                source_text = (
+                    prev.get("raw_output")
+                    or prev.get("message")
+                    or prev.get("summary")
+                    or prev.get("search_results")
+                    or prev.get("error")
+                    # Last resort: `output` may be either a string (some
+                    # handlers) or a dict (post BUG-632 context). Only
+                    # accept string outputs here so we don't summarize a
+                    # structured dict.
+                    or (prev.get("output") if isinstance(prev.get("output"), str) else None)
+                )
 
         if not thread_id and not source_text:
             return {
@@ -2694,7 +2790,20 @@ class FlowEngine:
                     output = {"raw": step_run.output_json}
 
             # Build step data with all output fields merged
+            # BUG-632 / BUG-633: also expose the raw output dict under the
+            # literal key `output` so authors can bind Gate / template
+            # conditions using `step_N.output` (e.g. when a message step
+            # produces `{"message_sent": "seed"}`, `step_1.output` resolves
+            # to that dict instead of literal null). Individual fields
+            # (`step_1.message_sent`, `step_1.raw_output`, etc.) still work
+            # because `**output` is merged at the same level.
+            # BUG-632 followup: keep `**output` spread BEFORE the canonical
+            # `output` alias so handler-emitted `output` keys (string) don't
+            # overwrite the dict alias. Also re-assert the top-level
+            # bookkeeping fields AFTER the spread so they can't be clobbered
+            # by a handler that happens to emit `status`/`error`/etc.
             step_data = {
+                **output,  # Merge all output fields (raw_output, summary, tool_used, etc.)
                 "position": position,
                 "name": name,
                 "type": step_type,
@@ -2702,7 +2811,7 @@ class FlowEngine:
                 "error": step_run.error_text,
                 "execution_time_ms": step_run.execution_time_ms,
                 "retry_count": step_run.retry_count,
-                **output  # Merge all output fields (raw_output, summary, tool_used, etc.)
+                "output": output,  # canonical dict alias — MUST be last to survive the spread
             }
 
             # Add by position (1-based): step_1, step_2, etc.
@@ -2902,7 +3011,21 @@ class FlowEngine:
                 # Check if the handler reported internal failure via output status
                 if isinstance(output, dict) and output.get("status") == "failed":
                     step_run.status = "failed"
-                    step_run.error_text = output.get("error", "Step handler reported failure")
+                    # BUG-635: surface the richest error text available instead
+                    # of the opaque "Step handler reported failure". Handlers
+                    # that set `error` get priority; otherwise fall back to
+                    # metadata.error, `message`, or `output` text so operators
+                    # get actionable detail in the run UI.
+                    metadata = output.get("metadata") if isinstance(output.get("metadata"), dict) else {}
+                    fallback_text = (
+                        output.get("error")
+                        or metadata.get("error")
+                        or metadata.get("message")
+                        or output.get("message")
+                        or (output.get("output") if isinstance(output.get("output"), str) else None)
+                        or f"Step handler '{step.type}' reported failure (no error text provided)"
+                    )
+                    step_run.error_text = str(fallback_text)[:4000]
                     logger.warning(f"Step {step.id} ({step.type}) reported failure: {step_run.error_text}")
                 else:
                     step_run.status = "completed"
@@ -3183,6 +3306,17 @@ class FlowEngine:
             if flow_run.status not in ("failed", "cancelled"):
                 if flow_run.failed_steps > 0:
                     flow_run.status = "completed_with_errors"
+                elif flow_run.completed_steps == 0 and flow_run.total_steps == 0:
+                    # BUG-637: a flow with zero steps is a no-op, not a success.
+                    # Mark as "noop" so operators/ops dashboards don't confuse an
+                    # empty flow definition for a green run. This also covers
+                    # templates that somehow instantiated with 0 steps
+                    # (BUG-631 defence-in-depth).
+                    flow_run.status = "noop"
+                    flow_run.error_text = (
+                        "Flow has no steps to execute. "
+                        "Add at least one step or delete this flow."
+                    )
                 else:
                     flow_run.status = "completed"
 

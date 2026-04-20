@@ -462,6 +462,17 @@ class PlaygroundThreadService:
                     formatted_msg["kb_used"] = msg["kb_used"]
                 elif "metadata" in msg and isinstance(msg["metadata"], dict) and "kb_used" in msg["metadata"]:
                     formatted_msg["kb_used"] = msg["metadata"]["kb_used"]
+                # BUG-592: Surface persisted image URLs so reopened threads can
+                # re-render generated images.
+                msg_meta = msg.get("metadata") if isinstance(msg.get("metadata"), dict) else None
+                if "image_url" in msg and msg["image_url"]:
+                    formatted_msg["image_url"] = msg["image_url"]
+                elif msg_meta and msg_meta.get("image_url"):
+                    formatted_msg["image_url"] = msg_meta["image_url"]
+                if "image_urls" in msg and msg["image_urls"]:
+                    formatted_msg["image_urls"] = msg["image_urls"]
+                elif msg_meta and msg_meta.get("image_urls"):
+                    formatted_msg["image_urls"] = msg_meta["image_urls"]
                 formatted_messages.append(formatted_msg)
 
             return {

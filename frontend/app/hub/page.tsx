@@ -11,13 +11,19 @@
  * - Tool APIs: Brave Search, Tavily, Amadeus
  */
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import dynamic from 'next/dynamic'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
+
+const SearchIntegrationWizard = dynamic(
+  () => import('@/components/integrations/SearchIntegrationWizard'),
+  { ssr: false },
+)
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
 // V060-CHN-002: SlackSetupModal/DiscordSetupModal replaced by guided wizards.
@@ -30,14 +36,19 @@ import SlackSetupModal from '@/components/SlackSetupWizard'
 import DiscordSetupModal from '@/components/DiscordSetupWizard'
 import PublicBaseUrlCard from '@/components/PublicBaseUrlCard'
 import WebhookSetupModal from '@/components/WebhookSetupModal'
+import WebhookSecretRevealModal from '@/components/WebhookSecretRevealModal'
+import WebhookEditModal from '@/components/WebhookEditModal'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
 import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
 import MCPServerWizard from '@/components/mcp/MCPServerWizard'
+import OllamaSetupWizard from '@/components/ollama/OllamaSetupWizard'
+import KokoroSetupWizard from '@/components/tts/KokoroSetupWizard'
 import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/TypeaheadChipInput'
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
+import { useGoogleWizard, useGoogleWizardComplete } from '@/contexts/GoogleWizardContext'
 import IntegrationSummary from '@/components/hub/IntegrationSummary'
 import {
   GeminiIcon,
@@ -252,6 +263,7 @@ const DEVELOPER_TOOLS: { value: string; label: string; Icon: React.FC<IconProps>
 
 const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
   { value: 'brave_search', label: 'Brave Search', Icon: SearchIcon, description: 'Privacy-focused web search API', status: 'available' },
+  { value: 'searxng', label: 'SearXNG', Icon: GlobeIcon, description: 'Self-hosted open-source metasearch', status: 'available' },
   { value: 'tavily', label: 'Tavily', Icon: GlobeIcon, description: 'AI-focused web search API', status: 'available' },
   { value: 'google_flights', label: 'SerpAPI (Google Services)', Icon: GlobeIcon, description: 'Unified SerpAPI key for Google Search, Google Flights, and other Google services', status: 'available' },
   { value: 'amadeus', label: 'Amadeus', Icon: PlaneIcon, description: 'Flight search API', status: 'available' },
@@ -259,12 +271,70 @@ const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; desc
 
 const NOTIFICATION_SERVICES: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = []
 
+// v0.6.x: Curated list of Ollama models for per-tenant auto-provisioning
+const CURATED_OLLAMA_MODELS = [
+  'llama3.2:1b',
+  'llama3.2:3b',
+  'qwen2.5:3b',
+  'qwen2.5:7b',
+  'deepseek-r1:7b',
+  'phi3.5:3.8b',
+  'mistral:7b',
+  'custom',
+]
+
 export default function HubPage() {
+  // OAuth popup handoff. The Google OAuth callback at /api/hub/google/oauth/callback
+  // redirects the popup window to /hub?integration=<gmail|calendar>&status=success&id=<n>
+  // because the same route is also used by the legacy direct-redirect fallback (popup
+  // blocked). When we're actually inside a wizard-launched popup, the Hub page has no
+  // business rendering — we notify the opener (wizard) and close ourselves so the
+  // wizard can advance immediately instead of waiting on its 3-second poll.
+  //
+  // Runs as early as possible in the component body (before any other hooks allocate
+  // state) so the popup closes without a flash of Hub UI.
+  if (typeof window !== 'undefined' && window.opener && window.opener !== window) {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const status = params.get('status')
+      const integration = params.get('integration') || params.get('type')
+      if (status === 'success' && (integration === 'gmail' || integration === 'calendar')) {
+        const id = params.get('id')
+        const payload = {
+          source: 'tsushin-google-oauth',
+          integration,
+          integration_id: id ? Number(id) : null,
+          status,
+        }
+        try { window.opener.postMessage(payload, window.location.origin) } catch {}
+        window.close()
+        return null
+      }
+    } catch {
+      // Fall through to normal Hub render on any unexpected error
+    }
+  }
+
   const toast = useToast()
   const { isGlobalAdmin, hasPermission } = useAuth()
+  // BUG-610 FIX: Gate every Hub mutation control (connect, disconnect,
+  // delete, edit, add) on ``hub.write``. Tenants with only ``hub.read``
+  // should see the catalog of configured integrations but must not be
+  // offered action buttons that the backend would 403 on anyway.
+  const canWriteHub = hasPermission('hub.write')
   // BUG-322: Use forceOpenWizard so the wizard always opens when explicitly triggered from Hub,
   // even if the user previously dismissed it.
   const { forceOpenWizard: openWhatsAppWizard } = useWhatsAppWizard()
+  const { openWizard: openGoogleWizard } = useGoogleWizard()
+  // loadHubIntegrations is defined later in the component; keep a ref so we can
+  // invoke the latest version from the wizard-complete callback without
+  // dancing around declaration order.
+  const loadHubIntegrationsRef = useRef<((refreshHealth?: boolean) => Promise<void>) | null>(null)
+  const onGoogleWizardComplete = useCallback(() => {
+    loadHubIntegrationsRef.current?.()
+  }, [])
+  useGoogleWizardComplete('gmail', onGoogleWizardComplete)
+  useGoogleWizardComplete('calendar', onGoogleWizardComplete)
   const searchParams = useSearchParams()
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     if (typeof window === 'undefined') return 'ai-providers'
@@ -272,6 +342,7 @@ export default function HubPage() {
     const requested = new URLSearchParams(window.location.search).get('tab') as TabType | null
     return requested && validTabs.includes(requested) ? requested : 'ai-providers'
   })
+  const [showSearchWizard, setShowSearchWizard] = useState(false)
 
   // Sync activeTab with ?tab= query param when it changes (e.g., via soft nav back from sub-pages)
   useEffect(() => {
@@ -310,7 +381,15 @@ export default function HubPage() {
   // v0.6.0: Webhook-as-a-Channel
   const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])
   const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
+  const [webhookRotateModal, setWebhookRotateModal] = useState<
+    { open: boolean; secret: string; inboundUrl: string } | null
+  >(null)
+  const [webhookEditTarget, setWebhookEditTarget] = useState<WebhookIntegration | null>(null)
   const [webhookSaving, setWebhookSaving] = useState(false)
+
+  // v0.6.1: resolved public ingress info — authoritative source for inbound
+  // webhook URL display (replaces window.location.origin fallback).
+  const [publicIngress, setPublicIngress] = useState<PublicIngressInfo | null>(null)
   const [discordTestLoading, setDiscordTestLoading] = useState<number | null>(null)
 
   // Vertex AI configuration state
@@ -342,6 +421,16 @@ export default function HubPage() {
   // Local Services state (Ollama & Kokoro management)
   const [kokoroContainerStatus, setKokoroContainerStatus] = useState<{ status: string; name?: string; image?: string; message?: string } | null>(null)
   const [kokoroActionLoading, setKokoroActionLoading] = useState(false)
+  // v0.7.0: Per-tenant Kokoro auto-provisioning (Hub-consolidated, replaces /settings/tts)
+  const [kokoroInstances, setKokoroInstances] = useState<TTSInstance[]>([])
+  const [kokoroDefault, setKokoroDefault] = useState<{ default_tts_instance_id: number | null; instance: TTSInstance | null } | null>(null)
+  const [kokoroWizardOpen, setKokoroWizardOpen] = useState(false)
+  const [kokoroInstanceActionLoading, setKokoroInstanceActionLoading] = useState<number | null>(null)
+  const [kokoroLegacyExpanded, setKokoroLegacyExpanded] = useState(false)
+  const [kokoroLogsOpenFor, setKokoroLogsOpenFor] = useState<number | null>(null)
+  const [kokoroLogsContent, setKokoroLogsContent] = useState<string>('')
+  const [kokoroLogsLoading, setKokoroLogsLoading] = useState(false)
+  const [kokoroConfirmDelete, setKokoroConfirmDelete] = useState<{ id: number; removeVolume: boolean } | null>(null)
   const [ollamaEnabled, setOllamaEnabled] = useState(false)
   const [ollamaToggleLoading, setOllamaToggleLoading] = useState(false)
   const [ollamaUrlEditing, setOllamaUrlEditing] = useState(false)
@@ -349,6 +438,19 @@ export default function HubPage() {
   const [ollamaUrlSaving, setOllamaUrlSaving] = useState(false)
   const [ollamaTestResult, setOllamaTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const [ollamaTestLoading, setOllamaTestLoading] = useState(false)
+  // v0.6.x: Ollama per-tenant auto-provisioning
+  const [ollamaMode, setOllamaMode] = useState<'host' | 'auto'>('host')
+  const [ollamaProvisionLoading, setOllamaProvisionLoading] = useState(false)
+  const [showOllamaSetupWizard, setShowOllamaSetupWizard] = useState(false)
+  const [ollamaContainerStatus, setOllamaContainerStatus] = useState<any | null>(null)
+  const [ollamaGpuEnabled, setOllamaGpuEnabled] = useState(false)
+  const [ollamaMemLimit, setOllamaMemLimit] = useState('4g')
+  const [ollamaSelectedModel, setOllamaSelectedModel] = useState('llama3.2:1b')
+  const [ollamaCustomModel, setOllamaCustomModel] = useState('')
+  const [ollamaPullLoading, setOllamaPullLoading] = useState(false)
+  const [ollamaPullJobId, setOllamaPullJobId] = useState<string | null>(null)
+  const [ollamaPullProgress, setOllamaPullProgress] = useState<any | null>(null)
+  const [ollamaPulledModels, setOllamaPulledModels] = useState<string[]>([])
 
   // MCP Servers state (Phase 26)
   const [mcpServers, setMcpServers] = useState<any[]>([])
@@ -482,6 +584,7 @@ export default function HubPage() {
         loadSlackIntegrations()  // v0.6.0
         loadDiscordIntegrations()  // v0.6.0
         loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
+        loadPublicIngress()  // v0.6.1: resolver-backed inbound URL
       }
       if (activeTab === 'mcp-servers') {
         loadMcpServers()  // Phase 26
@@ -649,6 +752,7 @@ export default function HubPage() {
         fetchOllamaHealth(),
         fetchKokoroHealth(),
         fetchKokoroContainerStatus(),
+        refreshKokoroInstances(),  // v0.7.0: per-tenant Kokoro (Hub-consolidated)
         loadHubIntegrations(),
         loadMcpInstances(),
         loadTesterStatus(),
@@ -656,6 +760,7 @@ export default function HubPage() {
         loadSlackIntegrations(),  // v0.6.0
         loadDiscordIntegrations(),  // v0.6.0
         loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
+        loadPublicIngress(),  // v0.6.1: resolver-backed inbound URL
         fetchToolboxStatus(),
         loadGoogleCredentials(),
         loadSystemConfig(),
@@ -879,7 +984,7 @@ export default function HubPage() {
           status: 'unavailable',
           message: 'Health check failed',
           available: false,
-          details: { hint: 'Start with: docker compose --profile tts up -d' }
+          details: { hint: 'Create a per-tenant Kokoro instance at /hub (Kokoro card → Setup with Wizard).' }
         })
       }
     } catch (error) {
@@ -888,7 +993,7 @@ export default function HubPage() {
         status: 'unavailable',
         message: 'Cannot reach backend',
         available: false,
-        details: { hint: 'Start with: docker compose --profile tts up -d' }
+        details: { hint: 'Create a per-tenant Kokoro instance at /hub (Kokoro card → Setup with Wizard).' }
       })
     }
   }
@@ -976,6 +1081,149 @@ export default function HubPage() {
     }
   }, [kokoroContainerStatus?.status, kokoroHealth?.available, kokoroActionLoading])
 
+  // ==================== Per-tenant Kokoro Instance Management (v0.7.0) ====================
+
+  const refreshKokoroInstances = async () => {
+    try {
+      const [list, def] = await Promise.all([
+        api.getTTSInstances().catch(() => [] as TTSInstance[]),
+        api.getDefaultTTSInstance().catch(() => null),
+      ])
+      setKokoroInstances((list || []).filter((i: TTSInstance) => i.vendor === 'kokoro'))
+      setKokoroDefault(def)
+    } catch {
+      // Non-fatal — tenant may not have permissions
+    }
+  }
+
+  const handleKokoroWizardClose = (refresh?: boolean) => {
+    setKokoroWizardOpen(false)
+    if (refresh) {
+      refreshKokoroInstances()
+    }
+  }
+
+  const handleKokoroInstanceStart = async (id: number) => {
+    setKokoroInstanceActionLoading(id)
+    try {
+      await api.ttsContainerAction(id, 'start')
+      toast.success('Starting Kokoro container...')
+      setTimeout(() => refreshKokoroInstances(), 1200)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to start container')
+    } finally {
+      setKokoroInstanceActionLoading(null)
+    }
+  }
+
+  const handleKokoroInstanceStop = async (id: number) => {
+    setKokoroInstanceActionLoading(id)
+    try {
+      await api.ttsContainerAction(id, 'stop')
+      toast.success('Stopping Kokoro container...')
+      setTimeout(() => refreshKokoroInstances(), 1200)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to stop container')
+    } finally {
+      setKokoroInstanceActionLoading(null)
+    }
+  }
+
+  const handleKokoroInstanceRestart = async (id: number) => {
+    setKokoroInstanceActionLoading(id)
+    try {
+      await api.ttsContainerAction(id, 'restart')
+      toast.success('Restarting Kokoro container...')
+      setTimeout(() => refreshKokoroInstances(), 1500)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to restart container')
+    } finally {
+      setKokoroInstanceActionLoading(null)
+    }
+  }
+
+  const handleSetKokoroDefault = async (id: number | null) => {
+    try {
+      await api.setDefaultTTSInstance(id)
+      toast.success(id ? 'Default Kokoro instance updated' : 'Default Kokoro cleared')
+      await refreshKokoroInstances()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to set default')
+    }
+  }
+
+  const handleKokoroInstanceDelete = async () => {
+    if (!kokoroConfirmDelete) return
+    const { id, removeVolume } = kokoroConfirmDelete
+    try {
+      await api.deleteTTSInstance(id, removeVolume)
+      toast.success('Kokoro instance deleted')
+      setKokoroConfirmDelete(null)
+      await refreshKokoroInstances()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete instance')
+      setKokoroConfirmDelete(null)
+    }
+  }
+
+  const handleKokoroViewLogs = async (id: number) => {
+    if (kokoroLogsOpenFor === id) {
+      setKokoroLogsOpenFor(null)
+      setKokoroLogsContent('')
+      return
+    }
+    setKokoroLogsOpenFor(id)
+    setKokoroLogsLoading(true)
+    try {
+      const { logs } = await api.getTTSContainerLogs(id, 100)
+      setKokoroLogsContent(logs || '(no logs)')
+    } catch (e: any) {
+      setKokoroLogsContent(`Error loading logs: ${e?.message || 'unknown'}`)
+    } finally {
+      setKokoroLogsLoading(false)
+    }
+  }
+
+  // Poll container status for Kokoro instances that are creating/provisioning
+  useEffect(() => {
+    const pending = kokoroInstances.filter(i => {
+      const s = (i.container_status || '').toLowerCase()
+      return s === 'creating' || s === 'provisioning'
+    })
+    if (pending.length === 0) return
+    const interval = setInterval(async () => {
+      try {
+        const updates = await Promise.all(
+          pending.map(i => api.getTTSContainerStatus(i.id).catch(() => null))
+        )
+        let changed = false
+        const next = kokoroInstances.map((inst) => {
+          const match = pending.find(p => p.id === inst.id)
+          if (!match) return inst
+          const idx = pending.indexOf(match)
+          const statusResp = updates[idx]
+          if (statusResp && statusResp.status && statusResp.status !== inst.container_status) {
+            changed = true
+            return { ...inst, container_status: statusResp.status }
+          }
+          return inst
+        })
+        if (changed) {
+          setKokoroInstances(next)
+          // If any transitioned to running/error/stopped, refresh the full list
+          const anyTerminal = updates.some(u => {
+            const s = (u?.status || '').toLowerCase()
+            return s === 'running' || s === 'error' || s === 'stopped'
+          })
+          if (anyTerminal) {
+            refreshKokoroInstances()
+          }
+        }
+      } catch { /* transient */ }
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [kokoroInstances])
+
   // ==================== Ollama Instance Management ====================
 
   // Derive Ollama enabled state from provider instances
@@ -1057,6 +1305,208 @@ export default function HubPage() {
     }
   }
 
+  // v0.6.x: Ollama auto-provisioning handlers
+  const refreshOllamaContainerStatus = async () => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return null
+    try {
+      const status = await api.getOllamaContainerStatus(inst.id)
+      setOllamaContainerStatus(status)
+      return status
+    } catch {
+      return null
+    }
+  }
+
+  const refreshOllamaPulledModels = async () => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    try {
+      const { models } = await api.listOllamaModels(inst.id)
+      setOllamaPulledModels(models || [])
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Detect auto-provisioned Ollama and load its state
+  useEffect(() => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (inst?.is_auto_provisioned) {
+      setOllamaMode('auto')
+      // Load initial status + pulled models
+      ;(async () => {
+        try {
+          const status = await api.getOllamaContainerStatus(inst.id)
+          setOllamaContainerStatus(status)
+          if ((status?.status || '').toLowerCase() === 'running') {
+            try {
+              const { models } = await api.listOllamaModels(inst.id)
+              setOllamaPulledModels(models || [])
+            } catch { /* ignore */ }
+          }
+        } catch { /* ignore */ }
+      })()
+    } else if (inst) {
+      setOllamaMode('host')
+    }
+  }, [providerInstances])
+
+  // Poll container status while provisioning (peer review A-11: cleanup on unmount)
+  useEffect(() => {
+    if (ollamaMode !== 'auto') return
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst?.is_auto_provisioned) return
+    const state = (ollamaContainerStatus?.status || '').toLowerCase()
+    if (state !== 'creating' && state !== 'provisioning') return
+
+    let cancelled = false
+    let ticks = 0
+    const timer = setInterval(async () => {
+      if (cancelled) return
+      ticks++
+      try {
+        const status = await api.getOllamaContainerStatus(inst.id)
+        if (cancelled) return
+        setOllamaContainerStatus(status)
+        const s = (status?.status || '').toLowerCase()
+        if (s === 'running') {
+          try {
+            const { models } = await api.listOllamaModels(inst.id)
+            if (!cancelled) setOllamaPulledModels(models || [])
+          } catch { /* ignore */ }
+          clearInterval(timer)
+        } else if (s === 'error') {
+          clearInterval(timer)
+        }
+      } catch { /* keep polling on transient errors */ }
+      if (ticks > 180) clearInterval(timer)  // ~9 min cap
+    }, 3000)
+
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [ollamaMode, ollamaContainerStatus?.status, providerInstances])
+
+  const handleOllamaProvision = async () => {
+    // Ensure an Ollama provider instance exists first
+    setOllamaProvisionLoading(true)
+    try {
+      let inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+      if (!inst) {
+        inst = await api.ensureOllamaInstance()
+        await fetchProviderInstances()
+      }
+      await api.provisionOllamaContainer(inst.id, ollamaGpuEnabled, ollamaMemLimit)
+      toast.success('Provisioning Ollama container — this may take 1-2 minutes')
+      // Set initial status so the status-poll useEffect kicks in
+      setOllamaContainerStatus({ status: 'provisioning' })
+      await fetchProviderInstances()
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to provision Ollama container')
+    } finally {
+      setOllamaProvisionLoading(false)
+    }
+  }
+
+  const handleOllamaDeprovision = async (removeVolume: boolean) => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    if (!confirm(`Deprovision Ollama container${removeVolume ? ' and remove model volume (permanent data loss)' : ''}?`)) return
+    try {
+      await api.deprovisionOllamaContainer(inst.id, removeVolume)
+      toast.success('Ollama container deprovisioned')
+      setOllamaContainerStatus(null)
+      setOllamaPulledModels([])
+      await fetchProviderInstances()
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to deprovision Ollama container')
+    }
+  }
+
+  const handleOllamaContainerAction = async (action: 'start' | 'stop' | 'restart') => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    try {
+      await api.controlOllamaContainer(inst.id, action)
+      toast.success(`Container ${action === 'start' ? 'started' : action === 'stop' ? 'stopped' : 'restarted'}`)
+      setTimeout(() => { refreshOllamaContainerStatus() }, 1200)
+    } catch (err: any) {
+      toast.error(err.message || `Failed to ${action} container`)
+    }
+  }
+
+  const handleOllamaPullModel = async () => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    const modelName = ollamaSelectedModel === 'custom'
+      ? ollamaCustomModel.trim()
+      : ollamaSelectedModel
+    if (!modelName) {
+      toast.error('Please enter a model name')
+      return
+    }
+    setOllamaPullLoading(true)
+    setOllamaPullProgress(null)
+    try {
+      const job = await api.pullOllamaModel(inst.id, modelName)
+      setOllamaPullJobId(job.job_id)
+      setOllamaPullProgress(job)
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to start model pull')
+      setOllamaPullLoading(false)
+    }
+  }
+
+  // Poll pull job (peer review A-11: cleanup on unmount)
+  useEffect(() => {
+    if (!ollamaPullJobId || !ollamaPullLoading) return
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+
+    let cancelled = false
+    const timer = setInterval(async () => {
+      if (cancelled) return
+      try {
+        const status = await api.getPullJobStatus(inst.id, ollamaPullJobId)
+        if (cancelled) return
+        setOllamaPullProgress(status)
+        if (status.status === 'done') {
+          toast.success(`Pulled ${status.model || 'model'}`)
+          setOllamaPullLoading(false)
+          setOllamaPullJobId(null)
+          await refreshOllamaPulledModels()
+          clearInterval(timer)
+        } else if (status.status === 'error') {
+          toast.error(status.error || 'Pull failed')
+          setOllamaPullLoading(false)
+          setOllamaPullJobId(null)
+          clearInterval(timer)
+        }
+      } catch { /* keep polling on transient */ }
+    }, 2000)
+
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ollamaPullJobId, ollamaPullLoading])
+
+  const handleOllamaDeleteModel = async (modelName: string) => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    if (!confirm(`Delete model "${modelName}"?`)) return
+    try {
+      await api.deleteOllamaModel(inst.id, modelName)
+      toast.success(`Deleted ${modelName}`)
+      await refreshOllamaPulledModels()
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete model')
+    }
+  }
+
   const fetchToolboxStatus = async () => {
     try {
       const apiUrl = ''
@@ -1106,6 +1556,8 @@ export default function HubPage() {
       console.error('Failed to fetch Hub integrations:', error)
     }
   }
+  // Keep the ref used by the Google wizard complete handler in sync.
+  loadHubIntegrationsRef.current = loadHubIntegrations
 
   const handleSaveWhatsappDelay = async () => {
     if (!canEditSettings) {
@@ -1265,7 +1717,12 @@ export default function HubPage() {
 
   const saveAPIKey = async () => {
     if (!modalData.service || !modalData.api_key) {
-      toast.warning('Validation', 'Please select a service and provide the API key')
+      toast.warning(
+        'Validation',
+        modalData.service === 'searxng'
+          ? 'Please provide the SearXNG base URL'
+          : 'Please select a service and provide the API key'
+      )
       return
     }
 
@@ -1751,6 +2208,18 @@ export default function HubPage() {
     }
   }, [])
 
+  // v0.6.1: fetch the resolver-computed public ingress URL so all inbound-URL
+  // displays (webhook cards, setup modal) share the same authoritative value.
+  const loadPublicIngress = useCallback(async () => {
+    try {
+      const info = await api.getMyPublicIngress()
+      setPublicIngress(info)
+    } catch (err) {
+      console.error('Failed to resolve public ingress:', err)
+      setPublicIngress(null)
+    }
+  }, [])
+
   const handleCreateWebhookIntegration = async (data: WebhookIntegrationCreate) => {
     setWebhookSaving(true)
     try {
@@ -1779,13 +2248,23 @@ export default function HubPage() {
     }
   }
 
-  const handleRotateWebhookSecret = async (id: number) => {
+  const handleToggleWebhookActive = async (integration: WebhookIntegration) => {
+    const next = !integration.is_active
+    try {
+      await api.updateWebhookIntegration(integration.id, { is_active: next })
+      setSuccessMessage(next ? `"${integration.integration_name}" is now active` : `"${integration.integration_name}" paused — slug remains reserved`)
+      setTimeout(() => setSuccessMessage(null), 4000)
+      loadWebhookIntegrations()
+    } catch (err: any) {
+      setError(err.message || 'Failed to toggle webhook')
+    }
+  }
+
+  const handleRotateWebhookSecret = async (id: number, inboundUrl: string) => {
     if (!confirm('Rotate the HMAC secret? Your external system will need the new secret before the next request.')) return
     try {
       const result = await api.rotateWebhookSecret(id)
-      await navigator.clipboard.writeText(result.api_secret).catch(() => {})
-      setSuccessMessage(`New secret copied to clipboard: ${result.api_secret_preview}`)
-      setTimeout(() => setSuccessMessage(null), 6000)
+      setWebhookRotateModal({ open: true, secret: result.api_secret, inboundUrl })
       loadWebhookIntegrations()
     } catch (err: any) {
       setError(err.message || 'Failed to rotate webhook secret')
@@ -1825,14 +2304,19 @@ export default function HubPage() {
 
     try {
       const apiUrl = ''
-      await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/asana/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
-      loadHubIntegrations()
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        throw new Error(body || `Disconnect failed (${response.status})`)
+      }
+      setHubIntegrations(prev => prev.filter(i => i.id !== integrationId))
+      await loadHubIntegrations()
       setSuccessMessage('Asana disconnected')
       setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (error) {
-      setError('Failed to disconnect Asana')
+    } catch (error: any) {
+      setError(error?.message || 'Failed to disconnect Asana')
     }
   }
 
@@ -1859,35 +2343,14 @@ export default function HubPage() {
     }
   }
 
-  // Google Calendar handlers
-  const handleGoogleCalendarConnect = async () => {
-    // Check if Google credentials are configured first
+  // Google Calendar handlers — route through the shared wizard so OAuth, account
+  // selection and agent-linking all happen in one flow.
+  const handleGoogleCalendarConnect = () => {
     if (!googleCredentials) {
       setError('Google OAuth credentials are not configured. Please configure them in Settings → Integrations first.')
       return
     }
-
-    try {
-      const apiUrl = ''
-      const params = new URLSearchParams({ redirect_url: '/hub' })
-      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/authorize?${params}`, {
-        method: 'POST'
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
-        throw new Error(errorData.detail || `HTTP ${response.status}`)
-      }
-
-      const data = await response.json()
-      window.location.href = data.authorization_url
-    } catch (err: any) {
-      if (err.message?.includes('credentials not configured')) {
-        setError('Google OAuth credentials are not configured. Please configure them in Settings → Integrations first.')
-      } else {
-        setError(`Failed to connect: ${err.message}`)
-      }
-    }
+    openGoogleWizard('calendar')
   }
 
   const handleGoogleCalendarDisconnect = async (integrationId: number) => {
@@ -1895,46 +2358,30 @@ export default function HubPage() {
 
     try {
       const apiUrl = ''
-      await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/disconnect/${integrationId}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/calendar/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
-      loadHubIntegrations()
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        throw new Error(body || `Disconnect failed (${response.status})`)
+      }
+      setHubIntegrations(prev => prev.filter(i => i.id !== integrationId))
+      await loadHubIntegrations()
       setSuccessMessage('Google Calendar disconnected')
       setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (error) {
-      setError('Failed to disconnect Google Calendar')
+    } catch (error: any) {
+      setError(error?.message || 'Failed to disconnect Google Calendar')
     }
   }
 
-  // Gmail handlers
-  const handleGmailConnect = async () => {
-    // Check if Google credentials are configured first
+  // Gmail handlers — route through the shared wizard so OAuth and agent-linking
+  // run together (matches the Settings → Integrations flow).
+  const handleGmailConnect = () => {
     if (!googleCredentials) {
       setError('Google OAuth credentials are not configured. Please configure them in Settings → Integrations first.')
       return
     }
-
-    try {
-      const apiUrl = ''
-      const params = new URLSearchParams({ redirect_url: '/hub' })
-      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/authorize?${params}`, {
-        method: 'POST'
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
-        throw new Error(errorData.detail || `HTTP ${response.status}`)
-      }
-
-      const data = await response.json()
-      window.location.href = data.authorization_url
-    } catch (err: any) {
-      if (err.message?.includes('credentials not configured')) {
-        setError('Google OAuth credentials are not configured. Please configure them in Settings → Integrations first.')
-      } else {
-        setError(`Failed to connect: ${err.message}`)
-      }
-    }
+    openGoogleWizard('gmail')
   }
 
   const handleGmailDisconnect = async (integrationId: number) => {
@@ -1942,14 +2389,19 @@ export default function HubPage() {
 
     try {
       const apiUrl = ''
-      await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/disconnect/${integrationId}`, {
+      const response = await authenticatedFetch(`${apiUrl}/api/hub/google/gmail/oauth/disconnect/${integrationId}`, {
         method: 'POST'
       })
-      loadHubIntegrations()
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        throw new Error(body || `Disconnect failed (${response.status})`)
+      }
+      setHubIntegrations(prev => prev.filter(i => i.id !== integrationId))
+      await loadHubIntegrations()
       setSuccessMessage('Gmail disconnected')
       setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (error) {
-      setError('Failed to disconnect Gmail')
+    } catch (error: any) {
+      setError(error?.message || 'Failed to disconnect Gmail')
     }
   }
 
@@ -2011,7 +2463,13 @@ export default function HubPage() {
   const runtimeTesterInstances = testerMcpInstances.filter(instance => instance.status !== 'deleted')
   const communicationMcpInstances = mcpInstances
   const testerControlSource = testerStatus?.source ?? (runtimeTesterInstances.length > 0 ? 'runtime' : 'compose')
-  const showDedicatedTesterCard = Boolean(testerStatus) || runtimeTesterInstances.length > 0
+  const hasComposeTesterContainer = Boolean(
+    testerStatus &&
+    testerStatus.source === 'compose' &&
+    testerStatus.container_state &&
+    testerStatus.container_state !== 'not_found'
+  )
+  const showDedicatedTesterCard = hasComposeTesterContainer
   const testerSourceLabel = testerControlSource === 'runtime' ? 'Runtime-managed tester' : 'Compose-managed tester'
   const testerContainerLabel = testerStatus?.name || runtimeTesterInstances[0]?.container_name || 'tester-mcp'
   const apiKeyDeleteLabel = apiKeyDeleteTarget
@@ -2025,7 +2483,14 @@ export default function HubPage() {
   ) => {
     const apiKey = getApiKeyForService(item.value)
     const isComingSoon = item.status === 'coming_soon'
-    const hasInstanceKey = type === 'ai' && providerInstances.some(i => i.vendor === item.value && i.api_key_configured)
+    const configuredInstance = type === 'ai'
+      ? (
+        providerInstances.find(i => i.vendor === item.value && i.is_active && i.api_key_configured && i.is_default)
+        || providerInstances.find(i => i.vendor === item.value && i.is_active && i.api_key_configured)
+      )
+      : null
+    const hasInstanceKey = Boolean(configuredInstance)
+    const configuredViaInstance = !apiKey && hasInstanceKey
     const ItemIcon = item.Icon
 
     return (
@@ -2044,6 +2509,11 @@ export default function HubPage() {
               {hasInstanceKey && apiKey && (
                 <span className="text-[10px] text-amber-400/80">Fallback — instance key takes priority</span>
               )}
+              {configuredViaInstance && (
+                <span className="text-[10px] text-teal-400/80">
+                  Configured via instance: {configuredInstance?.instance_name}
+                </span>
+              )}
             </div>
           </div>
           {isComingSoon ? (
@@ -2051,8 +2521,8 @@ export default function HubPage() {
               Coming Soon
             </span>
           ) : (
-            <span className={apiKey?.is_active ? 'badge badge-success' : 'badge badge-neutral'}>
-              {apiKey ? (apiKey.is_active ? 'Active' : 'Inactive') : 'Not configured'}
+            <span className={(apiKey?.is_active || configuredViaInstance) ? 'badge badge-success' : 'badge badge-neutral'}>
+              {apiKey ? (apiKey.is_active ? 'Active' : 'Inactive') : (configuredViaInstance ? 'Instance configured' : 'Not configured')}
             </span>
           )}
         </div>
@@ -2062,7 +2532,13 @@ export default function HubPage() {
             <p className="font-mono text-xs text-tsushin-accent">{apiKey.api_key_preview}</p>
           </div>
         )}
-        {!isComingSoon && (
+        {!isComingSoon && !apiKey && configuredInstance && (
+          <div className="text-sm text-tsushin-slate mb-4">
+            <p className="text-xs text-tsushin-slate">Using instance <span className="font-medium text-white">{configuredInstance.instance_name}</span></p>
+            <p className="font-mono text-xs text-tsushin-accent">{configuredInstance.api_key_preview}</p>
+          </div>
+        )}
+        {!isComingSoon && canWriteHub && (
           <div className="flex gap-2">
             {apiKey ? (
               <>
@@ -2084,7 +2560,7 @@ export default function HubPage() {
                 onClick={() => item.value === 'vertex_ai' ? setShowVertexAiModal(true) : openAddApiKeyModal(item.value)}
                 className="w-full btn-secondary py-2 text-sm"
               >
-                Configure
+                {configuredViaInstance ? 'Configure Fallback' : 'Configure'}
               </button>
             )}
           </div>
@@ -2133,6 +2609,25 @@ export default function HubPage() {
       </div>
 
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 pb-8 space-y-6">
+        {/* BUG-610 read-only banner: surfaces why Connect/Add/Disconnect
+            buttons are missing for non-admins. Without this the page
+            looks broken ("why are there no actions?") — with it the
+            user knows to ask an admin for hub.write. */}
+        {!canWriteHub && (
+          <div
+            className="p-4 bg-tsushin-warning/10 border border-tsushin-warning/30 rounded-xl text-tsushin-warning flex items-center gap-3"
+            data-testid="hub-readonly-banner"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+            </svg>
+            <div className="text-sm">
+              <span className="font-medium">Read-only view.</span>{' '}
+              Your role does not have <code className="font-mono">hub.write</code>{' '}
+              — you can browse configured integrations but cannot add, edit, or disconnect them. Ask an owner/admin for access.
+            </div>
+          </div>
+        )}
         {/* Alerts */}
         {successMessage && (
           <div className="p-4 bg-tsushin-success/10 border border-tsushin-success/30 rounded-xl text-tsushin-success flex justify-between items-center animate-fade-in-down">
@@ -2501,8 +2996,242 @@ export default function HubPage() {
                         </div>
                       </div>
                       <p className="text-xs text-tsushin-slate mb-3">Run LLMs locally - no API key needed</p>
+
+                      {/* Setup wizard CTA — guides users through provision + model pull + agent wiring */}
+                      {canEditSettings && (
+                        <button
+                          onClick={() => setShowOllamaSetupWizard(true)}
+                          className="w-full mb-3 bg-purple-500 hover:bg-purple-400 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors"
+                        >
+                          Setup with Wizard
+                        </button>
+                      )}
+
+                      {/* v0.6.x: Mode selector (host vs auto-provision) */}
+                      {ollamaEnabled && canEditSettings && (
+                        <div className="mb-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
+                          <p className="text-xs font-medium text-tsushin-accent mb-1.5">Mode</p>
+                          <label className="flex items-start gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="ollama-mode"
+                              value="host"
+                              checked={ollamaMode === 'host'}
+                              onChange={() => setOllamaMode('host')}
+                              className="mt-0.5 accent-tsushin-success"
+                            />
+                            <div className="flex-1">
+                              <span className="text-xs text-white">Use host Ollama (URL)</span>
+                              <p className="text-[11px] text-tsushin-muted">Point at an Ollama server you manage.</p>
+                            </div>
+                          </label>
+                          <label className="flex items-start gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="ollama-mode"
+                              value="auto"
+                              checked={ollamaMode === 'auto'}
+                              onChange={() => setOllamaMode('auto')}
+                              className="mt-0.5 accent-tsushin-success"
+                            />
+                            <div className="flex-1">
+                              <span className="text-xs text-white">Auto-provision container</span>
+                              <p className="text-[11px] text-tsushin-muted">Tsushin manages a dedicated Ollama container for this tenant.</p>
+                            </div>
+                          </label>
+                        </div>
+                      )}
+
+                      {/* v0.6.x: Auto-provision panel */}
+                      {ollamaMode === 'auto' && ollamaEnabled && (() => {
+                        const state = (ollamaContainerStatus?.status || 'none').toLowerCase()
+                        const isProvisioning = state === 'creating' || state === 'provisioning'
+                        const isRunning = state === 'running'
+                        const isStopped = state === 'stopped'
+                        const isNoneOrError = state === 'none' || state === 'error' || !state
+                        return (
+                          <div className="mb-3 p-3 bg-tsushin-ink/40 border border-white/10 rounded-lg space-y-3">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs font-medium text-tsushin-accent">Container Management</p>
+                              <span className={`text-[11px] px-2 py-0.5 rounded ${
+                                isRunning ? 'bg-tsushin-success/20 text-tsushin-success' :
+                                isProvisioning ? 'bg-yellow-500/20 text-yellow-400' :
+                                isStopped ? 'bg-gray-500/20 text-gray-400' :
+                                state === 'error' ? 'bg-tsushin-vermilion/20 text-tsushin-vermilion' :
+                                'bg-gray-500/20 text-gray-400'
+                              }`}>
+                                {isProvisioning ? 'Provisioning...' : state || 'not created'}
+                              </span>
+                            </div>
+
+                            {isNoneOrError && canEditSettings && (
+                              <div className="space-y-2">
+                                <label className="flex items-center gap-2 text-xs text-tsushin-slate">
+                                  <input
+                                    type="checkbox"
+                                    checked={ollamaGpuEnabled}
+                                    onChange={e => setOllamaGpuEnabled(e.target.checked)}
+                                    className="accent-tsushin-success"
+                                  />
+                                  GPU enabled (requires NVIDIA runtime on host)
+                                </label>
+                                <div>
+                                  <label className="block text-[11px] text-tsushin-muted mb-1">Memory limit</label>
+                                  <select
+                                    value={ollamaMemLimit}
+                                    onChange={e => setOllamaMemLimit(e.target.value)}
+                                    className="w-full bg-tsushin-ink border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                                  >
+                                    <option value="2g">2g</option>
+                                    <option value="4g">4g</option>
+                                    <option value="8g">8g</option>
+                                    <option value="16g">16g</option>
+                                  </select>
+                                </div>
+                                <button
+                                  onClick={handleOllamaProvision}
+                                  disabled={ollamaProvisionLoading}
+                                  className="w-full bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded-lg px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
+                                >
+                                  {ollamaProvisionLoading ? 'Starting...' : 'Provision Container'}
+                                </button>
+                              </div>
+                            )}
+
+                            {isProvisioning && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 text-xs text-yellow-400">
+                                  <span className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-yellow-400" />
+                                  Setting up Ollama container (may take 1-2 minutes to pull image)...
+                                </div>
+                                <button
+                                  onClick={refreshOllamaContainerStatus}
+                                  className="text-[11px] text-tsushin-accent hover:text-white"
+                                >
+                                  Refresh status
+                                </button>
+                              </div>
+                            )}
+
+                            {isRunning && (
+                              <div className="space-y-3">
+                                {/* Pulled models */}
+                                <div>
+                                  <p className="text-[11px] text-tsushin-muted mb-1.5">Pulled models</p>
+                                  {ollamaPulledModels.length === 0 ? (
+                                    <p className="text-[11px] text-tsushin-slate italic">None yet — pull one below.</p>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {ollamaPulledModels.map(m => (
+                                        <span key={m} className="inline-flex items-center gap-1.5 text-[11px] bg-tsushin-ink border border-white/10 rounded-lg px-2 py-1 text-white font-mono">
+                                          {m}
+                                          {canEditSettings && (
+                                            <button
+                                              onClick={() => handleOllamaDeleteModel(m)}
+                                              className="text-tsushin-vermilion hover:text-red-300 text-xs"
+                                              title="Delete model"
+                                            >
+                                              &times;
+                                            </button>
+                                          )}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Pull model */}
+                                {canEditSettings && (
+                                  <div className="space-y-2 pt-2 border-t border-white/5">
+                                    <p className="text-[11px] text-tsushin-muted">Pull a new model</p>
+                                    <div className="flex gap-1.5">
+                                      <select
+                                        value={ollamaSelectedModel}
+                                        onChange={e => setOllamaSelectedModel(e.target.value)}
+                                        disabled={ollamaPullLoading}
+                                        className="flex-1 bg-tsushin-ink border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono disabled:opacity-50"
+                                      >
+                                        {CURATED_OLLAMA_MODELS.map(m => (
+                                          <option key={m} value={m}>{m}</option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        onClick={handleOllamaPullModel}
+                                        disabled={ollamaPullLoading || (ollamaSelectedModel === 'custom' && !ollamaCustomModel.trim())}
+                                        className="bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded-lg px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
+                                      >
+                                        {ollamaPullLoading ? 'Pulling...' : 'Pull'}
+                                      </button>
+                                    </div>
+                                    {ollamaSelectedModel === 'custom' && (
+                                      <input
+                                        type="text"
+                                        value={ollamaCustomModel}
+                                        onChange={e => setOllamaCustomModel(e.target.value)}
+                                        placeholder="e.g. llama3.2:8b-instruct-q4_K_M"
+                                        disabled={ollamaPullLoading}
+                                        className="w-full bg-tsushin-ink border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono disabled:opacity-50"
+                                      />
+                                    )}
+                                    {ollamaPullLoading && ollamaPullProgress && (
+                                      <div className="space-y-1">
+                                        <div className="flex items-center justify-between text-[11px] text-tsushin-slate">
+                                          <span>Pulling {ollamaPullProgress.model || ollamaSelectedModel}</span>
+                                          <span>{ollamaPullProgress.percent != null ? `${Math.round(ollamaPullProgress.percent)}%` : '...'}</span>
+                                        </div>
+                                        <div className="h-1.5 w-full bg-tsushin-ink rounded-full overflow-hidden">
+                                          <div
+                                            className="h-full bg-purple-400 transition-all"
+                                            style={{ width: `${ollamaPullProgress.percent ?? 0}%` }}
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Container controls */}
+                                {canEditSettings && (
+                                  <div className="flex gap-1.5 pt-2 border-t border-white/5">
+                                    <button
+                                      onClick={() => handleOllamaContainerAction('stop')}
+                                      className="flex-1 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors"
+                                    >
+                                      Stop
+                                    </button>
+                                    <button
+                                      onClick={() => handleOllamaContainerAction('restart')}
+                                      className="flex-1 bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors"
+                                    >
+                                      Restart
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {isStopped && canEditSettings && (
+                              <div className="flex gap-1.5">
+                                <button
+                                  onClick={() => handleOllamaContainerAction('start')}
+                                  className="flex-1 bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
+                                >
+                                  Start Container
+                                </button>
+                                <button
+                                  onClick={() => handleOllamaDeprovision(true)}
+                                  className="flex-1 bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
+                                >
+                                  Deprovision
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
+
                       <div className="text-sm text-tsushin-slate space-y-2">
-                        {ollamaHealth?.available ? (
+                        {ollamaMode === 'host' && ollamaHealth?.available ? (
                           <>
                             <p className="text-xs">{ollamaHealth.models_count || 0} models available</p>
                             {/* Inline URL editor */}
@@ -2554,25 +3283,27 @@ export default function HubPage() {
                               <p className="text-xs text-tsushin-slate">... and {(ollamaHealth.models_count || 0) - 3} more</p>
                             )}
                           </>
-                        ) : (
+                        ) : ollamaMode === 'host' ? (
                           <>
                             <p className="text-xs text-tsushin-vermilion">{ollamaHealth?.error || 'Not running'}</p>
                             <p className="text-xs">Start with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">ollama serve</code></p>
                           </>
+                        ) : null}
+                        {/* BUG-331: Docker networking guidance — visible only in host mode */}
+                        {ollamaMode === 'host' && (
+                          <div className="mt-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
+                            <p className="text-xs font-medium text-tsushin-accent">Docker Networking Note</p>
+                            <p className="text-xs text-tsushin-slate">
+                              Tsushin runs inside Docker. Use <code className="bg-tsushin-ink px-1 rounded font-mono text-tsushin-accent">http://172.18.0.1:11434</code> instead of <code className="bg-tsushin-ink px-1 rounded font-mono">localhost</code> so the backend container can reach Ollama on the host.
+                            </p>
+                            <p className="text-xs text-tsushin-slate">
+                              Also ensure Ollama listens on all interfaces — add to its systemd override:
+                            </p>
+                            <code className="block text-xs bg-tsushin-ink px-2 py-1.5 rounded font-mono text-tsushin-success whitespace-nowrap overflow-x-auto">
+                              Environment=&quot;OLLAMA_HOST=0.0.0.0:11434&quot;
+                            </code>
+                          </div>
                         )}
-                        {/* BUG-331: Docker networking guidance — always visible */}
-                        <div className="mt-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
-                          <p className="text-xs font-medium text-tsushin-accent">Docker Networking Note</p>
-                          <p className="text-xs text-tsushin-slate">
-                            Tsushin runs inside Docker. Use <code className="bg-tsushin-ink px-1 rounded font-mono text-tsushin-accent">http://172.18.0.1:11434</code> instead of <code className="bg-tsushin-ink px-1 rounded font-mono">localhost</code> so the backend container can reach Ollama on the host.
-                          </p>
-                          <p className="text-xs text-tsushin-slate">
-                            Also ensure Ollama listens on all interfaces — add to its systemd override:
-                          </p>
-                          <code className="block text-xs bg-tsushin-ink px-2 py-1.5 rounded font-mono text-tsushin-success whitespace-nowrap overflow-x-auto">
-                            Environment=&quot;OLLAMA_HOST=0.0.0.0:11434&quot;
-                          </code>
-                        </div>
                         {/* Test result display */}
                         {ollamaTestResult && (
                           <p className={`text-xs ${ollamaTestResult.success ? 'text-tsushin-success' : 'text-tsushin-vermilion'}`}>
@@ -2620,98 +3351,256 @@ export default function HubPage() {
                       })()}
                     </div>
 
-                    {/* Kokoro TTS Card (Enhanced - Container Management) */}
+                    {/* Kokoro TTS Card (v0.7.0 consolidated — per-tenant instances + legacy) */}
                     <div className="card p-5 hover-glow group border-green-700/30">
-                      <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                             <MicrophoneIcon size={20} className="text-green-400" />
                           </div>
-                          <h3 className="font-semibold text-white">Kokoro TTS (Free)</h3>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          {/* Status indicator with color-coded dot */}
-                          <div className="flex items-center gap-1.5">
-                            <div className={`w-2 h-2 rounded-full ${
-                              kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
-                                ? 'bg-tsushin-success animate-pulse'
-                                : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
-                                  ? 'bg-yellow-400 animate-pulse'
-                                  : kokoroContainerStatus?.status === 'not_installed' || kokoroContainerStatus?.status === 'error'
-                                    ? 'bg-tsushin-vermilion'
-                                    : 'bg-tsushin-slate'
-                            }`} />
-                            <span className="text-[11px] text-tsushin-slate capitalize">
-                              {kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
-                                ? 'Running'
-                                : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
-                                  ? 'Initializing...'
-                                  : kokoroContainerStatus?.status === 'exited'
-                                    ? 'Stopped'
-                                    : kokoroContainerStatus?.status === 'not_installed'
-                                      ? 'Not Installed'
-                                      : kokoroContainerStatus?.status === 'error'
-                                        ? 'Error'
-                                        : kokoroHealth?.available ? 'Online' : 'Offline'}
-                            </span>
+                          <div>
+                            <h3 className="font-semibold text-white">Kokoro TTS (Free)</h3>
+                            <p className="text-[11px] text-tsushin-slate">Self-hosted, multilingual text-to-speech</p>
                           </div>
-                          {/* Enable/Disable Toggle */}
-                          {canEditSettings && kokoroContainerStatus?.status !== 'not_installed' && (
-                            <ToggleSwitch
-                              checked={kokoroContainerStatus?.status === 'running'}
-                              onChange={async (checked) => {
-                                if (checked) {
-                                  await handleStartKokoro()
-                                } else {
-                                  await handleStopKokoro()
-                                }
-                              }}
-                              disabled={kokoroActionLoading}
-                              title={kokoroContainerStatus?.status === 'running' ? 'Stop Kokoro' : 'Start Kokoro'}
-                            />
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <div className={`w-2 h-2 rounded-full ${
+                            kokoroInstances.some(i => (i.container_status || '').toLowerCase() === 'running')
+                              ? 'bg-tsushin-success animate-pulse'
+                              : kokoroInstances.length > 0 ? 'bg-yellow-400' : 'bg-tsushin-slate'
+                          }`} />
+                          <span className="text-[11px] text-tsushin-slate">
+                            {kokoroInstances.length} instance{kokoroInstances.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Per-Tenant Instances (primary UX) */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-tsushin-accent uppercase tracking-wider">Per-Tenant Instances</p>
+                          {canEditSettings && (
+                            <button
+                              onClick={() => setKokoroWizardOpen(true)}
+                              className="text-[11px] bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg px-2.5 py-1 transition-colors"
+                            >
+                              + Setup with Wizard
+                            </button>
                           )}
                         </div>
-                      </div>
-                      <p className="text-xs text-tsushin-slate mb-3">Free text-to-speech with PTBR support</p>
-                      <div className="text-sm text-tsushin-slate space-y-2">
-                        {kokoroHealth?.available ? (
-                          <>
-                            <p className="text-xs">{kokoroHealth.details?.voices || 15} voices available</p>
-                            <p className="text-xs font-mono text-tsushin-accent">{kokoroHealth.details?.service_url || 'http://localhost:8880'}</p>
-                            {kokoroHealth.latency_ms && (
-                              <p className="text-xs text-green-400">Latency: {kokoroHealth.latency_ms}ms</p>
+
+                        {kokoroInstances.length === 0 ? (
+                          <div className="p-4 bg-tsushin-ink/40 border border-white/5 rounded-lg text-center">
+                            <p className="text-xs text-tsushin-slate mb-2">No Kokoro instances yet.</p>
+                            {canEditSettings && (
+                              <button
+                                onClick={() => setKokoroWizardOpen(true)}
+                                className="text-xs bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg px-3 py-1.5 transition-colors"
+                              >
+                                Setup with Wizard
+                              </button>
                             )}
-                            <p className="text-xs text-green-400 flex items-center gap-1"><CreditCardIcon size={12} className="text-green-400" /> 100% FREE - No API costs!</p>
-                          </>
-                        ) : kokoroContainerStatus?.status === 'running' ? (
-                          <>
-                            <p className="text-xs text-yellow-400">Container is running — loading TTS models, please wait...</p>
-                            {kokoroContainerStatus?.name && (
-                              <p className="text-xs font-mono text-tsushin-slate">Container: {kokoroContainerStatus.name}</p>
-                            )}
-                          </>
+                          </div>
                         ) : (
-                          <>
-                            <p className="text-xs text-tsushin-vermilion">{kokoroHealth?.message || kokoroContainerStatus?.message || 'Service not running'}</p>
-                            {kokoroContainerStatus?.status === 'not_installed' && (
-                              <p className="text-xs">Install with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">docker compose --profile tts up -d</code></p>
-                            )}
-                            {kokoroContainerStatus?.name && (
-                              <p className="text-xs font-mono text-tsushin-slate">Container: {kokoroContainerStatus.name}</p>
-                            )}
-                          </>
+                          <div className="space-y-2">
+                            {kokoroInstances.map(inst => {
+                              const status = (inst.container_status || 'none').toLowerCase()
+                              const isProvisioning = status === 'creating' || status === 'provisioning'
+                              const isRunning = status === 'running'
+                              const isStopped = status === 'stopped'
+                              const isBusy = kokoroInstanceActionLoading === inst.id
+                              const isDefault = kokoroDefault?.default_tts_instance_id === inst.id
+                              return (
+                                <div key={inst.id} className="p-3 bg-tsushin-ink/40 border border-white/5 rounded-lg">
+                                  <div className="flex items-start justify-between gap-2 flex-wrap">
+                                    <div className="flex items-start gap-2 min-w-0">
+                                      <input
+                                        type="radio"
+                                        checked={isDefault}
+                                        onChange={() => canEditSettings && handleSetKokoroDefault(isDefault ? null : inst.id)}
+                                        disabled={!canEditSettings}
+                                        aria-label={`Set ${inst.instance_name} as default Kokoro instance`}
+                                        className="mt-1 accent-green-400"
+                                      />
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className="text-sm text-white font-medium truncate">{inst.instance_name}</span>
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400">{inst.vendor}</span>
+                                          {inst.is_auto_provisioned && (
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">Auto</span>
+                                          )}
+                                          {isDefault && (
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-tsushin-success/20 text-tsushin-success">Default</span>
+                                          )}
+                                        </div>
+                                        {inst.base_url && (
+                                          <p className="text-[11px] font-mono text-tsushin-muted mt-1 truncate">{inst.base_url}</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${
+                                      isRunning ? 'bg-tsushin-success/20 text-tsushin-success' :
+                                      isProvisioning ? 'bg-yellow-500/20 text-yellow-400' :
+                                      isStopped ? 'bg-gray-500/20 text-gray-400' :
+                                      status === 'error' ? 'bg-tsushin-vermilion/20 text-tsushin-vermilion' :
+                                      'bg-gray-500/20 text-gray-400'
+                                    }`}>
+                                      {isProvisioning ? 'Provisioning...' : status || 'n/a'}
+                                    </span>
+                                  </div>
+
+                                  {/* Actions */}
+                                  {canEditSettings && inst.is_auto_provisioned && (
+                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                      {!isRunning && !isProvisioning && (
+                                        <button
+                                          onClick={() => handleKokoroInstanceStart(inst.id)}
+                                          disabled={isBusy}
+                                          className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-0.5 disabled:opacity-50"
+                                        >
+                                          {isBusy ? '...' : 'Start'}
+                                        </button>
+                                      )}
+                                      {isRunning && (
+                                        <button
+                                          onClick={() => handleKokoroInstanceStop(inst.id)}
+                                          disabled={isBusy}
+                                          className="text-[11px] bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded px-2 py-0.5 disabled:opacity-50"
+                                        >
+                                          {isBusy ? '...' : 'Stop'}
+                                        </button>
+                                      )}
+                                      {(isRunning || isStopped) && (
+                                        <button
+                                          onClick={() => handleKokoroInstanceRestart(inst.id)}
+                                          disabled={isBusy}
+                                          className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5 disabled:opacity-50"
+                                        >
+                                          Restart
+                                        </button>
+                                      )}
+                                      {isRunning && (
+                                        <button
+                                          onClick={() => handleKokoroViewLogs(inst.id)}
+                                          className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5"
+                                        >
+                                          {kokoroLogsOpenFor === inst.id ? 'Hide Logs' : 'Logs'}
+                                        </button>
+                                      )}
+                                      <button
+                                        onClick={() => setKokoroConfirmDelete({ id: inst.id, removeVolume: false })}
+                                        className="text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-0.5 ml-auto"
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  {/* Logs drawer (inline) */}
+                                  {kokoroLogsOpenFor === inst.id && (
+                                    <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
+                                        <button
+                                          onClick={async () => {
+                                            setKokoroLogsLoading(true)
+                                            try {
+                                              const { logs } = await api.getTTSContainerLogs(inst.id, 100)
+                                              setKokoroLogsContent(logs || '(no logs)')
+                                            } catch (e: any) {
+                                              setKokoroLogsContent(`Error: ${e?.message || 'unknown'}`)
+                                            } finally {
+                                              setKokoroLogsLoading(false)
+                                            }
+                                          }}
+                                          disabled={kokoroLogsLoading}
+                                          className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
+                                        >
+                                          {kokoroLogsLoading ? 'Loading...' : 'Refresh'}
+                                        </button>
+                                      </div>
+                                      <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
+                                        {kokoroLogsContent || (kokoroLogsLoading ? 'Loading logs...' : '(no logs loaded)')}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
                         )}
                       </div>
-                      {/* Container management */}
-                      <div className="flex gap-2 mt-4">
+
+                      {/* Legacy global compose Kokoro (demoted, collapsed by default) */}
+                      <div className="mt-4 pt-3 border-t border-white/5">
                         <button
-                          onClick={async () => {
-                            await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
-                          }}
-                          className="flex-1 btn-secondary py-1.5 text-sm"
+                          onClick={() => setKokoroLegacyExpanded(v => !v)}
+                          className="flex items-center gap-1.5 text-[11px] text-tsushin-slate hover:text-white transition-colors"
+                          aria-expanded={kokoroLegacyExpanded}
                         >
-                          Refresh Status
+                          <svg className={`w-3 h-3 transition-transform ${kokoroLegacyExpanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                          Legacy (global compose Kokoro)
                         </button>
+                        {kokoroLegacyExpanded && (
+                          <div className="mt-3 p-3 bg-tsushin-ink/30 border border-white/5 rounded-lg space-y-2">
+                            <p className="text-[11px] text-tsushin-muted">
+                              The original single shared Kokoro service defined in docker-compose. Prefer per-tenant instances above; this fallback remains for installs still using the <code className="text-tsushin-accent font-mono">tts</code> compose profile.
+                            </p>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <div className={`w-2 h-2 rounded-full ${
+                                  kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
+                                    ? 'bg-tsushin-success animate-pulse'
+                                    : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
+                                      ? 'bg-yellow-400 animate-pulse'
+                                      : kokoroContainerStatus?.status === 'not_installed' || kokoroContainerStatus?.status === 'error'
+                                        ? 'bg-tsushin-vermilion'
+                                        : 'bg-tsushin-slate'
+                                }`} />
+                                <span className="text-[11px] text-tsushin-slate capitalize">
+                                  {kokoroContainerStatus?.status === 'running' && kokoroHealth?.available
+                                    ? 'Running'
+                                    : kokoroContainerStatus?.status === 'running' && !kokoroHealth?.available
+                                      ? 'Initializing...'
+                                      : kokoroContainerStatus?.status === 'exited'
+                                        ? 'Stopped'
+                                        : kokoroContainerStatus?.status === 'not_installed'
+                                          ? 'Not Installed'
+                                          : kokoroContainerStatus?.status === 'error'
+                                            ? 'Error'
+                                            : kokoroHealth?.available ? 'Online' : 'Offline'}
+                                </span>
+                              </div>
+                              {canEditSettings && kokoroContainerStatus?.status !== 'not_installed' && (
+                                <ToggleSwitch
+                                  checked={kokoroContainerStatus?.status === 'running'}
+                                  onChange={async (checked) => {
+                                    if (checked) await handleStartKokoro()
+                                    else await handleStopKokoro()
+                                  }}
+                                  disabled={kokoroActionLoading}
+                                  title={kokoroContainerStatus?.status === 'running' ? 'Stop legacy Kokoro' : 'Start legacy Kokoro'}
+                                />
+                              )}
+                            </div>
+                            {kokoroHealth?.available && (
+                              <p className="text-[11px] font-mono text-tsushin-accent">{kokoroHealth.details?.service_url || 'http://localhost:8880'}</p>
+                            )}
+                            {kokoroContainerStatus?.status === 'not_installed' && (
+                              <p className="text-[11px] text-tsushin-slate">No Kokoro instance yet. Click <span className="font-semibold text-tsushin-accent">Setup with Wizard</span> above to auto-provision one.</p>
+                            )}
+                            <button
+                              onClick={async () => {
+                                await Promise.all([fetchKokoroContainerStatus(), fetchKokoroHealth()])
+                              }}
+                              className="text-[11px] text-tsushin-accent hover:text-white"
+                            >
+                              Refresh status
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2754,9 +3643,6 @@ export default function HubPage() {
                     + Create WhatsApp Instance
                   </button>
                 </div>
-
-                {/* v0.6.0 V060-CHN-002: Public Base URL setting (used by Slack HTTP + Discord) */}
-                <PublicBaseUrlCard canEdit={canEditSettings} />
 
                 {/* WhatsApp Instances */}
                 <div className="space-y-4">
@@ -3030,12 +3916,14 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <PlaneIcon size={18} /> Telegram Bots
                     </h3>
-                    <button
-                      onClick={() => setShowTelegramModal(true)}
-                      className="px-4 py-2 bg-blue-600/20 text-blue-400 border border-blue-600/50 rounded hover:bg-blue-600/30 text-sm"
-                    >
-                      + Create Bot
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowTelegramModal(true)}
+                        className="px-4 py-2 bg-blue-600/20 text-blue-400 border border-blue-600/50 rounded hover:bg-blue-600/30 text-sm"
+                      >
+                        + Create Bot
+                      </button>
+                    )}
                   </div>
 
                   {telegramInstances.length === 0 ? (
@@ -3045,12 +3933,14 @@ export default function HubPage() {
                       </div>
                       <h3 className="text-lg font-semibold text-white mb-2">No Telegram Bots</h3>
                       <p className="text-tsushin-slate mb-4">Create a bot to connect Telegram</p>
-                      <button
-                        onClick={() => setShowTelegramModal(true)}
-                        className="btn-primary"
-                      >
-                        Create Bot
-                      </button>
+                      {canWriteHub && (
+                        <button
+                          onClick={() => setShowTelegramModal(true)}
+                          className="btn-primary"
+                        >
+                          Create Bot
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -3110,12 +4000,14 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <SlackIcon size={18} className="text-purple-400" /> Slack
                     </h3>
-                    <button
-                      onClick={() => setShowSlackSetupModal(true)}
-                      className="px-4 py-2 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded hover:bg-purple-600/30 text-sm"
-                    >
-                      + Connect Workspace
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowSlackSetupModal(true)}
+                        className="px-4 py-2 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded hover:bg-purple-600/30 text-sm"
+                      >
+                        + Connect Workspace
+                      </button>
+                    )}
                   </div>
 
                   {slackIntegrations.length === 0 ? (
@@ -3125,12 +4017,14 @@ export default function HubPage() {
                       </div>
                       <h3 className="text-lg font-semibold text-white mb-2">No Slack Workspaces</h3>
                       <p className="text-tsushin-slate mb-4">Connect a Slack workspace to enable bot messaging</p>
-                      <button
-                        onClick={() => setShowSlackSetupModal(true)}
-                        className="btn-primary"
-                      >
-                        Connect Workspace
-                      </button>
+                      {canWriteHub && (
+                        <button
+                          onClick={() => setShowSlackSetupModal(true)}
+                          className="btn-primary"
+                        >
+                          Connect Workspace
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -3191,12 +4085,14 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <DiscordIcon size={18} className="text-indigo-400" /> Discord
                     </h3>
-                    <button
-                      onClick={() => setShowDiscordSetupModal(true)}
-                      className="px-4 py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 rounded hover:bg-indigo-600/30 text-sm"
-                    >
-                      + Connect Bot
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowDiscordSetupModal(true)}
+                        className="px-4 py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 rounded hover:bg-indigo-600/30 text-sm"
+                      >
+                        + Connect Bot
+                      </button>
+                    )}
                   </div>
 
                   {discordIntegrations.length === 0 ? (
@@ -3206,12 +4102,14 @@ export default function HubPage() {
                       </div>
                       <h3 className="text-lg font-semibold text-white mb-2">No Discord Bots</h3>
                       <p className="text-tsushin-slate mb-4">Connect a Discord bot to enable messaging in your servers</p>
-                      <button
-                        onClick={() => setShowDiscordSetupModal(true)}
-                        className="btn-primary"
-                      >
-                        Connect Bot
-                      </button>
+                      {canWriteHub && (
+                        <button
+                          onClick={() => setShowDiscordSetupModal(true)}
+                          className="btn-primary"
+                        >
+                          Connect Bot
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -3266,18 +4164,23 @@ export default function HubPage() {
                   )}
                 </div>
 
+                {/* v0.6.0 V060-CHN-002: Public Base URL setting (used by Slack HTTP + Discord + Webhooks) */}
+                <PublicBaseUrlCard canEdit={canEditSettings} />
+
                 {/* v0.6.0: Webhook-as-a-Channel Integrations */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <WebhookIcon size={18} className="text-cyan-400" /> Webhook Integrations
                     </h3>
-                    <button
-                      onClick={() => setShowWebhookSetupModal(true)}
-                      className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
-                    >
-                      + New Webhook
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowWebhookSetupModal(true)}
+                        className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
+                      >
+                        + New Webhook
+                      </button>
+                    )}
                   </div>
 
                   {webhookIntegrations.length === 0 ? (
@@ -3289,12 +4192,14 @@ export default function HubPage() {
                       <p className="text-tsushin-slate mb-4">
                         Connect external HTTP systems (CRMs, Zapier, custom apps) via HMAC-signed webhooks
                       </p>
-                      <button
-                        onClick={() => setShowWebhookSetupModal(true)}
-                        className="btn-primary"
-                      >
-                        Create Webhook
-                      </button>
+                      {canWriteHub && (
+                        <button
+                          onClick={() => setShowWebhookSetupModal(true)}
+                          className="btn-primary"
+                        >
+                          Create Webhook
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -3335,7 +4240,7 @@ export default function HubPage() {
                               <code className="text-cyan-300 text-xs bg-gray-900 px-1 rounded truncate">{integration.inbound_url}</code>
                               <button
                                 type="button"
-                                onClick={() => navigator.clipboard.writeText(window.location.origin + integration.inbound_url)}
+                                onClick={() => navigator.clipboard.writeText((publicIngress?.url || window.location.origin) + integration.inbound_url)}
                                 title="Copy URL"
                                 className="text-gray-500 hover:text-cyan-400 ml-auto shrink-0"
                               >
@@ -3346,13 +4251,49 @@ export default function HubPage() {
                             <p>Rate limit: <span className="text-white">{integration.rate_limit_rpm} req/min</span></p>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2">
+                          <label className="flex items-center justify-between gap-3 mb-3 p-2 rounded bg-gray-900/40 border border-gray-800 cursor-pointer">
+                            <div className="text-xs">
+                              <div className="text-gray-300 font-medium">
+                                {integration.is_active ? 'Enabled' : 'Paused'}
+                              </div>
+                              <div className="text-gray-500">
+                                {integration.is_active
+                                  ? 'Accepts inbound signed events.'
+                                  : 'Slug stays reserved — only deletion frees it for reuse.'}
+                              </div>
+                            </div>
                             <button
-                              onClick={() => handleRotateWebhookSecret(integration.id)}
+                              type="button"
+                              role="switch"
+                              aria-checked={integration.is_active}
+                              onClick={() => handleToggleWebhookActive(integration)}
+                              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                                integration.is_active ? 'bg-cyan-500' : 'bg-gray-600'
+                              }`}
+                              title={integration.is_active ? 'Pause webhook' : 'Enable webhook'}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                                  integration.is_active ? 'translate-x-4' : 'translate-x-0.5'
+                                }`}
+                              />
+                            </button>
+                          </label>
+
+                          <div className="grid grid-cols-3 gap-2">
+                            <button
+                              onClick={() => setWebhookEditTarget(integration)}
+                              className="px-3 py-1.5 bg-gray-700 text-gray-200 border border-gray-600 rounded text-xs hover:bg-gray-600"
+                              title="Edit webhook"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleRotateWebhookSecret(integration.id, integration.inbound_url)}
                               className="px-3 py-1.5 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded text-xs hover:bg-cyan-600/30"
                               title="Rotate HMAC secret"
                             >
-                              Rotate Secret
+                              Rotate
                             </button>
                             <button
                               onClick={() => handleDeleteWebhookIntegration(integration.id)}
@@ -3890,6 +4831,12 @@ export default function HubPage() {
                     <h2 className="text-lg font-display font-semibold text-white">Tool APIs</h2>
                     <p className="text-sm text-tsushin-slate">External APIs for agent capabilities</p>
                   </div>
+                  <button
+                    onClick={() => setShowSearchWizard(true)}
+                    className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    🔎 Setup Web Search
+                  </button>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 animate-stagger">
@@ -3903,7 +4850,7 @@ export default function HubPage() {
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     These tools are automatically available to agents when the corresponding API keys are configured.
-                    Tools include: Web Search (Brave/Tavily/Google), Flight Search (Amadeus/Google), and Web Scraping.
+                    Tools include: Web Search (Brave/SearXNG/Tavily/Google), Flight Search (Amadeus/Google), and Web Scraping.
                   </p>
                 </div>
               </div>
@@ -3917,12 +4864,14 @@ export default function HubPage() {
                     <h2 className="text-lg font-display font-semibold text-white">MCP Servers</h2>
                     <p className="text-sm text-tsushin-slate">Connect external Model Context Protocol servers for tool discovery</p>
                   </div>
-                  <button
-                    onClick={() => setShowMcpServerModal(true)}
-                    className="btn-primary"
-                  >
-                    + Add Server
-                  </button>
+                  {canWriteHub && (
+                    <button
+                      onClick={() => setShowMcpServerModal(true)}
+                      className="btn-primary"
+                    >
+                      + Add Server
+                    </button>
+                  )}
                 </div>
 
                 {/* MCP Server Cards */}
@@ -3938,12 +4887,14 @@ export default function HubPage() {
                     </div>
                     <h3 className="text-white font-semibold mb-2">No MCP Servers</h3>
                     <p className="text-tsushin-slate text-sm mb-4">Add an MCP server to discover and use external tools</p>
-                    <button
-                      onClick={() => setShowMcpServerModal(true)}
-                      className="btn-primary"
-                    >
-                      + Add Server
-                    </button>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowMcpServerModal(true)}
+                        className="btn-primary"
+                      >
+                        + Add Server
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -4329,7 +5280,11 @@ export default function HubPage() {
         <Modal
           isOpen={showApiKeyModal}
           onClose={() => setShowApiKeyModal(false)}
-          title={editingKey ? 'Edit API Key' : 'Add API Key'}
+          title={
+            modalData.service === 'searxng'
+              ? (editingKey ? 'Edit SearXNG URL' : 'Add SearXNG URL')
+              : (editingKey ? 'Edit API Key' : 'Add API Key')
+          }
           footer={
             <div className="flex justify-end gap-3">
               <button
@@ -4372,14 +5327,25 @@ export default function HubPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">API Key</label>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                {modalData.service === 'searxng' ? 'Base URL' : 'API Key'}
+              </label>
               <input
-                type="password"
+                type={modalData.service === 'searxng' ? 'text' : 'password'}
                 value={modalData.api_key}
                 onChange={(e) => setModalData({ ...modalData, api_key: e.target.value })}
-                placeholder={editingKey ? 'Enter new key to update' : 'Enter API key'}
+                placeholder={
+                  modalData.service === 'searxng'
+                    ? 'https://your-searxng-instance.example.com'
+                    : (editingKey ? 'Enter new key to update' : 'Enter API key')
+                }
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white"
               />
+              {modalData.service === 'searxng' && (
+                <p className="text-xs text-tsushin-slate mt-2">
+                  Enter the base URL of your SearXNG instance. Tsushin will call `/search?format=json` on that host.
+                </p>
+              )}
             </div>
             <label className="flex items-center">
               <input
@@ -4823,7 +5789,28 @@ export default function HubPage() {
         onClose={() => setShowWebhookSetupModal(false)}
         onSubmit={handleCreateWebhookIntegration}
         saving={webhookSaving}
-        apiBase={typeof window !== 'undefined' ? window.location.origin : ''}
+        apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
+      />
+
+      {/* v0.7.1: Webhook Rotate Secret Reveal Modal */}
+      {webhookRotateModal && (
+        <WebhookSecretRevealModal
+          isOpen={webhookRotateModal.open}
+          onClose={() => setWebhookRotateModal(null)}
+          secret={webhookRotateModal.secret}
+          inboundUrl={webhookRotateModal.inboundUrl}
+          apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
+          rotatedNotice
+        />
+      )}
+
+      {/* v0.7.1: Webhook Edit Modal */}
+      <WebhookEditModal
+        isOpen={webhookEditTarget !== null}
+        onClose={() => setWebhookEditTarget(null)}
+        onSaved={loadWebhookIntegrations}
+        integration={webhookEditTarget}
+        apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
       />
 
       {/* v0.6.0: Vector Store Config Modal */}
@@ -4840,6 +5827,19 @@ export default function HubPage() {
         onClose={() => setMcpWizardServer(null)}
         mcpServer={mcpWizardServer}
         onComplete={loadMcpServers}
+      />
+
+      {/* Ollama Setup Wizard — guided provision + model pull + agent assignment */}
+      <OllamaSetupWizard
+        isOpen={showOllamaSetupWizard}
+        onClose={() => setShowOllamaSetupWizard(false)}
+        onComplete={() => {
+          setShowOllamaSetupWizard(false)
+          toast.success('Ollama is ready — model pulled and agents wired')
+          // Refresh provider instances and container status so the card reflects new state
+          fetchOllamaHealth()
+          refreshOllamaContainerStatus()
+        }}
       />
 
       {/* Vertex AI Configuration Modal */}
@@ -4960,6 +5960,60 @@ export default function HubPage() {
           </div>
         </Modal>
       )}
+
+      {/* Kokoro Setup Wizard (v0.7.0 Hub-consolidated) */}
+      {kokoroWizardOpen && (
+        <KokoroSetupWizard
+          isOpen={kokoroWizardOpen}
+          onClose={() => handleKokoroWizardClose(false)}
+          onComplete={() => handleKokoroWizardClose(true)}
+        />
+      )}
+
+      {/* Kokoro delete confirmation */}
+      {kokoroConfirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+          <div className="bg-[#12121a] border border-white/10 rounded-xl w-full max-w-md">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">Delete Kokoro instance?</h3>
+              <p className="text-sm text-tsushin-slate mb-4">
+                This will soft-delete the instance and (if auto-provisioned) stop the container.
+              </p>
+              <label className="flex items-start gap-2 p-3 rounded-lg bg-tsushin-vermilion/5 border border-tsushin-vermilion/20 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={kokoroConfirmDelete.removeVolume}
+                  onChange={e => setKokoroConfirmDelete({ ...kokoroConfirmDelete, removeVolume: e.target.checked })}
+                  className="mt-0.5 accent-tsushin-vermilion"
+                />
+                <div>
+                  <div className="text-sm text-white">Also remove container volume</div>
+                  <div className="text-xs text-tsushin-vermilion mt-0.5">Permanent data loss — cached models and any voice files will be deleted.</div>
+                </div>
+              </label>
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setKokoroConfirmDelete(null)}
+                  className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-tsushin-slate text-sm hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleKokoroInstanceDelete}
+                  className="px-4 py-2 rounded-lg bg-tsushin-vermilion text-white text-sm font-medium hover:bg-red-400"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <SearchIntegrationWizard
+        isOpen={showSearchWizard}
+        onClose={() => setShowSearchWizard(false)}
+      />
     </div>
   )
 }

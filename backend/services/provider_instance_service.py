@@ -10,6 +10,7 @@ SSRF validation uses utils/ssrf_validator.py (DNS-resolution-based IP checking).
 """
 
 import logging
+import threading
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from models import ProviderInstance, ProviderConnectionAudit
@@ -35,12 +36,21 @@ SUPPORTED_VENDORS = list(VENDOR_DEFAULT_BASE_URLS.keys()) + ["custom"]
 class ProviderInstanceService:
 
     @staticmethod
-    def ensure_ollama_instance(tenant_id: str, db: Session) -> ProviderInstance:
+    def ensure_ollama_instance(
+        tenant_id: str,
+        db: Session,
+        auto_provision: bool = False,
+    ) -> ProviderInstance:
         """Ensure a default Ollama provider instance exists for the tenant.
 
         If an active Ollama instance already exists, returns it.
         Otherwise, creates a new default instance using the Ollama base URL
         from the Config table (or the standard default).
+
+        When ``auto_provision=True``, the caller is asking tsushin to manage a
+        per-tenant Ollama container. We mark the row ``is_auto_provisioned=True``
+        and kick off provisioning in a background thread so the HTTP request
+        returns immediately.
         """
         existing = db.query(ProviderInstance).filter(
             ProviderInstance.tenant_id == tenant_id,
@@ -49,6 +59,69 @@ class ProviderInstanceService:
         ).first()
         if existing:
             return existing
+
+        if auto_provision:
+            # Create a bare auto-provisioned row; base_url is set by the
+            # container manager once the DNS alias is known.
+            instance = ProviderInstance(
+                tenant_id=tenant_id,
+                vendor='ollama',
+                instance_name='Ollama (Managed)',
+                base_url=None,
+                is_default=True,
+                is_active=True,
+                is_auto_provisioned=True,
+                container_status='creating',
+            )
+            db.add(instance)
+            db.commit()
+            db.refresh(instance)
+
+            # Spawn background provisioning — do NOT block the request.
+            instance_id = instance.id
+
+            def _provision_bg():
+                try:
+                    from db import get_global_engine
+                    from sqlalchemy.orm import sessionmaker
+                    engine = get_global_engine()
+                    if engine is None:
+                        logger.error(
+                            "ensure_ollama_instance auto_provision: "
+                            "no global engine available"
+                        )
+                        return
+                    BgSession = sessionmaker(bind=engine)
+                    bg_db = BgSession()
+                    try:
+                        bg_inst = bg_db.query(ProviderInstance).filter(
+                            ProviderInstance.id == instance_id,
+                            ProviderInstance.tenant_id == tenant_id,
+                        ).first()
+                        if not bg_inst:
+                            return
+                        from services.ollama_container_manager import (
+                            OllamaContainerManager,
+                        )
+                        OllamaContainerManager().provision(bg_inst, bg_db)
+                    finally:
+                        try:
+                            bg_db.close()
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.error(
+                        f"ensure_ollama_instance auto_provision background "
+                        f"error (instance={instance_id}): {e}",
+                        exc_info=True,
+                    )
+
+            threading.Thread(
+                target=_provision_bg,
+                daemon=True,
+                name=f"ollama-ensure-provision-{instance_id}",
+            ).start()
+            return instance
 
         # Derive base_url from Config table
         from models import Config
@@ -63,6 +136,43 @@ class ProviderInstanceService:
             base_url=base_url,
             is_default=True,
         )
+
+    @staticmethod
+    def provision_container(
+        instance_id: int,
+        tenant_id: str,
+        db: Session,
+        *,
+        gpu_enabled: bool = False,
+        mem_limit: str = "4g",
+    ) -> ProviderInstance:
+        """
+        Prepare an existing Ollama ProviderInstance for container provisioning.
+
+        Validates vendor=='ollama', marks the row as auto-provisioned with the
+        requested sizing, commits, and returns the instance. The caller is
+        expected to invoke ``OllamaContainerManager().provision(instance, db)``
+        (typically in a background thread) using a fresh DB session.
+        """
+        instance = db.query(ProviderInstance).filter(
+            ProviderInstance.id == instance_id,
+            ProviderInstance.tenant_id == tenant_id,
+            ProviderInstance.is_active == True,
+        ).first()
+        if not instance:
+            raise ValueError(f"Provider instance {instance_id} not found")
+        if instance.vendor != "ollama":
+            raise ValueError(
+                f"provision_container only supports Ollama (got {instance.vendor})"
+            )
+
+        instance.gpu_enabled = bool(gpu_enabled)
+        instance.mem_limit = mem_limit or "4g"
+        instance.is_auto_provisioned = True
+        instance.container_status = "creating"
+        db.commit()
+        db.refresh(instance)
+        return instance
 
     @staticmethod
     def list_instances(tenant_id: str, db: Session, vendor: str = None, active_only: bool = True) -> List[ProviderInstance]:

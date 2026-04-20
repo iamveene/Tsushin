@@ -128,11 +128,14 @@ export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setInstanceData = useCallback((instance: WhatsAppMCPInstance) => {
+    // BUG-591: Do NOT mark step 2 complete here. Instance creation alone
+    // does not mean WhatsApp is authenticated — the QR still needs to be
+    // scanned. Step 2 is marked complete by StepCreateInstance only after
+    // health polling confirms `authenticated=true`.
     setState(prev => ({
       ...prev,
       createdInstanceId: instance.id,
       createdInstance: instance,
-      stepsCompleted: { ...prev.stepsCompleted, 2: true },
     }))
   }, [])
 

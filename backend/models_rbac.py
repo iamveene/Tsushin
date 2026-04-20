@@ -5,7 +5,7 @@ Phase 7.6.3 - Authentication Backend
 These models correspond to the database schema created in migration 001.
 """
 
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index, CheckConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -38,6 +38,11 @@ class Tenant(Base):
     # URL the tenant must paste into Slack/Discord. Nullable — when unset, the UI
     # shows a "configure this first" warning before allowing HTTP-mode setup.
     public_base_url = Column(String(512), nullable=True)
+    # v0.7.3: Per-tenant emergency stop. When True, every channel/trigger for this
+    # tenant is blocked at the ingress (MCP filters, agent router, webhook inbound).
+    # Orthogonal to the GLOBAL kill switch on Config.emergency_stop, which halts
+    # every tenant at once and is reserved for global admins.
+    emergency_stop = Column(Boolean, default=False, nullable=False, server_default="false")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)
@@ -151,25 +156,52 @@ class UserRole(Base):
 
 
 class UserInvitation(Base):
-    """User invitation model"""
+    """User invitation model.
+
+    Supports two invitation scopes:
+      - Tenant-scoped invite: tenant_id + role_id set, is_global_admin=False.
+      - Global-admin invite: tenant_id and role_id are NULL, is_global_admin=True.
+
+    A user may be re-invited after an old invite was accepted or cancelled —
+    the uniqueness constraint is a PostgreSQL partial index that only blocks
+    concurrent pending invites for the same (tenant_id, email). See migration
+    0036 for the actual index/CHECK-constraint creation.
+
+    auth_provider controls which flow the invitee must use to accept:
+      - "local"  — accept via password-based /auth/invitation/{token}/accept
+      - "google" — accept only via Google SSO (auth_google.find_or_create_user)
+    """
     __tablename__ = "user_invitation"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=False)
+    tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=True)
     email = Column(String(255), nullable=False)
-    role_id = Column(Integer, ForeignKey('role.id'), nullable=False)
+    role_id = Column(Integer, ForeignKey('role.id'), nullable=True)
     invited_by = Column(Integer, ForeignKey('user.id'), nullable=False)
     invitation_token = Column(String(255), unique=True, nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False)
     accepted_at = Column(DateTime, nullable=True)
+    is_global_admin = Column(Boolean, default=False, nullable=False)
+    auth_provider = Column(String(16), default='local', nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
     inviter = relationship("User", back_populates="sent_invitations", foreign_keys=[invited_by])
 
-    # Unique constraint
+    # NOTE: the pending-invite partial unique index is created via raw SQL in
+    # migration 0036 (SQLAlchemy 1.x can't express PG partial indexes in the
+    # metadata declaratively). It is therefore intentionally absent from
+    # __table_args__ to avoid Alembic autogen diff noise.
     __table_args__ = (
-        Index('uq_tenant_email', 'tenant_id', 'email', unique=True),
+        CheckConstraint(
+            "(is_global_admin = TRUE AND tenant_id IS NULL AND role_id IS NULL) OR "
+            "(is_global_admin = FALSE AND tenant_id IS NOT NULL AND role_id IS NOT NULL)",
+            name='ck_invitation_scope',
+        ),
+        CheckConstraint(
+            "auth_provider IN ('local', 'google')",
+            name='ck_invitation_auth_provider',
+        ),
     )
 
 
@@ -311,6 +343,39 @@ class TenantSSOConfig(Base):
 
     # Relationships
     tenant = relationship("Tenant", back_populates="sso_config")
+    default_role = relationship("Role")
+
+
+class GlobalSSOConfig(Base):
+    """
+    Platform-wide Google SSO configuration (singleton).
+
+    Used when a user signs in via Google SSO WITHOUT a tenant context — e.g.
+    accepting a global-admin invitation or hitting the generic /login page.
+
+    Only one row is ever expected; migration 0036 seeds an empty row on
+    upgrade and the startup hook in ``app.py`` is a belt-and-suspenders guard
+    that inserts a default row if it is missing.
+
+    ``auto_provision_users`` should stay False unless ``allowed_domains`` is
+    populated with a trusted domain list — otherwise anyone with a Google
+    account can create an unprivileged platform user. Global admins still
+    require an explicit invitation even when auto_provision is True, because
+    ``is_global_admin`` is set from the invitation scope, never from SSO.
+    """
+    __tablename__ = "global_sso_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    google_sso_enabled = Column(Boolean, default=False)
+    google_client_id = Column(String(255), nullable=True)
+    google_client_secret_encrypted = Column(Text, nullable=True)  # Fernet-encrypted
+    allowed_domains = Column(Text, nullable=True)                  # JSON array
+    auto_provision_users = Column(Boolean, default=False)
+    default_role_id = Column(Integer, ForeignKey('role.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
     default_role = relationship("Role")
 
 

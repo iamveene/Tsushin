@@ -4,6 +4,7 @@ from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 import os
 import json
+import settings
 from models import Base, Config, SlashCommand, ProjectCommandPattern
 # Phase 7.6.3: Import RBAC models to register with Base.metadata
 import models_rbac  # noqa: F401
@@ -23,6 +24,15 @@ def get_engine(database_url: str):
     is_postgres = database_url.startswith("postgresql")
 
     if is_postgres:
+        connect_args = {}
+        idle_tx_timeout_ms = max(settings.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS, 0)
+        if idle_tx_timeout_ms > 0:
+            # Defensive guardrail: leaked read transactions from stale tabs or
+            # long-lived request paths self-expire before they can saturate the pool.
+            connect_args["options"] = (
+                f"-c idle_in_transaction_session_timeout={idle_tx_timeout_ms}"
+            )
+
         engine = create_engine(
             database_url,
             poolclass=QueuePool,
@@ -30,6 +40,7 @@ def get_engine(database_url: str):
             max_overflow=30,
             pool_pre_ping=True,
             pool_recycle=1800,
+            connect_args=connect_args,
         )
     else:
         # SQLite fallback (local dev / legacy)

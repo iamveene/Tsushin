@@ -39,10 +39,8 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
   const { logout, isGlobalAdmin } = useAuth()
   const { startTour } = useOnboarding()
 
-  // Build nav items — add "System" link for global admins
-  const navItems = isGlobalAdmin
-    ? [...baseNavItems, { href: '/system/tenants', label: 'System', activePrefix: '/system' }]
-    : baseNavItems
+  // Global admin reaches System pages via Core → System section cards.
+  const navItems = baseNavItems
 
   // Mobile menu state
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
@@ -85,11 +83,15 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
     window.dispatchEvent(new CustomEvent('tsushin:close-user-guide'))
   }
 
-  // Emergency Stop state
+  // Emergency Stop state — two independent scopes:
+  //   - tenant: affects only the logged-in user's tenant (org.settings.write)
+  //   - global: affects ALL tenants (global admin only)
   const toast = useToast()
-  const [emergencyStop, setEmergencyStop] = useState(false)
-  const [checkingEmergencyStop, setCheckingEmergencyStop] = useState(false)
-  const [showStopConfirm, setShowStopConfirm] = useState(false)
+  const [tenantStop, setTenantStop] = useState(false)
+  const [globalStop, setGlobalStop] = useState(false)
+  const [tenantBusy, setTenantBusy] = useState(false)
+  const [globalBusy, setGlobalBusy] = useState(false)
+  const [stopConfirm, setStopConfirm] = useState<null | 'tenant' | 'global'>(null)
 
   // Close mobile menu on route change
   useEffect(() => {
@@ -122,7 +124,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
     return pathname?.startsWith(prefix)
   }
 
-  // Emergency stop status polling
+  // Emergency stop status polling — reads both tenant and global flags.
   const checkEmergencyStopStatus = useCallback(async () => {
     if (isAuthPage || !user) {
       return
@@ -131,7 +133,8 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
       const response = await authenticatedFetch(`${API_URL}/api/system/status`)
       if (response.ok) {
         const data = await response.json()
-        setEmergencyStop(data.emergency_stop || false)
+        setTenantStop(Boolean(data.tenant_emergency_stop))
+        setGlobalStop(Boolean(data.global_emergency_stop))
       }
     } catch { /* silent */ }
   }, [isAuthPage, user])
@@ -145,38 +148,65 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
     return () => clearInterval(interval)
   }, [checkEmergencyStopStatus, isAuthPage, user])
 
-  async function handleEmergencyToggle() {
-    if (!emergencyStop) {
-      setShowStopConfirm(true)
+  function handleTenantToggle() {
+    if (!tenantStop) {
+      setStopConfirm('tenant')
       return
     }
-    // Resume directly
-    await executeEmergencyToggle()
+    executeToggle('tenant')
   }
 
-  async function executeEmergencyToggle() {
-    setShowStopConfirm(false)
-    setCheckingEmergencyStop(true)
+  function handleGlobalToggle() {
+    if (!globalStop) {
+      setStopConfirm('global')
+      return
+    }
+    executeToggle('global')
+  }
+
+  async function executeToggle(scope: 'tenant' | 'global') {
+    setStopConfirm(null)
+    const isStopping = scope === 'tenant' ? !tenantStop : !globalStop
+    const setBusy = scope === 'tenant' ? setTenantBusy : setGlobalBusy
+    const setFlag = scope === 'tenant' ? setTenantStop : setGlobalStop
+    const endpoint =
+      scope === 'tenant'
+        ? isStopping ? '/api/system/emergency-stop' : '/api/system/resume'
+        : isStopping ? '/api/system/global-emergency-stop' : '/api/system/global-resume'
+
+    setBusy(true)
     try {
-      const endpoint = emergencyStop ? '/api/system/resume' : '/api/system/emergency-stop'
       const response = await authenticatedFetch(`${API_URL}${endpoint}`, {
         method: 'POST',
       })
       if (response.ok) {
         const data = await response.json()
-        setEmergencyStop(data.emergency_stop || false)
-        if (data.emergency_stop) {
-          toast.error('Emergency Stop', 'All message processing has been halted')
+        const newFlag = Boolean(
+          scope === 'tenant' ? data.tenant_emergency_stop : data.global_emergency_stop
+        )
+        setFlag(newFlag)
+        if (newFlag) {
+          toast.error(
+            scope === 'global' ? 'GLOBAL Emergency Stop' : 'Tenant Emergency Stop',
+            scope === 'global'
+              ? 'All message processing halted for every tenant'
+              : `Message processing halted for ${user?.tenant_name || 'this tenant'}`
+          )
         } else {
-          toast.success('Resumed', 'Message processing has been resumed')
+          toast.success(
+            scope === 'global' ? 'Global Resumed' : 'Tenant Resumed',
+            scope === 'global'
+              ? 'Global kill switch cleared. Per-tenant stops (if any) remain in effect.'
+              : 'Message processing resumed for this tenant'
+          )
         }
       } else {
-        toast.error('Error', 'Failed to toggle emergency stop')
+        toast.error('Error', `Failed to toggle ${scope} emergency stop`)
       }
     } catch {
-      toast.error('Error', 'Failed to toggle emergency stop')
+      toast.error('Error', `Failed to toggle ${scope} emergency stop`)
     } finally {
-      setCheckingEmergencyStop(false)
+      setBusy(false)
     }
   }
 
@@ -296,49 +326,111 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
               {/* Refresh button */}
               <RefreshButton />
 
-              {/* System status toggle switch */}
+              {/* Global kill switch — visible only to global admins. Sits LEFT of
+                  the tenant toggle so admins see scope increasing from right to left
+                  (this tenant → everyone). Purple/amber palette keeps it visually
+                  distinct from the red/green tenant toggle. */}
+              {isGlobalAdmin && (
+                <button
+                  onClick={handleGlobalToggle}
+                  disabled={globalBusy}
+                  title={globalStop
+                    ? 'GLOBAL STOP is ACTIVE — every tenant is halted. Click to clear.'
+                    : 'GLOBAL KILL SWITCH — halts message processing for every tenant on this instance. Click to activate.'
+                  }
+                  role="switch"
+                  aria-checked={globalStop}
+                  aria-label="Global emergency stop"
+                  className="flex items-center gap-2 group"
+                >
+                  <span className={`text-xs font-semibold tracking-wide transition-colors duration-300 hidden xl:inline ${
+                    globalBusy ? 'text-amber-400' :
+                    globalStop ? 'text-amber-300' : 'text-purple-300'
+                  }`}>
+                    {globalBusy ? '...' : globalStop ? 'Global Stopped' : 'Global'}
+                  </span>
+
+                  {/* Shield icon — telegraphs "system-wide" vs the tenant pill's check.
+                      Stays visible from md up so even when the label is suppressed at
+                      1024px (xl breakpoint gates the text), admins still see the second
+                      toggle is distinct from the tenant one. */}
+                  <span className={`hidden md:inline-flex items-center justify-center w-4 h-4 rounded-sm transition-colors ${
+                    globalStop ? 'text-amber-300' : 'text-purple-300'
+                  }`}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l8 4v5c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V7l8-4z" />
+                    </svg>
+                  </span>
+
+                  <div className={`relative w-9 h-5 rounded-full transition-all duration-300 ${
+                    globalBusy
+                      ? 'bg-amber-500/30 border border-amber-500/40'
+                      : globalStop
+                        ? 'bg-amber-500/30 border border-amber-500/60 shadow-[0_0_8px_rgba(245,158,11,0.4)]'
+                        : 'bg-purple-500/20 border border-purple-500/40 group-hover:bg-purple-500/30'
+                  }`}>
+                    <div className={`absolute top-0.5 w-4 h-4 rounded-full shadow-md transition-all duration-300 ${
+                      globalBusy
+                        ? 'left-0.5 bg-amber-400 animate-pulse'
+                        : globalStop
+                          ? 'left-[18px] bg-amber-300'
+                          : 'left-0.5 bg-purple-300'
+                    }`}>
+                      {globalStop && !globalBusy && (
+                        <span className="absolute inset-0 rounded-full bg-amber-300 animate-ping opacity-40"></span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              )}
+
+              {/* Tenant emergency stop — always visible. Affects the caller's
+                  tenant only. Disabled visually when a global stop is in force,
+                  so the operator understands their resume would be no-op. */}
               <button
-                onClick={handleEmergencyToggle}
-                disabled={checkingEmergencyStop}
-                title={emergencyStop
-                  ? 'STOPPED — Click to resume message processing'
-                  : 'Online — Click for emergency stop'
+                onClick={handleTenantToggle}
+                disabled={tenantBusy || globalStop}
+                title={globalStop
+                  ? 'Blocked by GLOBAL stop — all tenants are halted. A global admin must clear the global kill switch first.'
+                  : tenantStop
+                    ? `STOPPED for ${user?.tenant_name || 'your tenant'} — Click to resume`
+                    : `Online — Click to halt message processing for ${user?.tenant_name || 'your tenant'} only`
                 }
                 role="switch"
-                aria-checked={!emergencyStop}
-                aria-label="System status"
-                className="flex items-center gap-2 group"
+                aria-checked={!tenantStop}
+                aria-label="Tenant emergency stop"
+                className={`flex items-center gap-2 group ${globalStop ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
-                {/* Label */}
                 <span className={`text-xs font-semibold tracking-wide transition-colors duration-300 hidden sm:inline ${
-                  checkingEmergencyStop ? 'text-amber-400' :
-                  emergencyStop ? 'text-red-400' : 'text-tsushin-success'
+                  tenantBusy ? 'text-amber-400' :
+                  globalStop ? 'text-slate-400' :
+                  tenantStop ? 'text-red-400' : 'text-tsushin-success'
                 }`}>
-                  {checkingEmergencyStop ? '...' : emergencyStop ? 'Emergency Stop' : 'Online'}
+                  {tenantBusy ? '...' : tenantStop ? 'Tenant Stopped' : globalStop ? 'Tenant (blocked)' : 'Online'}
                 </span>
 
-                {/* Toggle track */}
                 <div className={`relative w-9 h-5 rounded-full transition-all duration-300 ${
-                  checkingEmergencyStop
+                  tenantBusy
                     ? 'bg-amber-500/30 border border-amber-500/40'
-                    : emergencyStop
-                      ? 'bg-red-500/30 border border-red-500/50'
-                      : 'bg-emerald-500/30 border border-emerald-500/50 group-hover:bg-emerald-500/40'
+                    : globalStop
+                      ? 'bg-slate-500/30 border border-slate-500/40'
+                      : tenantStop
+                        ? 'bg-red-500/30 border border-red-500/50'
+                        : 'bg-emerald-500/30 border border-emerald-500/50 group-hover:bg-emerald-500/40'
                 }`}>
-                  {/* Toggle knob */}
                   <div className={`absolute top-0.5 w-4 h-4 rounded-full shadow-md transition-all duration-300 ${
-                    checkingEmergencyStop
+                    tenantBusy
                       ? 'left-0.5 bg-amber-400 animate-pulse'
-                      : emergencyStop
-                        ? 'left-0.5 bg-red-400'
-                        : 'left-[18px] bg-emerald-400'
+                      : globalStop
+                        ? 'left-0.5 bg-slate-400'
+                        : tenantStop
+                          ? 'left-0.5 bg-red-400'
+                          : 'left-[18px] bg-emerald-400'
                   }`}>
-                    {/* Pulse glow when online */}
-                    {!emergencyStop && !checkingEmergencyStop && (
+                    {!tenantStop && !tenantBusy && !globalStop && (
                       <span className="absolute inset-0 rounded-full bg-emerald-400 animate-ping opacity-40"></span>
                     )}
-                    {/* Pulse glow when stopped */}
-                    {emergencyStop && !checkingEmergencyStop && (
+                    {tenantStop && !tenantBusy && (
                       <span className="absolute inset-0 rounded-full bg-red-400 animate-ping opacity-40"></span>
                     )}
                   </div>
@@ -526,44 +618,84 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
         </>
       )}
 
-      {/* Emergency Stop Confirmation Dialog */}
-      {showStopConfirm && (
+      {/* Emergency Stop Confirmation Dialog — rendered for either scope. Copy
+          differs so the user cannot mistake a global halt for a tenant halt. */}
+      {stopConfirm && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-          <div className="bg-slate-800 rounded-2xl max-w-md w-full shadow-2xl border border-red-500/30 overflow-hidden">
-            <div className="bg-red-500/10 px-6 py-4 border-b border-red-500/20">
+          <div className={`bg-slate-800 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border ${
+            stopConfirm === 'global' ? 'border-amber-500/40' : 'border-red-500/30'
+          }`}>
+            <div className={`px-6 py-4 border-b ${
+              stopConfirm === 'global' ? 'bg-amber-500/10 border-amber-500/20' : 'bg-red-500/10 border-red-500/20'
+            }`}>
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
-                  <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                  </svg>
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                  stopConfirm === 'global' ? 'bg-amber-500/20' : 'bg-red-500/20'
+                }`}>
+                  {stopConfirm === 'global' ? (
+                    <svg className="w-6 h-6 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l8 4v5c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V7l8-4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                  )}
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-red-400">Emergency Stop</h3>
-                  <p className="text-sm text-red-300/70">This action affects the entire system</p>
+                  <h3 className={`text-lg font-bold ${stopConfirm === 'global' ? 'text-amber-300' : 'text-red-400'}`}>
+                    {stopConfirm === 'global' ? 'Halt ALL Tenants?' : 'Tenant Emergency Stop'}
+                  </h3>
+                  <p className={`text-sm ${stopConfirm === 'global' ? 'text-amber-200/70' : 'text-red-300/70'}`}>
+                    {stopConfirm === 'global'
+                      ? 'Platform-wide kill switch — affects every tenant on this instance'
+                      : `Affects ${user?.tenant_name || 'your tenant'} only — other tenants keep running`}
+                  </p>
                 </div>
               </div>
             </div>
             <div className="px-6 py-4">
-              <p className="text-slate-300 text-sm">
-                This will <strong className="text-white">immediately halt all message processing</strong> across
-                all channels (WhatsApp, Telegram, API). No messages will be sent or received until you resume.
-              </p>
-              <p className="text-slate-400 text-xs mt-3">
-                Active flow runs will be cancelled. You can resume at any time by clicking the status badge again.
-              </p>
+              {stopConfirm === 'global' ? (
+                <>
+                  <p className="text-slate-300 text-sm">
+                    This <strong className="text-white">GLOBAL kill switch</strong> halts all message processing
+                    for <strong className="text-amber-300">every tenant</strong> on this instance, across WhatsApp,
+                    Telegram, Slack, Discord, webhooks and API triggers.
+                  </p>
+                  <p className="text-slate-400 text-xs mt-3">
+                    Use only for platform-level incidents (runaway loops, security response). Per-tenant stops
+                    remain in effect even after the global switch is cleared.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-slate-300 text-sm">
+                    This will <strong className="text-white">immediately halt all message processing</strong> for{' '}
+                    <strong className="text-white">{user?.tenant_name || 'your tenant'}</strong> across every
+                    channel (WhatsApp, Telegram, Slack, Discord, webhooks, API). Other tenants are unaffected.
+                  </p>
+                  <p className="text-slate-400 text-xs mt-3">
+                    Active flow runs will be cancelled. You can resume at any time by clicking the tenant toggle again.
+                  </p>
+                </>
+              )}
             </div>
             <div className="px-6 py-4 border-t border-slate-700 flex justify-end gap-3">
               <button
-                onClick={() => setShowStopConfirm(false)}
+                onClick={() => setStopConfirm(null)}
                 className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={executeEmergencyToggle}
-                className="px-5 py-2 bg-red-500 hover:bg-red-400 text-white font-medium text-sm rounded-lg transition-colors"
+                onClick={() => executeToggle(stopConfirm)}
+                className={`px-5 py-2 text-white font-medium text-sm rounded-lg transition-colors ${
+                  stopConfirm === 'global'
+                    ? 'bg-amber-500 hover:bg-amber-400'
+                    : 'bg-red-500 hover:bg-red-400'
+                }`}
               >
-                Stop All Processing
+                {stopConfirm === 'global' ? 'Halt Every Tenant' : 'Stop This Tenant'}
               </button>
             </div>
           </div>

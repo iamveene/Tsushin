@@ -97,7 +97,20 @@ export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps)
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
+        // BUG-599 FIX: ``stopPropagation`` alone still runs sibling
+        // capture-phase listeners registered on the same node (window).
+        // When the Agent Studio is maximized it has its own Escape
+        // handler that collapses the fullscreen pane — if that handler
+        // races with ours, the guide closes but Studio un-maximizes
+        // too, or (worse, depending on React re-render timing) neither
+        // does. ``stopImmediatePropagation`` guarantees we win and the
+        // guide's close handler fires alone. We keep ``stopPropagation``
+        // as a belt for older browsers that don't honor the immediate
+        // variant.
         e.stopPropagation()
+        if (typeof (e as any).stopImmediatePropagation === 'function') {
+          ;(e as any).stopImmediatePropagation()
+        }
         onClose()
       }
     }
@@ -128,24 +141,45 @@ export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps)
     return () => container.removeEventListener('scroll', handleScroll)
   }, [isOpen, content])
 
+  // BUG-624 FIX: Hide the whole tree from assistive tech and visually
+  // collapse it when ``isOpen`` is false. Previously the slide-over was
+  // only translated off-screen via ``translate-x-full`` — the DOM nodes
+  // still existed, still had ``role="dialog"``, still took focus order
+  // for screen readers, and still rendered a full-viewport invisible
+  // backdrop that could swallow stray clicks in some browsers. Keep the
+  // mount (so the slide-out animation plays) but flip visibility off
+  // for a11y and pointer events once the transition finishes.
+  const hiddenA11y = !isOpen
+
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop — BUG-603: z-[200] keeps the User Guide above every other app modal
+          (Modal.tsx uses z-50, route-level dialogs use z-50..z-100), so landing on
+          /flows while this panel is open cannot accidentally stack a flow modal on
+          top and steal clicks away from the Close Guide button. */}
       <div
-        className={`fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm transition-opacity duration-300 ${
+        className={`fixed inset-0 z-[200] bg-black/50 backdrop-blur-sm transition-opacity duration-300 ${
           isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
         onClick={onClose}
+        aria-hidden={hiddenA11y ? 'true' : undefined}
+        style={hiddenA11y ? { visibility: 'hidden' } : undefined}
       />
 
       {/* Slide-over panel */}
       <div
-        className={`fixed top-0 right-0 z-[101] h-full w-full sm:max-w-2xl xl:max-w-3xl transform transition-transform duration-300 ease-in-out ${
+        className={`fixed top-0 right-0 z-[201] h-full w-full sm:max-w-2xl xl:max-w-3xl transform transition-transform duration-300 ease-in-out ${
           isOpen ? 'translate-x-0 pointer-events-auto' : 'translate-x-full pointer-events-none'
         }`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="user-guide-title"
+        aria-hidden={hiddenA11y ? 'true' : undefined}
+        // ``visibility: hidden`` (not display:none — that kills the
+        // transition and content re-mounts). Combined with aria-hidden
+        // this removes the panel from the screen-reader tree AND from
+        // the sequential keyboard focus order.
+        style={hiddenA11y ? { visibility: 'hidden' } : undefined}
       >
         <div className="h-full flex flex-col bg-tsushin-surface border-l border-tsushin-border shadow-2xl">
           {/* Header */}

@@ -178,6 +178,7 @@ class PermissionResponse(BaseModel):
     is_enabled: bool
     max_depth: int
     rate_limit_rpm: int
+    allow_target_skills: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -197,6 +198,10 @@ class PermissionCreateRequest(BaseModel):
     target_agent_id: int = Field(..., description="ID of the agent receiving communication")
     max_depth: int = Field(default=3, ge=1, le=10, description="Maximum delegation depth")
     rate_limit_rpm: int = Field(default=30, ge=1, le=1000, description="Rate limit (requests per minute)")
+    allow_target_skills: bool = Field(
+        default=False,
+        description="Allow the target agent to use its own skills (gmail, sandboxed_tools, …) during A2A calls from this source",
+    )
 
     class Config:
         extra = "forbid"
@@ -207,6 +212,7 @@ class PermissionUpdateRequest(BaseModel):
     is_enabled: Optional[bool] = None
     max_depth: Optional[int] = Field(None, ge=1, le=10)
     rate_limit_rpm: Optional[int] = Field(None, ge=1, le=1000)
+    allow_target_skills: Optional[bool] = None
 
     class Config:
         extra = "forbid"
@@ -385,6 +391,7 @@ async def list_permissions(
             is_enabled=p.is_enabled,
             max_depth=p.max_depth,
             rate_limit_rpm=p.rate_limit_rpm,
+            allow_target_skills=bool(getattr(p, "allow_target_skills", False)),
             created_at=p.created_at,
             updated_at=p.updated_at,
         ))
@@ -433,6 +440,7 @@ async def create_permission(
         target_agent_id=body.target_agent_id,
         max_depth=body.max_depth,
         rate_limit_rpm=body.rate_limit_rpm,
+        allow_target_skills=body.allow_target_skills,
     )
 
     name_map = _build_agent_name_map(db, {perm.source_agent_id, perm.target_agent_id}, tenant_id=ctx.tenant_id)
@@ -446,6 +454,7 @@ async def create_permission(
         is_enabled=perm.is_enabled,
         max_depth=perm.max_depth,
         rate_limit_rpm=perm.rate_limit_rpm,
+        allow_target_skills=bool(getattr(perm, "allow_target_skills", False)),
         created_at=perm.created_at,
         updated_at=perm.updated_at,
     )
@@ -480,6 +489,7 @@ async def update_permission(
         is_enabled=perm.is_enabled,
         max_depth=perm.max_depth,
         rate_limit_rpm=perm.rate_limit_rpm,
+        allow_target_skills=bool(getattr(perm, "allow_target_skills", False)),
         created_at=perm.created_at,
         updated_at=perm.updated_at,
     )

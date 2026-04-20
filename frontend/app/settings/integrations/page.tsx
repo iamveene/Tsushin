@@ -10,6 +10,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
 import { authenticatedFetch } from '@/lib/client'
+import { useGoogleWizard, useGoogleWizardComplete } from '@/contexts/GoogleWizardContext'
 
 interface GoogleCredentials {
   id: number
@@ -36,6 +37,9 @@ export default function IntegrationsSettingsPage() {
   const [googleClientId, setGoogleClientId] = useState('')
   const [googleClientSecret, setGoogleClientSecret] = useState('')
 
+  // Guided setup wizards live in a global context so Hub can reuse them
+  const { openWizard } = useGoogleWizard()
+
   const apiUrl = ''
 
   // ---- Google OAuth functions ----
@@ -55,6 +59,14 @@ export default function IntegrationsSettingsPage() {
       console.error('Error fetching Google credentials:', err)
     }
   }, [apiUrl])
+
+  const refreshAfterWizard = useCallback(() => {
+    fetchGoogleCredentials()
+    setSuccess('Integration connected')
+    setTimeout(() => setSuccess(null), 3000)
+  }, [fetchGoogleCredentials])
+  useGoogleWizardComplete('gmail', refreshAfterWizard)
+  useGoogleWizardComplete('calendar', refreshAfterWizard)
 
   const handleSaveGoogleCredentials = async () => {
     if (!googleClientId.trim()) { setError('Client ID is required'); return }
@@ -224,7 +236,15 @@ export default function IntegrationsSettingsPage() {
                   </div>
                 </div>
                 {canEdit && (
-                  <div className="flex gap-3 pt-4">
+                  <div className="flex flex-wrap gap-3 pt-4">
+                    <button onClick={() => openWizard('gmail')}
+                      className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors">
+                      Set up Gmail →
+                    </button>
+                    <button onClick={() => openWizard('calendar')}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">
+                      Set up Google Calendar →
+                    </button>
                     <button onClick={() => { setGoogleClientId(googleCredentials?.client_id || ''); setGoogleClientSecret(''); setShowGoogleModal(true) }}
                       className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg font-medium transition-colors">
                       Update Credentials
@@ -248,10 +268,21 @@ export default function IntegrationsSettingsPage() {
                   Configure your Google Cloud OAuth credentials to enable Google Sign-In (SSO), Gmail integration, and Google Calendar features.
                 </p>
                 {canEdit && (
-                  <button onClick={() => setShowGoogleModal(true)}
-                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">
-                    Configure Google Integration
-                  </button>
+                  <>
+                    <button onClick={() => setShowGoogleModal(true)}
+                      className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">
+                      Configure Google Integration
+                    </button>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+                      Or jump straight into a guided setup:{' '}
+                      <button onClick={() => openWizard('gmail')} className="text-red-500 hover:text-red-600 underline">
+                        Gmail
+                      </button>{' '}·{' '}
+                      <button onClick={() => openWizard('calendar')} className="text-blue-500 hover:text-blue-600 underline">
+                        Google Calendar
+                      </button>
+                    </p>
+                  </>
                 )}
               </div>
             )}
@@ -271,31 +302,6 @@ export default function IntegrationsSettingsPage() {
                   <li>Add redirect URI: <code className="bg-amber-100 dark:bg-amber-900/30 px-1.5 py-0.5 rounded text-xs">{apiUrl}/api/hub/google/oauth/callback</code></li>
                 </ol>
               </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Coming Soon */}
-      <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
-        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">Coming Soon</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="flex items-center gap-3 text-gray-400 dark:text-gray-500">
-            <div className="w-10 h-10 rounded-xl bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
-            </div>
-            <div>
-              <p className="font-medium">Microsoft 365</p>
-              <p className="text-xs">Outlook, Teams, OneDrive</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 text-gray-400 dark:text-gray-500">
-            <div className="w-10 h-10 rounded-xl bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2" /><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /></svg>
-            </div>
-            <div>
-              <p className="font-medium">Slack</p>
-              <p className="text-xs">Workspace integration</p>
             </div>
           </div>
         </div>
