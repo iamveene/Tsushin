@@ -47,7 +47,7 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   },
   web_search: {
     displayName: 'Web Search',
-    description: 'Search the web for information. Choose between Brave Search (privacy-focused) or Google Search (via SerpAPI).',
+    description: 'Search the web for information. Choose between Brave Search, SearXNG, or Google Search (via SerpAPI).',
     category: 'search_web',
     configType: 'provider',
     icon: SearchIcon,
