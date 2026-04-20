@@ -79,6 +79,17 @@ class BaseSkill(ABC):
     # - "special": Media-triggered (e.g., audio_transcript)
     execution_mode: str = "legacy"
 
+    # Wizard-facing metadata (read by SkillManager.list_available_skills() and
+    # rendered by the frontend Agent Wizard → Step Skills). Backend is the single
+    # source of truth; frontend no longer hardcodes a parallel list.
+    # applies_to: agent types where this skill is relevant in the wizard picker.
+    # auto_enabled_for: agent types where the wizard auto-enables + locks this skill.
+    # wizard_visible: if False, the wizard hides this skill (requires post-creation
+    #   setup such as OAuth, beacon pairing, or a dedicated Hub configuration step).
+    applies_to: List[str] = ["text", "audio", "hybrid"]
+    auto_enabled_for: List[str] = []
+    wizard_visible: bool = True
+
     def __init__(self):
         """Initialize the skill."""
         self._config: Dict[str, Any] = {}  # Set by skill manager during initialization

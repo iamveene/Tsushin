@@ -79,12 +79,16 @@ class ProviderInfoResponse(BaseModel):
     supported: bool
     requires_api_key: bool = True
     is_free: bool = False
-    status: str = "available"  # "available", "coming_soon"
+    status: str = "available"  # "available", "preview", "coming_soon"
     voice_count: int = 0
     default_voice: str = "default"
     supported_formats: List[str] = []
     supported_languages: List[str] = []
     pricing: Dict = {}
+    # True when the caller's tenant has credentials configured for this provider
+    # (API key row OR default ProviderInstance with a key). Lets wizards filter
+    # out "needs setup" providers without a separate round-trip.
+    tenant_has_configured: bool = False
 
 
 class ProviderStatusResponse(BaseModel):
@@ -134,6 +138,22 @@ def list_tts_providers(
     try:
         providers = TTSProviderRegistry.list_providers(db)
 
+        # Per-tenant credential resolution — saves the wizard a round-trip per
+        # provider. api_key_service.get_api_key already checks both the ApiKey
+        # table and the default ProviderInstance for the vendor.
+        from services.api_key_service import get_api_key
+        tenant_id = getattr(current_user, "tenant_id", None)
+
+        def _tenant_has_configured(provider_id: str, requires_api_key: bool) -> bool:
+            if not requires_api_key:
+                return True
+            if not tenant_id:
+                return False
+            try:
+                return bool(get_api_key(provider_id, db, tenant_id=tenant_id))
+            except Exception:
+                return False
+
         return [
             ProviderInfoResponse(
                 id=p["id"],
@@ -147,7 +167,10 @@ def list_tts_providers(
                 default_voice=p.get("default_voice", "default"),
                 supported_formats=p.get("supported_formats", []),
                 supported_languages=p.get("supported_languages", []),
-                pricing=p.get("pricing", {})
+                pricing=p.get("pricing", {}),
+                tenant_has_configured=_tenant_has_configured(
+                    p["id"], p.get("requires_api_key", True)
+                ),
             )
             for p in providers
         ]
