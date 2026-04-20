@@ -118,6 +118,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
   const kokoroRunning = existingTTSInstances.find(t => t.vendor === 'kokoro' && t.is_active)
   const hasOpenAIKey = providerInstances.some(p => p.vendor === 'openai' && p.api_key_configured)
   const hasElevenLabsKey = providerInstances.some(p => p.vendor === 'elevenlabs' && p.api_key_configured)
+  const hasGeminiKey = providerInstances.some(p => p.vendor === 'gemini' && p.api_key_configured)
 
   // -------------------- Step indicator --------------------
   const totalSteps = 5
@@ -162,7 +163,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
           response_format: state.format,
         })
       } else {
-        // OpenAI / ElevenLabs: set skill config directly (no TTSInstance)
+        // OpenAI / ElevenLabs / Gemini: set skill config directly (no TTSInstance)
         await api.updateAgentSkill(agentId, 'audio_tts', {
           is_enabled: true,
           config: {
@@ -392,6 +393,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
             kokoroRunning={kokoroRunning}
             hasOpenAIKey={hasOpenAIKey}
             hasElevenLabsKey={hasElevenLabsKey}
+            hasGeminiKey={hasGeminiKey}
           />
         </div>
       </Modal>
@@ -405,6 +407,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
       || state.provider === 'kokoro'
       || (state.provider === 'openai' && hasOpenAIKey)
       || (state.provider === 'elevenlabs' && hasElevenLabsKey)
+      || (state.provider === 'gemini' && hasGeminiKey)
 
     const footer = (
       <div className="flex items-center justify-between w-full">
@@ -444,6 +447,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
             kokoroRunning={kokoroRunning}
             hasOpenAIKey={hasOpenAIKey}
             hasElevenLabsKey={hasElevenLabsKey}
+            hasGeminiKey={hasGeminiKey}
           />
         </div>
       </Modal>

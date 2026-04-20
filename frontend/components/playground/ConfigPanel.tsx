@@ -42,8 +42,11 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'claude-3-5-sonnet-20241022': { prompt: 3.0, completion: 15.0 },
   'claude-3-opus-20240229': { prompt: 15.0, completion: 75.0 },
   // Google Gemini
+  'gemini-3-flash-preview': { prompt: 0.30, completion: 2.50 },
+  'gemini-3.1-flash-lite-preview': { prompt: 0.10, completion: 0.40 },
   'gemini-2.5-pro': { prompt: 1.25, completion: 5.0 },
   'gemini-2.5-flash': { prompt: 0.075, completion: 0.3 },
+  'gemini-2.5-flash-lite': { prompt: 0.10, completion: 0.40 },
   'gemini-2.0-flash': { prompt: 0.10, completion: 0.40 },
   'gemini-1.5-pro': { prompt: 1.25, completion: 5.0 },
   'gemini-1.5-flash': { prompt: 0.075, completion: 0.3 },
@@ -102,6 +105,8 @@ const formatCost = (cost: number): string => {
 // Common models by provider
 const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
   gemini: [
+    { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)' },
+    { value: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite (Preview)' },
     { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
     { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
@@ -387,13 +392,25 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                       {/* Provider models with pricing — sourced from configured instances */}
                       {(() => {
                         const isOllama = agent.model_provider?.toLowerCase() === 'ollama'
-                        // Build model list from configured instances; fall back to static MODEL_OPTIONS if none
-                        const instanceModels = [...new Set(providerInstances.flatMap(i => i.available_models))]
+                        // TTS-only models must not appear in the chat-model picker — they
+                        // emit audio only and would fail at call time on a text agent.
+                        const TTS_ONLY_SUFFIXES = ['-tts-preview', '-tts']
+                        const isTTSOnlyModel = (m: string) =>
+                          TTS_ONLY_SUFFIXES.some(s => m.endsWith(s))
+                        // Build model list from configured instances; fall back to static MODEL_OPTIONS if none.
+                        // Enrich raw model IDs with friendly labels from MODEL_OPTIONS when available.
+                        const vendorKey = agent.model_provider?.toLowerCase()
+                        const staticOptions = MODEL_OPTIONS[vendorKey] || []
+                        const labelFor = (m: string) =>
+                          staticOptions.find(o => o.value === m)?.label || m
+                        const instanceModels = [
+                          ...new Set(providerInstances.flatMap(i => i.available_models))
+                        ].filter(m => !isTTSOnlyModel(m))
                         const dynamicModels: { value: string; label: string }[] = isOllama
                           ? ollamaModels
                           : instanceModels.length > 0
-                            ? instanceModels.map(m => ({ value: m, label: m }))
-                            : (MODEL_OPTIONS[agent.model_provider?.toLowerCase()] || [])
+                            ? instanceModels.map(m => ({ value: m, label: labelFor(m) }))
+                            : staticOptions.filter(o => !isTTSOnlyModel(o.value))
                         return dynamicModels
                       })().map(model => {
                         const costInfo = getModelCostInfo(model.value, agent.model_provider)

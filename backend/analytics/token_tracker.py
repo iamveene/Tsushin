@@ -112,6 +112,13 @@ MODEL_PRICING = {
     "claude-3-sonnet-20240229": {"prompt": 3.0, "completion": 15.0},
     "claude-3-haiku-20240307": {"prompt": 0.25, "completion": 1.25},
 
+    # Google Gemini 3.x preview series (2026-04-20, folded into v0.6.0 addendum)
+    # NOTE: Google has not yet published official pricing for the 3.x preview line;
+    # placeholders approximate the 2.5 Flash / 2.5 Flash-Lite tiers respectively.
+    "gemini-3-flash-preview": {"prompt": 0.30, "completion": 2.50},  # TODO confirm when Google publishes
+    "gemini-3.1-flash-lite-preview": {"prompt": 0.10, "completion": 0.40},  # TODO confirm
+    "gemini-3.1-flash-tts-preview": {"prompt": 0.0, "completion": 0.0},  # TODO confirm — TTS preview, pricing TBD
+
     # Google Gemini 2.5 series (UPDATED prices)
     "gemini-2.5-pro": {"prompt": 1.25, "completion": 10.0},  # Updated: output was 5.0
     "gemini-2.5-pro-preview-05-06": {"prompt": 1.25, "completion": 10.0},
@@ -127,6 +134,7 @@ MODEL_PRICING = {
     # Google Gemini Image Generation (Nano Banana)
     # Pricing: ~$0.02-0.04 per image (represented as per-operation cost)
     "gemini-2.5-flash-image": {"prompt": 20.0, "completion": 0.0},  # Nano Banana - $0.02/image
+    "gemini-3.1-flash-image-preview": {"prompt": 20.0, "completion": 0.0},  # TODO confirm — assume parity with 2.5 flash-image for now
     "gemini-3-pro-image-preview": {"prompt": 40.0, "completion": 0.0},  # Nano Banana Pro - $0.04/image
 
     # Google Gemini 1.5 series (legacy)
@@ -157,6 +165,8 @@ MODEL_PRICING = {
     # ============================================================
 
     # OpenRouter - Google Gemini
+    "google/gemini-3-flash-preview": {"prompt": 0.30, "completion": 2.50},  # TODO confirm
+    "google/gemini-3.1-flash-lite-preview": {"prompt": 0.10, "completion": 0.40},  # TODO confirm
     "google/gemini-2.5-flash": {"prompt": 0.30, "completion": 2.50},
     "google/gemini-2.5-flash-preview-05-20": {"prompt": 0.30, "completion": 2.50},
     "google/gemini-2.5-pro": {"prompt": 1.25, "completion": 10.0},

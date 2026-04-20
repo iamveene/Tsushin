@@ -290,6 +290,23 @@ class TTSProviderRegistry:
         except ImportError as e:
             logger.debug(f"ElevenLabs provider not available: {e}")
 
+        # Register Google Gemini TTS provider (preview — gemini-3.1-flash-tts-preview).
+        # Reuses the tenant Gemini API key; no per-tenant container needed.
+        try:
+            from .gemini_tts_provider import GeminiTTSProvider
+            cls.register_provider(
+                "gemini",
+                GeminiTTSProvider,
+                {
+                    "requires_api_key": True,
+                    "is_free": False,
+                    "status": "preview",
+                    "description": "Google Gemini TTS (preview) — 30 prebuilt voices, WAV output"
+                }
+            )
+        except ImportError as e:
+            logger.debug(f"Gemini TTS provider not available: {e}")
+
         cls._initialized = True
         logger.info(f"Initialized {len(cls._providers)} TTS provider(s)")
 

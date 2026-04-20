@@ -514,10 +514,18 @@ class AIClient:
             self.logger.warning(f"User message too large ({len(user_message)} chars), truncating to {MAX_CHARS}")
             user_message = user_message[:MAX_CHARS] + "\n\n[... context truncated due to size limits ...]"
 
+        # Gemini 3.x Flash previews support up to 65,536 output tokens (vs 8,192 on 2.x Flash).
+        # Lift the default cap when caller didn't override and the model is 3.x.
+        effective_max_tokens = self.max_tokens
+        model_name_lc = (self.model_name or "").lower()
+        if (model_name_lc.startswith("gemini-3-") or model_name_lc.startswith("gemini-3.1-")) \
+                and effective_max_tokens < 65536:
+            effective_max_tokens = 65536
+
         # Configure generation with temperature and max_tokens
         generation_config = genai.GenerationConfig(
             temperature=self.temperature,
-            max_output_tokens=self.max_tokens
+            max_output_tokens=effective_max_tokens
         )
 
         # BUG-133 fix: Use system_instruction for proper role separation

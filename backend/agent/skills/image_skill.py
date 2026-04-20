@@ -56,7 +56,8 @@ class ImageSkill(BaseSkill):
 
     SUPPORTED_MODELS = {
         "gemini-2.5-flash-image": "Nano Banana (Fast)",
-        "gemini-3-pro-image-preview": "Nano Banana Pro (Quality)"
+        "gemini-3.1-flash-image-preview": "Gemini 3.1 Flash Image (Preview)",
+        "gemini-3-pro-image-preview": "Nano Banana Pro (Quality)",
     }
 
     def __init__(self, token_tracker: Optional["TokenTracker"] = None):

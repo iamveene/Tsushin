@@ -372,11 +372,12 @@ export default function OnboardingWizard() {
       // Step 12 — v0.7.0: Voice Capabilities (optional)
       title: 'Voice Capabilities (optional)',
       targetSelector: null,
-      content: 'Want your agents to reply with audio or transcribe incoming voice messages? Launch the Audio Agents wizard — it walks you through picking a TTS provider (Kokoro free/local, OpenAI, or ElevenLabs), configuring a voice, and either scaffolding a brand-new Voice Assistant agent or attaching audio capabilities to an existing one. This step is entirely optional; skip if you do not need audio.',
+      content: 'Want your agents to reply with audio or transcribe incoming voice messages? Launch the Audio Agents wizard — it walks you through picking a TTS provider (Kokoro free/local, OpenAI, ElevenLabs, or Google Gemini), configuring a voice, and either scaffolding a brand-new Voice Assistant agent or attaching audio capabilities to an existing one. This step is entirely optional; skip if you do not need audio.',
       highlightFeatures: [
         'Kokoro TTS — free, open-source, runs in a local Docker container (~30–90s auto-provision)',
         'OpenAI TTS — high-quality cloud voices, uses your existing OpenAI API key',
         'ElevenLabs — premium voice cloning, requires an ElevenLabs API key',
+        'Google Gemini TTS (preview) — 30 prebuilt voices, reuses your Gemini API key, WAV output',
         'Create a new Voice Assistant OR attach audio_tts/audio_transcript to an existing agent',
         'Pick "Hybrid" to both transcribe incoming voice AND reply with synthesized audio',
       ],

@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Gemini 3.x preview models + Gemini TTS provider (2026-04-20, v0.6.0 addendum)
+
+Adds first-class support for Google's Gemini 3.x preview line across every wizard,
+picker, pricing table, and skill config surface. Folded into v0.6.0 since the
+release has not been publicly announced yet.
+
+**New LLMs** (already listed in `PREDEFINED_MODELS`, now wired into pricing + UI):
+
+- `gemini-3-flash-preview` — flagship Flash for agents; first Flash-tier with
+  native `computer_use` tool support. 1M input / 65K output context.
+- `gemini-3.1-flash-lite-preview` — cheapest 3.x multimodal tier. Same 1M/65K
+  context; drops Live API, adds Maps grounding.
+
+**New TTS provider** — `gemini-3.1-flash-tts-preview` as the 4th TTS backend
+alongside OpenAI, Kokoro, and ElevenLabs:
+
+- Registered as `"gemini"` in `TTSProviderRegistry` with status `preview`.
+- Uses standard `generateContent` with `response_modalities=["AUDIO"]` + a
+  `SpeechConfig` block. 30 prebuilt voices (Zephyr, Puck, Charon, Kore, …).
+- Reuses the tenant's existing Gemini API key (no new credential flow).
+- Wraps Google's raw 24 kHz / 16-bit / mono PCM response in a WAV container
+  using stdlib `wave` before persisting — the skill layer always gets a
+  playable `.wav` file path.
+- Implements the documented retry for the preview-quirk where the model
+  occasionally returns text tokens instead of audio (up to 2 retries).
+- No per-tenant container needed — pure API call.
+
+**Image skill** — adds `gemini-3.1-flash-image-preview` as a new option on
+`ImageSkill.SUPPORTED_MODELS` (alongside the existing `gemini-2.5-flash-image`
+and `gemini-3-pro-image-preview`). Pricing seeded in `MODEL_PRICING`.
+
+**Wizards updated** (per directive — "all affected wizards must be updated"):
+
+- **Setup Wizard** (`frontend/app/setup/page.tsx`) — 3.x previews prepended to
+  Gemini fallback model list.
+- **Playground ConfigPanel** (`frontend/components/playground/ConfigPanel.tsx`) —
+  new 3.x entries in `MODEL_OPTIONS` + pricing table.
+- **Audio Agents Wizard** (`frontend/components/audio-wizard/`) — Gemini provider
+  card with "Preview" badge; new `GEMINI_VOICES` dropdown (30 voices); speed
+  slider hidden for Gemini; format locked to WAV.
+- **Agent Wizard → Step Audio** (`frontend/components/agent-wizard/steps/StepAudio.tsx`) —
+  Gemini wired through the shared `AudioProviderPicker` + `AudioVoiceFields`.
+
+**Backend**:
+
+- `backend/analytics/token_tracker.py` — pricing rows for
+  `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`,
+  `gemini-3.1-flash-tts-preview`, `gemini-3.1-flash-image-preview` + matching
+  OpenRouter aliases. All marked with `TODO confirm` pending Google's pricing
+  announcement.
+- `backend/agent/ai_client.py` (`_call_gemini`) — default
+  `generation_config.max_output_tokens` now lifts to **65,536** when the model
+  name starts with `gemini-3-` or `gemini-3.1-` (vs. 8,192 on 2.x), matching
+  the 3.x Flash context window.
+- `backend/hub/providers/gemini_tts_provider.py` — new provider class.
+- `backend/hub/providers/tts_registry.py` — registers the new provider.
+- `backend/agent/skills/image_skill.py` — `SUPPORTED_MODELS` extended.
+
+**Playground ConfigPanel polish** (post-QA, 2026-04-20):
+
+- Chat-model dropdown now filters out TTS-only models (anything ending in
+  `-tts-preview` or `-tts`), so `gemini-3.1-flash-tts-preview` no longer
+  appears as a selectable chat model — it would fail at call time since the
+  model only emits audio.
+- Instance-sourced model IDs are now enriched with friendly labels from
+  `MODEL_OPTIONS` when a match exists (e.g. `gemini-3-flash-preview` renders
+  as "Gemini 3 Flash (Preview)" instead of the raw ID). Unknown model IDs
+  still fall back to the raw ID so new models surface without code changes.
+
+**Regression evidence** (2026-04-20):
+
+- `gemini-3-flash-preview` text chat via `/api/v1/agents/{id}/chat` → 200,
+  response `"PONG-3-FLASH"`, 6.9s.
+- `gemini-3.1-flash-lite-preview` text chat → 200, response `"PONG-31-LITE"`,
+  2.1s.
+- Direct Gemini TTS synthesize with `voice=Zephyr` → success, 213 KB output,
+  valid RIFF/WAVE header (`b'RIFF\\xa4@\\x03\\x00WAVE'`).
+- `ImageSkill.SUPPORTED_MODELS` introspection confirms all three image
+  models (including the new `gemini-3.1-flash-image-preview`) appear in both
+  the MCP tool definition enum and the skill config schema.
+- Browser QA (Playwright): Audio Agents Wizard Step 2 renders all four
+  provider cards; Step 3 for Gemini renders 30 voices, speed slider hidden
+  with explanatory note, format locked to WAV.
+
 ### Tavily search provider (2026-04-20)
 
 - New `TavilySearchProvider` wrapping `https://api.tavily.com/search`.

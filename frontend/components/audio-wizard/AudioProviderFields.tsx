@@ -14,6 +14,7 @@ import type { TTSInstance } from '@/lib/client'
 import {
   KOKORO_VOICES,
   OPENAI_VOICES,
+  GEMINI_VOICES,
   LANGUAGES,
   MEM_LIMITS,
   type AudioProvider,
@@ -26,9 +27,11 @@ function providerStatus(
   kokoroRunning: TTSInstance | undefined,
   hasOpenAIKey: boolean,
   hasElevenLabsKey: boolean,
+  hasGeminiKey: boolean,
 ): ProviderStatus {
   if (p === 'kokoro') return kokoroRunning ? 'configured' : 'available'
   if (p === 'openai') return hasOpenAIKey ? 'configured' : 'missing'
+  if (p === 'gemini') return hasGeminiKey ? 'configured' : 'missing'
   return hasElevenLabsKey ? 'configured' : 'missing'
 }
 
@@ -39,6 +42,7 @@ export interface AudioProviderPickerProps {
   kokoroRunning: TTSInstance | undefined
   hasOpenAIKey: boolean
   hasElevenLabsKey: boolean
+  hasGeminiKey?: boolean
 }
 
 export function AudioProviderPicker({
@@ -48,22 +52,31 @@ export function AudioProviderPicker({
   kokoroRunning,
   hasOpenAIKey,
   hasElevenLabsKey,
+  hasGeminiKey = false,
 }: AudioProviderPickerProps) {
   const opts: { id: AudioProvider; title: string; desc: string; cost: string }[] = [
     { id: 'kokoro', title: 'Kokoro TTS', desc: 'Free, open-source, runs locally in a Docker container. Portuguese + English voices.', cost: 'Free' },
     { id: 'openai', title: 'OpenAI TTS', desc: 'High-quality cloud TTS. Requires an OpenAI API key (configured in Hub → AI Providers).', cost: 'Paid' },
     { id: 'elevenlabs', title: 'ElevenLabs', desc: 'Premium voice cloning and expressive TTS. Requires an ElevenLabs API key.', cost: 'Paid' },
+    { id: 'gemini', title: 'Google Gemini TTS (Preview)', desc: '30 prebuilt voices from gemini-3.1-flash-tts-preview. WAV output, no speed control. Reuses your Gemini API key.', cost: 'Preview' },
   ]
+
+  const defaultVoiceFor = (id: AudioProvider): string => {
+    if (id === 'kokoro') return 'pf_dora'
+    if (id === 'openai') return 'nova'
+    if (id === 'gemini') return 'Zephyr'
+    return 'nova'
+  }
 
   return (
     <div className="space-y-2">
       {opts.map(opt => {
-        const status = providerStatus(opt.id, kokoroRunning, hasOpenAIKey, hasElevenLabsKey)
+        const status = providerStatus(opt.id, kokoroRunning, hasOpenAIKey, hasElevenLabsKey, hasGeminiKey)
         return (
           <button
             key={opt.id}
             type="button"
-            onClick={() => onChange(opt.id, opt.id === 'kokoro' ? 'pf_dora' : 'nova')}
+            onClick={() => onChange(opt.id, defaultVoiceFor(opt.id))}
             disabled={!allowChoice}
             className={`w-full text-left p-4 rounded-xl border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               provider === opt.id
@@ -108,6 +121,7 @@ export interface AudioVoiceFieldsProps {
   kokoroRunning: TTSInstance | undefined
   hasOpenAIKey: boolean
   hasElevenLabsKey: boolean
+  hasGeminiKey?: boolean
   /** Hide the "set as default TTS" checkbox when embedded in agent wizard (single-agent flow). */
   hideDefaultTTSOption?: boolean
 }
@@ -119,10 +133,12 @@ export function AudioVoiceFields({
   kokoroRunning,
   hasOpenAIKey,
   hasElevenLabsKey,
+  hasGeminiKey = false,
   hideDefaultTTSOption,
 }: AudioVoiceFieldsProps) {
   const availableVoices = useMemo(() => {
     if (value.provider === 'kokoro') return KOKORO_VOICES.filter(v => v.lang === value.language)
+    if (value.provider === 'gemini') return GEMINI_VOICES.map(v => ({ id: v.id, label: v.label, lang: value.language }))
     return OPENAI_VOICES.map(v => ({ id: v.id, label: v.label, lang: value.language }))
   }, [value.provider, value.language])
 
@@ -153,29 +169,35 @@ export function AudioVoiceFields({
             </select>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Speed</label>
-              <input
-                type="number" min={0.5} max={2.0} step={0.1}
-                value={value.speed}
-                onChange={(e) => onChange({ speed: parseFloat(e.target.value) || 1.0 })}
-                className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
-              />
+          {value.provider === 'gemini' ? (
+            <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-xs text-gray-400">
+              Gemini TTS preview outputs WAV at 24 kHz / 16-bit / mono. Speed control is not supported by this model.
             </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Format</label>
-              <select
-                value={value.format}
-                onChange={(e) => onChange({ format: e.target.value })}
-                className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
-              >
-                <option value="opus">Opus (recommended)</option>
-                <option value="mp3">MP3</option>
-                <option value="wav">WAV</option>
-              </select>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Speed</label>
+                <input
+                  type="number" min={0.5} max={2.0} step={0.1}
+                  value={value.speed}
+                  onChange={(e) => onChange({ speed: parseFloat(e.target.value) || 1.0 })}
+                  className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Format</label>
+                <select
+                  value={value.format}
+                  onChange={(e) => onChange({ format: e.target.value })}
+                  className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+                >
+                  <option value="opus">Opus (recommended)</option>
+                  <option value="mp3">MP3</option>
+                  <option value="wav">WAV</option>
+                </select>
+              </div>
             </div>
-          </div>
+          )}
 
           {value.provider === 'kokoro' && !kokoroRunning && (
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 space-y-3">
@@ -219,6 +241,12 @@ export function AudioVoiceFields({
           {value.provider === 'elevenlabs' && !hasElevenLabsKey && (
             <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
               No ElevenLabs API key detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
+            </div>
+          )}
+
+          {value.provider === 'gemini' && !hasGeminiKey && (
+            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
+              No Gemini API key detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
             </div>
           )}
         </>

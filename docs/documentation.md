@@ -2273,6 +2273,24 @@ Anthropic supports up to four `cache_control` breakpoints per request. Tsushin u
 - Cache TTL is Anthropic-managed (5 minutes idle, or evicted under load). Tsushin does not persist anything client-side.
 - No configuration is required — it's always on for Anthropic requests. To disable for a specific agent (rare — e.g., if you want to rehearse a cold token count), set `provider_config.cache_enabled = false` in the agent config JSON.
 
+### 19.7 Gemini 3.x preview models — v0.6.0 (added 2026-04-20)
+
+Google's Gemini 3.x preview line is first-class across every picker and pricing surface. Added late into v0.6.0 before the public announcement.
+
+| Model ID | Tier | Input / Output context | Notable capabilities |
+|---|---|---|---|
+| `gemini-3-flash-preview` | Flash (flagship agentic) | 1,048,576 / 65,536 | **First Flash-tier with native `computer_use` tool support.** Thinking/reasoning, code execution, Search + Maps grounding. No Live API. |
+| `gemini-3.1-flash-lite-preview` | Flash-Lite (cheapest 3.x) | 1,048,576 / 65,536 | Thinking/reasoning, Search + Maps grounding. No `computer_use`, no Live API. |
+| `gemini-3.1-flash-tts-preview` | TTS (preview) | 8,192 / 16,384 | Text-to-speech — see §20.6. |
+| `gemini-3.1-flash-image-preview` | Image generation | — | Available in `ImageSkill.SUPPORTED_MODELS` (`backend/agent/skills/image_skill.py`). |
+| `gemini-3-pro-image-preview` | Image generation (premium) | — | Nano Banana Pro. Already wired in pre-addendum. |
+
+**Backend auto-lift of output tokens.** `backend/agent/ai_client.py` `_call_gemini` raises the default `generation_config.max_output_tokens` to **65,536** when the model name starts with `gemini-3-` or `gemini-3.1-` (the 2.x default of 8,192 truncates long 3.x outputs). The lift applies only when the caller hasn't explicitly set a lower value.
+
+**Pricing placeholders.** Google has not yet published official pricing for the 3.x preview line. `backend/analytics/token_tracker.py` seeds rows based on the 2.5 Flash / 2.5 Flash-Lite analogues (`0.30/2.50` and `0.10/0.40` per 1M tokens respectively) and marks each with a `TODO confirm` comment. TTS pricing is stubbed `$0.00` until Google publishes.
+
+**Wizards covered.** Setup Wizard, Playground ConfigPanel, Agent Wizard → Step Audio, and Audio Agents Wizard all include the 3.x models. The Agent Wizard → Step Basics picker is API-fed from `ProviderInstance.available_models`, so 3.x preview models appear there automatically once model discovery hits Google's `/models` endpoint.
+
 ---
 
 ## 20. Hub Integrations
@@ -2350,13 +2368,26 @@ Two provider types (`browser_automation_provider.py:196-252`):
 
 The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate_cdp_url` before connecting (`cdp_provider.py:66-72`) and persists browser state (cookies, localStorage, active logins) via the live CDP connection.
 
-### 20.6 TTS (Kokoro, OpenAI, ElevenLabs)
+### 20.6 TTS (Kokoro, OpenAI, ElevenLabs, Gemini)
 
-**Sources:** `backend/hub/providers/tts_provider.py` (abstract + `TTSRequest`/`TTSResponse`/`VoiceInfo`), `backend/hub/providers/kokoro_tts_provider.py`, `backend/hub/providers/openai_tts_provider.py`, `backend/hub/providers/elevenlabs_tts_provider.py`, `backend/hub/providers/tts_registry.py`, `backend/api/routes_tts_providers.py`
+**Sources:** `backend/hub/providers/tts_provider.py` (abstract + `TTSRequest`/`TTSResponse`/`VoiceInfo`), `backend/hub/providers/kokoro_tts_provider.py`, `backend/hub/providers/openai_tts_provider.py`, `backend/hub/providers/elevenlabs_tts_provider.py`, `backend/hub/providers/gemini_tts_provider.py`, `backend/hub/providers/tts_registry.py`, `backend/api/routes_tts_providers.py`
 
 - Providers expose `get_available_voices()` → `List[VoiceInfo]` and a default voice.
 - OpenAI TTS default voice: `"nova"` (`tts_provider.py:43`).
 - Kokoro is a local/self-hosted TTS option. **v0.7.0 removed the stack-level `kokoro-tts` compose service and the `KOKORO_SERVICE_URL` env fallback** — Kokoro now runs as per-tenant auto-provisioned containers managed by `KokoroContainerManager` and addressed via `TTSInstance.base_url`. The provider's `synthesize()` raises `RuntimeError` if called without a `base_url`; `AudioTTSSkill` resolves one from `AgentSkill.config.tts_instance_id` → `Config.default_tts_instance_id`, and surfaces a clear skill-result error if neither is set.
+
+#### 20.6.0 Gemini TTS (v0.6.0 addendum, preview)
+
+**Source:** `backend/hub/providers/gemini_tts_provider.py`. Registered in `TTSProviderRegistry` as `"gemini"` with `requires_api_key=True`, `status="preview"`.
+
+- **Model:** `gemini-3.1-flash-tts-preview` on the standard `generateContent` endpoint with `response_modalities=["AUDIO"]` and a `SpeechConfig(voice_config=VoiceConfig(prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=…)))` block.
+- **30 prebuilt voices:** Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus, Umbriel, Algieba, Despina, Erinome, Algenib, Rasalgethi, Laomedeia, Achernar, Alnilam, Schedar, Gacrux, Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia, Sadaltager, Sulafat. Case-sensitive proper nouns.
+- **Output:** Google returns raw 24 kHz / 16-bit / mono PCM. The provider wraps it in a WAV container using stdlib `wave` before persisting — the skill layer always receives a playable `.wav` file path under `<tempdir>/tsushin_audio/gemini_<message_id>.wav`.
+- **Input quirks:** plain text + inline audio tags (`[whispers]`, `[laughs]`, `[excited]`). No SSML. No speed control. Default voice: **Zephyr**.
+- **Preview retry:** Google documents that the model occasionally returns text tokens instead of audio. The provider retries up to **2 times** before surfacing a failure.
+- **API key:** reuses the existing tenant Gemini key (`ApiKey.service="gemini"`). No new credential flow.
+- **No per-tenant container** — Gemini TTS is a pure API call, unlike Kokoro.
+- Surfaced in all TTS-facing wizards: `AudioAgentsWizard`, `AgentWizard → StepAudio`, and the shared `AudioProviderPicker` / `AudioProviderFields` components (`frontend/components/audio-wizard/`).
 
 #### 20.6.1 Kokoro TTS Setup Wizard
 
@@ -2387,8 +2418,8 @@ This wizard replaced the built-in Kokoro / Kira / Transcript seed agents (remove
 Five configuration steps + one progress step:
 
 1. **Intent** — three cards: *Voice responses (TTS)*, *Audio transcription only*, *Hybrid — both*. Transcription-only skips provider choice (Whisper via OpenAI is the only option).
-2. **Provider** — three cards: Kokoro (free/local), OpenAI TTS (paid), ElevenLabs (premium). Each card shows a **Detected** badge when the tenant already has that provider configured (`api.getTTSInstances()` for Kokoro, `api.getProviderInstances()` for OpenAI/ElevenLabs keys), or a **Needs API key** badge linking back to Hub → AI Providers otherwise.
-3. **Voice & credentials** — language first (filters Kokoro voices by language), then voice, speed, format. Kokoro adds a memory-limit dropdown and a "Set as tenant-default TTS" checkbox.
+2. **Provider** — four cards: Kokoro (free/local), OpenAI TTS (paid), ElevenLabs (premium), Google Gemini TTS (preview, reuses tenant Gemini key). Each card shows a **Detected** badge when the tenant already has that provider configured (`api.getTTSInstances()` for Kokoro, `api.getProviderInstances()` for OpenAI / ElevenLabs / Gemini keys), or a **Needs API key** badge linking back to Hub → AI Providers otherwise.
+3. **Voice & credentials** — language first (filters Kokoro voices by language), then voice, speed, format. Kokoro adds a memory-limit dropdown and a "Set as tenant-default TTS" checkbox. Gemini hides the speed slider and locks format to WAV (model constraints).
 4. **Agent target** — radio: *Create a new Voice Assistant* (system prompt defaults mirror the old Kira/Kokoro prompts, preserved as client-side templates in `defaults.ts`) or *Attach audio to an existing agent* (preserves other skills on the target). Existing-agent radio is disabled if the tenant has no agents yet.
 5. **Review & Create** — summary cards + skill diff (`audio_tts`, `audio_transcript`, or both) + "Create & Provision" CTA.
 
