@@ -12,11 +12,17 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { useAuth } from '@/contexts/AuthContext'
 import { authenticatedFetch } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
 import Link from 'next/link'
+
+const SandboxedToolsSetupWizard = dynamic(
+  () => import('@/components/tools/SandboxedToolsSetupWizard'),
+  { ssr: false },
+)
 import {
   StopIcon,
   RefreshIcon,
@@ -135,6 +141,7 @@ export default function CustomToolsPage() {
 
   // UI state
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showWizard, setShowWizard] = useState(false)
   const [showInstallModal, setShowInstallModal] = useState(false)
   const [editingTool, setEditingTool] = useState<CustomTool | null>(null)
   const [saving, setSaving] = useState(false)
@@ -794,12 +801,20 @@ export default function CustomToolsPage() {
                     <h3 className="text-lg font-semibold text-white">Sandboxed Tools</h3>
                     <p className="text-sm text-tsushin-slate">Tools agents can use for command execution</p>
                   </div>
-                  <button
-                    onClick={() => setShowCreateModal(true)}
-                    className="btn-primary"
-                  >
-                    + Create Tool
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowWizard(true)}
+                      className="btn-primary"
+                    >
+                      🪄 Guided Setup
+                    </button>
+                    <button
+                      onClick={() => setShowCreateModal(true)}
+                      className="px-3 py-2 bg-white/5 hover:bg-white/10 text-gray-200 rounded-lg text-sm"
+                    >
+                      + Create Tool
+                    </button>
+                  </div>
                 </div>
 
                 {toolsLoading ? (
@@ -1370,6 +1385,14 @@ export default function CustomToolsPage() {
           </div>
         )}
       </Modal>
+
+      <SandboxedToolsSetupWizard
+        isOpen={showWizard}
+        onClose={() => setShowWizard(false)}
+        onComplete={() => {
+          loadTools()
+        }}
+      />
     </div>
   )
 }

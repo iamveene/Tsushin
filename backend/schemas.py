@@ -162,6 +162,11 @@ class StepType(str, Enum):
     SLASH_COMMAND = "slash_command"  # Phase 8: Slash command execution
     SUMMARIZATION = "summarization"  # Phase 17: AI-powered summarization
     GATE = "gate"  # Conditional gate node (programmatic or agentic)
+    # BUG-629: enum must match runtime handler registry (flow_engine.py:2590-2613)
+    # FlowNode.type is stored as a string, so adding new values is additive and
+    # safe — no DB migration required.
+    CUSTOM_SKILL = "custom_skill"  # Phase 22: Custom skill (alias for skill)
+    BROWSER_AUTOMATION = "browser_automation"  # Phase 14.5: Browser automation
 
 
 class FlowStatus(str, Enum):
@@ -448,6 +453,20 @@ class FlowResponse(BaseModel):
 
     # Computed
     step_count: int = 0
+    # BUG-630: legacy alias — `FlowDefinitionResponse` historically exposed
+    # `node_count`. v2 callers should read `step_count` but the alias stays
+    # populated so clients migrating from legacy don't break.
+    node_count: int = 0
+
+    @model_validator(mode="after")
+    def _mirror_step_node_count(self):
+        # Keep step_count and node_count in sync regardless of which one
+        # was supplied by the caller/constructor.
+        if self.step_count and not self.node_count:
+            self.node_count = self.step_count
+        elif self.node_count and not self.step_count:
+            self.step_count = self.node_count
+        return self
 
     class Config:
         from_attributes = True

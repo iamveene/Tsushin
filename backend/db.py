@@ -4,6 +4,7 @@ from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 import os
 import json
+import settings
 from models import Base, Config, SlashCommand, ProjectCommandPattern
 # Phase 7.6.3: Import RBAC models to register with Base.metadata
 import models_rbac  # noqa: F401
@@ -23,6 +24,15 @@ def get_engine(database_url: str):
     is_postgres = database_url.startswith("postgresql")
 
     if is_postgres:
+        connect_args = {}
+        idle_tx_timeout_ms = max(settings.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS, 0)
+        if idle_tx_timeout_ms > 0:
+            # Defensive guardrail: leaked read transactions from stale tabs or
+            # long-lived request paths self-expire before they can saturate the pool.
+            connect_args["options"] = (
+                f"-c idle_in_transaction_session_timeout={idle_tx_timeout_ms}"
+            )
+
         engine = create_engine(
             database_url,
             poolclass=QueuePool,
@@ -30,6 +40,7 @@ def get_engine(database_url: str):
             max_overflow=30,
             pool_pre_ping=True,
             pool_recycle=1800,
+            connect_args=connect_args,
         )
     else:
         # SQLite fallback (local dev / legacy)
@@ -1652,12 +1663,14 @@ def get_session(engine):
 
 # Global engine for FastAPI dependency injection
 _global_engine = None
+_global_session_factory: "sessionmaker | None" = None
 
 
 def set_global_engine(engine):
     """Set the global engine for FastAPI dependencies"""
-    global _global_engine
+    global _global_engine, _global_session_factory
     _global_engine = engine
+    _global_session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
 def get_global_engine():
@@ -1665,21 +1678,50 @@ def get_global_engine():
     return _global_engine
 
 
-def get_db():
-    """
-    FastAPI dependency for database sessions
+def get_session_factory():
+    """Return the module-level sessionmaker (raises if engine not initialised)."""
+    if _global_session_factory is None:
+        raise RuntimeError("Database engine not initialized. Call set_global_engine first.")
+    return _global_session_factory
 
-    Usage:
-        @app.get("/api/endpoint")
-        def endpoint(db: Session = Depends(get_db)):
-            # Use db here
+
+def get_db():
+    """FastAPI dependency for database sessions.
+
+    Always rolls back on exit to guarantee the underlying connection returns to
+    the pool in a clean state (prevents 'idle in transaction' leaks when a
+    request hits the implicit autobegin path but never commits/rollbacks).
     """
-    if _global_engine is None:
+    if _global_session_factory is None:
         raise RuntimeError("Database engine not initialized. Call set_global_engine first.")
 
-    SessionLocal = sessionmaker(bind=_global_engine)
-    db = SessionLocal()
+    db = _global_session_factory()
     try:
         yield db
+    finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        db.close()
+
+
+@contextmanager
+def session_scope():
+    """Context manager for background tasks / non-request code paths.
+
+    Commits on clean exit, rolls back on exception, and always closes.
+    Uses the module-level sessionmaker (no per-call sessionmaker creation —
+    fixes the BUG-355-class pool-exhaustion pattern for any future call site).
+    """
+    if _global_session_factory is None:
+        raise RuntimeError("Database engine not initialized. Call set_global_engine first.")
+    db = _global_session_factory()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

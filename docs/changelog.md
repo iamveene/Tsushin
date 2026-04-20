@@ -7,6 +7,938 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.0-patch.5 (2026-04-20)
+
+Multi-day stabilization release rolling up the v0.7.0-preview guided-wizard work, a massive bug-remediation campaign, independent-review follow-ups, and a VM fresh-install regression fix. Scope is stabilization + feature-completion on the v0.6.0 line, not a new minor release — headline features (agents, memory, flows, Sentinel) are unchanged; this patch ships the full setup-wizard track, a 51-bug remediation sweep, and six follow-up regression fixes caught by independent reviewers.
+
+**Highlights**
+- Full guided-wizard suite across Gmail, Google Calendar, Shell Beacon, Sandboxed Tools, Search (Brave/Tavily/SerpAPI), and Audio Agents (Kokoro TTS + Whisper transcript). Reusable primitives (`CopyableBlock`, `GoogleAppCredentialsStep`, `BeaconInstallInstructions`) extracted for future wizards.
+- Tenant-isolation hardening of `/api/skill-integrations` and `/api/skill-providers/{skill_type}` (BUG-608/609).
+- 51 bugs closed in a single parallel-group campaign (Groups F test-infra, A Sentinel, B Flows, C Playground, D Install/Infra, E Security/RBAC/SSO/UX).
+- 6 concrete follow-up regressions caught and closed by post-sprint independent review (gate-binding spread overwrite, SSO login 400, WS default-tenant bypass, beacon auth exception swallow, stale ORM ref, localStorage cross-tenant leak).
+- VM fresh-install fix (BUG-653b) — IP-only HTTPS now works via port-only `:443` site matcher so curl and mainstream browsers (which don't send SNI for IP-literal hosts per RFC 3546) complete the handshake.
+
+**Regression** — 319+ assertions, 13/13 phases green, 0 ship-blockers. See the detailed per-group entries below.
+
+### BUG-653b — IP-only HTTPS handshake fix (2026-04-20)
+
+After the 2026-04-19 VM regression pass, curl / browser HTTPS against IP-only self-signed installs still failed with `TLSv1 alert internal error` even though `openssl s_client -servername <IP>` correctly served the Caddy-internal cert with an IP SAN. Root cause: curl (and mainstream browsers) do NOT send SNI for IP-literal hosts per RFC 3546 §3.1, so with a domain-matching site block `{IP} { tls internal ... }` Caddy had no way to pick a site on SNI-less connections and aborted the handshake.
+
+`install.py` now emits a port-only `:443 { tls internal ... }` site block for IP-literal bindings. Port-only matching serves the internal cert on any TLS connection regardless of SNI, and Caddy's internal CA automatically issues the cert with an IP SAN for the bound IP. Hostname installs are unchanged — they keep the existing `default_sni {domain}` + domain-matching block. `caddy/Caddyfile.template` docstring updated with both patterns side-by-side.
+
+### Bug-remediation follow-up regression patch (2026-04-20)
+
+An independent post-sprint review surfaced **six concrete regressions** introduced by the 2026-04-19 remediation campaign. All six were fixed in commit `ba751a2`.
+
+- **Flow gate-binding silent neutralization** (`backend/flows/flow_engine.py _build_step_context`): the dict literal `{"output": output, **output}` let the `**output` spread overwrite the canonical dict alias with whatever the handler emitted — a string for Slash, Skill, BrowserAutomation, and Message handlers. The BUG-632 fix was silently undone for those four handler types. Reordered to `{**output, ..., "output": output}` so the dict alias wins, and re-asserted the top-level bookkeeping fields (`position`, `name`, `type`, `status`, `error`, `execution_time_ms`, `retry_count`) after the spread so a misbehaving handler can't clobber them either.
+- **Primary tenant SSO login broken** (`frontend/app/auth/login/LoginClient.tsx`): `handleGoogleSignIn()` called `loginWithGoogle()` with no arguments. After the BUG-647 guard enforced explicit scope, every unauthenticated user hitting the public login page got `400` on click. Now passes `{platform: true}` — the correct scope per the backend docstring ("Required for global-admin flows and any login page not bound to a tenant"). `AuthContext.loginWithGoogle` type signature + `api.getGoogleAuthURL()` client method extended to accept the `platform` flag.
+- **Stale tenant-less JWTs bypassed the tenant-hopping guard** (`backend/api/shell_websocket.py`): pre-multi-tenant tokens without a `tenant_id` claim were falling back to `tenant_id = "default"` and then carved out of the guard (`tenant_id not in ("default",)`). Any stale JWT could subscribe to any tenant's shell/beacon feed until it expired naturally. Now rejects such tokens outright with `4003 "Missing tenant claim — please re-login"` and the `"default"` carve-out is removed.
+- **Beacon auth tenant-check silently fell through on exception** (`backend/api/shell_websocket.py authenticate_beacon`): the deleted_at / emergency_stop check was wrapped in a bare `except Exception` that logged and continued to the happy path. Security-critical checks must never default-allow on error. Now fails CLOSED with an explicit `auth_failed` response and `return None` on any tenant-state-check exception.
+- **Ollama error-path used stale ORM reference** (`backend/services/ollama_container_manager.py provision`): the except branch referenced `instance.id` after `db.close()` — technically `DetachedInstanceError` territory even though loaded PKs usually survive in `__dict__`. Now captures `err_instance_id` + `err_tenant_id_capture` before the close (mirroring the happy-path pattern at line 260) and filters by both columns on the fresh session for tenant safety.
+- **Cross-tenant `lastThreadId` leak** (`frontend/app/playground/page.tsx`): when `initializeThreads` detected a stale `?thread=` param that didn't belong to the current agent's thread list, it stripped the URL param but left `localStorage['tsushin.playground.lastThreadId']` pointing at the stale id. On a shared browser that id bled across agent switches and (in the worst case) across tenants. Now clears the localStorage key alongside the URL param.
+- **Fact-extractor parameter rename for security clarity** (`backend/agent/memory/fact_extractor.py`): the parameter named `had_trusted_user_turn` actually carries "had trusted non-user turn" (assistant/system role present). Renamed to `had_trusted_non_user_turn` throughout — no behavior change, pure readability / correctness-of-reasoning fix so the security invariant matches the variable name.
+
+Post-follow-up regression: 319+ assertions across 7 suites still green (sentinel_fast_benchmark 248/248 with zero false positives; group-level pytest suites 37+ pass standalone; UI-first API + source regression audit GREEN across all 10 checkpoints).
+
+### Massive Bug Remediation Campaign — summary (52 open → 2 deferred) (2026-04-19)
+
+A full triage + debate + group-fix sweep of every open entry in `BUGS.md`
+at the start of the sprint (52 bugs). Triage closed 5 as false-positives
+after code audit (BUG-598/622/623/659/660), rescoped 4 where the
+description didn't match the real root cause (BUG-642/643/647/661), and
+shipped 51 fixes across six parallel groups (F, A, B, C, D, E).
+
+Two bugs remain deferred (BUG-616 — test-harness, not backend seed;
+BUG-657 — referenced route file does not exist; wizard status lives in
+`auth_routes.py` which is already hardened). All other open bugs closed
+or fixed.
+
+Post-sprint regression (319+ assertions across 7 suites):
+- `sentinel_fast_benchmark.py` — 248/248, 0 false positives across all
+  4 aggressiveness levels.
+- `backend/tests/test_api_v1_e2e.py` — 28/29 (1 test-isolation case
+  pre-dates this sprint, tracked under BUG-638 fixture cleanup helper).
+- `backend/tests/test_playground_memory_regressions.py` — 6/6.
+- `backend/dev_tests/test_sentinel_rescoped_bugs.py` — 13/13.
+- `backend/dev_tests/test_flows_group_b.py` — 9/9.
+- `backend/dev_tests/test_group_e_security.py` — 9/9.
+- `backend/dev_tests/test_group_d_infra.py` — 6/6 (+2 host-only skipped).
+- WhatsApp round-trip: tester → bot → tester verified end-to-end on the
+  live stack (02:36:48 ping → 02:36:52 reply).
+- Sandboxed-tool API: 200 OK for `/api/v1/agents/17/chat` with a tool
+  command.
+- Post-regression container logs: no new backend/frontend ERROR lines
+  (only pre-existing env noise: Qdrant DNS when Qdrant isn't configured,
+  Vertex AI credential gaps for unconfigured providers).
+
+### Sentinel / Memory hardening — Group A (BUG-642/643/644/646/656/661) (2026-04-19)
+
+Critical prompt-injection hardening: the fact extractor was promoting
+adversarial "remember this" user turns (including credential-poisoning
+and behavior-prefix payloads) into persistent, high-confidence long-term
+facts whenever Sentinel was in `detect_only` mode or missed the attack.
+Sentinel itself was empirically under-blocking at level-1 and was
+a complete no-op without an LLM provider key (fail-open for `detect_only`,
+fail-closed for `block`). Three-layer fix:
+
+- **BUG-642 + BUG-661** — `backend/agent/memory/fact_extractor.py` gains
+  `_sanitize_conversation_for_extraction` (drops user turns matching
+  injection markers before the LLM extractor sees them) and
+  `_filter_untrusted_facts` (refuses any `instructions`-topic fact
+  unless a trusted assistant/system turn exists, drops facts whose
+  value or context looks injection-like, caps any surviving
+  `instructions` fact at confidence 0.9). User content is treated as
+  quotation, not instruction.
+- **BUG-643 + BUG-656** — new `backend/agent/sentinel/heuristics.py` +
+  `SentinelService._heuristic_floor_result`, wired into `_analyze_unified`
+  BEFORE the LLM call AND in the LLM-error fallback. Provider-independent
+  regex floor covering `prompt_injection`, `agent_takeover`,
+  `memory_poisoning` (credential + behavior-prefix), `agent_escalation`,
+  `vector_store_poisoning`, `shell_malicious`, `browser_ssrf`. Fires
+  in block / warn_only / detect_only modes, respects per-profile
+  detection toggles, logs with `llm_provider="heuristic"`. Zero LLM
+  key required — Sentinel is no longer a no-op on LLM-less installs.
+- **BUG-644** — `UNIFIED_CLASSIFICATION_PROMPT[1]` and `[3]` in
+  `backend/services/sentinel_detections.py` rewritten. Level-1 tightened
+  with explicit MUST-block phrasings per family; level-3 rebuilt as a
+  strict superset of level-1, always catching every level-1 trigger
+  plus the three aggressiveness regressions (`attack-ssrf`,
+  `attack-memory-cred-a`, `attack-vs-poisoning`). Benign carve-outs
+  (preferences, roleplay games, educational questions) preserved.
+- **BUG-646** — `frontend/app/playground/page.tsx` +
+  `frontend/components/playground/ExpertMode.tsx` now render a
+  distinctive red-bordered inline card with the threat family pill
+  and full `threat_reason` when Sentinel blocks a turn, instead of
+  showing only a generic error state. Also handles the legacy
+  "🛡️ Your message was blocked…" prefix in persisted history.
+
+Regression guard: `backend/dev_tests/test_sentinel_rescoped_bugs.py`
+(13/13 passing).
+
+### Test infrastructure — Group F (BUG-638/639/640/641) (2026-04-19)
+
+- **BUG-641** — `backend/Dockerfile` now installs
+  `backend/requirements-dev.txt` (pytest, pytest-asyncio, pytest-cov)
+  into `/opt/venv` in the builder stage so the runtime image has the
+  full test harness. `docker exec tsushin-backend python -m pytest
+  --collect-only tests/` now collects 270 tests without module-not-found.
+- **BUG-640** — `backend/tests/test_sentinel_detection_mode_fix.py`
+  imports `models_rbac` so `User` is registered on `Base.metadata`
+  before `ApiClient.created_by` FK resolution, and narrows
+  `db_engine` to the Sentinel-only tables so SQLite doesn't compile
+  Postgres-only JSONB columns. 10 tests collect; 10 tests pass.
+- **BUG-639** — `test_scheduler_message_with_no_threat_llm` now sets
+  `timeout_seconds=5.0` and `max_input_chars=5000` on the MagicMock
+  so `asyncio.wait_for`/prompt slicing no longer crash on
+  TypeError.
+- **BUG-638** — new `backend/dev_tests/cleanup_reg_fixtures.py` helper
+  + `test_fixture_cleanup.py` — resolves the tenant by
+  email/id/slug, finds agents whose linked `Contact.friendly_name`
+  starts with `reg-`, respects an `--older-than-hours` guard, and
+  cascades agent + contact deletion. Dry-run by default, `--apply`
+  to commit.
+
+### Playground & Studio state/threading — Group C (BUG-597/600/617/618/619/620/621/625/645) (2026-04-19)
+
+Playground UX hardening sprint focused on state persistence, race
+conditions, and misleading graph affordances.
+
+- **BUG-597** — Agent Builder cold-load blank-canvas fixed via a React
+  Flow overlay spinner in `AgentStudioTab.tsx` that holds until
+  `builder.nodes.length > 0` for the selected agent.
+- **BUG-600** — A2A Network ghost peer nodes no longer dropped. Instead
+  of `commEnabledAgents.filter`, `useAgentBuilder.ts` iterates
+  `peerIds` directly and synthesizes `"Agent #N"` placeholders when
+  the comm-enabled payload omits a peer.
+- **BUG-617** — Rapid double-click on "+ New Thread" now produces exactly
+  one thread. `handleNewThread` gains a `creatingThreadRef` in-flight
+  guard; second click is dropped until the first `createThread`
+  request settles.
+- **BUG-618** — Hard refresh no longer loses the active Playground
+  thread. `activeThreadId` hydrates from `?thread=<id>` then
+  `localStorage['tsushin.playground.lastThreadId']`; a dedicated
+  effect mirrors state back via `window.history.replaceState`
+  without triggering a client remount.
+- **BUG-619** — Project-scope thread filter now applied. `ExpertMode.tsx`
+  computes `scopedThreads` client-side when `projectSession?.is_in_project`
+  and the Threads badge reflects the scope.
+- **BUG-620** — `[WebSocket] Connection error: Event` log noise quieted.
+  `websocket.ts` onerror now logs structured diagnostics
+  (`readyState`, `readyStateLabel`, `url`, `type`) once per
+  close-cycle as `warn`; clean closes (code 1000) are `debug`.
+- **BUG-621** — Watcher Graph-Glow no longer lights every skill-category
+  edge. `GraphCanvas.tsx` builds `categorySkillTypesByNodeId` and only
+  glows Agent→Category edges when the invoked skill's type matches one
+  of that category's skill types.
+- **BUG-625** — Thread context menu no longer opens on whole-row click.
+  Row `onClick` ignores events originating inside `[data-no-row-click]`;
+  kebab is `opacity-0 group-hover:opacity-100`; right-click adds
+  explicit `onContextMenu` for the menu.
+- **BUG-645** — "Thread N not found" crash replaced with self-healing
+  WS `onError` handler: detects the specific pattern, drops the stale
+  id, clears URL/localStorage, reloads the thread list, suppresses the
+  error banner. User can retry immediately.
+
+### Security / RBAC / SSO / UX — Group E bug sprint (BUG-599/601/602/610/611/612+613/614/615/624/626/636/647/648) (2026-04-19)
+
+Remediation sprint for the Group E audit findings (WS auth bypass, RBAC UI
+gates, SSO scoping, hub 500, schema gap, onboarding/guide UX). Regression
+guard at `backend/dev_tests/test_group_e_security.py` (9 live tests).
+
+- **BUG-612 + BUG-613** (HIGH) `/ws/shell/status` decoded the JWT but never
+  verified the User row. A deactivated or tombstoned user still held a valid
+  token and could keep receiving live beacon/status events. `shell_websocket.py`
+  now looks up the `User`, asserts `is_active=True` + `deleted_at IS NULL`,
+  rejects tenant-mismatched JWTs, and requires at least one `shell.*`
+  permission before sending `auth_success` (otherwise WebSocket close 4003).
+  The sister `/ws/beacon/{integration_id}` handler also now rejects beacons
+  whose tenant is deleted or in emergency stop.
+- **BUG-615** (HIGH) `GET /api/hub/integrations?refresh_health=true` was 500ing
+  across all roles when a polymorphic `HubIntegration` row pointed at a
+  deleted child (ObjectDeletedError on `hub.type` attribute access). Every
+  per-integration iteration is now wrapped in try/except; guarded `getattr`
+  calls harvest what can be surfaced and a degraded `{status:"error"}` row is
+  emitted instead of 500ing the whole list.
+- **BUG-614** (MEDIUM) Playground debug endpoint joined
+  `sandboxed_tool_executions` on a `tenant_id` column that did not exist in
+  the DB schema. Added Alembic migration `0042_add_sandboxed_tool_exec_tenant_id`
+  (nullable `VARCHAR(50)` + index, backfilled from
+  `agent_run.agent_id → agent.tenant_id`), added the column to the
+  `SandboxedToolExecution` ORM model, and threaded `self.tenant_id` into
+  `SandboxedToolService.execute_command` insertion.
+- **BUG-647** (HIGH) SSO `/api/auth/google/authorize` silently fell back to
+  "first tenant with SSO enabled" — a cross-tenant leak. New explicit
+  `platform=true` query param routes to `GlobalSSOConfig`; callers must now
+  pass either `tenant_slug=<slug>` OR `platform=true` (never both, never
+  neither) or receive a 400.
+- **BUG-648** (MEDIUM) Tenant invitation list view never returned
+  `invitation_link` (raw tokens are not stored). New admin-only
+  `POST /api/team/invitations/{id}/resend-link` endpoint rotates the
+  invitation token, extends the expiry by 7 days, and returns the
+  fresh link WITHOUT triggering a duplicate email (the existing
+  `/resend` endpoint continues to email).
+- **BUG-610** (HIGH) Read-only users saw mutation UI on Hub / Agents / Flows.
+  Added `hasPermission('agents.write' | 'flows.write' | 'hub.write')` gates
+  around every create / edit / delete / toggle / bulk-action control, plus
+  a top-of-page read-only banner on Hub.
+- **BUG-611** (MEDIUM) Settings overview hid Billing from owners — the
+  overview card gated on `billing.manage` but the billing subpage itself
+  gated on `billing.write`. Aligned both to `billing.write`.
+- **BUG-636** (MEDIUM) Flow editor edit-then-execute path produced no run.
+  `handleRunFlow` now re-fetches the latest saved flow before execute so a
+  just-edited flow is executed against its fresh definition, and the edit
+  modal's `onSuccess` awaits `loadData()` before closing the modal.
+- **BUG-624** (LOW) `UserGuidePanel` persisted in the DOM after dismissal
+  with only `translate-x-full`; assistive tech still saw a dialog role. Added
+  `aria-hidden` + `visibility: hidden` to both the backdrop and panel when
+  `isOpen` is false.
+- **BUG-626** (LOW) Onboarding tour re-appeared after Skip Tour if the
+  provider remounted. `handleGuideClose` now treats `localStorage` as the
+  source of truth — any persisted completion marker blocks restart
+  unconditionally and re-syncs `tourDismissedRef`.
+- **BUG-599** (MEDIUM) User Guide Escape key conflicted with Studio's
+  fullscreen Esc handler. UserGuide's handler now calls
+  `stopImmediatePropagation` in addition to `stopPropagation` so a single
+  Esc press cleanly closes the guide without also collapsing Studio.
+- **BUG-601** (MEDIUM) Palette items were draggable even when attached, but
+  there was no drop-to-detach handler — the tooltip promised behavior that
+  didn't exist. Attached items are now `draggable={false}` and the tooltip
+  truthfully says "Double-click to detach".
+- **BUG-602** (MEDIUM) Studio's "Create new agent" was a parallel
+  implementation that produced persona-less / tone-less agents vs. the main
+  `/agents` modal. Quick-create now emits the same explicit-null payload
+  shape as the main modal, and a new footer link routes users who need
+  persona / tone / keywords to `/agents?create=1` (AgentsPage auto-opens the
+  create flow from that query param).
+
+Touched files: `backend/api/shell_websocket.py`, `backend/api/routes_hub.py`,
+`backend/api/routes_team.py`,
+`backend/alembic/versions/0042_add_sandboxed_tool_exec_tenant_id.py` (new),
+`backend/models.py`, `backend/agent/tools/sandboxed_tool_service.py`,
+`backend/auth_routes.py`, `backend/auth_google.py`,
+`frontend/app/hub/page.tsx`, `frontend/app/agents/page.tsx`,
+`frontend/app/flows/page.tsx`, `frontend/app/settings/page.tsx`,
+`frontend/components/UserGuidePanel.tsx`,
+`frontend/contexts/OnboardingContext.tsx`,
+`frontend/components/watcher/studio/StudioAgentSelector.tsx`,
+`frontend/components/watcher/studio/palette/PaletteItem.tsx`.
+
+### Agent Creation Wizard — guided multi-step flow (2026-04-19)
+
+Creating an agent was a single modal with ~12 fields — powerful for experts, intimidating for newcomers. New **Agent Creation Wizard** branches upfront on **Text / Audio / Hybrid** and progressively discloses only the steps that matter for the chosen type. Guided is the default; Advanced (existing single-form modal) remains available for power users via a per-user toggle.
+
+**What's new**
+
+- **Guided mode.** 7–9 steps (varies by type): Type → Basics → Personality → [Voice for audio/hybrid] → Skills → Memory → Channels → Review → Progress. Circular-checkmark step indicator, per-step validation, Back-nav preserves draft.
+- **Type branching.** Text agents skip the Voice step and hide audio-only skills. Audio & Hybrid reuse the extracted `AudioProviderPicker` / `AudioVoiceFields` from the Audio Agents Wizard — single source of truth for voice UX.
+- **Advanced mode preserved.** Existing `frontend/app/agents/page.tsx` modal is unchanged in behavior; it now shows a "Switch to Guided" link and reads a pre-filled draft from `AgentWizardContext` when the user switched mid-flow.
+- **Mode preference.** Per-user `localStorage['tsushin:agentWizardMode']` — defaults to `guided`. Both directions persist the user's choice on switch.
+- **Chained provisioning.** `useCreateAgentChain` orchestrates: contact resolve → `createAgent` → `updateAgent` (memory/channels/vector store) → per-skill fan-out → custom skills → Kokoro TTS provisioning + voice binding (for audio/hybrid). On partial failure after the agent row is created, the wizard keeps the agent and surfaces the failing stage rather than rolling back.
+- **Deep-link on success.** Progress step's primary CTA navigates to `/playground?agentId=<id>` so the new agent is chattable immediately.
+
+**Extracted shared modules**
+
+- `frontend/components/audio-wizard/AudioProviderFields.tsx` — `AudioProviderPicker` + `AudioVoiceFields` (lifted from `AudioAgentsWizard` steps 2 & 3).
+- `frontend/components/agent-wizard/hooks/useKokoroPolling.ts` — Kokoro container status polling (lifted from `AudioAgentsWizard`).
+- `AudioAgentsWizard.tsx` refactored to consume both; behavior unchanged.
+
+**Touched files.** `frontend/contexts/AgentWizardContext.tsx` (new), `frontend/lib/agent-wizard/reducer.ts` (new, pure), `frontend/components/agent-wizard/*` (new — AgentWizard shell + 9 step components + 2 hooks + defaults), `frontend/components/audio-wizard/AudioProviderFields.tsx` (new extraction), `frontend/components/audio-wizard/AudioAgentsWizard.tsx` (refactor — consumes extracted modules), `frontend/app/layout.tsx` (mount `AgentWizardProvider`), `frontend/app/agents/page.tsx` (Create button dispatches by mode; "Switch to Guided" link; pre-fill banner).
+
+### Infra / install / observability — Group D bug sprint (BUG-649/650/651/652/653/654/655/658) (2026-04-19)
+
+Remediation sprint for the Group D audit findings. Regression guard at
+`backend/dev_tests/test_group_d_infra.py` (6 live tests + 2 host-only checks).
+
+- **BUG-649** (HIGH) Ollama auto-provisioning failed on chat/provision due to a
+  pooled DB connection held idle across a 60-120s health wait and silently
+  dropped by Postgres. `OllamaContainerManager.provision` now explicitly
+  `db.close()` before the health loop, runs a new `_wait_for_health_detached`
+  against the captured `base_url`, and opens a fresh session to write back
+  `container_status` / `health_status`.
+- **BUG-650** (LOW) Provisioning errors wrote raw SQL snippets + 64-char
+  container IDs into `health_status_reason`. New `_sanitize_health_reason`
+  helper strips `[SQL: ...]`, SQLAlchemy background URLs, `psycopg2.*`
+  wrappers, and long hex IDs before the text is persisted.
+- **BUG-651** (LOW) `POST /api/tts-instances` with `auto_provision=true`
+  briefly reported `is_auto_provisioned: false` in its 202 response. The route
+  now calls `TTSInstanceService.mark_pending_auto_provision` to flip
+  `is_auto_provisioned=True` + `container_status=provisioning` synchronously
+  before kicking off the background worker.
+- **BUG-652** (LOW) `POST /api/vector-stores {"vendor":"chroma", ...}`
+  returned `400 Unsupported vendor: chroma`. Added `chroma` to
+  `VectorStoreInstanceService.SUPPORTED_VENDORS` (remains absent from
+  `AUTO_PROVISIONABLE_VENDORS` — chroma is the in-process default with no container).
+- **BUG-653** (HIGH) Self-signed Caddy installs bound to bare IP literals
+  broke external TLS handshakes because the generator emitted
+  `default_sni localhost` (Caddy rejects IP literals in `default_sni`). For
+  IP-literal binds the `install.py` generator now omits the `default_sni`
+  directive entirely and lets Caddy auto-select; hostname binds keep
+  `default_sni {domain}`.
+- **BUG-654** (MEDIUM) `docker-compose.yml` declared `TSN_AUTH_RATE_LIMIT`
+  twice, shadowing the `5/minute` default with an empty string. Removed the
+  earlier duplicate.
+- **BUG-655** (MEDIUM) Toolbox image build failed on aarch64 hosts because
+  classic `docker build` never populates `TARGETARCH` in the Dockerfile, so
+  the arch-aware lines silently pulled amd64 binaries on arm64. `install.py`
+  now detects the host arch and passes `--build-arg TARGETARCH=arm64|amd64`,
+  and emits a clearer warning + a ready-to-copy rebuild command when a build
+  does fail.
+- **BUG-658** (LOW) Installer SSL-proxy health check now fails fast after
+  three consecutive TLS handshake errors (rather than burning all 20 attempts)
+  and points the operator at BUG-653 as the likely root cause.
+
+### Flows engine — Group B bug sprint (BUG-627..637) (2026-04-19)
+
+Remediation sprint for the flows audit findings. Nine Group B bugs resolved in one commit; see `backend/dev_tests/test_flows_group_b.py` for the regression guard (9/9 passing).
+
+- **BUG-627** (template credential pre-flight). `POST /api/flows/templates/{id}/instantiate` now runs `_check_required_credentials` against the tenant's `ApiKey` rows before building the flow. Missing credentials return `400 {error: "missing_credentials", missing_credentials: [...]}`. Pass `skip_credential_check: true` in params to bypass (integration tests).
+- **BUG-628** (template detail endpoint). New `GET /api/flows/templates/{id}` returns the template summary plus best-effort `preview_steps` for UI previews.
+- **BUG-629** (`StepType` vocabulary). `schemas.StepType` now exposes `custom_skill` and `browser_automation` so typed `POST /api/flows/create` accepts the full runtime vocabulary. Enum change is additive — `FlowNode.type` is stored as a string, no DB migration required. A runtime test asserts every `StepType` value has a handler registered.
+- **BUG-630** (step_count / node_count alias). `FlowResponse` (v2), `FlowDefinitionResponse` (legacy), and the v1 summary dict now populate **both** `step_count` and `node_count`, mirrored via validators. Clients can migrate between legacy and v2 endpoints without field-name handling.
+- **BUG-631** (empty-flow guard). Template instantiation refuses to persist a flow with zero steps (returns 500 with `error: template_produced_empty_flow`). Runtime also marks empty FlowRuns as `noop` (see BUG-637) as defence in depth.
+- **BUG-632 / BUG-633** (Gate binding). `_build_step_context` now exposes the previous step's whole output dict under the literal key `output`, so Gate conditions bound with `field: "step_1.output"` resolve to actual data instead of literal `"null"`. Both programmatic and agentic gate modes benefit — the fix is at the context layer.
+- **BUG-634** (Summarization auto-bind). `SummarizationStepHandler` now walks three layers to find a conversation `thread_id` when neither `thread_id` nor `source_step` is set: immediate previous step → earlier steps in the context dict → `ConversationThread.flow_step_run_id` DB lookup within the same FlowRun. Raw-text fallback only triggers when all three layers return nothing. The `output` dict (new in BUG-632) is NOT treated as source text, so summarization doesn't garbage-summarize step JSON.
+- **BUG-635** (skill error surfacing). `SkillStepHandler` now includes a top-level `error` field on failure; the executor's `step_run.error_text` fallback reads `output.error → metadata.error → metadata.message → output.message → output.output (if str)` before landing on the generic message. Skill failures now carry actionable detail to the run UI.
+- **BUG-637** (zero-step status). `run_flow` marks a FlowRun as `status=noop` (not `completed`) when `total_steps == 0 and completed_steps == 0 and failed_steps == 0`. Includes an `error_text` explaining the no-op.
+
+**Touched files.** `backend/flows/flow_engine.py` (context builder, gate binding, skill/summarization handlers, run-completion status), `backend/api/routes_flows.py` (credential pre-flight, template detail endpoint, empty-step guard, FlowDefinitionResponse alias), `backend/api/v1/routes_flows.py` (FlowSummary / FlowDetailResponse alias), `backend/schemas.py` (`StepType` additions, `FlowResponse.node_count` mirror), `backend/dev_tests/test_flows_group_b.py` (new test suite, gitignored).
+
+**Deferred.** BUG-636 (edit-then-execute from the flow editor) is a frontend concern in `frontend/app/flows/page.tsx` — deferred to Group E.
+
+### Emergency Stop split into tenant + global scopes (2026-04-19)
+
+The header emergency-stop toggle was a single control writing a **singleton** flag on `config.emergency_stop`. That made it a GLOBAL kill switch in practice — any tenant owner with `org.settings.write` could halt every tenant on the instance. Functional for defence, wrong for multi-tenant separation of concerns.
+
+**What changed.** The control is now **two independent toggles**, one per scope:
+
+- **Tenant stop** (`tenant.emergency_stop`, new column) — toggled by the logged-in tenant owner via `POST /api/system/emergency-stop` and `/api/system/resume`. Halts all channels/triggers for that tenant only (WhatsApp, Telegram, Slack, Discord, webhooks, API). Other tenants keep running. Permission: unchanged — still `org.settings.write`.
+- **Global stop** (`config.emergency_stop`, existing column, now admin-only) — toggled by global admins via the new `POST /api/system/global-emergency-stop` and `/api/system/global-resume` endpoints guarded by `require_global_admin()`. Halts every tenant on the instance — reserved for platform-wide incidents.
+
+**Enforcement.** All three existing ingress points now evaluate `Config.emergency_stop (global) OR Tenant.emergency_stop (this tenant)`:
+- `backend/mcp_reader/filters.py` — `MessageFilter` gained a `tenant_id` kwarg; `watcher_manager.py` passes `instance.tenant_id` when constructing the filter. MCP-sourced WhatsApp/Telegram messages are dropped before routing.
+- `backend/agent/router.py` — the existing router-level block now also reads `Tenant.emergency_stop` via `self.tenant_id`. Log lines are tagged `[EMERGENCY STOP:global]` vs `[EMERGENCY STOP:tenant]` so ops can attribute the halt.
+- `backend/api/routes_webhook_inbound.py` — webhook inbound path reads `integration.tenant_id` and rejects with 503 when either flag is true.
+
+All three fail-open on DB errors (unchanged behavior — a DB blip should not silently halt a tenant).
+
+**Header UI** (`frontend/components/LayoutContent.tsx`). Two toggles in the top-right:
+- Tenant toggle: green "Online" / red "Tenant Stopped". Tooltip names the tenant explicitly. Confirmation modal is red, titled "Tenant Emergency Stop", button "Stop This Tenant".
+- Global toggle (visible only when `user.is_global_admin`): purple "Global" / amber "Global Stopped" + shield icon to telegraph system-wide scope. Confirmation modal is amber, titled "Halt ALL Tenants?", button "Halt Every Tenant".
+- When a global stop is active, the tenant toggle is disabled with tooltip "Blocked by GLOBAL stop" — prevents a confused tenant owner from resuming into a no-op.
+- Both toggles share the same `/api/system/status` poll (10s) which now returns `{ tenant_emergency_stop, global_emergency_stop, is_global_admin, tenant_id, tenant_name, maintenance_mode }`. Legacy `emergency_stop` field remains (= tenant OR global) for older clients.
+
+**Migration.** `backend/alembic/versions/0041_add_tenant_emergency_stop.py` — `ALTER TABLE tenant ADD COLUMN emergency_stop BOOLEAN NOT NULL DEFAULT FALSE` with `server_default=false`, so every existing tenant row is backfilled automatically on deploy.
+
+**Touched files.**
+- Backend: `backend/models_rbac.py` (+`Tenant.emergency_stop`), `backend/alembic/versions/0041_add_tenant_emergency_stop.py` (new), `backend/api/routes.py` (two endpoints re-scoped to tenant + two new global endpoints + extended status payload + audit log calls), `backend/mcp_reader/filters.py` (`tenant_id` kwarg, dual-flag check), `backend/services/watcher_manager.py` (pass `instance.tenant_id` to `MessageFilter`), `backend/agent/router.py` (dual-flag check at router), `backend/api/routes_webhook_inbound.py` (dual-flag check at webhook ingress).
+- Frontend: `frontend/components/LayoutContent.tsx` (two independent toggles, scope-aware confirmation modal, blocked-state styling when global is on).
+
+**Verified via API + browser automation (https://localhost):**
+- `GET /api/system/status` as tenant owner returns `{tenant_emergency_stop:false, global_emergency_stop:false, is_global_admin:false}`.
+- Tenant owner `POST /api/system/emergency-stop` flips only the tenant flag; `/api/system/global-emergency-stop` returns 403.
+- Global admin `POST /api/system/global-emergency-stop` flips the global flag; the tenant owner's subsequent `/api/system/status` correctly reports `global_emergency_stop:true`, greying out the tenant toggle.
+- Resumes work for both scopes; clearing the global flag restores the tenant toggle's interactive state.
+
+### Audio Agents Onboarding Wizard — Kokoro / Kira / Transcript removed from seed (2026-04-19)
+
+Every fresh tenant used to get three audio agents seeded automatically: **Kokoro** (free/local TTS), **Kira** (OpenAI TTS), and **Transcript** (Whisper-only). Most tenants never configured audio at all, so those agents sat idle at the top of every agent list — and Kokoro in particular silently disabled itself because it required a Kokoro Docker container that was never provisioned.
+
+The audio agents are now **opt-in** via a new **Audio Agents wizard** that covers all three intents (TTS responses, transcription-only, hybrid) across all three providers (Kokoro / OpenAI / ElevenLabs) in a single guided flow.
+
+**What the wizard does.** 5 steps, all client-side orchestration over existing endpoints:
+1. *Intent* — voice (TTS out), transcript (voice in), or hybrid (both).
+2. *Provider* — Kokoro / OpenAI / ElevenLabs. "Detected" badge renders when the provider is already configured for this tenant (`api.getProviderInstances()` for OpenAI/ElevenLabs keys, `api.getTTSInstances()` for Kokoro); "Needs API key" badge links to Hub → AI Providers otherwise.
+3. *Voice & credentials* — language → voice list (Kokoro voices filter by language), speed, format; Kokoro step also asks for mem_limit and "set as tenant-default TTS".
+4. *Agent target* — create a new Voice Assistant (default system prompt carries over from the old Kira/Kokoro prompts as client-side templates) OR attach `audio_tts` + `audio_transcript` skills to an existing agent.
+5. *Review* + *Provision & wire* — creates the TTSInstance (Kokoro only), polls `/api/tts-instances/{id}/container/status` until `running` (~30–90s), creates the Contact + Agent if new-mode, wires skills via `assignTTSInstanceToAgent` (Kokoro) or `updateAgentSkill('audio_tts'/'audio_transcript')` (OpenAI/ElevenLabs).
+
+**Two entry points** (both optional):
+- **Onboarding tour step 12** — new "Voice Capabilities (optional)" page with a "Set up voice agent" CTA and a skip button. Tour total raised 14 → 15.
+- **Studio → New Agent** — the inline "Create New Agent" modal now has a **Text / Voice / Hybrid** radio. Picking Voice or Hybrid hands off to the wizard preset with the agent name pre-filled and `presetMode='new'`.
+
+**Backward compatibility.** Existing tenants keep their already-seeded Kokoro / Kira / Transcript agents untouched — the change is remove-only in `agent_seeding.py`. The previous Kokoro-TTSInstance resolution block that seeded the `audio_tts` skill disabled-with-a-hint is also gone (no longer needed since the agent isn't seeded). `KokoroSetupWizard` is still mounted in Hub → Voice as a direct deep-link for power users.
+
+**Touched files.**
+- Backend: `backend/services/agent_seeding.py` (removed Kokoro/Kira/Transcript dicts from `agents_config`; removed Kokoro TTSInstance lookup block and the `audio_tts skill_type=='kokoro'` enablement branch; updated `default_agent_names` list used by `check_existing_agents` and the module docstring), `backend/auth_routes.py` (updated the `agents_created` example in the `/api/auth/setup` docstring).
+- Frontend: `frontend/contexts/AudioWizardContext.tsx` (new global provider modeled on `GoogleWizardContext` — `openWizard({ presetProvider, presetAgentId, presetMode, presetAgentType, presetNewAgentName })`, `closeWizard`, `registerOnComplete`, `useAudioWizardComplete`; emits `tsushin:audio-wizard-closed` so the tour can auto-resume), `frontend/components/audio-wizard/AudioAgentsWizard.tsx` (new 6-step wizard — 5 config steps + 1 progress step, container polling, skill wiring), `frontend/components/audio-wizard/defaults.ts` (new — voice/agent templates carrying over the Kira/Kokoro/Transcript prompts as client-side constants), `frontend/app/layout.tsx` (mount `AudioWizardProvider` alongside the existing wizard providers), `frontend/contexts/OnboardingContext.tsx` (`TOTAL_STEPS` 14 → 15), `frontend/components/OnboardingWizard.tsx` (new `openVoiceWizard` callback; new "Voice Capabilities (optional)" tour step between Playground and Playground Mini; shifted step-numbering comments on Sentinel/finale), `frontend/components/watcher/studio/StudioAgentSelector.tsx` (new `newAgentKind` state — text / voice / hybrid — with Audio Wizard hand-off; provider/instance/model fields now render only for Text; button label flips to "Continue in Audio Wizard →" for Voice/Hybrid).
+- Docs: this changelog entry; documentation.md updated under "Voice & Audio" and "Default Agents".
+
+### Hub: auto health-test provider instances on save (2026-04-19)
+
+Cloud LLM provider instances (OpenAI, Gemini, Anthropic, Groq, Grok, DeepSeek, OpenRouter, Vertex AI, custom) used to sit at `health_status="unknown"` — gray dot in **Hub → AI Providers** — until the user opened the row's three-dot menu and clicked **Test Connection**. Even with valid credentials configured, nothing else flipped the status; only Ollama (which has its own container-manager probe) went green on its own.
+
+The `POST /api/provider-instances` and `PUT /api/provider-instances/{id}` endpoints now schedule a connection test in a FastAPI `BackgroundTasks` after the response is returned. The test mirrors the manual button: it picks the first model (or vendor fallback), calls `AIClient.generate` with `max_tokens=20` and SDK retries disabled, then writes `health_status` (`healthy`/`unavailable`), `health_status_reason`, `last_health_check`, and a `ProviderConnectionAudit` row with `action="auto_test_on_save"`.
+
+**Trigger rules.**
+- *Create:* fire iff the instance was saved with credentials (or vendor is `ollama`) **and** `available_models` is non-empty.
+- *Update:* fire iff a connectivity-relevant field changed (`api_key`, `base_url`, `extra_config`, `available_models`) and the instance still has credentials and is active. Pure renames or default-toggles do not re-test.
+- *Clear key:* setting `api_key=""` resets `health_status` back to `"unknown"` (gray) so the dot doesn't keep showing a stale green from the previous valid key.
+
+**Touched files.**
+- Backend: `backend/api/routes_provider_instances.py` (new `_background_test_instance` helper; `BackgroundTasks` parameter on create + update; clear-key resets health).
+
+### A2A Communications moved to Studio (2026-04-19)
+
+A2A permission-rule CRUD was previously hosted under **Watcher → A2A Comms → Permissions**, which was a layering mistake — Watcher is the observability surface ("what's happening"), not configuration ("what's allowed"). Since A2A wiring describes the whole multi-agent graph (many-to-many, group-level), it belongs in Studio, where tenant-admins already configure agents, personas, projects, and security profiles.
+
+**New location.** `/agents/communication` — a first-class Studio tab sitting between **Security** and **Builder** in the Studio sub-nav, with a two-way-arrow icon. The full CRUD lives here: Permission Rules table (Source, Target, Max Depth, Rate Limit, Target Skills toggle, Status toggle, Delete) + Add-Permission modal.
+
+**Watcher → A2A Comms** is now purely read-only observability: sub-nav is just **Communication Log** + **Statistics**, with an info banner at the top of the page pointing users to Studio → A2A Communications for rule management.
+
+**Touched files.**
+- Frontend: `frontend/app/agents/communication/page.tsx` (new Studio route; mounts StudioTabs + the manager), `frontend/components/studio/A2APermissionsManager.tsx` (new — full permission CRUD, extracted from CommunicationTab), `frontend/components/studio/StudioTabs.tsx` (+`A2A Communications` entry with a cyan two-way-arrow icon), `frontend/components/watcher/CommunicationTab.tsx` (removed Permissions view, Add modal, and all CRUD handlers/state; added pointer banner).
+
+**Verified via browser automation (https://localhost):**
+- Studio nav shows A2A Communications between Security and Builder; clicking it loads the Permission Rules table with the two existing pairs (Tsushin→movl, Tsushin→archsec), TARGET SKILLS amber toggle ON, STATUS teal toggle ON.
+- Add-Permission modal renders all fields including the "Allow target to use its own skills" checkbox + help text.
+- Watcher → A2A Comms sub-nav is now **Communication Log | Statistics** only; banner "Permission rules moved — configure which agents can communicate in Studio → A2A Communications" links to `/agents/communication`.
+- 0 console errors.
+
+### A2A: opt-in "allow_target_skills" per permission row (2026-04-19)
+
+The `agent_communication_service._invoke_target_agent` call had historically hard-coded `disable_skills=True`, so when Agent A asked Agent B anything via A2A, B answered with LLM knowledge only — every tool (gmail, sandboxed_tools, shell, …) was silenced. A user asking "Tsushin, ask movl for the latest emails" got "I have no email access" back from movl, even though movl had its Gmail integration correctly bound to `movl2007@gmail.com`.
+
+`AgentCommunicationPermission` now has an `allow_target_skills` Boolean column (default `false`, preserves old behavior for every existing row). When `true` on a source→target pair, the target's own skills load during A2A invocation; depth limit, rate limiting, permission check, and Sentinel analysis continue to bound the call.
+
+**Touched files.**
+- Backend: `backend/alembic/versions/0040_add_allow_target_skills_to_agent_comm_permission.py` (new migration, idempotent, `server_default=false`), `backend/models.py` (+`allow_target_skills` column), `backend/services/agent_communication_service.py` (`create_permission`/`update_permission` accept the flag; `send_message` reads it from the permission row and passes through; `_invoke_target_agent` translates it into `disable_skills=not allow_target_skills`), `backend/api/routes_agent_communication.py` (`PermissionResponse`/`PermissionCreateRequest`/`PermissionUpdateRequest` updated, route plumbing passes the flag on).
+- Frontend: `frontend/lib/client.ts` (`AgentCommPermission.allow_target_skills`, extended create/update signatures), `frontend/components/watcher/CommunicationTab.tsx` (new "Target Skills" column with inline amber toggle + `handleToggleTargetSkills`; checkbox in Add-Permission modal with help text).
+- Tests: `backend/tests/test_agent_communication_service.py` (+6 cases covering default-false, opt-in true, toggle-update, `_invoke_target_agent` disable_skills mapping in both directions, and end-to-end propagation from permission row → invoke call).
+
+**Verified:**
+- Migration applied cleanly: `0039 -> 0040` in backend logs, column present on `agent_communication_permission`.
+- Unit tests: 15/15 pass (`pytest tests/test_agent_communication_service.py -o addopts=`); API v1 E2E 28/29 pass (the one failure is a pre-existing agent-quota 409, unrelated).
+- Live E2E via `/api/v1/agents/1/chat`: Tsushin asked movl → movl fetched and returned real subjects from `movl2007@gmail.com`; asked archsec → archsec returned real subjects from `mv@archsec.io`. Three completed sessions recorded in `agent_communication_session` (status=completed, depth=1).
+- UI: Permissions table shows the new column + amber toggle; Add-Permission modal shows the new checkbox and help text; Graph View renders the A2A edges (`a2a-4` Tsushin→movl, `a2a-5` Tsushin→archsec) with dashed styling and glows during active calls.
+
+### Webhook: ready-to-paste test snippet in the reveal modal (2026-04-19)
+
+The Webhook reveal modal (shown once on create and after Rotate Secret) now includes a pre-filled `openssl`+`curl` snippet with the actual secret and inbound URL baked in. The user copies the block, pastes it into any shell, and a successful reply (`{"status":"queued",…}`) confirms the integration end-to-end — no signing library or manual HMAC computation required. The `-k` flag is included automatically when the URL is `https://localhost` so the self-signed cert on the dev stack doesn't break the test; production URLs render without it.
+
+Touched files: `frontend/components/WebhookSecretRevealModal.tsx` (new test block + Copy command button).
+
+### Webhook: edit modal + enable/pause toggle (2026-04-19)
+
+Each webhook card now has an **Edit** button (opens `WebhookEditModal` — name, slug, callback, rate limit, IP allowlist) and a **Pause / Enable** toggle that flips `is_active` via `PATCH /api/webhook-integrations/{id}`. The slug-available endpoint gained an optional `exclude_id` query param so the edit flow doesn't collide with the integration's own current slug.
+
+**Slug collision while paused.** Uniqueness is independent of `is_active`. A paused webhook's slug stays reserved — only `DELETE` frees it for reuse. Verified: `PATCH {is_active:false}` on `qa-crm-test` + `POST /api/webhook-integrations` with the same slug returns `409 {"detail":"Slug already in use"}`.
+
+**Touched files.**
+- Backend: `backend/api/routes_webhook_instances.py` (exclude_id on slug-available).
+- Frontend: `frontend/components/WebhookEditModal.tsx` (new), `frontend/app/hub/page.tsx` (toggle + Edit button + modal mount), `frontend/lib/client.ts` (`checkWebhookSlugAvailable(slug, excludeId?)`).
+
+### Webhook: reveal rotated secret + custom URI slug (2026-04-19)
+
+Two UX defects addressed in the v0.6.0 Webhook-as-a-Channel feature.
+
+**Bug fix — Rotate Secret now reveals the new plaintext.** Previously, `Rotate Secret` copied the new HMAC secret to the clipboard and flashed a masked-preview toast; if the clipboard write failed or the user dismissed the toast, the secret was gone forever (only the encrypted blob + 10-char preview are persisted by design). A new `WebhookSecretRevealModal` now opens with the full plaintext secret in a read-only input, a copy button, the inbound URL, signing instructions, and an amber "never shown again" warning. The same component is reused by the create flow.
+
+**Feature — custom inbound URI slug.** Webhook integrations now have a human-readable `slug` used in the inbound path: `/api/webhooks/<slug>/inbound`. The create modal exposes two modes:
+
+- **Auto** (default) — server generates `wh-{6-hex}` on create.
+- **Custom** — user types a slug. Live-validated against `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (3–64 chars, must start with a letter, lowercase, no consecutive/leading/trailing hyphens), checked against a reserved list (`inbound, rotate-secret, health, status, test, callback, docs, openapi, api, webhooks, admin, v1`), and checked for global uniqueness via a new `GET /api/webhook-integrations/slug-available?slug=…` endpoint. Red X + reason when invalid/taken, green check + "Available" when OK. The full inbound URL is previewed live.
+
+Slug is globally unique (not per-tenant) because the inbound route has no auth before the DB lookup — the slug is the identifier used to resolve the tenant.
+
+**Backward compatibility.** Existing integrations were backfilled to `slug = wh-{id}`. The inbound route still accepts numeric IDs via a `slug.isdigit()` fallback so every legacy URL (`/api/webhooks/123/inbound`) keeps working.
+
+**Touched files.**
+- Backend: `backend/models.py` (+slug column on `WebhookIntegration`), `backend/alembic/versions/0039_add_webhook_integration_slug.py` (new — nullable add + backfill + NOT NULL + unique index), `backend/api/routes_webhook_instances.py` (slug validation, auto-gen, `/slug-available` endpoint, CRUD updates, `inbound_url` now derives from slug), `backend/api/routes_webhook_inbound.py` (path param `int → str`, slug-first lookup with numeric fallback).
+- Frontend: `frontend/components/WebhookSecretRevealModal.tsx` (new), `frontend/components/WebhookSetupModal.tsx` (URI mode radio + debounced slug availability check + URL preview), `frontend/app/hub/page.tsx` (rotate handler now opens reveal modal instead of toast-copy), `frontend/lib/client.ts` (types + `checkWebhookSlugAvailable`).
+
+**Verified via UI regression (https://localhost):**
+- Rotate Secret on existing webhook → reveal modal shows full plaintext, inbound URL, copy buttons, auto-copy notice.
+- Create with Custom mode, slug `qa-ui-test` → green "Available", full URL preview, modal shows secret + URL ending `/qa-ui-test/inbound`.
+- Slug `inbound` → "Slug is reserved"; slug `qa-crm-test` (existing) → "Slug already in use" — both block Create.
+- Graph View renders webhook channel nodes per integration with their readable name (e.g., "Webhook QA UI Custom").
+
+**Verified via API:**
+- Signed inbound POST to `/api/webhooks/qa-ui-test/inbound` → 200 `{queue_id, poll_url}`; agent binding resolved; queue worker picked up the item.
+- Signed inbound POST to legacy numeric path `/api/webhooks/<id>/inbound` → HMAC accepted, agent lookup path identical (backward-compat confirmed).
+
+### Google OAuth handle_callback honors the real integration_type (2026-04-19)
+
+**Root-cause fix for a years-old latent bug surfaced by the wizard QA pass today.**
+
+`backend/hub/google/oauth_handler.py::handle_callback` was inferring `integration_type` by parsing the `redirect_url` query string and **defaulting to `"calendar"`** when it couldn't find one. The popup-driven wizard flow never sets a `redirect_url` (it uses the same tab via `window.open` and relies on a postMessage handoff), so **every wizard-initiated Gmail OAuth actually upserted the user's email into the Calendar integration table.** The frontend's success URL correctly said `type=gmail` because the outer `routes_google.py::oauth_callback` read the state prefix, but that value was never passed into the handler — two independent copies of "what type is this", and only one of them was right.
+
+Example: running the Gmail wizard for `mv@archsec.io` on the test tenant updated Calendar row `id=3` (it already existed, disconnected) and wrote a Gmail-scope OAuth token against it. The Gmail row `id=4` stayed `is_active=false, health_status=disconnected`, so the wizard's Step-3 list (which correctly filters disconnected rows) stayed empty — "wizard is stuck".
+
+**Fix.** `handle_callback` now accepts `integration_type: Optional[str]` and the outer `oauth_callback` at `backend/api/routes_google.py::527` passes it in explicitly (already parsed from the `OAuthState` prefix). The handler still falls back to parsing `redirect_url` for the legacy direct-redirect path, but if it still can't determine the type, it now raises `ValueError` instead of silently defaulting to calendar. Defense-in-depth: the caller knows, the handler verifies, no silent miscategorization.
+
+**Data cleanup.** Restored test-tenant Calendar row `id=3` to `is_active=false, health_status='disconnected'` and deleted the misrouted Gmail-scope `oauth_token` row (`id=1561, integration_id=3`) so it can't be used.
+
+**Verified.** `GET /api/hub/google/gmail/integrations` and `.../calendar/integrations` both return only their correctly-typed, non-disconnected rows. After the fix, re-running the Gmail wizard for `mv@archsec.io` should upsert Gmail row `id=4` (not Calendar).
+
+### Gmail/Calendar OAuth popup auto-closes and hands off to the wizard (2026-04-19)
+
+Fixes a stuck-wizard UX in the Gmail / Calendar setup flow.
+
+**Symptom.** In Step 3 ("Connect a Gmail account" / "Connect a Calendar account"), clicking "Connect new account" opened the Google consent screen in a popup window. After the user approved, Google redirected the popup to the backend callback, which in turn redirected to `/hub?integration=<kind>&status=success&type=<kind>&id=<n>`. The popup then loaded the entire Hub page inside itself and stayed open. The wizard's parent window had no way to know OAuth had finished — it waited for its 3-second poll tick, which could be missed entirely if the user closed the popup manually before it fired.
+
+**Fix — two-sided.**
+
+1. **Popup side** (`frontend/app/hub/page.tsx`): At the very top of `HubPage`, before any hooks, we check `window.opener && window.opener !== window` plus the `status=success` + `integration=gmail|calendar` query params. When that's true, we post a `{ source: 'tsushin-google-oauth', integration, integration_id, status }` message back to `window.opener` (same-origin), call `window.close()`, and `return null`. This runs only in the popup render — a direct browser visit to `/hub?integration=gmail&status=success&…` (the popup-blocked fallback path) still renders Hub normally because `window.opener` is null.
+2. **Wizard side** (`frontend/components/integrations/GmailSetupWizard.tsx`, `GoogleCalendarSetupWizard.tsx`): Added a `message` event listener inside a `useEffect` gated on `isOpen`. On receipt of a same-origin message with the expected shape, it stops the 3-second poll, refreshes the integrations list, and selects the integration ID the popup reported (falling back to "first id not in the initial snapshot" if the payload is missing).
+
+**Verified end-to-end (Playwright):**
+- Direct visit to `/hub?integration=gmail&status=success&type=gmail&id=3` (no `window.opener`) renders Hub normally — the popup-blocked fallback still works.
+- `window.open('/hub?integration=gmail&status=success&type=gmail&id=3', …)` from the parent tab → parent received exactly one `{source:'tsushin-google-oauth', integration:'gmail', integration_id:3, status:'success'}` message; `popup.closed === true` within ~3 s. Calendar path behaves identically with `integration:'calendar', integration_id:4`.
+
+**Not touched:** the backend OAuth callback continues to redirect to `/hub?…` so the legacy popup-blocked fallback (which the wizard code still supports) stays unchanged.
+
+### Wizard Step 3 no longer lists disconnected Gmail/Calendar accounts (2026-04-19)
+
+Follow-up to the wizard-unification work below. `GET /api/hub/google/gmail/integrations` and `GET /api/hub/google/calendar/integrations` now exclude rows with `health_status='disconnected'`, matching the filter already applied by the main Hub list endpoint.
+
+**Why.** The wizard's Step 3 "Existing accounts" picker was backed by an unfiltered query, so a previously-disconnected row still appeared there. A user could select it, walk through the agent-linking step, and `PUT /api/agents/{id}/skill-integrations/gmail` would happily bind the agent's Gmail skill to the dead `integration_id`. The Hub card list correctly hid the integration (because it's disconnected), which made the wizard feel silently broken — "I finished the flow, where's my card?".
+
+**Fix.** Added `HubIntegration.health_status != 'disconnected'` to both list endpoints in `backend/api/routes_google.py`. Reconnecting a disconnected account goes through the OAuth flow, which already flips `is_active=True` and clears the `disconnected` status, so the row becomes eligible for the wizard list again naturally.
+
+**Data cleanup.** Unbound a stale `agent_skill_integration` row on a test-tenant agent that was pointing at a disconnected Gmail integration, and disabled the orphan Gmail skill row so the agent wouldn't sit in an "enabled but unbound" state.
+
+### Unify Gmail / Google Calendar wizards across Settings and Hub (2026-04-19)
+
+Hub → Communication "Add Gmail Account" and Hub → Productivity "Add Calendar Account" now open the same multi-step `GmailSetupWizard` / `GoogleCalendarSetupWizard` already used on `/settings/integrations`, instead of doing a bare `window.location.href` OAuth redirect.
+
+**Problem.** The Hub buttons called `/api/hub/google/{gmail|calendar}/oauth/authorize` directly and full-page-redirected. The user came back to Hub with an `HubIntegration` row but with **no agent bound** — they had to re-do the flow from Settings to enable the Gmail / Scheduler skill on the agent and link the integration. Two entry points, two different experiences, silently diverging outcomes.
+
+**Fix.** Lifted the wizards into a shared `GoogleWizardProvider` mounted globally in `app/layout.tsx` (same pattern already in use for WhatsApp via `WhatsAppWizardProvider`). A new `useGoogleWizard()` hook exposes `openWizard('gmail' | 'calendar')`; a `useGoogleWizardComplete(kind, cb)` companion hook lets consumer pages refresh their local integration lists when the wizard finishes.
+
+**Touched files.**
+- `frontend/contexts/GoogleWizardContext.tsx` (new) — provider, hook, `GoogleWizardHost` that mounts both dynamic-imported wizards.
+- `frontend/app/layout.tsx` — wraps tree with `GoogleWizardProvider`.
+- `frontend/app/settings/integrations/page.tsx` — removed local wizard state and inline mounts; buttons call `openWizard()`; `useGoogleWizardComplete` re-fetches Google credentials after completion.
+- `frontend/app/hub/page.tsx` — rewrote `handleGmailConnect` and `handleGoogleCalendarConnect` to call `openWizard()`; registered `loadHubIntegrations` as the completion callback via a ref (the function is declared below the hook call in the same component).
+
+**No backend changes.** Wizards already call `/api/hub/google/{gmail|calendar}/oauth/authorize` in popup mode and then `PUT /api/agents/{id}/skills/{type}` + `PUT /api/agents/{id}/skill-integrations/{type}` — the existing endpoints and schema are unchanged.
+
+**Verified end-to-end (Playwright, https://localhost):**
+- Hub → Communication → "+ Add Gmail Account" opens the 6-step Gmail wizard (not a redirect).
+- Hub → Productivity → "+ Add Calendar Account" opens the 6-step Calendar wizard.
+- `/settings/integrations` → "Set up Gmail →" / "Set up Google Calendar →" still open the same wizards (regression clean).
+- No `ReferenceError`, `TypeError`, or React invariant violations in the browser console.
+
+### QA — UI-First 4-Audit Regression Campaign (2026-04-19)
+
+- Coverage: Playground + Mini + Graph-Glow (A1 API harness + A2 browser), Flows (B1 API + B2 UI 20-shape matrix + 2 edit scenarios), Sentinel + MemGuard (C1 preflight + C2 browser matrix across Chroma × block/aggressive), Full-Stack multi-tenant UI + Ollama/Kokoro autoprov (D12 + D34-api), Ubuntu VM fresh install (HTTP + self-signed TLS, E1).
+- Outcome: 43 bugs filed (BUG-616..BUG-658). 1 Critical, 12 High, 12 Medium, 18 Low. Top findings: memory-poisoning persistence writing adversarial "IGNORE PREVIOUS INSTRUCTIONS" content as high-confidence long-term facts (BUG-642); Sentinel aggressive-level-3 regressing below block-level-1 on 3 attack families (BUG-644); Gate step data-binding returning literal `"null"` for `step_N.output` across 5 flow shapes (BUG-632); Ollama idle-DB-connection failures during long image pulls and CPU inference (BUG-649); platform Google SSO authorize URL leaking tenant client_id (BUG-647); self-signed Caddy TLS aborting SNI-less handshakes on IP-only hosts (BUG-653).
+- Evidence root: `output/playwright/full-regression-20260419/` (gitignored).
+- Playbook (reusable): `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md`.
+
+### Agent Studio empty-canvas + stale-switch fix, fullscreen exit button, integration-disconnect leak fix (2026-04-19)
+
+Three fixes in the Studio/Hub areas surfaced by a UI regression pass.
+
+**Agent Studio — canvas empty on first load (`frontend/components/watcher/studio/hooks/useAgentBuilder.ts`).**
+- Symptom: on fresh page load the default agent auto-selected in the dropdown, but the React Flow canvas rendered 0 nodes. The `/api/v2/agents/{id}/builder-data` call fired and returned 200, yet the layout never committed.
+- Root cause: the node-generation effect used a `let cancelled = false` local with a cleanup `() => { cancelled = true }`. Because the effect depends on `detachProfile` (and other callbacks whose refs change on every parent render — `onWarning` in `AgentStudioTab` was an unmemoized lambda), the effect re-ran frequently. Each re-run cancelled the prior in-flight dagre layout, and if the re-run early-returned (because the structural fingerprint hadn't changed) no new layout was kicked off — so the first layout's nodes never landed.
+- Fix: replaced the cleanup-based cancellation with a `layoutRequestVersion` ref. A pending layout only gets discarded when a newer layout is actually started, so benign re-renders no longer wipe the canvas.
+
+**Agent Studio — first agent switch rendered the previous agent's data (`useAgentBuilder.ts` + `useStudioData.ts`).**
+- Symptom: after the empty-canvas state above, clicking a different agent showed the dropdown updated to the new agent but the canvas rendered the previously-selected agent's name, channels, skill count, etc. Only the first switch was affected.
+- Root cause: `useStudioData` did not clear `agent`/`skills`/etc. when `agentId` changed — it waited for the new fetch to resolve, during which consumers saw the old payload combined with the new id.
+- Fix: `useStudioData` now tracks the last synced agentId via a ref and clears the per-agent state slice the moment `agentId` actually changes (before kicking off the new fetch). `useAgentBuilder`'s load-state effect also gained a defensive `if (studioData.agent.id !== agentId) return` guard so it never processes a mismatched payload even for a single render.
+
+**Agent Studio — exit-fullscreen button hidden behind backdrop (`frontend/components/watcher/studio/AgentStudioTab.tsx`).**
+- When the board was maximized, the existing minimize button in the header row ended up under the `z-40` backdrop (header wasn't elevated), so users had to hit `Esc` or click the dark overlay — both non-obvious.
+- Added a visible close button (top-right, `z-[60]`) inside the maximized container. `Esc` and click-outside still work.
+
+**Hub — Gmail / Google Calendar / Asana disconnect left the card visible.**
+- Symptom: clicking "Disconnect" on a Gmail/Calendar/Asana card would sometimes succeed on the backend but the card remained in the list after reload.
+- Root cause split across layers:
+  1. Backend `disconnect_integration` (`backend/hub/google/oauth_handler.py`, `backend/hub/asana/oauth_handler.py`) set `integration.is_active = False` but did not reset `health_status`. The listing filter in `backend/api/routes_hub.py` returned integrations where `is_active=True` **or** `health_status='unavailable'` (the "needs re-auth" branch), so a just-disconnected integration that was previously unavailable still matched.
+  2. Frontend handlers (`frontend/app/hub/page.tsx`) for Gmail/Calendar/Asana did not check `response.ok`, silently showing the "Disconnected" toast even on backend failure; they also didn't await the re-fetch.
+- Fix: backend now sets `health_status = 'disconnected'` alongside `is_active = False`. Listing filter now requires `health_status != 'disconnected'` in addition to the existing active/unavailable predicate. Frontend handlers throw on non-2xx responses, optimistically drop the card from local state, await the re-fetch, and surface errors via the existing error toast path instead of a silent success.
+- Reconnect path is unaffected — the existing authorize flow resets `is_active=True` and `health_status='unknown'`, which clears the `disconnected` marker.
+
+### Live Playground regression harness (2026-04-19)
+
+Added a reusable live-stack regression runner for Playground / Playground Mini / Watcher Graph verification.
+
+- **New test-only runner** — `backend/dev_tests/run_playground_regression_live.py`
+  - Authenticates against `https://localhost` with the current owner fixture (`test@example.com / test1234`).
+  - Validates the existing live interfaces only: `/api/auth/login`, `/api/auth/me`, `/api/playground/agents`, `/api/projects`, `/api/playground/threads`, `/api/playground/chat?sync=true`, `/api/v2/agents/graph-preview`, `/api/v2/agents/{id}/expand-data`, `/api/v2/agents/comm-enabled`, `/api/agents/{id}/knowledge-base/*`, and `/ws/watcher/activity`.
+  - Discovers the live default/default-capable agent mapping, uploads `sample_data/acme_sales.csv` to the provider-backed graph agent knowledge base, waits for chunking completion, and then exercises baseline thread flow, provider-backed `web_search`, KB-backed answers, and `agent_communication` A2A.
+  - Writes a structured JSON report into `output/playwright/playground-regression-api-<timestamp>.json` with correlation tokens, watcher event capture, cleanup targets, and per-scenario assertions.
+  - Supports `--skip-cleanup` so the browser Graph run can inspect the same KB / thread artifacts before cleanup.
+
+- **Regression artifact convention** — browser evidence for the paired Playwright CLI run is now expected under `output/playwright/playground-regression-<timestamp>/` so screenshots, summaries, and API JSON stay grouped per live pass.
+
+- **No product contract changes.** This is regression-only scaffolding; all coverage uses the existing tenant-scoped Playground, project, watcher, graph, KB, and auth routes.
+
+### Global admin invite UX + System-under-Core nav consolidation (2026-04-19)
+
+Hardens the multi-tenant mental model in the global-admin UI. Previously, inviting a user from `/system/users` let the admin drift into an ambiguous state where a tenant-scoped invite could be submitted with no tenant selected, relying solely on a backend 400 to catch it — and the Create User modal had the same shape. The System area also lived as a standalone top-level nav item in the global-admin view, inconsistent with the tenant view where System is a card under Core.
+
+**Frontend — explicit `Tenant User` vs `Global Admin` branching** (`frontend/app/system/users/page.tsx`).
+- Both Invite User and Create User modals now lead with a two-option segmented picker: **Tenant User** (belongs to a specific organization — the common case, default) and **Global Admin** (platform-wide administrator, no tenant).
+- Tenant-user path: required Organization dropdown labeled with `{name} — {slug} ({user_count} members)` so the admin can disambiguate; inline red helper when empty (*"Invitees are not global admins and must belong to one tenant"*); role dropdown constrained to `owner | admin | member | readonly` (no `global_admin` row here — global admin is chosen via the kind picker).
+- Global-admin path: tenant + role dropdowns hidden; small purple info banner explains platform-wide scope.
+- Submit button disabled until all required fields for the active kind are filled — the old form could submit without a tenant and fail server-side.
+- When no tenants exist yet, both modals surface an amber hint to create one via System → Tenant Management first.
+
+**Frontend — System becomes a Core section, not a standalone nav link.**
+- Removed the separate `System` top-level nav item for global admins in `components/LayoutContent.tsx`. Top nav is now identical for all roles: `Watcher, Studio, Hub, Flows, Playground, Core`.
+- `app/settings/page.tsx` — expanded the global-admin section from one card (Tenant Management) to five: **Tenant Management, User Management, Plans & Limits, Remote Access, Global SSO**. Section header renamed from `Platform Administration` to `System` to match the concept (and the old nav label).
+- Global admin login now redirects to `/settings` (Core) instead of `/system/integrations`.
+- `app/system/integrations/page.tsx` replaced with a redirect stub that `router.replace('/settings')` — preserves old bookmarks and email links.
+- New `app/system/sso/page.tsx` — dedicated Global SSO page; extracts the Google SSO config block (credentials form, domain whitelist, auto-provision + default-role dropdown, setup instructions) from the old `/system/integrations` hub. Behavior preserved verbatim (`api.getGlobalSSOConfig` / `api.updateGlobalSSOConfig`).
+
+**Backend — clearer validation + `is_global_admin` on create (non-breaking).**
+- `backend/api/routes_admin_invitations.py`: replaced the two generic 400s with field-specific messages that name the missing or forbidden field (`"tenant_id is required for tenant-scoped invitations. Pick the organization this user should belong to."`, `"Global admin invitations must not include tenant_id. Global admins are platform-wide and not scoped to a tenant."`, etc.), so the UI can surface actionable feedback.
+- `backend/api/routes_global_users.py`: `POST /api/admin/users/` now accepts `is_global_admin: bool = False` and branches shape validation the same way as the invite endpoint. When `True`, `tenant_id`/`role_name` must be absent, the user is created with `tenant_id=NULL` and `is_global_admin=True`, no `UserRole` row is inserted, and the tenant user-limit check is skipped. When `False` (default), both `tenant_id` and `role_name` are required and the existing tenant-scoped path runs unchanged. Existing callers are 100% unaffected. Audit log includes `is_global_admin` in details.
+
+**Frontend type change** — `lib/client.ts` `UserCreateRequest` now has `tenant_id?: string | null`, `role_name?: string | null`, and `is_global_admin?: boolean` to match the widened backend contract.
+
+**Database — no migration.** The existing `UserInvitation` CHECK constraint `(is_global_admin=TRUE ↔ tenant_id IS NULL AND role_id IS NULL)` and the `User.tenant_id` nullable column already support both shapes.
+
+**Verified.** `docker-compose build --no-cache backend frontend` + `up -d`. Browser sweep: global-admin login lands on `/settings`; top nav no longer shows `System`; Core shows System group with 5 cards; invite with kind=`Tenant User` + no tenant keeps submit disabled and shows the red helper; invite with kind=`Global Admin` hides tenant/role and submits against the admin-invitations endpoint with `is_global_admin=true`; `/system/integrations` redirects to `/settings`. Tenant-owner invite flow at `/settings/team/invite` unchanged.
+
+### Calendar + Shell Beacon + Sandboxed Tools + Search wizards + Sentinel tour step (2026-04-19)
+
+Completes the guided-setup wizard track. Five new end-to-end flows + one onboarding tour step, all following the Kokoro shape (numbered pill indicator, 4-card info grid on step 1, Back / Cancel / primary-action footer). Cosmetically verified in-browser — consistent accent color per wizard (red Gmail, blue Calendar, teal Shell / Tools / Search).
+
+- **Google Calendar Setup Wizard** (`frontend/components/integrations/GoogleCalendarSetupWizard.tsx`, 6 steps) — reuses `GoogleAppCredentialsStep`; step 3 lists existing `CalendarIntegration` rows + popup-and-poll new-account flow + optional `default_calendar_id` / timezone fields that PUT through `/api/hub/google/calendar/{id}`. Step 6 per-agent: `PUT /skills/scheduler {is_enabled:true}` then `PUT /skill-integrations/scheduler {integration_id, scheduler_provider:"google_calendar", config:{permissions:{read,write}}}`.
+- **Shell Beacon Setup Wizard** (`frontend/components/shell/ShellBeaconSetupWizard.tsx`, 6 steps) + shared `BeaconInstallInstructions` (`frontend/components/shell/BeaconInstallInstructions.tsx`, ~150 LOC extracted from `hub/shell/page.tsx:1450-1617`). Configure step covers name, display name, mode, poll interval, retention, allowlist chips (commands + paths, Enter to add), YOLO toggle with red warning. Create step POSTs `/api/shell/integrations`, renders the one-time API key, loops `PUT /skills/shell` with `execution_mode=hybrid` per agent, and surfaces the install snippet via the shared component — same source of truth as the existing "Advanced: bare form" modal. Final step lists testable `/shell uptime | ls /tmp | df -h | whoami && hostname` commands and a link to the approval queue.
+- **Sandboxed Tools Setup Wizard** (`frontend/components/tools/SandboxedToolsSetupWizard.tsx`, 5 steps) — two-column tool checkbox grid with Select-all / Clear / defaults-only helpers. Apply step ensures `AgentSkill(sandboxed_tools, is_enabled=true)` per agent then `POST /api/agents/{id}/custom-tools` per selected tool (swallows 400 "already assigned" as idempotent). Success screen surfaces "Try one of these" example commands keyed to the 9 pre-seeded tools with Copy buttons.
+- **Search Integrations Wizard** (`frontend/components/integrations/SearchIntegrationWizard.tsx`, 5 steps) — 3 provider cards: Brave (recommended), Tavily (gated "Coming soon" badge with disabled radio until the adapter ships), SerpAPI. Masked API-key input with Show/Hide toggle. POSTs `/api/api-keys`; on `400 already configured` retries as `PUT /api/api-keys/{service}`. Per-agent `PUT /skills/web_search {is_enabled:true, config:{provider, max_results:5, language:"en", country:"US", safe_search:true}}`. No skill-integrations row needed (`routes_skill_integrations.py:640-648` reports `requires_integration:false` for `web_search`).
+- **Sentinel step in onboarding tour** — `TOTAL_STEPS` bumped from 13 to 14 in `frontend/contexts/OnboardingContext.tsx`. New `customBody?: React.ReactNode` field on the `TourStep` interface + inline `SentinelTourPanel` (~80 LOC) inside `frontend/components/OnboardingWizard.tsx`. Panel reads `api.getSentinelConfig()` on mount and renders a Block-vs-Detect-only toggle that writes `{is_enabled:true, detection_mode:"block", block_on_detection:true, enable_prompt_analysis:true, enable_tool_analysis:true, enable_shell_analysis:true}` on ON or `{detection_mode:"detect_only", block_on_detection:false}` on OFF. Deep-links to `/settings/sentinel` for per-agent overrides. Spliced between the Playground Mini step and the All-Set finale.
+
+**Entry points wired.** `settings/integrations` — "Set up Gmail" + "Set up Google Calendar" buttons; the previously-disabled `(soon)` placeholder is now live. `hub/shell` — "+ Register Beacon" opens the wizard, the old inline modal survives as "Advanced: bare form". `hub/sandboxed-tools` — "🪄 Guided Setup" primary CTA next to the old "+ Create Tool". `hub?tab=tool-apis` — "🔎 Setup Web Search" header CTA.
+
+**Safety.** Every endpoint these wizards touch was tenant-isolation audited in the preceding commit (BUG-608 + BUG-609). Browser walkthrough confirmed Phase 0 fix live: Gmail step 3's existing-accounts list shows only the current tenant's emails.
+
+**Verified.** `docker-compose build --no-cache frontend` (clean TS compile, no new lints) + `up -d frontend` (healthy < 10 s). Step 1 of every wizard + the Sentinel tour step screenshotted and visually reviewed for consistency. Skip + Back + Cancel paths exercised. No console errors on wizard open / close.
+
+### Gmail setup wizard + shared wizard primitives (2026-04-19)
+
+Added the first of a planned series of friction-reduction wizards that bundle resource creation, OAuth authorization, and agent-skill wiring into a single modal flow. The Gmail wizard replaces a four-UI-hop sequence (configure Google OAuth credentials → start the OAuth flow → enable the Gmail skill on each agent → link the integration per-agent from Agent Studio) with a 6-step guided path.
+
+**New — `frontend/components/integrations/GmailSetupWizard.tsx` (~670 LOC).** Steps:
+1. Welcome (explains read-only scope `gmail.readonly` and multi-account support).
+2. Google OAuth app credentials (delegates to the shared `GoogleAppCredentialsStep`; auto-skips when the tenant already has credentials).
+3. Connect Gmail account — radio picker of existing `GmailIntegration` rows plus "Connect new Gmail account" that opens the authorization URL in a popup and polls `/api/hub/google/gmail/integrations` every 3 s (6-minute ceiling) for the new row. Popup-blocked fallback redirects to the auth URL in the current tab.
+4. Link to agents — multi-select, cloned from the Kokoro pattern; uses `api.getAgents(true)`.
+5. Review — account + scope + selected agents summary.
+6. Progress — for each selected agent, `api.updateAgentSkill(id, 'gmail', {is_enabled: true})` then `api.updateSkillIntegration(id, 'gmail', {integration_id, config: {}})`. Per-agent live log, "Retry failed" button, green success banner.
+
+**New — `frontend/components/ui/CopyableBlock.tsx` (~40 LOC).** Extracted the copy-to-clipboard code block that lived inline in `SlackSetupWizard.tsx:87-107`. Accepts a `tone` prop (teal / purple / blue / amber / slate) so each wizard can match its accent. `SlackSetupWizard` updated to import the shared component and pass `tone="purple"` at its two call sites.
+
+**New — `frontend/components/integrations/GoogleAppCredentialsStep.tsx` (~200 LOC).** Reusable wizard step that ensures the tenant has Google OAuth app credentials before any downstream Gmail / Calendar OAuth flow can start. Fetches `GET /api/hub/google/credentials`; if configured, shows a "Use these credentials" confirmation panel; if missing, renders the client_id / client_secret form and POSTs. Mirrors the copy + amber help box from the Integrations settings page.
+
+**Entry points** (in `frontend/app/settings/integrations/page.tsx`): when Google credentials are configured, a red "Set up Gmail →" button lives next to the existing Update / Remove actions. When no credentials yet, a secondary "Or jump into a guided setup: Gmail · Google Calendar (soon)" link appears below the primary "Configure Google Integration" CTA. The wizard is lazy-loaded via `next/dynamic` with `ssr:false`. The Google Calendar entry point is present but disabled with a "(soon)" tooltip — the Calendar wizard lands in a follow-up commit in the same release.
+
+**Safety.** Every backend endpoint the wizard calls was tenant-isolation-audited in the preceding commit (BUG-608 / BUG-609). Integration ids passed to `PUT /api/agents/{id}/skill-integrations/gmail` are verified against `HubIntegration.tenant_id == ctx.tenant_id`, and `GET /api/skill-providers/gmail` is scoped to the caller's tenant, so the wizard cannot leak or link cross-tenant resources even if the payload is tampered with.
+
+**Verified.** `docker-compose build --no-cache frontend` + `docker-compose up -d frontend` clean compile and healthy boot.
+
+### Legacy Kokoro compose service removed (2026-04-19)
+
+The stack-level `kokoro-tts` compose service and the `KOKORO_SERVICE_URL` env fallback have been deleted. Per-tenant auto-provisioned Kokoro containers (introduced in v0.7.0 via the TTSInstance model and the Hub "Kokoro TTS → Setup with Wizard" flow) are now the only supported way to run Kokoro.
+
+- **BREAKING**: Removed `kokoro-tts` service from `docker-compose.yml` and the `tts` profile. Users running `docker compose --profile tts up -d` must migrate to per-tenant auto-provisioned instances via Hub → Kokoro TTS → Setup with Wizard. The `kokoro-models` and `kokoro-audio` top-level volumes were also removed (the old compose service owned them; per-tenant instances manage their own volumes via `KokoroContainerManager`).
+- `KOKORO_SERVICE_URL` env fallback removed from `KokoroTTSProvider`. `synthesize(request, *, base_url)` now raises `RuntimeError` immediately if `base_url` is not supplied, and `health_check(base_url=None)` returns `status="unknown"` when called without one. `AudioTTSSkill` no longer silently falls back to an env URL: agents without a `tts_instance_id` or `Config.default_tts_instance_id` now return a clear `SkillResult` error pointing at Hub → Kokoro TTS → Setup with Wizard.
+- `POST /api/services/kokoro/{start,stop}` and `GET /api/services/kokoro/status` now return HTTP 410 Gone with a JSON body `{error, message, replacement: "/api/tts-instances"}` and a `Link: </api/tts-instances>; rel="successor-version"` header so old clients get a helpful migration message instead of a 404.
+- `install.py` no longer writes `KOKORO_SERVICE_URL` to `.env` during install and no longer backfills it into existing `.env` files. The `_get_default_kokoro_service_url()` helper has been deleted.
+- `backend/services/agent_seeding.py` is now Kokoro-instance-aware. When seeding the default "Kokoro" demo agent, it checks for an existing per-tenant `TTSInstance(vendor="kokoro", is_active=True)`. If one exists, the seeded `audio_tts` skill is wired to it via `tts_instance_id`. If none exists, the skill is seeded with `is_enabled=False` and a `_note` pointing the user to Hub → Kokoro TTS → Setup with Wizard — no more zombie agents referencing a dead compose URL.
+- Docs: `docs/documentation.md` no longer lists `KOKORO_SERVICE_URL` in the env reference and the quick-start `docker compose --profile tts up -d` note has been replaced by a pointer to the Hub wizard.
+
+### Tenant isolation hardening — skill-integrations routes (2026-04-19)
+
+A tenant-isolation audit performed while planning the Gmail / Google Calendar / Shell Beacon / Sandboxed Tools / Web Search setup wizards surfaced two pre-existing cross-tenant defects in `backend/api/routes_skill_integrations.py`. The wizards would have scaled the impact of both bugs by turning these endpoints into the primary call path for every tenant that opted into guided setup. Both bugs are now fixed with a parametrized SQL-compile regression test that runs offline and covers every affected subclass.
+
+**BUG-608 — `GET /api/skill-providers/{skill_type}` leaked integrations across tenants.** Every per-subclass query (`CalendarIntegration`, `GmailIntegration`, `AsanaIntegration`, `GoogleFlightsIntegration`, `AmadeusIntegration`) previously filtered only by `is_active == True`. Any tenant member with `agents.read` could list every other tenant's active integrations — owner email, integration id, health status. Fixed: each query now joins `HubIntegration` on the shared primary-key id and filters `HubIntegration.tenant_id == ctx.tenant_id`. Per-row `HubIntegration` lookups that re-queried the parent table were removed; the already-joined polymorphic subclass row exposes `.name` / `.health_status` directly.
+
+**BUG-609 — `PUT /api/agents/{agent_id}/skill-integrations/{skill_type}` accepted cross-tenant `integration_id`.** The route validated integration existence without checking tenant ownership (`HubIntegration.id == request.integration_id` only). An attacker who obtained a foreign integration id (trivially reachable through BUG-608) could wire that integration to one of their own agents. Fixed: lookup now requires both `HubIntegration.id == request.integration_id` and `HubIntegration.tenant_id == ctx.tenant_id`. The route returns `404` (not `400`) so integration existence cannot be probed across tenants via the error string.
+
+**Regression coverage.** `backend/tests/test_skill_integration_tenant_isolation.py` (newly tracked — previously every `backend/tests/*` was local-only) contains 7 assertions that compile the exact SQLAlchemy queries used inside the route and check for `tenant_id = <caller>` in the rendered SQL. Run with `docker exec tsushin-backend python -m pytest tests/test_skill_integration_tenant_isolation.py -v --no-cov`. The SQL-compile approach matches the existing `test_memory_tenant_scoping.py` pattern — no database fixture or HTTP stack needed.
+
+**Rebuild.** Backend-only: `docker-compose build --no-cache backend` + `docker-compose up -d backend`. WhatsApp / MCP sessions preserved.
+
+### Kokoro TTS Hub consolidation + Config.tenant_id fix (2026-04-19)
+
+Kokoro TTS management was split across two pages (`/settings/tts` for per-tenant instances + `/hub` for the legacy global compose service), which made the UX inconsistent with Ollama's in-Hub auto-provision flow and confused users who couldn't tell which page was authoritative. This change collapses everything into the existing Hub Kokoro card, mirroring the Ollama pattern, and fixes a latent `Config.tenant_id` AttributeError that was crashing `GET/PUT /api/settings/tts/default` at runtime.
+
+**Backend — Config.tenant_id bug fix.** `backend/services/tts_instance_service.py` (`get_config_default` and `set_default`) and `backend/agent/skills/audio_tts_skill.py` (TTS base_url resolution path) were filtering `Config` rows with `.filter(Config.tenant_id == tenant_id)`, but the `Config` model has no `tenant_id` column — it is a singleton. That meant every call to the default-TTS endpoints and every Kokoro message with per-tenant override resolution would crash with `AttributeError: type object 'Config' has no attribute 'tenant_id'`. Fixed by querying `db.query(Config).first()` (the single row) and keeping tenant isolation on the INSTANCE side: `set_default` still validates that the target `TTSInstance.tenant_id == ctx.tenant_id` before accepting it, and `audio_tts_skill` now adds a `TTSInstance.tenant_id == tenant_id` filter as defense-in-depth so a globally-configured default cannot leak another tenant's instance. The `SELECT ... FOR UPDATE` row-lock in `set_default` is preserved; it now locks by `Config.id` instead of by `tenant_id`. The `default_tts_instance_id` FK is effectively global for v0.7.0; a schema migration adding per-tenant Config defaults can follow later.
+
+**Frontend — consolidation.**
+
+- `frontend/app/settings/tts/page.tsx` — **deleted**. The standalone page and its classic single-form modal no longer exist.
+- `frontend/app/settings/page.tsx` — removed the "TTS / Speech Synthesis" settings card and the now-orphaned `tts` icon definition. The settings hub no longer links to a dedicated TTS page.
+- `frontend/app/hub/page.tsx` — extended the existing Kokoro card (AI Providers tab) with a "Per-Tenant Instances" section above the demoted "Legacy (global compose Kokoro)" collapsed panel. New card UX:
+  - `+ Setup with Wizard` CTA opens `KokoroSetupWizard` (unchanged 4-step flow — reused verbatim from the deleted page).
+  - Instance list shows name + vendor + auto-provisioned + default badges, container status chip (running / creating / stopped / error), base_url in mono, and per-instance actions: Default radio (click to set as tenant default), Start / Stop / Restart (for auto-provisioned), Logs toggle with inline drawer + Refresh, Delete with remove-volume confirm dialog.
+  - Container status for `creating` / `provisioning` instances polls `GET /api/tts-instances/{id}/container/status` every 3 s until terminal state, then triggers a full instance refresh.
+  - Empty state renders "No Kokoro instances yet." with a Setup-with-Wizard button.
+  - The legacy global-compose toggle (previously the only thing on the card) is still available but collapsed behind a "Legacy (global compose Kokoro)" expandable details section — preserved for installs still using the `docker compose --profile tts` pattern.
+- The `KokoroSetupWizard.tsx` component was unchanged; only its mount point moved from `/settings/tts` to the Hub card. `onComplete` now triggers a full Kokoro instance list refresh on the Hub page.
+
+**Backend warning text.** `tts_instance_service.provision_instance` fail-open warning text updated from "You can retry from Settings > TTS Instances." to "You can retry from Hub > AI Providers > Kokoro TTS." to match the new UX.
+
+**Verified.**
+
+- `docker exec tsushin-backend python -c "from services.tts_instance_service import TTSInstanceService; ..."` — confirmed both service methods no longer reference `Config.tenant_id`.
+- Direct API tests (as `test@example.com`, tenant owner): `POST /api/tts-instances` (create) → `PUT /api/settings/tts/default` (set default — previously crashed) → `GET /api/settings/tts/default` (returns default with `is_default:true`) → `DELETE /api/tts-instances/{id}` → `GET /api/settings/tts/default` (returns `{default_tts_instance_id: null}` — FK auto-cleared by the delete). Full round-trip passes.
+- Browser walkthrough via Playwright: `/hub` renders the consolidated Kokoro card with "Per-Tenant Instances" heading, `+ Setup with Wizard` CTA, empty state, and the collapsed "Legacy (global compose Kokoro)" toggle. Clicking "Setup with Wizard" opens the 4-step modal (What is Kokoro → Configure → Link Agents → Review & Create) with the step indicator tracking correctly. `/settings/tts` returns 404 as expected. `/settings` no longer lists the TTS card.
+
+No schema changes, no volume impact. Backend + frontend rebuilt safely via `docker compose up -d --no-deps --build backend` and `docker compose build --no-cache frontend`.
+
+### Kokoro TTS & Ollama setup wizards (2026-04-19)
+
+Added guided multi-step creation wizards for the two local-container providers so users no longer have to juggle the classic single-form modal, the container lifecycle APIs, and the agent-skill configuration separately.
+
+**Backend — two new "assign to agent" endpoints.**
+
+- `POST /api/tts-instances/{id}/assign-to-agent` — body `{agent_id, voice?, speed?, language?, response_format?}`. Upserts the `audio_response` `AgentSkill` row for the target agent with `config = {provider: "kokoro", tts_instance_id, voice, language, speed, response_format}` and `is_enabled = true`. Tenant isolation is double-guarded on both the TTS instance and the agent; cross-tenant access returns 404 (same shape as missing resource to avoid leaking existence). Permission: `org.settings.write`. [`backend/api/routes_tts_instances.py`](backend/api/routes_tts_instances.py).
+- `POST /api/provider-instances/{id}/assign-to-agent` — body `{agent_id, model_name}`. Sets `Agent.provider_instance_id`, `Agent.model_name`, and `Agent.model_provider` (to the instance vendor — typically `"ollama"`) in one call. Same double-guard tenant isolation pattern. Empty `model_name` returns 400. Permission: `org.settings.write`. [`backend/api/routes_provider_instances.py`](backend/api/routes_provider_instances.py).
+
+**Frontend — two new wizard components.**
+
+- `frontend/components/tts/KokoroSetupWizard.tsx` — 4-step modal (mirrors `MCPServerWizard.tsx`): What-is-Kokoro card → Configure (instance name, auto-provision, memory limit, voice/speed/language/format, set-as-default) → Link agents (multi-select with "Select all"/"Skip") → Review & Create. On submit: `createTTSInstance` → optional `setDefaultTTSInstance` → poll `/container/status` every 3 s until `running` (or `error`) → `assignTTSInstanceToAgent` per selected agent → close with success toast. Error states surface a Retry button. Keyboard: ESC closes, Enter advances on config/link/review steps.
+- `frontend/components/ollama/OllamaSetupWizard.tsx` — 5-step modal: What-is-Ollama card → Configure container (instance name, GPU checkbox, memory limit) → Choose model (curated list of 7 models with params/disk/summary, plus Custom) → Link agents (multi-select) → Review & Provision. Orchestration: `ensureOllamaInstance` → `provisionOllamaContainer(gpu, mem)` → poll `/container/status` → `pullOllamaModel` → poll pull job (2 s tick, live % progress bar) → `assignOllamaInstanceToAgent` per selected agent → close. Three-stage progress indicator (Provision → Pull → Assign) with per-stage active/done states.
+
+**Frontend — CTAs wired into existing pages.**
+
+- `frontend/app/settings/tts/page.tsx` now shows two buttons in the header: "Create with Wizard" (primary teal) + "Advanced: Add Manually" (secondary, opens the existing classic modal). The wizard is a *supplement*, not a replacement — power users who know exactly what they want keep the single-form path.
+- `frontend/app/hub/page.tsx` adds a "Setup with Wizard" button at the top of the Ollama card above the host/auto-provision radio. The existing inline auto-provision panel stays intact for users already past first-run onboarding.
+
+**API client additions.**
+
+- `api.assignTTSInstanceToAgent(id, data)` and `api.assignOllamaInstanceToAgent(id, data)` added to `frontend/lib/client.ts`, returning the updated skill or agent summary.
+
+**Verified.**
+
+- `docker exec tsushin-backend python -c "import api.routes_tts_instances; import api.routes_provider_instances"` → OK.
+- Direct API tests (as `test@example.com`, tenant owner): 404 paths for missing instance / agent / wrong-tenant agent all return the expected `{"detail": "..."}` shape; empty `model_name` returns 400; valid assignments return 200 with the correct upserted row/agent config. Re-running an assignment on an agent that already has an `audio_response` skill updates the existing row (skill_id preserved) instead of creating a duplicate.
+- Browser walkthrough via Playwright: both wizards open, step indicator advances (1 → ✓, current step highlighted), agent multi-select shows all tenant agents (9 in test tenant), review screen renders Instance / Voice Defaults / Agent Assignments / Container / Model sections with the current selections. ESC / X / backdrop close work. No new TypeScript errors in the Next build.
+
+No schema changes, no volume impact. Safe per-service rebuild.
+
+### Bug-Fix Sprint — BUG-594 to BUG-607 resolved (2026-04-19)
+
+Closed the 11 remaining Open items on `develop` across the 2026-04-18 UI-Only Playground/Mini/Graph sweep, Sentinel + MemGuard audit, and Flows UI-First sweep. Per-bug evidence in [`BUGS.md`](../BUGS.md) under the matching Resolved entries.
+
+**Fixed (grouped by root cause).**
+
+- **DB pool exhaustion via `/api/readiness` — BUG-604, BUG-607, BUG-594.** `backend/api/routes.py:145–154` built a per-call `sessionmaker(bind=_engine)` and closed the session with **no `db.rollback()`** before `db.close()`. Under rapid readiness probing that leaked one `idle in transaction` connection per call — eventually saturating the pool, stalling `/api/auth/me` and `/api/auth/login` (BUG-604), and presenting the "edge hangs while containers report healthy" state (BUG-607) because `/api/health` is DB-free. The six post-login 502s in BUG-594 were downstream — the Caddy proxy reported upstream-unreachable while the Watcher dashboard fired six queries in parallel. Replaced the per-call sessionmaker with the module-level `get_session_factory()` (same factory FastAPI's `Depends(get_db)` uses) and added an explicit rollback-before-close. `for i in {1..200}; do curl -sk https://localhost/api/readiness; done` now leaves only 1 idle-in-transaction (the in-flight probe) versus unbounded growth before. [`backend/api/routes.py`](backend/api/routes.py).
+- **Sentinel LLM call had no outer timeout — BUG-601.** Both `_call_llm` invocations in `backend/services/sentinel_service.py` (per-detection at `:1049` and unified at `:1340`) are now wrapped in `asyncio.wait_for(coro, timeout=config.timeout_seconds)`. The existing fail-closed (block mode) / fail-open (non-block mode) handler from BUG-LOG-020 catches `asyncio.TimeoutError` naturally, so a stalled Sentinel provider can no longer pin the Playground request's DB session indefinitely and amplify pool pressure. Added `import asyncio` at module top. [`backend/services/sentinel_service.py`](backend/services/sentinel_service.py).
+
+**Fixed (localized).**
+
+- **Flow tool config — BUG-605.** Flow-engine tool step merges both `parameters` and `tool_parameters` from the node config with `parameters = {**(_p), **(_tp)}` (later wins). The previous `config.get("parameters", config.get("tool_parameters", {}))` `dict.get` fallback never fired when the UI wrote **both** keys (the common case — `parameters={}` plus `tool_parameters={"query": "..."}`), so the built-in `google_search` step ran with `query=""` and returned HTTP 422. [`backend/flows/flow_engine.py`](backend/flows/flow_engine.py).
+- **`asana_tasks` built-in removed — BUG-606.** The UI offered `Asana Tasks` in the Tool-step picker at two sites in `frontend/app/flows/page.tsx` and the backend declared its metadata in `backend/api/routes_flows.py:1296–1315`, but `FlowEngine._execute_builtin_tool` only dispatches `google_search` and `web_scraping` — everything else raised `Unknown built-in tool: asana_tasks`. Went with the graceful fix (removing the option from the UI + metadata) rather than wiring a new dispatcher: adding a real Asana task creator to the flow engine is a feature for v0.7.0, not a bug fix. Tenants who need Asana from flows today can use the scheduler skill, which is already backed by `backend/agent/skills/scheduler/asana_provider.py`. [`frontend/app/flows/page.tsx`](frontend/app/flows/page.tsx), [`backend/api/routes_flows.py`](backend/api/routes_flows.py).
+- **Playground first-paint empty state — BUG-596.** Added `isLoadingAgents` (`true` initially, `false` in `loadAgents()`'s `finally`) and gated the "Select an Agent" empty state behind `!isLoadingAgents` in `ExpertMode`. Shows a dedicated "Loading agents…" spinner during the cached-then-fresh hydration instead of flashing `Agents 0` + a disabled selector. [`frontend/app/playground/page.tsx`](frontend/app/playground/page.tsx), [`frontend/components/playground/ExpertMode.tsx`](frontend/components/playground/ExpertMode.tsx).
+- **Onboarding re-open / `/flows` overlay trap — BUG-595, BUG-603.** Two changes. (1) `OnboardingContext` auto-start timer now re-reads localStorage at fire time (`getCompletedForUser(key)`) before flipping `isActive=true` — refs can go out of sync on route changes but localStorage is the persistent source of truth. (2) `UserGuidePanel` backdrop/panel raised to `z-[200]` / `z-[201]` so route-level modals (Modal.tsx `z-50`, flow page modals `z-50`) can't stack over the Close Guide button. `OnboardingWizard` now short-circuits to `null` on auth/setup routes and when `state.hasCompletedOnboarding` is true (belt-and-suspenders). [`frontend/contexts/OnboardingContext.tsx`](frontend/contexts/OnboardingContext.tsx), [`frontend/components/UserGuidePanel.tsx`](frontend/components/UserGuidePanel.tsx), [`frontend/components/OnboardingWizard.tsx`](frontend/components/OnboardingWizard.tsx).
+- **Graph View playground glow — BUG-597.** Pipeline verified correct end-to-end with Playwright + `MutationObserver` on `.react-flow__edge` / `.react-flow__node` class attributes during two independent live Playground Mini sends. Captured lifecycle on every send: T+0 `edge-active-cyan` + `agent-node-processing` applied → T+5s (MIN_AGENT_GLOW_DURATION) transitions to `edge-fading-cyan` + `agent-node-fading` + `channel-node-fading` → T+8s cleanup removes all classes. Earlier polling-based QA checks found 0 because they ran after the full 8-second cycle had already completed (agent responds in ~1-5s, glow minimum is 5s). No code change required. Original 2026-04-18 audit's 0-count observation is a derivative of Cluster B's backend instability (WebSocket drop during pool exhaustion eliminates events).
+- **Sentinel benchmark dev-test script — BUG-600.** `backend/dev_tests/sentinel_fast_benchmark.py` called the removed `SentinelService._get_config()` and passed `content=` where the public `analyze_prompt` API expects `prompt=`. Replaced both with `sentinel.get_tenant_config() or sentinel.get_system_config()` and corrected the kwarg. The benchmark now runs past preflight and makes live Gemini calls per test case.
+
+No schema migrations, no public API v1 contract changes, no volume recreation. Safe per-service rebuild; WhatsApp/MCP sessions preserved.
+
+### Global-admin invitation flow + independent platform Google SSO (2026-04-18)
+
+**Problem.** Three related gaps on the global-admin side. (1) The "Invite Member" UI in the tenant settings page returned an invitation link built from the *hashed* token stored in the DB instead of the raw token sent in the email, so the copy-link button in the success panel was broken. (2) Global-admin user management (`/system/users`) had no invite flow at all — only direct "+ Create User" with a plaintext password — and no way to pre-provision Google-SSO users. (3) Platform-wide Google SSO lived only in env-vars (`GOOGLE_SSO_CLIENT_ID/SECRET`), with no DB storage, no UI, no allowed-domains list, and no per-scope independence from tenant credentials.
+
+**Added.**
+- **`UserInvitation` schema extension** (Alembic `0036_invitation_scope_and_global_sso.py`). `tenant_id` and `role_id` became nullable; new columns `is_global_admin BOOLEAN NOT NULL DEFAULT false` and `auth_provider VARCHAR(16) NOT NULL DEFAULT 'local'`. The old `uq_tenant_email` hard unique index was replaced by a PostgreSQL partial unique index `uq_invitation_tenant_email_pending ON (tenant_id, email) WHERE accepted_at IS NULL` so the same address can be re-invited after an old invite accepts/expires. Two `CHECK` constraints (`ck_invitation_scope`, `ck_invitation_auth_provider`) encode the scope/shape invariants in the DB as well as the ORM. [`backend/alembic/versions/0036_invitation_scope_and_global_sso.py`](backend/alembic/versions/0036_invitation_scope_and_global_sso.py), [`backend/models_rbac.py`](backend/models_rbac.py).
+- **`GlobalSSOConfig` singleton table** (same migration). Platform-wide Google SSO configuration — `google_sso_enabled`, `google_client_id`, `google_client_secret_encrypted` (Fernet, identifier `sso_client_secret_global`), `allowed_domains` (JSON array), `auto_provision_users` (stays `false` by default — global admins must be explicitly invited), `default_role_id`. Seeded with one empty row on upgrade; belt-and-suspenders startup hook in `backend/app.py` re-seeds if the row is ever deleted.
+- **`POST /api/team/invite` accepts `auth_provider`.** `local` (default, user creates a password on accept) or `google` (user must accept via Google SSO with matching email). [`backend/api/routes_team.py`](backend/api/routes_team.py).
+- **Global-admin invitation endpoints** at `/api/admin/invitations` (require_global_admin). `POST /` accepts `{email, tenant_id?, role?, is_global_admin, auth_provider, message?}`; enforces the scope shape in code and catches IntegrityError from the partial unique index as HTTP 409. `GET /` lists pending invitations with `is_global_admin`/`tenant_id`/`email_contains` filters. `DELETE /{id}` cancels. Audit-logged via `log_admin_action`. [`backend/api/routes_admin_invitations.py`](backend/api/routes_admin_invitations.py).
+- **Global-admin SSO config endpoints** at `/api/admin/sso-config` (require_global_admin). `GET` masks the client secret by default; `?include_secret=true` returns the decrypted value. `PUT` upserts the singleton; secret is Fernet-encrypted using the same `encryption_key_service` path as `TenantSSOConfig`. [`backend/api/routes_admin_sso.py`](backend/api/routes_admin_sso.py).
+- **Frontend — tenant invite form (`/settings/team/invite`)** gained a **Sign-in method** radio. The "Google SSO" option is disabled with a tooltip when the tenant has no Google SSO configured (prevents creating an invite the invitee can't accept). [`frontend/app/settings/team/invite/page.tsx`](frontend/app/settings/team/invite/page.tsx).
+- **Frontend — global-admin `/system/users`** gained a primary **"Invite User"** button alongside the break-glass "+ Create User". Modal fields: email, role (includes **Global Admin**), tenant (hidden when role=Global Admin), auth method, optional message. Success view mirrors the tenant flow with a copy-able invitation link. A **Pending Invitations** section lists all outstanding invites (scope / role / auth / expires / Cancel). [`frontend/app/system/users/page.tsx`](frontend/app/system/users/page.tsx).
+- **Frontend — accept page (`/auth/invite/[token]`)** rewrites the header to "Join Tsushin as Global Admin" + admin badge + "Platform-wide" organization row when the invitation is global-scoped. When `auth_provider === 'google'` the password form is hidden and only "Continue with Google" remains (with a tagline stating the Google email must match). A red dead-end banner replaces the button when a Google-only invite lands on a platform with Google SSO disabled. [`frontend/app/auth/invite/[token]/page.tsx`](frontend/app/auth/invite/[token]/page.tsx).
+- **Frontend — global `/system/integrations`** gained a real **Platform-wide Google SSO** configuration section (distinct from the per-tenant settings page). Fields: `google_sso_enabled`, `google_client_id`, `google_client_secret` (write-only; shows `••• (unchanged)` placeholder when already set), `allowed_domains` (comma-separated ↔ JSON array), `auto_provision_users` (with bold-red warning copy — disabled by default), `default_role_id` (shown only when auto-provision is on). Setup-instructions card shows the OAuth redirect URI. [`frontend/app/system/integrations/page.tsx`](frontend/app/system/integrations/page.tsx).
+
+**Changed.**
+- **Fixed.** `backend/api/routes_team.py::invitation_to_response` now accepts a `raw_token` kwarg; `invite_team_member` and `resend_invitation` pass the raw token through so the UI-returned `invitation_link` is actually valid. Previously the link was built from `invitation.invitation_token` which is the SHA-256 hash stored in the DB — the emailed link worked but the copy-from-UI link did not.
+- **`GoogleSSOService.get_oauth_credentials`** resolution order is now tenant `GoogleOAuthCredentials` → `GlobalSSOConfig` (when enabled) → `GOOGLE_SSO_CLIENT_ID`/`_SECRET` env-var fallback. Decrypting the global secret uses the `sso_client_secret_global` Fernet identifier; failure raises `GoogleSSOError` with a remediation hint instead of silently returning the ciphertext. [`backend/auth_google.py`](backend/auth_google.py).
+- **Accept flow** (`POST /auth/invitation/{token}/accept` and `GoogleSSOService.find_or_create_user`) branches on invite fields: `auth_provider=google` rejects password-accept with 400; `is_global_admin=true` creates a user with `tenant_id=null`, `is_global_admin=true`, no `UserRole` row; Google-SSO accept of a `google` invite enforces `invitation.email == google.email` case-insensitively. An existing-user email match while presenting a global-admin invitation token is explicitly rejected so the invite cannot be used to silently upgrade a pre-existing account. [`backend/auth_routes.py`](backend/auth_routes.py), [`backend/auth_google.py`](backend/auth_google.py).
+- **`/settings/integrations`** — removed the "Coming Soon" Microsoft 365 + Slack placeholder cards. Slack has had its own integration for several versions; Microsoft 365 is not on the near-term roadmap.
+
+**Migration & fresh-install impact.** Existing rows default `auth_provider='local'` and `is_global_admin=false` at the DB (`server_default`), ORM (`default='local'`), and application (`invitation.auth_provider or "local"`) layers — pre-migration invites accept unchanged. Fresh installs run `alembic upgrade head` (via `init_database`) which includes `0036` and seeds the `global_sso_config` row; the startup hook in `app.py` re-seeds if the row is ever deleted. `install.py` is unchanged (only bootstraps `.env` + Docker).
+
+**Tests.** `backend/tests/test_invitation_scope.py` — 14 pytest cases covering: raw-token link fix, Google-provider invite rejects password-accept, default `auth_provider='local'`, invalid `auth_provider` rejected, global-admin invite round-trip, shape/uniqueness/CHECK constraint enforcement, re-invite after accept, Google-SSO accept email mismatch, `GlobalSSOConfig` singleton GET/PUT, `require_global_admin` rejection for tenant owners. All passing.
+
+### Invitation link portability — multi-tenant + ingress-aware (2026-04-19)
+
+**Problem.** The invitation link returned to the UI and sent in emails was a bare path `"/auth/invite/<token>"` in API responses and `f"{FRONTEND_URL}/auth/invite/<token>"` in the email body. Under Cloudflare named tunnels (e.g. `https://tsushin.archsec.io`) the link either resolved to the wrong host (when the frontend prepended `window.location.origin` correctly but the backend's env-based email URL was stale) or leaked an internal hostname. Under multi-tenant deployments where one tenant has a `public_base_url` override and another does not, the backend used the *calling admin's* context instead of the *invitation's own tenant*.
+
+**Added.**
+- **`resolve_invitation_base_url(request, tenant=None)`** helper in `backend/services/public_ingress_resolver.py`. Multi-tenant-aware precedence chain: `tenant.public_base_url` (valid override) → platform Cloudflare tunnel → request origin (honoring `X-Forwarded-Proto` / `X-Forwarded-Host` so the named-tunnel hostname survives the Caddy reverse proxy) → `FRONTEND_URL` env → last-resort string. Always returns a non-empty origin with no trailing slash so callers can concatenate the token path directly.
+- **`backend/tests/test_invitation_link_portability.py`** — 9 pytest cases covering override precedence, trailing-slash normalization, tunnel fallback, global-admin (no-tenant) path, `X-Forwarded-*` honoring, `http://localhost:3030` dev mode, invalid-override graceful fallthrough, and the non-None last-resort contract.
+
+**Changed.**
+- **`invitation_to_response`** (`backend/api/routes_team.py`) and **`_invitation_to_response`** (`backend/api/routes_admin_invitations.py`) now accept a `request` argument and return an **absolute `invitation_link`** built with the resolver. The invitation's OWN `tenant_id` is looked up — never the calling admin's context — so a global admin inviting Tenant-A users gets Tenant-A's public URL, not their own. Global-admin invites (`tenant=None`) skip the override branch entirely.
+- **`send_invitation_email`** (`backend/services/email_service.py`) gained an optional `base_url` kwarg. Callers in both invite routes pass the resolved URL; the env-based `FRONTEND_URL` is now only a last-resort default.
+- **`GET /api/auth/google/status`** (`backend/auth_routes.py`) now counts `GlobalSSOConfig` as "platform-configured" in addition to the legacy `GOOGLE_SSO_CLIENT_ID`/`_SECRET` env vars. Without this bridge, the tenant invite page's "Google SSO" radio was incorrectly disabled when the platform was configured only via the new global-admin UI.
+- **Frontend** (`frontend/app/system/users/page.tsx`, `frontend/app/settings/team/invite/page.tsx`) now uses the absolute URL from the response verbatim, falling back to `window.location.origin` only when the backend returns a legacy relative path.
+
+**Verification.** All 23 pytest cases pass (14 original + 9 new portability cases). Live API confirms `https://localhost` → `https://localhost/auth/invite/…`; direct backend with `X-Forwarded-Proto: https, X-Forwarded-Host: tsushin.archsec.io` → `https://tsushin.archsec.io/auth/invite/…`. Browser E2E covered global-admin invites (local + Google-only), tenant invites, and the platform-SSO section.
+
+### Public Ingress Resolver — unified tenant-facing ingress URL (2026-04-18)
+
+**Problem.** Three features each solved "what public HTTPS URL reaches this backend?" differently: `tenant.public_base_url` was a free-text string (no validation, no reachability check); the global Remote Access tunnel exposed its live `public_url` only to global admins; and `WebhookSetupModal` used `window.location.origin` at copy time, silently breaking when admins browsed via LAN IP. A running platform tunnel never benefited the features that needed it, and a tenant admin could paste any string into `public_base_url` with no guardrails.
+
+**Added.**
+- **`GET /api/tenant/me/public-ingress`** — authoritative resolver for tenant-facing callers. Returns `{url, source, warning, override_url}` where `source ∈ {override, tunnel, dev, none}`. Precedence: tenant override (when format-valid) > platform tunnel (when running) > `TSN_DEV_PUBLIC_BASE_URL` env (dev escape hatch) > none. Decoupled from the login-entitlement flag `tenant.remote_access_enabled` — ingress and login gating are now separate concerns. [`backend/services/public_ingress_resolver.py`](backend/services/public_ingress_resolver.py), [`backend/api/routes_tenant_settings.py`](backend/api/routes_tenant_settings.py).
+- **Stricter `PATCH /api/tenant/me/settings` validation.** `http://` rejected unless `TSN_DEV_PUBLIC_BASE_URL` is set (dev flag); `user:pass@host` credential-laced URLs rejected explicitly; hostname must be a public FQDN (`localhost` / single-label rejected); DNS pre-resolution via async `loop.getaddrinfo` with a 2s timeout catches typos at save time instead of letting Slack/Discord deliveries fail silently later. Audit log entry added on every mutation via `log_tenant_event(..., TenantAuditActions.SETTINGS_UPDATE, ...)` with URL credentials scrubbed before logging (defense-in-depth).
+- **`TSN_DEV_PUBLIC_BASE_URL` env var** for local dev without a Cloudflare tunnel. Process-start only. Wired through `docker-compose.yml`.
+
+**Changed.**
+- **`PublicBaseUrlCard`** renamed to **"Ingress Override (Advanced)"** and demoted to a collapsible `<details>` inside a status card. Always shows the currently-resolved URL and its source ("via platform tunnel" / "tenant override" / "dev environment"), with an amber banner and auto-expanded override input when `source === 'none'`. Resolver warnings (invalid stored override) surfaced inline. [`frontend/components/PublicBaseUrlCard.tsx`](frontend/components/PublicBaseUrlCard.tsx).
+- **`SlackSetupWizard` + `DiscordSetupWizard`** now call `api.getMyPublicIngress()` instead of reading `tenant.public_base_url` directly. Both render a small source badge next to the detected URL. HTTP-mode banners point the user at the override card or Remote Access depending on the failure mode. [`frontend/components/SlackSetupWizard.tsx`](frontend/components/SlackSetupWizard.tsx), [`frontend/components/DiscordSetupWizard.tsx`](frontend/components/DiscordSetupWizard.tsx).
+- **Webhook channel.** `frontend/app/hub/page.tsx` fetches the resolver-provided URL once and feeds both the inline "Inbound:" copy button (previously concatenated `window.location.origin`) and `WebhookSetupModal`'s `apiBase` prop.
+
+**No schema / migration changes.** Existing tenants with an override preserve it automatically (`source=override`). Only new writes are subject to the stricter validation.
+
+**Verification.** End-to-end on `develop`: resolver returns correct source in all precedence branches; PATCH rejects `http://` outside dev mode, credential-laced URLs, non-FQDN hostnames, and unresolvable DNS, while accepting valid `https://` URLs. UI verified via Playwright: Ingress Override card, Slack HTTP wizard, Discord welcome step, Webhook setup modal all render the resolver's URL and source badge.
+
+### UI Recovery & Local Auth Stability (2026-04-18)
+
+- **Stale-session recovery login:** frontend auth bootstrap now times out `GET /api/auth/me` after 8s and hard-redirects to `/auth/login?force=1&reason=session-recovery` instead of leaving protected routes stuck on `Loading Tsushin...`. The login page shows a recovery banner and performs a best-effort logout without blocking sign-in. [`frontend/contexts/AuthContext.tsx`](frontend/contexts/AuthContext.tsx), [`frontend/app/auth/login/page.tsx`](frontend/app/auth/login/page.tsx), [`frontend/lib/client.ts`](frontend/lib/client.ts), [`frontend/middleware.ts`](frontend/middleware.ts)
+- **Local HTTP + HTTPS Google SSO parity:** auth cookies now derive the `Secure` flag from the actual request scheme, Google OAuth callback URLs are built from the request origin, and loopback HTTP entrypoints fall back to the configured local HTTPS callback when self-signed HTTPS is enabled. This keeps `https://localhost` Google SSO working and lets `http://127.0.0.1:3030` initiate the same flow without a separate Google redirect URI registration. Also removed a duplicate `TSN_SSL_MODE` compose env entry that blanked the backend SSL mode. [`backend/auth_routes.py`](backend/auth_routes.py), [`backend/auth_google.py`](backend/auth_google.py), [`docker-compose.yml`](docker-compose.yml), [`backend/tests/test_auth_security_fixes.py`](backend/tests/test_auth_security_fixes.py)
+- **Postgres pool guardrail for stale tabs:** backend Postgres connections now set `idle_in_transaction_session_timeout` (default `15000ms`) so leaked read transactions from stale browser tabs cannot pin the full pool long enough to break `/api/auth/me` or Google SSO. [`backend/db.py`](backend/db.py), [`backend/settings.py`](backend/settings.py), [`docker-compose.yml`](docker-compose.yml), [`backend/tests/test_db_connection_guards.py`](backend/tests/test_db_connection_guards.py)
+
+### Bug-Fix Sprint — BUG-589 to BUG-593 (2026-04-18)
+
+Remediated the five `Open` findings from the 2026-04-17 UI-First Fresh-Install audit on `develop`:
+
+- **BUG-589 — Remote Access public-hostname probe.** Named-tunnel start now runs a retrying `HEAD https://<tunnel_hostname>/api/health` probe (up to ~30 s) **after** `cloudflared_tunnel_ha_connections > 0` and gates the `state="running"` transition on it returning non-5xx. While the probe is outstanding the snapshot stays in a new `state="verifying"` with a clear message; on probe failure the tunnel is stopped and the admin sees the real error instead of a false "running" badge. [backend/services/cloudflare_tunnel_service.py](backend/services/cloudflare_tunnel_service.py), [backend/api/routes_remote_access.py](backend/api/routes_remote_access.py), [frontend/app/system/remote-access/page.tsx](frontend/app/system/remote-access/page.tsx), [frontend/lib/client.ts](frontend/lib/client.ts).
+- **BUG-590 — Flow tool nodes accept slug strings.** `FlowEngine._execute_sandboxed_tool` now resolves non-numeric `tool_id` values via `SandboxedTool.name` (tenant-scoped, enabled-only — same lookup `routes_flows.py` uses at create/update time). Digit-string legacy ids still cast via `int()`. Mismatches raise a clean `"Sandboxed tool 'X' not found or disabled for tenant Y"` error instead of the cryptic `invalid literal for int()` crash. Verified end-to-end with an API v1 flow whose tool node declared `tool_name="webhook"` — flow ran to `status=completed`. [backend/flows/flow_engine.py](backend/flows/flow_engine.py).
+- **BUG-591 — WhatsApp wizard stops flashing "Connected" before QR is scanned.** `WhatsAppWizardContext.setInstanceData()` no longer writes `stepsCompleted[2]=true` as a side-effect of instance creation — only the polling handler's `markStepComplete(2)` call (fired when `health.authenticated=true`) marks the step done. `StepCreateInstance` also re-verifies `/api/mcp/instances/{id}/health` before short-circuiting into the success state for a previously-created instance; if health reports not-authenticated it falls back to the QR-scan UI and resumes polling. Verified via Playwright against `https://localhost` — 23 DOM snapshots at 100 ms over 23 s after "Create", **0** "WhatsApp Connected!" frames. [frontend/contexts/WhatsAppWizardContext.tsx](frontend/contexts/WhatsAppWizardContext.tsx), [frontend/components/whatsapp-wizard/StepCreateInstance.tsx](frontend/components/whatsapp-wizard/StepCreateInstance.tsx).
+- **BUG-592 — Playground image URLs persist across thread reload.** The image-cache block in `PlaygroundService` (sync-chat + streaming paths, skill-only AND full-agent branches) now runs **before** `memory_manager.add_message(...)` and injects `image_url`/`image_urls` into `memory_metadata`. `playground_thread_service._get_thread(...)` and `playground_service.get_conversation_history(...)` mirror the existing `audio_url` pattern: they surface `image_url`/`image_urls` from the message dict or `msg["metadata"]` on read. Verified via Playwright: image rendered on first send, then survived a navigate-away + hard reload; `GET /api/playground/threads/{id}` now returns the persisted URLs for the assistant message. [backend/services/playground_service.py](backend/services/playground_service.py), [backend/services/playground_thread_service.py](backend/services/playground_thread_service.py).
+- **BUG-593 — Shellboy boots with the shell skill enabled.** `shell_skill_seeding` gained `_shell_is_enabled_default_for(db, agent)` which looks up the agent's `Contact.friendly_name` and, for names in `SHELL_ENABLED_AGENT_NAMES` (currently just `"shellboy"`), creates the `agent_skill(skill_type='shell')` row with `is_enabled=True`. Every other seeded agent keeps the default `is_enabled=False` opt-in posture. Both `seed_shell_skill_for_tenant` (fresh-install) and `backfill_shell_skill_all_tenants` (boot-time migration) apply the override — the backfill also flips any pre-existing disabled Shellboy rows. Verified via `SELECT ... FROM agent_skill` post-rebuild: Shellboy's `shell.is_enabled` is now `t`. [backend/services/shell_skill_seeding.py](backend/services/shell_skill_seeding.py), [backend/services/agent_seeding.py](backend/services/agent_seeding.py).
+
+No schema migrations, no public API v1 contract changes, no volume recreation. All verification done against the local `develop` stack with a safe per-service `--no-cache` rebuild; WhatsApp/MCP sessions preserved.
+
+### Playground Mini — floating quick-test bubble on every page (2026-04-17)
+
+**Added: Playground Mini** — a compact floating chat bubble available on every authenticated page (Watcher, Studio, Hub, Flows, Core, Settings, System) so operators can fire a quick test against any agent without leaving their current page. Particularly useful while exploring the Watcher Graph view, editing a Flow, or inspecting a dashboard, where the friction of a full page switch used to discourage mid-task validation.
+
+**Surface area & UX:**
+- Circular FAB in the bottom-right (bottom-6 right-6, z-[70]) on every authenticated page. Route-gated: hidden on `/playground`, `/auth/*`, `/setup` so the full Playground is never duplicated.
+- Expands to a 380×560 panel (mobile: inset-x-4 bottom-4 top-16) with `animate-scale-in`. `role="dialog"` `aria-modal="false"` (non-blocking — the page behind stays interactive).
+- Header packs: agent dropdown, project dropdown (`(No project)` + all non-archived projects — selecting a project scopes the thread list to that `folder`), thread selector, new-thread ("+"), expand-to-full-Playground, close.
+- Composer: auto-grow textarea (up to 4 rows). Enter = send, Shift+Enter = newline, Ctrl/Cmd+Enter = send. Disabled during in-flight.
+- Assistant messages render through `react-markdown` + `remark-gfm` with a dedicated `.mini-markdown` stylesheet (compact p/h1–h4/strong/em/a/ul/ol/blockquote/code/pre/table/hr styles tuned for the tight bubble). User messages remain plain-text to preserve input.
+- Pending state: three pulsing `tsushin-accent` dots in an assistant-style bubble while `sendMessage` is in-flight (sync HTTP — no WS state machine in the Mini, avoids a second always-on WebSocket connection from every page).
+- Global hotkey: **Ctrl/Cmd + Shift + L** toggles the Mini (ignored when any `[role="dialog"][aria-modal="true"]` is focused). ESC closes the panel when focus is inside it and returns focus to the FAB.
+
+**Expand handover — conversation carries over intact.** Clicking the expand icon navigates the user to `/playground?thread=<id>&agent=<id>&project=<id>`. The full Playground consumes those params on mount and lands the user on the exact same thread with the same messages already rendered, then strips the query string via `window.history.replaceState` without a React remount so future navigation works normally. Multiple iterations were required to get this right:
+- Initial implementation used `router.replace('/playground', { scroll: false })` which invalidated the segment cache and remounted the page, wiping the `pendingThreadFromUrlRef` and causing the wrong (empty) thread to be auto-selected. Replaced with `window.history.replaceState(null, '', '/playground')` which updates the URL bar without triggering React.
+- Second race: `loadAgents()`' default-agent auto-pick fired before the URL-sync effect populated the pending thread, so `initializeThreads` ran for the wrong agent. Fixed by seeding `selectedAgentId` from `window.location.search` via a lazy `useState` initializer at mount — beats `loadAgents()` by one render.
+- Third race: the pending-thread consumption was split across two effects (`useSearchParams` + `[threads]`), so the ref could be null when `initializeThreads` checked it. Consolidated the claim inside `initializeThreads` itself: it reads `window.location.search` directly (not via `useSearchParams`), looks up the thread in the just-fetched `agentThreads`, selects it, strips the URL, and bails out before the empty-thread auto-pick / auto-create logic. A module-local `lastConsumedHandoverThreadRef` de-dupes repeat consumption within one session while still allowing a later expand with a different thread to work.
+
+**Multi-tenant safety.** All data operations reuse the existing tenant-scoped endpoints (`GET /api/playground/agents`, `GET /api/projects`, `GET/POST /api/playground/threads`, `GET /api/playground/threads/:id`, `POST /api/playground/chat?sync=true`) — no new backend, no new auth paths. Selection state is persisted in sessionStorage keyed by userId (`tsushin:playground-mini:v1:<userId>`), and `AuthContext.logout()` clears it. Messages are never persisted client-side: they re-fetch from `api.getThread(activeThreadId)` on panel mount, which re-validates tenant ownership on every call.
+
+**Thread auto-creation before send.** The first message sent when no thread is active creates a thread synchronously via `api.createThread(...)` before the chat POST, so the handover URL always has a valid `?thread=<id>` to deep-link into.
+
+**Onboarding tour integration.** Bumped `TOTAL_STEPS` from 12 → 13. Added a new tour step 12 ("New: Playground Mini") targeting `[data-testid="playground-mini"]`. When the step becomes active the wizard applies the existing `.tour-highlight` class AND the new `.playground-mini-tour-glow` keyframe — a 1.4s × 3-iterations strong box-shadow pulse using `tsushin-accent` + `tsushin-indigo` that draws the eye to the FAB. The step's "Open Playground Mini" action dispatches `tsushin:playground-mini:open`, which `PlaygroundMini` listens for and re-applies the glow to the open panel. A MutationObserver on the FAB watches for the wizard's `.tour-highlight` toggle and triggers the glow automatically, so it also lights up if the wizard is relaunched from the header `?` button and advanced back to the Mini step. If the user happens to be on an excluded route (`/playground`, `/auth/*`, `/setup`) when they click the step's action button, the wizard first `router.push('/')` before dispatching the open event so the Mini actually renders.
+
+**Files added:**
+- [frontend/components/playground/mini/PlaygroundMini.tsx](frontend/components/playground/mini/PlaygroundMini.tsx)
+- [frontend/components/playground/mini/PlaygroundMiniPanel.tsx](frontend/components/playground/mini/PlaygroundMiniPanel.tsx)
+- [frontend/components/playground/mini/MiniHeader.tsx](frontend/components/playground/mini/MiniHeader.tsx)
+- [frontend/components/playground/mini/MiniMessageList.tsx](frontend/components/playground/mini/MiniMessageList.tsx)
+- [frontend/components/playground/mini/MiniStreamingMessage.tsx](frontend/components/playground/mini/MiniStreamingMessage.tsx)
+- [frontend/components/playground/mini/MiniComposer.tsx](frontend/components/playground/mini/MiniComposer.tsx)
+- [frontend/components/playground/mini/usePlaygroundMini.ts](frontend/components/playground/mini/usePlaygroundMini.ts)
+- [frontend/lib/playgroundMiniSessionStore.ts](frontend/lib/playgroundMiniSessionStore.ts)
+
+**Files modified:**
+- [frontend/app/layout.tsx](frontend/app/layout.tsx) — mount `<PlaygroundMini />` beside `<ToastContainer />` inside `ToastProvider`.
+- [frontend/app/playground/page.tsx](frontend/app/playground/page.tsx) — URL-seeded `selectedAgentId`, handover consumption inside `initializeThreads`, de-dupe ref, `history.replaceState` URL strip.
+- [frontend/components/OnboardingWizard.tsx](frontend/components/OnboardingWizard.tsx) — new step 12 "New: Playground Mini" with action button dispatching `tsushin:playground-mini:open`.
+- [frontend/contexts/OnboardingContext.tsx](frontend/contexts/OnboardingContext.tsx) — `TOTAL_STEPS: 12 → 13`.
+- [frontend/app/globals.css](frontend/app/globals.css) — `.playground-mini-tour-glow` keyframe + `.mini-markdown` typography block.
+- [frontend/contexts/AuthContext.tsx](frontend/contexts/AuthContext.tsx) — `logout()` clears Playground Mini sessionStorage.
+
+**Verification:** Full E2E via Playwright against `https://localhost` covered 16 scenarios — FAB visibility scoping, open/close + animation, hotkey toggle with modal guard, ESC close + focus restoration, agent switch refreshes thread list, project switch filters threads by folder, new-thread button focuses composer, send/receive round-trip with thread auto-rename, markdown rendering (real `<ul><li><strong><code>` elements in the DOM — not raw Markdown text), expand handover preserves thread+messages on both cold URL navigation AND client-side `router.push` from the Mini, URL stripped post-consumption, no stray `POST /api/playground/threads` during handover, persistence across `/flows` navigation + hard refresh, second handover during the same session, zero frontend/backend errors, and the wizard glow trigger via both the active-step detection and the `tsushin:playground-mini:open` event. Non-audio agents only (Tsushin, Gemini1) per the QA spec. The only console noise is the pre-existing Playground WebSocket reconnect event (unrelated).
+
+No backend changes. No schema changes. No new dependencies — `react-markdown` and `remark-gfm` were already in `frontend/package.json`.
+
+### Flows — Create-from-Template modal: surface load errors (2026-04-17)
+
+The "Create Flow from Template" modal previously rendered the same empty-state message ("No templates available.") whether the backend returned an empty list or the fetch failed (401, 403, 5xx, network). The `.catch` handler wrote the failure to `submitError`, but that state was only rendered inside the `preview` step, so on the initial `pick` step any failure was silently indistinguishable from an empty catalog. [frontend/components/flows/CreateFromTemplateModal.tsx](frontend/components/flows/CreateFromTemplateModal.tsx) now renders a red error banner in the `pick` step when `submitError` is set, and gates the "No templates available." message on `!submitError` so the two conditions are visually distinct.
+
+No backend changes — flow templates remain a code-defined catalog in [backend/services/flow_template_seeding.py](backend/services/flow_template_seeding.py) (7 templates) exposed via `GET /api/flows/templates` and are not DB-seeded by design.
+
+### Watcher Graph — BUG-596 fix + live-activity edge-glow scoping (2026-04-17)
+
+**BUG-596 resolved.** `transformBatchToAgentsGraphData()` in [frontend/components/watcher/graph/hooks/useGraphData.ts](frontend/components/watcher/graph/hooks/useGraphData.ts) now gates the synthetic "WhatsApp Unassigned" placeholder behind `showWhatsAppUnassignedPlaceholder = tenantHasWhatsAppInstances || hasStaleWhatsAppBinding`. On a truly fresh tenant (zero WhatsApp instances, no stale `whatsapp_integration_id` pointing at a missing instance) the placeholder node and its dotted amber edges are suppressed. The placeholder still surfaces as a warning signal when a real stale binding exists. The gate wraps both the edge push and the node creation for defense-in-depth.
+
+**Graph live-glow accuracy tightening (same change set).** The Watcher Graph previously rendered a perpetual dashed-marching stroke on every Playground→agent edge (via `animated: true` baked into the edge), implying constant fan-out communication that's physically impossible (Playground talks to one agent at a time). The dynamic activity-glow path at [GraphCanvas.tsx](frontend/components/watcher/graph/GraphCanvas.tsx) also used a loose `activeChannels.has(channel) || processingAgents.has(agent)` OR, which lit *every* edge on the active channel when *any* agent was responding. Four surgical changes:
+
+- **Fix B — drop the static `animated` flag on Playground→agent edges.** The Playground edge now relies on CSS (`edge-active-cyan`) applied by the live-activity path, not a static animation. WhatsApp/Telegram/Webhook edges remain animated (instance-scoped channels are a reasonable "this connection exists" cue).
+- **Fix C — channel→agent glow scoped to the `(channel, agent)` pair.** [useWatcherActivity.ts](frontend/hooks/useWatcherActivity.ts) now derives a `processingAgentChannels: Map<agentId, channelType>` from the same `processingSessions` map that already tracks per-agent state. [GraphCanvas.tsx](frontend/components/watcher/graph/GraphCanvas.tsx) checks `processingAgentChannels.get(targetAgentId) === channelType` instead of the loose OR, so only the one `channel-X → agent-Y` edge where agent Y is actually responding to a message on channel X glows.
+- **Fix D — agent→skill glow scoped to skills actually invoked.** The agent→skill edge glow now matches `recentSkillUse.get(agentId).skillType` to the *specific* skill node's `skillType` (built into a per-node lookup via `getNodes()`), not every skill the agent owns. Category-level and provider-level glow apply the same match so the teal highlight traces the actual tool invocation path.
+- **Type wiring.** `ActivityState` in [frontend/components/watcher/graph/GraphCanvas.tsx](frontend/components/watcher/graph/GraphCanvas.tsx) gained an optional `processingAgentChannels?: Map<number, string>`; [GraphViewTab.tsx](frontend/components/watcher/GraphViewTab.tsx) threads the new map through the `activityState` useMemo and its dependency array.
+
+No backend changes — the WebSocket stream at `/ws/watcher/activity` already carried `channel` on `agent_processing` events ([backend/services/playground_service.py](backend/services/playground_service.py), [backend/agent/router.py](backend/agent/router.py), [backend/services/watcher_activity_service.py](backend/services/watcher_activity_service.py)); the gap was purely in the frontend render-decision layer.
+
+Verification: Fix A validated via live API intercept in the browser against the current tenant's `/api/v2/agents/graph-preview` response — simulating the fresh-install scenario (`channels.whatsapp: []`, all 7 agents with `whatsapp_binding_status: 'unassigned'`) resolves `showWhatsAppUnassignedPlaceholder` to `false`; simulating the stale-binding scenario (0 instances, 1 agent with `whatsapp_integration_id = 999` pointing at a missing instance) resolves it to `true`; current-tenant baseline (1 instance, all agents explicitly bound) is unchanged. Frontend rebuilt `--no-cache` and container reports healthy. Noted an unrelated pre-existing issue where React Flow renders 0 edge paths despite the hook returning 14 edges (same behavior on the unchanged baseline codebase — not part of this fix; tracked separately).
+
+### Ubuntu VM fresh-install audit — docs and bug-log update only (2026-04-17)
+
+Completed an audit-only regression pass against a fresh Ubuntu 24.04 VM install of `develop` using the interactive installer, self-signed HTTPS on `https://10-211-55-5.sslip.io`, browser automation, direct API checks, and a generated API v1 client. The install path itself succeeded, `/setup` completed normally, hosted-provider setup passed for Gemini/OpenAI/Anthropic/Vertex plus Brave/Tavily/SerpAPI, and the audit confirmed working baseline behavior for API v1 auth/chat, vector-store auto-provisioning, isolated/shared memory, knowledge-base retrieval, A2A communication, Watcher Security, Watcher A2A Comms, and the Shell Command Center UI.
+
+The session produced tracker/playbook updates only; no product code changed. New findings were recorded in the internal bug tracker as BUG-589 through BUG-596: Tavily runtime search mismatch, two broken shipped flow templates, `/api/v2/agents/` returning 500, webhook queue contract/provider-instance regressions, shell-beacon self-signed TLS failure, and Graph View rendering `WhatsApp Unassigned` on a zero-instance install. The run also reconfirmed open BUG-538 (`tsushin-toolbox:base` still missing on fresh install), which surfaced in-browser as `GET /api/toolbox/status` returning 500 and continued to block script skills, MCP stdio flows, and sandboxed tool execution.
+
+Updated the internal deployment test playbook to cover self-signed HTTPS first-run installs, runtime-vs-Hub provider checks, Graph negative assertions, webhook dead-letter inspection, shell-beacon TLS behavior, flow-template execution, generated-client verification, and protected API v2 smokes. Added a durable operator note to [docs/documentation.md](docs/documentation.md) explaining that shell beacons do not bypass TLS validation on self-signed HTTPS installs and therefore require trusted certificates or a local HTTP-only smoke path for QA.
+
+### QueuePool exhaustion hardening — BUG-588 resolved (2026-04-17)
+
+Eliminated a long-standing `QueuePool limit of size 20 overflow 30 reached, connection timed out` backend deadlock that wedged every request after ~3 h of uptime. Root cause: SQLAlchemy 2.0 `autobegin` starts an implicit transaction on the first SELECT; if the request path never commits/rolls back, the connection returns to the pool in `idle in transaction` state because `pool_reset_on_return='rollback'` only fires on checkin — and every `def get_db()` duplicate in the per-router modules built a fresh `sessionmaker` on each call, extending the Session object's lifetime enough to keep the connection pinned. In real traffic the backend eventually exhausted all 50 slots and every `/api/auth/me` hung → the frontend sat on "Loading Tsushin..." indefinitely for any browser with an auth cookie (incognito worked because no cookie → fast 401 → no DB lookup).
+
+Fix applied at three layers:
+
+1. **Architectural (one root-cause change).** `backend/db.py` now caches a single module-level `_global_session_factory` inside `set_global_engine()` instead of rebuilding a `sessionmaker` per-call. `get_db()` always runs `try: db.rollback(); except: pass` in `finally` before `db.close()` so the implicit transaction ends cleanly. A new `session_scope()` context manager (commits on clean exit, rolls back on exception, always closes) is now the canonical helper for background tasks and non-request code paths.
+2. **Per-router safety-net.** The 28 `backend/api/routes_*.py` modules that define their own local `def get_db()` copy received the same rollback-before-close guard, so even routers that don't migrate to the global dependency yet are protected.
+3. **Background-service safety-net.** `channel_health_service._check_all_instances()` and `mcp_server_health_service._check_all_servers()` both now rollback before `close()` in their finally blocks — prevents the health-loop itself from contributing to the leak it's supposed to detect.
+
+Verified: pool stays at `(active,1) (idle,20) (idle in transaction,≤1)` under 25-parallel load, zero `QueuePool` errors for 10+ min post-rebuild, `/api/health` + `/api/readiness` + OAuth2 + v1 agent/skill/tool/persona/tone-preset sweeps all 200, `/tool dig` sandboxed tool returns correct DNS records, WhatsApp tester→bot round-trip confirmed, browser normal-mode UI renders past the loading splash in <2s (previously stuck indefinitely). Files: [backend/db.py](backend/db.py), [backend/services/channel_health_service.py](backend/services/channel_health_service.py), [backend/services/mcp_server_health_service.py](backend/services/mcp_server_health_service.py), plus 28 router modules under [backend/api/](backend/api/). Documented as BUG-588 in [BUGS.md](BUGS.md).
+
 ### Onboarding wizard — v0.6.0 "What's New" showcase (2026-04-17)
 
 The fresh-install onboarding tour now opens with four showcase pages covering the features shipped in v0.6.0 before the existing Watcher → Studio → Hub → Channels → Flows → Playground walkthrough begins. `TOTAL_STEPS` moved from 8 → 12; the auto-start trigger, localStorage keys, and user-guide coordination are unchanged so existing users who already completed the tour are **not** re-prompted (they can relaunch from the `?` button in the header). Each showcase page was written from a live inventory of the v0.6.0 codebase so the copy names the *actual* capabilities (providers, transports, auth modes, vector-store vendors, memory types, etc.) rather than a reductive summary.

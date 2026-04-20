@@ -2,7 +2,7 @@
 
 **Production-ready Text-to-Speech using Kokoro-82M model via Kokoro-FastAPI**
 
-This directory documents the upstream [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) image used by the standalone `backend/kokoro-tts/docker-compose.yml` example. The main repository also exposes Kokoro through the optional root-level `tts` profile.
+This directory documents the upstream [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) image used by the standalone `backend/kokoro-tts/docker-compose.yml` example. The root-level `tts` compose profile was removed in v0.7.0; the main stack now provisions per-tenant Kokoro containers automatically when you create a TTS instance via Hub → Kokoro TTS → Setup with Wizard.
 
 The checked-in `kokoro_service.py` file is a separate reference FastAPI implementation for local experimentation. It is **not** the service launched by the root compose stack or by the standalone compose file in this directory.
 
@@ -37,7 +37,7 @@ sudo docker compose logs -f kokoro-tts
 sudo docker compose down
 ```
 
-From the repository root, you can also enable Kokoro in the main stack with `docker compose --profile tts up -d`.
+In the main stack, Kokoro is now provisioned per tenant from the UI: Hub → Kokoro TTS → Setup with Wizard. The backend `KokoroContainerManager` launches a dedicated CPU container per instance — no compose profile required.
 
 ### Option 2: Docker Run
 

@@ -246,13 +246,21 @@ async def list_gmail_integrations(
     current_user: User = Depends(require_permission("hub.read"))
 ):
     """
-    List all Gmail integrations for the tenant.
+    List Gmail integrations for the tenant.
 
-    Returns all connected Gmail accounts.
+    Excludes rows the user has explicitly disconnected (health_status='disconnected').
+    Those rows are kept for audit/history, but must not surface in the setup wizard's
+    "Existing Gmail accounts" picker — otherwise a user can bind an agent skill to a
+    dead integration, and the main Hub card list (which filters disconnected rows)
+    hides the resulting card, making it look like the wizard silently failed.
+    Reconnecting a previously-disconnected account goes through OAuth, which flips
+    the row back to is_active=True and clears the disconnected status, making it
+    eligible for this list again.
     """
     integrations = db.query(GmailIntegration).join(HubIntegration).filter(
         HubIntegration.tenant_id == ctx.tenant_id,
-        HubIntegration.type == 'gmail'
+        HubIntegration.type == 'gmail',
+        HubIntegration.health_status != 'disconnected',
     ).all()
 
     result = []
@@ -379,13 +387,15 @@ async def list_calendar_integrations(
     current_user: User = Depends(require_permission("hub.read"))
 ):
     """
-    List all Calendar integrations for the tenant.
+    List Calendar integrations for the tenant.
 
-    Returns all connected Google Calendar accounts.
+    Excludes rows the user has explicitly disconnected (health_status='disconnected').
+    Symmetrical with list_gmail_integrations above — same rationale for the filter.
     """
     integrations = db.query(CalendarIntegration).join(HubIntegration).filter(
         HubIntegration.tenant_id == ctx.tenant_id,
-        HubIntegration.type == 'calendar'
+        HubIntegration.type == 'calendar',
+        HubIntegration.health_status != 'disconnected',
     ).all()
 
     result = []
@@ -552,9 +562,13 @@ async def oauth_callback(
                 detail="Tenant ID not found in OAuth state. Please try connecting again."
             )
 
-        # Handle callback
+        # Handle callback. The state record already told us which integration
+        # type this OAuth flow belongs to (google_gmail vs google_calendar);
+        # pass it through so the handler doesn't have to guess by parsing an
+        # optional redirect_url (which the wizard popup flow never sets, so
+        # gmail OAuth used to silently create calendar rows — BUG-Unreleased).
         handler = get_google_oauth_handler(db, tenant_id)
-        result = await handler.handle_callback(code, state)
+        result = await handler.handle_callback(code, state, integration_type=integration_type)
 
         # Redirect to success page
         frontend_url = settings.FRONTEND_URL

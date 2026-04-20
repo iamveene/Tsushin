@@ -29,7 +29,7 @@ import {
   EyeIcon,
   EyeOffIcon,
 } from '@/components/ui/icons'
-import { api, type DiscordIntegrationCreate } from '@/lib/client'
+import { api, type DiscordIntegrationCreate, type PublicIngressSource } from '@/lib/client'
 
 interface Props {
   isOpen: boolean
@@ -98,6 +98,8 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
   const [botToken, setBotToken] = useState('')
   const [showBot, setShowBot] = useState(false)
   const [publicBaseUrl, setPublicBaseUrl] = useState<string | null>(null)
+  const [ingressSource, setIngressSource] = useState<PublicIngressSource>('none')
+  const [ingressWarning, setIngressWarning] = useState<string | null>(null)
   const [doneIntegrationId, setDoneIntegrationId] = useState<number | null>(null)
 
   useEffect(() => {
@@ -107,11 +109,26 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
       setPublicKey('')
       setBotToken('')
       setDoneIntegrationId(null)
-      api.getMyTenantSettings()
-        .then(s => setPublicBaseUrl(s.public_base_url))
-        .catch(() => setPublicBaseUrl(null))
+      // v0.6.1 — resolver replaces direct tenant.public_base_url read.
+      api.getMyPublicIngress()
+        .then(info => {
+          setPublicBaseUrl(info.url)
+          setIngressSource(info.source)
+          setIngressWarning(info.warning)
+        })
+        .catch(() => {
+          setPublicBaseUrl(null)
+          setIngressSource('none')
+          setIngressWarning(null)
+        })
     }
   }, [isOpen])
+
+  const sourceLabel =
+    ingressSource === 'tunnel' ? 'platform tunnel'
+    : ingressSource === 'override' ? 'tenant override'
+    : ingressSource === 'dev' ? 'dev environment'
+    : null
 
   const totalSteps = 6
   const stepTitles = useMemo(
@@ -160,15 +177,19 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
             <AlertTriangleIcon size={14} /> Public HTTPS URL required
           </h4>
           <p className="text-xs text-amber-100/80">
-            Discord can't reach <code className="bg-amber-900/40 px-1 rounded">https://localhost</code>. Set your tenant's <strong>Public Base URL</strong> in Hub → Communication first. For local dev:{' '}
-            <code className="bg-amber-900/40 px-1 rounded">cloudflared tunnel --url http://localhost:8081</code>
+            {ingressWarning ? (
+              <>Tenant override is stored but invalid: {ingressWarning}. Fix it in Hub → Communication, or ask a global admin to enable Remote Access.</>
+            ) : (
+              <>Discord can't reach <code className="bg-amber-900/40 px-1 rounded">https://localhost</code>. Ask a global admin to enable <strong>Remote Access</strong> for this tenant, or set an <strong>Ingress Override</strong> in Hub → Communication.</>
+            )}
           </p>
         </div>
       ) : (
         <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
           <p className="text-xs text-emerald-200 flex items-center gap-2">
             <CheckCircleIcon size={14} />
-            Public Base URL detected: <code className="bg-emerald-900/40 px-1 rounded text-[10px]">{publicBaseUrl}</code>
+            Public URL: <code className="bg-emerald-900/40 px-1 rounded text-[10px]">{publicBaseUrl}</code>
+            {sourceLabel && <span className="text-emerald-300/80">({sourceLabel})</span>}
           </p>
         </div>
       )}

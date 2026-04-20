@@ -12,6 +12,7 @@ import hashlib
 import logging
 from typing import Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from services.contact_channel_mapping_service import ContactChannelMappingService
 
@@ -78,11 +79,22 @@ class ContactResolver:
                     return contact.id
 
             # Try phone number
-            normalized_sender = sender.lstrip("+")
-            contact = mapping_service.get_contact_by_channel('phone', normalized_sender, tenant_id)
-            if contact and contact.is_active:
-                self.logger.debug(f"Resolved contact ID {contact.id} via phone {sender}")
-                return contact.id
+            normalized_sender = (sender or "").split("@")[0].lstrip("+")
+            phone_candidates = []
+            digits = "".join(ch for ch in normalized_sender if ch.isdigit())
+            for candidate in [normalized_sender, digits]:
+                if candidate and candidate not in phone_candidates:
+                    phone_candidates.append(candidate)
+            if digits.startswith("55") and len(digits) > 11:
+                phone_candidates.append(digits[2:])
+            elif digits and len(digits) in (10, 11):
+                phone_candidates.append(f"55{digits}")
+
+            for candidate in phone_candidates:
+                contact = mapping_service.get_contact_by_channel('phone', candidate, tenant_id)
+                if contact and contact.is_active:
+                    self.logger.debug(f"Resolved contact ID {contact.id} via phone {candidate}")
+                    return contact.id
 
             # Phase 10.2: Fallback to legacy columns for backward compatibility
 
@@ -119,8 +131,15 @@ class ContactResolver:
                     return contact.id
 
             # Try phone number (legacy)
+            legacy_phone_filters = []
+            for candidate in phone_candidates:
+                legacy_phone_filters.extend([
+                    Contact.phone_number == candidate,
+                    Contact.phone_number == f"+{candidate}",
+                    Contact.phone_number.like(f"%{candidate}"),
+                ])
             contact = self.db.query(Contact).filter(
-                Contact.phone_number == normalized_sender,
+                or_(*legacy_phone_filters),
                 Contact.is_active == True
             ).first()
             if contact:
@@ -129,7 +148,7 @@ class ContactResolver:
 
             # Try whatsapp_id field with sender value (legacy)
             contact = self.db.query(Contact).filter(
-                Contact.whatsapp_id == normalized_sender,
+                Contact.whatsapp_id.in_(phone_candidates),
                 Contact.is_active == True
             ).first()
             if contact:

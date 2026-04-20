@@ -50,6 +50,10 @@ def get_db():
     try:
         yield db
     finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         db.close()
 
 
@@ -324,12 +328,15 @@ async def update_skill_integration(
                         detail=f"Permission '{key}' must be a boolean value"
                     )
 
-        # Validate integration exists if provided
+        # Validate integration exists AND belongs to this tenant (BUG-FIX: cross-tenant leak)
         if request.integration_id:
-            hub = db.query(HubIntegration).filter(HubIntegration.id == request.integration_id).first()
+            hub = db.query(HubIntegration).filter(
+                HubIntegration.id == request.integration_id,
+                HubIntegration.tenant_id == ctx.tenant_id
+            ).first()
             if not hub:
                 raise HTTPException(
-                    status_code=400,
+                    status_code=404,
                     detail=f"Integration {request.integration_id} not found"
                 )
 
@@ -462,8 +469,8 @@ async def get_available_providers(
 
     Requires agents.read permission.
 
-    Note: This returns system-wide providers/integrations. Tenant filtering
-    is applied to integrations that have tenant_id fields.
+    Tenant isolation: all listed integrations are filtered by HubIntegration.tenant_id
+    against the caller's tenant context (BUG-FIX for cross-tenant integration leak).
 
     Args:
         skill_type: 'scheduler' or 'email'
@@ -485,20 +492,22 @@ async def get_available_providers(
                 "available_integrations": []
             })
 
-            # 2. Google Calendar
+            # 2. Google Calendar — tenant-scoped
             calendars = db.query(CalendarIntegration)\
+                .join(HubIntegration, HubIntegration.id == CalendarIntegration.id)\
                 .filter(CalendarIntegration.is_active == True)\
+                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
                 .all()
 
-            calendar_integrations = []
-            for cal in calendars:
-                hub = db.query(HubIntegration).filter(HubIntegration.id == cal.id).first()
-                calendar_integrations.append({
+            calendar_integrations = [
+                {
                     "integration_id": cal.id,
-                    "name": hub.name if hub else f"Calendar {cal.id}",
+                    "name": cal.name,
                     "email": cal.email_address,
-                    "health_status": hub.health_status if hub else "unknown"
-                })
+                    "health_status": cal.health_status,
+                }
+                for cal in calendars
+            ]
 
             providers.append({
                 "provider_type": "google_calendar",
@@ -508,20 +517,22 @@ async def get_available_providers(
                 "available_integrations": calendar_integrations
             })
 
-            # 3. Asana
+            # 3. Asana — tenant-scoped
             asana_list = db.query(AsanaIntegration)\
+                .join(HubIntegration, HubIntegration.id == AsanaIntegration.id)\
                 .filter(AsanaIntegration.is_active == True)\
+                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
                 .all()
 
-            asana_integrations = []
-            for asana in asana_list:
-                hub = db.query(HubIntegration).filter(HubIntegration.id == asana.id).first()
-                asana_integrations.append({
+            asana_integrations = [
+                {
                     "integration_id": asana.id,
-                    "name": hub.name if hub else f"Asana {asana.id}",
+                    "name": asana.name,
                     "workspace": asana.workspace_name,
-                    "health_status": hub.health_status if hub else "unknown"
-                })
+                    "health_status": asana.health_status,
+                }
+                for asana in asana_list
+            ]
 
             providers.append({
                 "provider_type": "asana",
@@ -540,20 +551,22 @@ async def get_available_providers(
             # Email providers
             providers = []
 
-            # Gmail
+            # Gmail — tenant-scoped
             gmail_list = db.query(GmailIntegration)\
+                .join(HubIntegration, HubIntegration.id == GmailIntegration.id)\
                 .filter(GmailIntegration.is_active == True)\
+                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
                 .all()
 
-            gmail_integrations = []
-            for gmail in gmail_list:
-                hub = db.query(HubIntegration).filter(HubIntegration.id == gmail.id).first()
-                gmail_integrations.append({
+            gmail_integrations = [
+                {
                     "integration_id": gmail.id,
-                    "name": hub.name if hub else f"Gmail {gmail.id}",
+                    "name": gmail.name,
                     "email": gmail.email_address,
-                    "health_status": hub.health_status if hub else "unknown"
-                })
+                    "health_status": gmail.health_status,
+                }
+                for gmail in gmail_list
+            ]
 
             providers.append({
                 "provider_type": "gmail",
@@ -572,19 +585,21 @@ async def get_available_providers(
             # Flight Search providers
             providers = []
 
-            # 1. Google Flights (SerpApi)
+            # 1. Google Flights (SerpApi) — tenant-scoped
             google_flights = db.query(GoogleFlightsIntegration)\
+                .join(HubIntegration, HubIntegration.id == GoogleFlightsIntegration.id)\
                 .filter(GoogleFlightsIntegration.is_active == True)\
+                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
                 .all()
 
-            gf_integrations = []
-            for gf in google_flights:
-                hub = db.query(HubIntegration).filter(HubIntegration.id == gf.id).first()
-                gf_integrations.append({
+            gf_integrations = [
+                {
                     "integration_id": gf.id,
-                    "name": hub.name if hub else f"Google Flights {gf.id}",
-                    "health_status": hub.health_status if hub else "unknown"
-                })
+                    "name": gf.name,
+                    "health_status": gf.health_status,
+                }
+                for gf in google_flights
+            ]
 
             providers.append({
                 "provider_type": "google_flights",
@@ -594,19 +609,21 @@ async def get_available_providers(
                 "available_integrations": gf_integrations
             })
 
-            # 2. Amadeus
+            # 2. Amadeus — tenant-scoped
             amadeus_list = db.query(AmadeusIntegration)\
+                .join(HubIntegration, HubIntegration.id == AmadeusIntegration.id)\
                 .filter(AmadeusIntegration.is_active == True)\
+                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
                 .all()
 
-            amadeus_integrations = []
-            for am in amadeus_list:
-                hub = db.query(HubIntegration).filter(HubIntegration.id == am.id).first()
-                amadeus_integrations.append({
+            amadeus_integrations = [
+                {
                     "integration_id": am.id,
-                    "name": hub.name if hub else f"Amadeus {am.id}",
-                    "health_status": hub.health_status if hub else "unknown"
-                })
+                    "name": am.name,
+                    "health_status": am.health_status,
+                }
+                for am in amadeus_list
+            ]
 
             providers.append({
                 "provider_type": "amadeus",

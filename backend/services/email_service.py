@@ -142,9 +142,19 @@ class EmailService:
         role_name: str,
         invitation_token: str,
         personal_message: Optional[str] = None,
+        base_url: Optional[str] = None,
     ) -> bool:
-        """Send an invitation email."""
-        invitation_url = f"{self.base_url}/auth/invite/{invitation_token}"
+        """Send an invitation email.
+
+        ``base_url`` — when provided, overrides the ``FRONTEND_URL`` env for
+        this one email. Callers should pass the value returned by
+        ``resolve_invitation_base_url`` so the link honors the inviting
+        tenant's public override, the platform tunnel, or the request
+        origin — essential under multi-tenant + tunneled deployments where
+        the env default isn't the right public URL for this invite.
+        """
+        effective_base = (base_url or self.base_url).rstrip("/")
+        invitation_url = f"{effective_base}/auth/invite/{invitation_token}"
 
         subject = f"{inviter_name} invited you to join {tenant_name} on {self.app_name}"
 
@@ -388,10 +398,11 @@ def send_invitation(
     role_name: str,
     invitation_token: str,
     personal_message: Optional[str] = None,
+    base_url: Optional[str] = None,
 ) -> bool:
     """Convenience function to send invitation email."""
     return get_email_service().send_invitation_email(
-        to_email, inviter_name, tenant_name, role_name, invitation_token, personal_message
+        to_email, inviter_name, tenant_name, role_name, invitation_token, personal_message, base_url
     )
 
 

@@ -85,15 +85,19 @@ def _ip_in_allowlist(client_ip: str, allowlist_json: str) -> bool:
         return False
 
 
-@router.post("/api/webhooks/{webhook_id}/inbound")
+@router.post("/api/webhooks/{slug}/inbound")
 async def receive_webhook(
-    webhook_id: int,
+    slug: str,
     request: Request,
     x_tsushin_signature: Optional[str] = Header(None, alias="X-Tsushin-Signature"),
     x_tsushin_timestamp: Optional[str] = Header(None, alias="X-Tsushin-Timestamp"),
     db: Session = Depends(get_db),
 ):
     """Receive an HMAC-signed external webhook event and enqueue it for agent processing.
+
+    v0.7.1: path param is now a human-readable slug. Numeric-only slugs are
+    treated as a backward-compat fallback to the legacy ``/api/webhooks/{id}``
+    shape so every existing integration keeps working.
 
     Request requirements:
       • X-Tsushin-Signature: "sha256=<hex>" where hex = HMAC-SHA256(secret, timestamp + "." + raw_body)
@@ -103,18 +107,30 @@ async def receive_webhook(
         Optional fields: sender_id, sender_name, source_id, timestamp
     """
     integration: Optional[WebhookIntegration] = (
-        db.query(WebhookIntegration).filter_by(id=webhook_id).first()
+        db.query(WebhookIntegration).filter_by(slug=slug).first()
     )
+    if integration is None and slug.isdigit():
+        # Backward compatibility: legacy numeric-id URLs
+        integration = db.query(WebhookIntegration).filter_by(id=int(slug)).first()
     if integration is None or not integration.is_active or integration.status == "paused":
         _generic_403()
 
-    # v0.6.0: Honor global emergency stop at the ingress (avoid eating queue/LLM resources)
+    webhook_id = integration.id
+
+    # Honor emergency stop at the ingress (avoid eating queue/LLM resources).
+    # v0.7.3: Check BOTH the global kill switch and the integration's tenant flag.
     try:
         from models import Config as ConfigModel
         _config = db.query(ConfigModel).first()
         if _config and getattr(_config, 'emergency_stop', False):
-            logger.warning(f"[EMERGENCY STOP] Rejecting webhook {webhook_id} inbound — emergency stop active")
+            logger.warning(f"[EMERGENCY STOP:global] Rejecting webhook {webhook_id} inbound — GLOBAL emergency stop active")
             raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+        if integration.tenant_id:
+            from models_rbac import Tenant as TenantModel
+            _tenant = db.query(TenantModel).filter(TenantModel.id == integration.tenant_id).first()
+            if _tenant and getattr(_tenant, 'emergency_stop', False):
+                logger.warning(f"[EMERGENCY STOP:tenant] Rejecting webhook {webhook_id} inbound — tenant {integration.tenant_id} emergency stop active")
+                raise HTTPException(status_code=503, detail="Service temporarily unavailable")
     except HTTPException:
         raise
     except Exception:

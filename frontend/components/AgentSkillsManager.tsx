@@ -358,6 +358,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
       // For web_search, we need to update the skill config with the provider
       if (configuringProvider === 'web_search') {
         const currentConfig = getSkillConfig(skillType)
+        // Merge existing config first, then overwrite the provider selected
+        // in the modal so stale defaults like "brave" do not win.
         Object.assign(config, currentConfig, {
           provider: selectedProvider
         })

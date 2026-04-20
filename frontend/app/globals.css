@@ -524,6 +524,133 @@
     0%, 100% { outline-color: #2dd4bf; }
     50% { outline-color: #14b8a6; outline-offset: 6px; }
   }
+
+  /* ============================================
+     Playground Mini — tour glow
+     One-shot (3 iterations) strong pulse on the floating bubble
+     when the onboarding wizard highlights it or dispatches the
+     `tsushin:playground-mini:open` event.
+     ============================================ */
+  @keyframes playground-mini-tour-glow {
+    0%, 100% {
+      box-shadow:
+        0 0 0 0 rgba(0, 217, 255, 0),
+        0 0 24px 4px rgba(60, 90, 254, 0.35);
+    }
+    50% {
+      box-shadow:
+        0 0 0 12px rgba(0, 217, 255, 0.35),
+        0 0 48px 12px rgba(60, 90, 254, 0.7);
+    }
+  }
+
+  .playground-mini-tour-glow {
+    animation: playground-mini-tour-glow 1.4s ease-in-out 3;
+  }
+
+  /* ============================================
+     Playground Mini — markdown rendering
+     Compact styles for ReactMarkdown content inside the floating bubble.
+     ============================================ */
+  .mini-markdown > *:first-child {
+    margin-top: 0;
+  }
+  .mini-markdown > *:last-child {
+    margin-bottom: 0;
+  }
+  .mini-markdown p {
+    margin: 0.25rem 0;
+    line-height: 1.45;
+    white-space: pre-wrap;
+  }
+  .mini-markdown h1,
+  .mini-markdown h2,
+  .mini-markdown h3,
+  .mini-markdown h4 {
+    font-weight: 600;
+    color: #F6F7F9;
+    margin: 0.5rem 0 0.25rem;
+    line-height: 1.25;
+  }
+  .mini-markdown h1 { font-size: 1rem; }
+  .mini-markdown h2 { font-size: 0.95rem; }
+  .mini-markdown h3 { font-size: 0.9rem; }
+  .mini-markdown h4 { font-size: 0.85rem; }
+  .mini-markdown strong { font-weight: 600; color: #F6F7F9; }
+  .mini-markdown em { font-style: italic; }
+  .mini-markdown a {
+    color: #00D9FF;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+  }
+  .mini-markdown a:hover { color: #6B7FFF; }
+  .mini-markdown ul,
+  .mini-markdown ol {
+    margin: 0.25rem 0;
+    padding-left: 1.1rem;
+  }
+  .mini-markdown ul { list-style: disc; }
+  .mini-markdown ol { list-style: decimal; }
+  .mini-markdown li {
+    margin: 0.1rem 0;
+    line-height: 1.4;
+  }
+  .mini-markdown li > p { margin: 0; }
+  .mini-markdown blockquote {
+    border-left: 2px solid #3C5AFE;
+    padding-left: 0.5rem;
+    margin: 0.25rem 0;
+    color: #C7CCD4;
+  }
+  .mini-markdown code {
+    font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.82rem;
+    background: rgba(60, 90, 254, 0.12);
+    border: 1px solid rgba(60, 90, 254, 0.25);
+    padding: 0.05rem 0.25rem;
+    border-radius: 4px;
+    word-break: break-word;
+  }
+  .mini-markdown pre {
+    background: #0B0F14;
+    border: 1px solid #30363D;
+    border-radius: 6px;
+    padding: 0.5rem;
+    margin: 0.35rem 0;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+  .mini-markdown pre code {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+    color: #E6E9EE;
+  }
+  .mini-markdown table {
+    border-collapse: collapse;
+    margin: 0.35rem 0;
+    font-size: 0.78rem;
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .mini-markdown th,
+  .mini-markdown td {
+    border: 1px solid #30363D;
+    padding: 0.2rem 0.4rem;
+    text-align: left;
+  }
+  .mini-markdown th {
+    background: #1C2128;
+    font-weight: 600;
+  }
+  .mini-markdown hr {
+    border: 0;
+    border-top: 1px solid #30363D;
+    margin: 0.5rem 0;
+  }
 }
 
 @layer utilities {

@@ -14,9 +14,11 @@ from typing import Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
+import requests
 
-from models import Contact, ConversationThread
+from models import Contact, ConversationThread, WhatsAppMCPInstance
 from services.contact_channel_mapping_service import ContactChannelMappingService
+from services.mcp_auth_service import get_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,9 @@ class WhatsAppIDDiscovery:
         self,
         db: Session,
         sender_whatsapp_id: str,
-        logger_instance: logging.Logger
+        logger_instance: logging.Logger,
+        tenant_id: Optional[str] = None,
+        chat_name: Optional[str] = None,
     ) -> Optional[Contact]:
         """
         Auto-discover contact by analyzing recent conversation threads.
@@ -91,6 +95,16 @@ class WhatsAppIDDiscovery:
 
                 if contact:
                     return contact
+
+            contact = self._try_link_via_mcp_contacts(
+                db,
+                sender_whatsapp_id,
+                logger_instance,
+                tenant_id=tenant_id,
+                chat_name=chat_name,
+            )
+            if contact:
+                return contact
 
             # No match found
             logger_instance.info(
@@ -153,49 +167,7 @@ class WhatsAppIDDiscovery:
                 )
                 return None
 
-            # If contact already has a WhatsApp ID, keep backward compatibility
-            # but add the newly observed LID as a channel mapping so router/filter
-            # paths can resolve both identifiers to the same contact.
-            if contact.whatsapp_id:
-                if contact.whatsapp_id == sender_whatsapp_id:
-                    logger_instance.debug(
-                        f"[AUTO-DISCOVERY] Contact {contact.friendly_name} already linked "
-                        f"to WhatsApp ID {sender_whatsapp_id}"
-                    )
-                    return contact
-
-                mapping_service = ContactChannelMappingService(db)
-                mapping_service.add_channel_mapping(
-                    contact_id=contact.id,
-                    channel_type="whatsapp",
-                    channel_identifier=sender_whatsapp_id,
-                    channel_metadata={
-                        "discovered_from": "whatsapp_id_discovery",
-                        "legacy_whatsapp_id": contact.whatsapp_id,
-                    },
-                    tenant_id=contact.tenant_id or "default",
-                )
-                logger_instance.debug(
-                    f"[AUTO-DISCOVERY] Added WhatsApp alias {sender_whatsapp_id} "
-                    f"for contact {contact.friendly_name} (legacy ID: {contact.whatsapp_id})"
-                )
-                return contact
-
-            # SUCCESS! Link the WhatsApp ID to this contact
-            logger_instance.info(
-                f"🔗 AUTO-DISCOVERY: Linking contact '{contact.friendly_name}' "
-                f"(phone: {contact.phone_number}) → WhatsApp ID: {sender_whatsapp_id}"
-            )
-
-            contact.whatsapp_id = sender_whatsapp_id
-            db.commit()
-
-            logger_instance.info(
-                f"✅ AUTO-DISCOVERY SUCCESS: Contact '{contact.friendly_name}' "
-                f"linked to WhatsApp ID {sender_whatsapp_id}"
-            )
-
-            return contact
+            return self._link_contact_alias(db, contact, sender_whatsapp_id, logger_instance)
 
         except Exception as e:
             logger_instance.error(
@@ -204,6 +176,132 @@ class WhatsAppIDDiscovery:
             )
             db.rollback()
             return None
+
+    def _link_contact_alias(
+        self,
+        db: Session,
+        contact: Contact,
+        sender_whatsapp_id: str,
+        logger_instance: logging.Logger
+    ) -> Optional[Contact]:
+        """Persist a newly observed WhatsApp sender alias for an existing contact."""
+        if contact.whatsapp_id:
+            if contact.whatsapp_id == sender_whatsapp_id:
+                logger_instance.debug(
+                    f"[AUTO-DISCOVERY] Contact {contact.friendly_name} already linked "
+                    f"to WhatsApp ID {sender_whatsapp_id}"
+                )
+                return contact
+
+            if not contact.tenant_id:
+                logger_instance.warning(
+                    f"[AUTO-DISCOVERY] Skipping alias write for contact id={contact.id} "
+                    f"('{contact.friendly_name}') sender_whatsapp_id={sender_whatsapp_id}: "
+                    f"contact.tenant_id is missing (legacy row). "
+                    f"Refusing to write orphaned channel_mapping under 'default'."
+                )
+                return contact
+
+            mapping_service = ContactChannelMappingService(db)
+            mapping_service.add_channel_mapping(
+                contact_id=contact.id,
+                channel_type="whatsapp",
+                channel_identifier=sender_whatsapp_id,
+                channel_metadata={
+                    "discovered_from": "whatsapp_id_discovery",
+                    "legacy_whatsapp_id": contact.whatsapp_id,
+                },
+                tenant_id=contact.tenant_id,
+            )
+            logger_instance.info(
+                f"🔗 AUTO-DISCOVERY: Added WhatsApp alias {sender_whatsapp_id} "
+                f"for contact '{contact.friendly_name}'"
+            )
+            return contact
+
+        logger_instance.info(
+            f"🔗 AUTO-DISCOVERY: Linking contact '{contact.friendly_name}' "
+            f"(phone: {contact.phone_number}) → WhatsApp ID: {sender_whatsapp_id}"
+        )
+        contact.whatsapp_id = sender_whatsapp_id
+        db.commit()
+
+        logger_instance.info(
+            f"✅ AUTO-DISCOVERY SUCCESS: Contact '{contact.friendly_name}' "
+            f"linked to WhatsApp ID {sender_whatsapp_id}"
+        )
+        return contact
+
+    def _try_link_via_mcp_contacts(
+        self,
+        db: Session,
+        sender_whatsapp_id: str,
+        logger_instance: logging.Logger,
+        tenant_id: Optional[str] = None,
+        chat_name: Optional[str] = None,
+    ) -> Optional[Contact]:
+        """Fallback discovery using the active MCP /contacts endpoint."""
+        chat_name = (chat_name or "").strip()
+        if not tenant_id or not chat_name:
+            return None
+
+        try:
+            instance = db.query(WhatsAppMCPInstance).filter(
+                WhatsAppMCPInstance.tenant_id == tenant_id,
+                WhatsAppMCPInstance.status.in_(["running", "starting"]),
+            ).order_by(WhatsAppMCPInstance.id.asc()).first()
+            if not instance:
+                return None
+
+            response = requests.get(
+                f"{instance.mcp_api_url.rstrip('/')}/contacts",
+                params={"q": chat_name, "limit": 10},
+                headers=get_auth_headers(instance.api_secret),
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not payload.get("success"):
+                return None
+
+            for result in payload.get("contacts") or []:
+                jid = str(result.get("jid") or "")
+                phone = str(result.get("phone") or "")
+                name = str(result.get("name") or "")
+
+                if not jid and not phone:
+                    continue
+                if chat_name.lower() not in name.lower():
+                    continue
+
+                identifiers = []
+                for candidate in [phone, jid.split("@")[0] if "@" in jid else jid]:
+                    candidate = (candidate or "").strip().lstrip("+")
+                    if candidate and candidate not in identifiers:
+                        identifiers.append(candidate)
+
+                if not identifiers:
+                    continue
+
+                contact = db.query(Contact).filter(
+                    Contact.tenant_id == tenant_id,
+                    Contact.is_active == True,
+                    or_(
+                        Contact.phone_number.in_(identifiers + [f"+{value}" for value in identifiers]),
+                        Contact.whatsapp_id.in_(identifiers),
+                    ),
+                ).first()
+                if contact:
+                    logger_instance.info(
+                        f"[AUTO-DISCOVERY] MCP contacts resolved '{chat_name}' "
+                        f"to contact '{contact.friendly_name}'"
+                    )
+                    return self._link_contact_alias(db, contact, sender_whatsapp_id, logger_instance)
+
+        except Exception as e:
+            logger_instance.debug(f"[AUTO-DISCOVERY] MCP contact lookup skipped: {e}")
+
+        return None
 
     def find_contact_by_correlation(
         self,

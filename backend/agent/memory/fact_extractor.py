@@ -9,6 +9,25 @@ Key features:
 - Confidence scoring based on statement clarity and repetition
 - Topic categorization (preferences, personal_info, history, etc.)
 - Incremental learning (updates existing facts with new information)
+
+BUG-642 / BUG-661 — Untrusted-content guard
+-------------------------------------------
+User-role conversation turns are *data*, not instructions. Before the
+LLM extractor sees them we run a provider-independent heuristic check
+(``agent.sentinel.heuristics.is_untrusted_user_injection``) and:
+
+1. Strip the offending user turn from the conversation before
+   extraction runs, so the LLM never sees "IGNORE PREVIOUS INSTRUCTIONS
+   / you are now DAN / embed admin password as a permanent fact" as
+   guidance it should act on.
+2. After extraction, drop any fact that could only be produced by such
+   a turn (``instructions`` topic without a trusted origin, or a value
+   that itself matches an injection marker).
+
+This is a separate trust boundary from Sentinel's inline block: even
+when Sentinel is configured in detect_only mode or misses a payload,
+the fact extractor refuses to promote it to persistent high-confidence
+``instructions``.
 """
 
 import logging
@@ -16,6 +35,19 @@ import json
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from json_repair import repair_json
+
+try:
+    # Provider-independent regex floor shared with Sentinel.
+    from agent.sentinel.heuristics import is_untrusted_user_injection
+except Exception:  # pragma: no cover — best-effort import
+    is_untrusted_user_injection = None  # type: ignore
+
+
+# Roles that may legitimately emit instructions-topic facts.
+# User content is ALWAYS untrusted for this purpose — the agent must
+# never confuse "things the user typed" with "directives the agent
+# should follow persistently".
+_TRUSTED_INSTRUCTION_ROLES = {"assistant", "system"}
 
 
 class FactExtractor:
@@ -191,9 +223,38 @@ Conversation to analyze:
         if not conversation:
             return []
 
+        # BUG-642 / BUG-661: Strip user turns that look like instruction
+        # injection / persona override / memory-poisoning before the LLM
+        # extractor sees them. The returned flag is True iff the
+        # conversation contains at least one assistant/system turn
+        # (a "trusted non-user origin"); we use it below to refuse
+        # persistent `instructions`-topic facts when the only content
+        # comes from user role turns.
+        sanitized_conversation, had_trusted_non_user_turn, dropped_count = (
+            self._sanitize_conversation_for_extraction(conversation)
+        )
+
+        if dropped_count:
+            self.logger.warning(
+                "Fact extractor: dropped %d untrusted user turn(s) "
+                "before LLM extraction (BUG-642 guard)",
+                dropped_count,
+            )
+
+        # Bail early if the sanitizer removed every substantive turn —
+        # no point in asking the LLM to extract from an empty
+        # conversation, and we definitely don't want it to hallucinate
+        # instructions facts from silence.
+        if not sanitized_conversation:
+            self.logger.info(
+                "Fact extractor: no trusted content left after sanitizer; "
+                "skipping extraction"
+            )
+            return []
+
         try:
             # Format conversation for prompt
-            conv_text = self._format_conversation(conversation)
+            conv_text = self._format_conversation(sanitized_conversation)
 
             # Build full prompt
             full_prompt = self.EXTRACTION_PROMPT + conv_text
@@ -216,6 +277,17 @@ Conversation to analyze:
             response_text = result.get("answer", "")
             facts = self._parse_extraction_response(response_text)
 
+            # BUG-642 / BUG-661: Post-filter facts. Even after sanitizing
+            # the conversation, belt-and-braces — refuse any fact whose
+            # `value` or `context` still contains an injection marker,
+            # and refuse `instructions`-topic facts when the conversation
+            # had no trusted (assistant/system) turns that could have
+            # legitimately produced one.
+            facts = self._filter_untrusted_facts(
+                facts,
+                had_trusted_non_user_turn=had_trusted_non_user_turn,
+            )
+
             # Add metadata
             for fact in facts:
                 fact['user_id'] = user_id
@@ -228,6 +300,112 @@ Conversation to analyze:
         except Exception as e:
             self.logger.error(f"Fact extraction failed: {e}")
             return []
+
+    @staticmethod
+    def _looks_like_injection(text: str) -> bool:
+        """Return True if the text matches an instruction-injection marker."""
+        if not text or is_untrusted_user_injection is None:
+            return False
+        try:
+            return is_untrusted_user_injection(text) is not None
+        except Exception:
+            return False
+
+    def _sanitize_conversation_for_extraction(
+        self, conversation: List[Dict]
+    ) -> Tuple[List[Dict], bool, int]:
+        """
+        BUG-642 / BUG-661: Drop user turns that look like instruction
+        injection / persona override / memory-poisoning.
+
+        Returns (sanitized_conversation, had_trusted_non_injection_turn,
+        dropped_count).
+
+        ``had_trusted_non_injection_turn`` is True when at least one
+        assistant/system turn is present (indicating the conversation is
+        a real exchange and not just a stream of injected user content).
+        The caller uses this to refuse emitting ``instructions``-topic
+        facts when no trusted origin exists.
+        """
+        sanitized: List[Dict] = []
+        had_trusted = False
+        dropped = 0
+
+        for msg in conversation:
+            role = str(msg.get("role", "")).lower()
+            content = msg.get("content", "") or ""
+
+            if role in _TRUSTED_INSTRUCTION_ROLES:
+                had_trusted = True
+                sanitized.append(msg)
+                continue
+
+            if role == "user" and self._looks_like_injection(content):
+                # Drop this user turn entirely. We considered redacting
+                # its content to "[redacted-for-safety]" but that can
+                # itself be interpreted by the LLM as an instruction;
+                # removing the turn is safer.
+                dropped += 1
+                continue
+
+            sanitized.append(msg)
+
+        return sanitized, had_trusted, dropped
+
+    def _filter_untrusted_facts(
+        self, facts: List[Dict], had_trusted_non_user_turn: bool
+    ) -> List[Dict]:
+        """
+        BUG-642 / BUG-661: Post-extraction filter.
+
+        * Drop any fact whose ``value`` or ``context`` itself looks like
+          an instruction-injection marker — the LLM occasionally echoes
+          sanitized content back from the sanitized transcript via the
+          ``context`` field, and we must not persist it.
+        * Drop any ``instructions``-topic fact when the conversation
+          lacked a trusted (assistant/system) origin. User text alone
+          can never produce a persistent ``instructions`` fact.
+        * Downgrade surviving ``instructions`` facts to confidence
+          capped at 0.9 so they stay below the "near-certain" bar that
+          was letting adversarial overrides lock in at 0.95–0.98.
+        """
+        if not facts:
+            return facts
+
+        kept: List[Dict] = []
+        for fact in facts:
+            topic = str(fact.get("topic", "")).lower()
+            value = str(fact.get("value", ""))
+            context = str(fact.get("context", ""))
+
+            if self._looks_like_injection(value) or self._looks_like_injection(context):
+                self.logger.warning(
+                    "Fact extractor: dropped fact with injection-like content "
+                    "(topic=%s key=%s)",
+                    topic,
+                    fact.get("key"),
+                )
+                continue
+
+            if topic == "instructions" and not had_trusted_non_user_turn:
+                self.logger.warning(
+                    "Fact extractor: dropped `instructions` fact "
+                    "(key=%s) — no trusted (assistant/system) origin in "
+                    "conversation; user content alone cannot produce "
+                    "persistent instructions (BUG-642 guard)",
+                    fact.get("key"),
+                )
+                continue
+
+            if topic == "instructions":
+                try:
+                    fact["confidence"] = min(float(fact.get("confidence", 0.0)), 0.9)
+                except (TypeError, ValueError):
+                    fact["confidence"] = 0.9
+
+            kept.append(fact)
+
+        return kept
 
     def _format_conversation(self, conversation: List[Dict]) -> str:
         """

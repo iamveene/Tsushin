@@ -129,7 +129,7 @@ export default function RemoteAccessPage() {
     return !HOSTNAME_REGEX.test(formDraft.tunnel_hostname.trim().toLowerCase())
   }, [formDraft.mode, formDraft.tunnel_hostname])
 
-  const transitioning = status?.state === 'starting' || status?.state === 'stopping'
+  const transitioning = status?.state === 'starting' || status?.state === 'verifying' || status?.state === 'stopping'
 
   // --------------------------------------------------------------------------
   // Data loading
@@ -526,7 +526,8 @@ export default function RemoteAccessPage() {
                   acting !== null ||
                   !status?.binary_available ||
                   status?.state === 'running' ||
-                  status?.state === 'starting'
+                  status?.state === 'starting' ||
+                  status?.state === 'verifying'
                 }
                 className="btn-primary px-4 py-2 rounded-md text-sm disabled:opacity-50"
               >
@@ -540,6 +541,7 @@ export default function RemoteAccessPage() {
                 !(
                   status?.state === 'running' ||
                   status?.state === 'starting' ||
+                  status?.state === 'verifying' ||
                   status?.state === 'crashed' ||
                   status?.state === 'error'
                 )

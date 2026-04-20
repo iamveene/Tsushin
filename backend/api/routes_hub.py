@@ -47,6 +47,10 @@ def get_db():
     try:
         yield db
     finally:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         db.close()
 
 
@@ -374,11 +378,16 @@ async def list_integrations(
     query = ctx.filter_by_tenant(query, HubIntegration.tenant_id)
 
     if active_only:
-        # Also include unavailable integrations (need re-auth) so the UI can show them
-        from sqlalchemy import or_
-        query = query.filter(or_(
-            HubIntegration.is_active == True,
-            HubIntegration.health_status == "unavailable"
+        # Also include unavailable integrations (need re-auth) so the UI can show them,
+        # but exclude those explicitly disconnected by the user — their is_active=False
+        # combined with health_status='disconnected' means they must not appear.
+        from sqlalchemy import or_, and_
+        query = query.filter(and_(
+            HubIntegration.health_status != "disconnected",
+            or_(
+                HubIntegration.is_active == True,
+                HubIntegration.health_status == "unavailable"
+            )
         ))
 
     hub_integrations = query.all()
@@ -386,78 +395,191 @@ async def list_integrations(
 
     integrations = []
     for hub in hub_integrations:
-        # Skip unsupported integration types (e.g., shell probes)
-        if hub.type not in ('asana', 'calendar', 'gmail'):
-            continue
+        # BUG-615 FIX: Wrap the ENTIRE per-integration block (not just the
+        # health check) in try/except so a single bad integration row —
+        # missing child record, schema drift, stale token that breaks
+        # decryption inside ``_create_asana_service``, response-model
+        # validation quirk, or an ObjectDeletedError from polymorphic
+        # rows whose underlying row was hard-deleted — cannot 500 the
+        # whole list endpoint. If anything raises, surface that row with
+        # health_status="error" instead of bubbling up.
+        try:
+            # Skip unsupported integration types (e.g., shell probes).
+            # We access ``hub.type`` INSIDE the try because a stale
+            # polymorphic row can raise ObjectDeletedError on this
+            # attribute access alone.
+            if hub.type not in ('asana', 'calendar', 'gmail'):
+                continue
+            # Get type-specific data by checking the type
+            asana = None
+            calendar = None
+            gmail = None
 
-        # Get type-specific data by checking the type
-        asana = None
-        calendar = None
-        gmail = None
+            if hub.type == 'asana':
+                asana = db.query(AsanaIntegration).filter(AsanaIntegration.id == hub.id).first()
+                # Optionally refresh health
+                if refresh_health:
+                    service = None
+                    try:
+                        service = _create_asana_service(hub.id, db)
+                        health_result = await service.check_health()
+                        hub.health_status = health_result['status']
+                        hub.last_health_check = datetime.utcnow()
+                        db.commit()
+                    except Exception as e:
+                        logger.warning(f"Health check failed for integration {hub.id}: {e}")
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                    finally:
+                        if service:
+                            await service.close()
+            elif hub.type == 'calendar':
+                calendar = db.query(CalendarIntegration).filter(CalendarIntegration.id == hub.id).first()
+                # Optionally refresh health for calendar integrations
+                if refresh_health:
+                    try:
+                        service = CalendarService(db, hub.id)
+                        health_result = await service.check_health()
+                        hub.health_status = health_result['status']
+                        hub.last_health_check = datetime.utcnow()
+                        db.commit()
+                    except Exception as e:
+                        logger.warning(f"Calendar health check failed for integration {hub.id}: {e}")
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                        try:
+                            hub.health_status = 'unavailable'
+                            db.commit()
+                        except Exception:
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
+            elif hub.type == 'gmail':
+                gmail = db.query(GmailIntegration).filter(GmailIntegration.id == hub.id).first()
+                # Optionally refresh health for gmail integrations
+                if refresh_health:
+                    try:
+                        service = GmailService(db, hub.id)
+                        health_result = await service.check_health()
+                        hub.health_status = health_result['status']
+                        hub.last_health_check = datetime.utcnow()
+                        db.commit()
+                    except Exception as e:
+                        logger.warning(f"Gmail health check failed for integration {hub.id}: {e}")
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                        try:
+                            hub.health_status = 'unavailable'
+                            db.commit()
+                        except Exception:
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
 
-        if hub.type == 'asana':
-            asana = db.query(AsanaIntegration).filter(AsanaIntegration.id == hub.id).first()
-            # Optionally refresh health
-            if refresh_health:
-                service = None
-                try:
-                    service = _create_asana_service(hub.id, db)
-                    health_result = await service.check_health()
-                    hub.health_status = health_result['status']
-                    hub.last_health_check = datetime.utcnow()
-                    db.commit()
-                except Exception as e:
-                    logger.warning(f"Health check failed for integration {hub.id}: {e}")
-                finally:
-                    if service:
-                        await service.close()
-        elif hub.type == 'calendar':
-            calendar = db.query(CalendarIntegration).filter(CalendarIntegration.id == hub.id).first()
-            # Optionally refresh health for calendar integrations
-            if refresh_health:
-                try:
-                    service = CalendarService(db, hub.id)
-                    health_result = await service.check_health()
-                    hub.health_status = health_result['status']
-                    hub.last_health_check = datetime.utcnow()
-                    db.commit()
-                except Exception as e:
-                    logger.warning(f"Calendar health check failed for integration {hub.id}: {e}")
-                    hub.health_status = 'unavailable'
-                    db.commit()
-        elif hub.type == 'gmail':
-            gmail = db.query(GmailIntegration).filter(GmailIntegration.id == hub.id).first()
-            # Optionally refresh health for gmail integrations
-            if refresh_health:
-                try:
-                    service = GmailService(db, hub.id)
-                    health_result = await service.check_health()
-                    hub.health_status = health_result['status']
-                    hub.last_health_check = datetime.utcnow()
-                    db.commit()
-                except Exception as e:
-                    logger.warning(f"Gmail health check failed for integration {hub.id}: {e}")
-                    hub.health_status = 'unavailable'
-                    db.commit()
+            # Build response with type-specific data
+            response = IntegrationResponse(
+                id=hub.id,
+                type=hub.type,
+                name=hub.name,
+                is_active=hub.is_active,
+                health_status=hub.health_status,
+                health_status_reason=getattr(hub, 'health_status_reason', None),
+                tenant_id=hub.tenant_id,
+                workspace_gid=asana.workspace_gid if asana else None,
+                workspace_name=asana.workspace_name if asana else None,
+                default_assignee_name=asana.default_assignee_name if asana else None,
+                default_assignee_gid=asana.default_assignee_gid if asana else None,
+                # Add email for calendar/gmail integrations
+                email=(calendar.email_address if calendar else (gmail.email_address if gmail else None)),
+                display_name=hub.display_name
+            )
+            integrations.append(response)
+        except Exception as e:
+            # Harvest what we can WITHOUT re-triggering the failure —
+            # attribute access on a stale polymorphic row can itself
+            # raise, so each getattr is guarded.
+            safe_id = None
+            safe_type = None
+            safe_name = None
+            safe_is_active = False
+            safe_tenant_id = None
+            safe_display_name = None
+            try:
+                safe_id = getattr(hub, "id", None)
+            except Exception:
+                pass
+            try:
+                safe_type = getattr(hub, "type", None)
+            except Exception:
+                pass
+            try:
+                safe_name = getattr(hub, "name", None)
+            except Exception:
+                pass
+            try:
+                safe_is_active = bool(getattr(hub, "is_active", False))
+            except Exception:
+                pass
+            try:
+                safe_tenant_id = getattr(hub, "tenant_id", None)
+            except Exception:
+                pass
+            try:
+                safe_display_name = getattr(hub, "display_name", None)
+            except Exception:
+                pass
 
-        # Build response with type-specific data
-        response = IntegrationResponse(
-            id=hub.id,
-            type=hub.type,
-            name=hub.name,
-            is_active=hub.is_active,
-            health_status=hub.health_status,
-            health_status_reason=getattr(hub, 'health_status_reason', None),
-            tenant_id=hub.tenant_id,
-            workspace_gid=asana.workspace_gid if asana else None,
-            workspace_name=asana.workspace_name if asana else None,
-            default_assignee_name=asana.default_assignee_name if asana else None,
-            default_assignee_gid=asana.default_assignee_gid if asana else None,
-            # Add email for calendar/gmail integrations
-            email=(calendar.email_address if calendar else (gmail.email_address if gmail else None)),
-            display_name=hub.display_name
-        )
-        integrations.append(response)
+            logger.error(
+                f"[list_integrations] Failed to assemble integration "
+                f"id={safe_id} type={safe_type}: {e}",
+                exc_info=True,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+            # If the row can't even be identified, silently skip — it's
+            # a ghost entry (likely a hard-deleted polymorphic row the
+            # session still cached). Don't render it; don't 500.
+            if safe_id is None or safe_type is None:
+                continue
+            if safe_type not in ("asana", "calendar", "gmail"):
+                # Non-user-facing types (shell, etc.) — skip silently.
+                continue
+
+            # Best-effort degraded row so the UI at least sees the broken
+            # integration and can offer to disconnect / re-auth it, rather
+            # than the whole page going blank.
+            try:
+                integrations.append(
+                    IntegrationResponse(
+                        id=safe_id,
+                        type=safe_type,
+                        name=safe_name or f"{safe_type}-{safe_id}",
+                        is_active=safe_is_active,
+                        health_status="error",
+                        health_status_reason=str(e)[:200],
+                        tenant_id=safe_tenant_id,
+                        workspace_gid=None,
+                        workspace_name=None,
+                        default_assignee_name=None,
+                        default_assignee_gid=None,
+                        email=None,
+                        display_name=safe_display_name,
+                    )
+                )
+            except Exception:
+                # Even the degraded row failed — skip it entirely rather than 500.
+                continue
 
     return integrations
 
