@@ -676,7 +676,16 @@ class ToolStepHandler(FlowStepHandler):
 
         tool_type = config.get("tool_type", "built_in")
         tool_name = config.get("tool_name") or config.get("tool_id") or ""
-        parameters = config.get("parameters", config.get("tool_parameters", {})) or {}
+        # BUG-605: The flows UI saves step parameters under `tool_parameters`.
+        # The original `config.get("parameters", config.get("tool_parameters", {}))`
+        # only fell back when the key was *missing*; if the UI wrote both
+        # `parameters={}` and `tool_parameters={"query": "X"}` the fallback
+        # never fired and downstream `parameters.get("query")` returned "".
+        # Merge both keys instead — later wins — so either shape resolves
+        # correctly.
+        _p = config.get("parameters") or {}
+        _tp = config.get("tool_parameters") or {}
+        parameters = {**_p, **_tp}
         timeout = step.timeout_seconds or DEFAULT_STEP_TIMEOUT
 
         # Phase 13.1: Resolve template variables in parameters
@@ -716,14 +725,36 @@ class ToolStepHandler(FlowStepHandler):
 
     async def _execute_sandboxed_tool(self, tool_id: str, parameters: Dict[str, Any], tenant_id: Optional[str] = None) -> Dict[str, Any]:
         """Execute sandboxed tool through SandboxedToolService."""
-        from models import SandboxedToolCommand
+        from models import SandboxedTool, SandboxedToolCommand
         from agent.tools.sandboxed_tool_service import SandboxedToolService
 
         try:
             if not tool_id:
                 raise ValueError("tool_id is required but was empty or None")
 
-            tool_id_int = int(tool_id)
+            # BUG-590: Flow tool nodes are authored with `tool_name` slugs
+            # (e.g. "webhook") because that is what routes_flows.py validates
+            # at create/update time. Legacy configs may still carry integer
+            # ids, so accept both forms here instead of blindly casting.
+            tool_id_str = str(tool_id).strip()
+            if tool_id_str.isdigit():
+                tool_id_int = int(tool_id_str)
+            else:
+                tool_query = self.db.query(SandboxedTool.id).filter(
+                    SandboxedTool.name == tool_id_str,
+                    SandboxedTool.is_enabled == True,  # noqa: E712
+                )
+                if tenant_id is not None:
+                    tool_query = tool_query.filter(
+                        SandboxedTool.tenant_id == tenant_id
+                    )
+                tool_row = tool_query.first()
+                if not tool_row:
+                    raise ValueError(
+                        f"Sandboxed tool '{tool_id_str}' not found or "
+                        f"disabled for tenant {tenant_id}"
+                    )
+                tool_id_int = tool_row[0]
 
             # Find the first command for this tool
             command = self.db.query(SandboxedToolCommand).filter_by(tool_id=tool_id_int).first()

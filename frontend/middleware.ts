@@ -4,6 +4,7 @@ import { isPublicPath } from '@/lib/public-paths'
 
 export function middleware(request: NextRequest) {
   const { nextUrl } = request
+  const forceLogin = nextUrl.searchParams.get('force') === '1'
 
   // Same-origin API/WebSocket calls must flow through to the backend rewrite
   // layer untouched. Auth and setup gating for those routes belongs to the
@@ -15,12 +16,20 @@ export function middleware(request: NextRequest) {
   // Redirect /login to /auth/login (or straight to / if already authenticated)
   if (nextUrl.pathname === '/login') {
     const hasSession = request.cookies.has('tsushin_session')
-    const target = hasSession ? '/' : '/auth/login'
-    return NextResponse.redirect(new URL(target, request.url))
+    const target = hasSession && !forceLogin ? '/' : '/auth/login'
+    const redirectUrl = new URL(target, request.url)
+    if (target === '/auth/login' && nextUrl.search) {
+      redirectUrl.search = nextUrl.search
+    }
+    return NextResponse.redirect(redirectUrl)
   }
 
   // Redirect authenticated users away from login page
-  if (nextUrl.pathname === '/auth/login' && request.cookies.has('tsushin_session')) {
+  if (
+    nextUrl.pathname === '/auth/login' &&
+    request.cookies.has('tsushin_session') &&
+    !forceLogin
+  ) {
     return NextResponse.redirect(new URL('/', request.url))
   }
 

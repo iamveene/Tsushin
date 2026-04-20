@@ -251,7 +251,15 @@ class AgentCommunicationService:
         # 10. Invoke target agent
         try:
             ai_result = await asyncio.wait_for(
-                self._invoke_target_agent(target_agent, message, context, source_agent, depth),
+                self._invoke_target_agent(
+                    target_agent,
+                    message,
+                    context,
+                    source_agent,
+                    depth,
+                    allow_target_skills=bool(getattr(permission, "allow_target_skills", False)),
+                    session_id=session.id,
+                ),
                 timeout=effective_timeout,
             )
         except asyncio.TimeoutError:
@@ -448,6 +456,7 @@ class AgentCommunicationService:
         target_agent_id: int,
         max_depth: int = 3,
         rate_limit_rpm: int = 30,
+        allow_target_skills: bool = False,
     ) -> AgentCommunicationPermission:
         try:
             perm = AgentCommunicationPermission(
@@ -457,6 +466,7 @@ class AgentCommunicationService:
                 is_enabled=True,
                 max_depth=max_depth,
                 rate_limit_rpm=rate_limit_rpm,
+                allow_target_skills=allow_target_skills,
             )
             self.db.add(perm)
             self._ensure_agent_communication_skill(
@@ -467,6 +477,7 @@ class AgentCommunicationService:
             self.db.refresh(perm)
             self._audit_log("agent_comm.permission.create", source_agent_id, target_agent_id, {
                 "permission_id": perm.id,
+                "allow_target_skills": allow_target_skills,
             })
             return perm
         except Exception:
@@ -488,7 +499,7 @@ class AgentCommunicationService:
                 return None
             explicit_enable = kwargs.get("is_enabled") is True
             explicit_disable = kwargs.get("is_enabled") is False
-            for key in ("is_enabled", "max_depth", "rate_limit_rpm"):
+            for key in ("is_enabled", "max_depth", "rate_limit_rpm", "allow_target_skills"):
                 if key in kwargs:
                     setattr(perm, key, kwargs[key])
 
@@ -809,13 +820,25 @@ class AgentCommunicationService:
         context: Optional[str],
         source_agent: Agent,
         depth: int,
+        allow_target_skills: bool = False,
+        session_id: Optional[int] = None,
     ) -> Dict:
-        """Invoke the target agent's AI processing and return the result dict."""
+        """Invoke the target agent's AI processing and return the result dict.
+
+        When ``allow_target_skills`` is False (default), the target runs without
+        any skills/tools — pure LLM-knowledge reply, matching the original A2A
+        contract. When True (opt-in on the permission row), the target loads its
+        own skills so it can fetch data on the source's behalf (e.g. its Gmail
+        mailbox). Depth, rate limit, and Sentinel still bound the call.
+
+        ``session_id`` is the current A2A session's id. It is propagated into
+        ``agent_config`` as ``comm_parent_session_id`` so that, if the target
+        calls the agent_communication tool recursively, loop detection in
+        ``send_message`` has a parent to traverse from.
+        """
         from agent.agent_service import AgentService
 
         # Build config dict directly (follows playground_service.py pattern)
-        # Note: enabled_tools is empty to prevent recursive tool invocations
-        # during inter-agent calls. The target agent uses its LLM knowledge only.
         agent_config = {
             "agent_id": target_agent.id,
             "model_provider": target_agent.model_provider,
@@ -899,6 +922,12 @@ class AgentCommunicationService:
         # BUG-LOG-006: Inject comm_depth into agent config so that if skills
         # are ever enabled for A2A targets, the depth limit will be enforced.
         agent_config["comm_depth"] = depth
+        # With allow_target_skills=True the target can re-enter send_message via
+        # the agent_communication skill. Thread our session id through so that
+        # nested calls populate parent_session_id and _detect_loop can traverse
+        # the chain instead of being silently skipped (if parent_session_id is None).
+        if session_id is not None:
+            agent_config["comm_parent_session_id"] = session_id
 
         agent_service = AgentService(
             agent_config,
@@ -906,7 +935,10 @@ class AgentCommunicationService:
             agent_id=target_agent.id,
             token_tracker=self.token_tracker,
             tenant_id=self.tenant_id,
-            disable_skills=True,  # Prevent recursive tool use during A2A
+            # Skills are gated per-permission. With allow_target_skills=True, the
+            # target can use its own tools (gmail, sandboxed_tools, etc.); recursion
+            # is still bounded by max_depth + rate_limit + permission checks.
+            disable_skills=not allow_target_skills,
         )
 
         sender_key = f"agent:{source_agent.id}"

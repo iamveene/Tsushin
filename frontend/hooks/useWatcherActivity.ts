@@ -86,6 +86,9 @@ interface UseWatcherActivityReturn {
   connectionState: ActivityConnectionState
   processingAgents: Set<number>
   activeChannels: Set<string>
+  // Map<agentId, channelType> for agents currently processing — lets the graph
+  // pair an in-flight (channel, agent) edge instead of lighting the whole channel row.
+  processingAgentChannels: Map<number, string>
   recentSkillUse: Map<number, SkillUseInfo>
   recentKbUse: Map<number, KbUseInfo>
   fadingAgents: Set<number>
@@ -144,6 +147,15 @@ export function useWatcherActivity(
       if (session.channel) channels.add(session.channel)
     })
     return channels
+  }, [processingSessions])
+
+  // Per-agent channel pair: which channel is each currently-processing agent responding on?
+  const processingAgentChannels = useMemo(() => {
+    const map = new Map<number, string>()
+    processingSessions.forEach((session, agentId) => {
+      if (session.channel && !session.isEnding) map.set(agentId, session.channel)
+    })
+    return map
   }, [processingSessions])
 
   // Derive recentSkillUse from processing sessions
@@ -662,6 +674,7 @@ export function useWatcherActivity(
     connectionState,
     processingAgents,
     activeChannels,
+    processingAgentChannels,
     recentSkillUse,
     recentKbUse,
     fadingAgents,

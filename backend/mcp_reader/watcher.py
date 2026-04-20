@@ -43,6 +43,23 @@ class MCPWatcher:
         self._conversation_delay_buffers = {}
         self._conversation_delay_tasks = {}
 
+    def _get_conversation_delay(self, msg: dict, trigger_type: str) -> float:
+        """
+        Return the effective debounce window for a message.
+
+        WhatsApp DMs should feel responsive, so we cap the debounce there to a
+        short window while keeping the configured aggregation behavior for
+        groups/conversation-heavy channels.
+        """
+        if trigger_type != "conversation":
+            return 0.0
+
+        delay = self.whatsapp_conversation_delay_seconds
+        if msg.get("channel") == "whatsapp" and not bool(msg.get("is_group", 0)):
+            return min(delay, 1.0)
+
+        return delay
+
     async def start(self):
         """Start the polling loop"""
         self.running = True
@@ -208,13 +225,14 @@ class MCPWatcher:
 
     async def _handle_conversation_message(self, msg: dict, trigger_type: str):
         """Optionally debounce WhatsApp conversation messages before routing."""
-        if msg.get("channel") == "whatsapp" and self.whatsapp_conversation_delay_seconds > 0:
-            self._enqueue_conversation_message(msg, trigger_type)
+        delay = self._get_conversation_delay(msg, trigger_type)
+        if delay > 0:
+            self._enqueue_conversation_message(msg, trigger_type, delay)
             return
 
         await self.on_message_callback(msg, trigger_type)
 
-    def _enqueue_conversation_message(self, msg: dict, trigger_type: str) -> None:
+    def _enqueue_conversation_message(self, msg: dict, trigger_type: str, delay_seconds: float) -> None:
         """Buffer conversation messages and debounce processing."""
         key = f"{msg.get('channel', 'unknown')}:{msg.get('chat_id') or msg.get('sender')}"
         buffer = self._conversation_delay_buffers.setdefault(key, [])
@@ -225,13 +243,13 @@ class MCPWatcher:
             existing_task.cancel()
 
         self._conversation_delay_tasks[key] = asyncio.create_task(
-            self._flush_conversation_buffer(key, trigger_type)
+            self._flush_conversation_buffer(key, trigger_type, delay_seconds)
         )
 
-    async def _flush_conversation_buffer(self, key: str, trigger_type: str) -> None:
+    async def _flush_conversation_buffer(self, key: str, trigger_type: str, delay_seconds: float) -> None:
         """Send a single aggregated message after the debounce window."""
         try:
-            await asyncio.sleep(self.whatsapp_conversation_delay_seconds)
+            await asyncio.sleep(delay_seconds)
             buffered = self._conversation_delay_buffers.pop(key, [])
             if not buffered:
                 return

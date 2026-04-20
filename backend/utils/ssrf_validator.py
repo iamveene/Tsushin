@@ -19,11 +19,19 @@ Usage:
 
 import ipaddress
 import logging
+import re
 import socket
 from typing import Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+# Internal Docker DNS aliases for tsushin-managed Ollama containers. These
+# hostnames are only resolvable inside the tsushin-network, so DNS resolution
+# from the backend host may or may not succeed depending on where the validator
+# runs; skipping DNS for these aliases avoids false-positive "DNS resolution
+# failed" errors while still preserving the surrounding scheme/format checks.
+_OLLAMA_INTERNAL_ALIAS_RE = re.compile(r"^tsushin-ollama-[a-f0-9]{8}-\d+$")
 
 # Docker and cloud internal hostnames that should be blocked
 BLOCKED_HOSTNAMES = frozenset({
@@ -215,6 +223,25 @@ def validate_ollama_url(url: str) -> str:
     """
     if not url or not url.strip():
         raise SSRFValidationError("Ollama URL cannot be empty")
+
+    # Tsushin-managed Ollama instances get a Docker-internal DNS alias of the
+    # form ``tsushin-ollama-<tenant_hash8>-<instance_id>``. These resolve only
+    # inside the tsushin-network, so we accept them without DNS resolution
+    # (scheme still validated below). Any other hostname falls through to
+    # the general SSRF validator.
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        raise SSRFValidationError(f"Invalid URL: {e}")
+
+    if parsed.scheme not in ("http", "https"):
+        raise SSRFValidationError(
+            f"Only HTTP and HTTPS schemes are allowed, got: {parsed.scheme or 'none'}"
+        )
+
+    hostname = parsed.hostname or ""
+    if _OLLAMA_INTERNAL_ALIAS_RE.match(hostname.lower()):
+        return url.rstrip("/")
 
     # Use the general validator with allow_private=True
     validated = validate_url(url, allow_private=True)

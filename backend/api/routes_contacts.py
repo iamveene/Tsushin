@@ -7,6 +7,7 @@ import sys
 import os
 import logging
 import asyncio
+import re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import Contact, UserContactMapping, ContactChannelMapping
@@ -19,6 +20,23 @@ from services.audit_service import log_tenant_event, TenantAuditActions
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def normalize_phone_number(value: str | None) -> str | None:
+    """Normalize user-entered phone numbers to E.164-like digits with optional leading +."""
+    if value is None:
+        return value
+
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+
+    has_plus = cleaned.startswith("+")
+    digits_only = re.sub(r"\D+", "", cleaned)
+    if not digits_only:
+        return None
+
+    return f"+{digits_only}" if has_plus else digits_only
 
 
 def trigger_whatsapp_resolution(contact_id: int, tenant_id: str):
@@ -236,6 +254,11 @@ class ContactCreate(BaseModel):
             return v
         return strip_html_tags(v).strip() or None
 
+    @field_validator("phone_number", mode="before")
+    @classmethod
+    def normalize_phone_number_field(cls, v: str | None) -> str | None:
+        return normalize_phone_number(v)
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -282,6 +305,11 @@ class ContactUpdate(BaseModel):
         if v is None:
             return v
         return strip_html_tags(v).strip() or None
+
+    @field_validator("phone_number", mode="before")
+    @classmethod
+    def normalize_phone_number_field(cls, v: str | None) -> str | None:
+        return normalize_phone_number(v)
 
 
 class ContactResponse(BaseModel):
@@ -573,8 +601,9 @@ def lookup_contact(
     if contact:
         return enrich_contact_with_user_info(db, contact)
 
-    # Try phone_number (normalize by removing + prefix)
-    normalized = identifier.lstrip("+")
+    # Try phone_number (normalize user-entered formatting, then strip + prefix)
+    normalized_phone = normalize_phone_number(identifier) or identifier
+    normalized = normalized_phone.lstrip("+")
     contact = base_query.filter(Contact.phone_number == normalized).first()
     if contact:
         return enrich_contact_with_user_info(db, contact)

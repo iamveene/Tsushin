@@ -32,7 +32,29 @@ export default function PlaygroundPage() {
   const { user, loading } = useRequireAuth()
 
   const [agents, setAgents] = useState<PlaygroundAgentInfo[]>([])
-  const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null)
+  // BUG-596: Gate the "Select an Agent" / empty-state render on a real
+  // loading flag so the first paint doesn't flash "Agents 0" before the
+  // cached-then-fresh agent list resolves. Starts `true` and only flips
+  // `false` after `loadAgents()`'s fresh fetch settles (success or failure).
+  const [isLoadingAgents, setIsLoadingAgents] = useState(true)
+  // Seed from the URL `?agent=` query param on initial mount so Playground Mini's
+  // expand handover (`router.push('/playground?agent=X&thread=Y')`) pre-selects the
+  // right agent BEFORE `loadAgents()` runs its default-agent auto-pick — otherwise
+  // that auto-pick would race the URL and the wrong agent's threads would be fetched.
+  const [selectedAgentId, setSelectedAgentId] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const agentParam = params.get('agent')
+      if (agentParam) {
+        const n = Number(agentParam)
+        if (!Number.isNaN(n)) return n
+      }
+    } catch {
+      /* ignore */
+    }
+    return null
+  })
   const [messages, setMessages] = useState<PlaygroundMessage[]>([])
   const [isSending, setIsSending] = useState(false)
   const [isLoadingHistory, setIsLoadingHistory] = useState(false)
@@ -116,6 +138,15 @@ export default function PlaygroundPage() {
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId
   }, [activeThreadId])
+
+  // --- Playground Mini handover (de-dupe)
+  // Tracks the last-consumed ?thread= so re-expanding with the same thread
+  // during one session doesn't re-select it on every re-render; re-expanding
+  // with a DIFFERENT thread still works. The actual URL read happens inside
+  // initializeThreads below — reading from `window.location.search` directly
+  // avoids a race with `loadAgents()` auto-selection that `useSearchParams`
+  // + a separate effect would have lost.
+  const lastConsumedHandoverThreadRef = useRef<number | null>(null)
 
   // Smart UX: Draft auto-save hook
   const { saveDraft, saveDraftImmediate, restoreDraft, clearDraft } = useDraftSave(activeThreadId, inputRef)
@@ -697,9 +728,18 @@ export default function PlaygroundPage() {
       const cachedAgents = getCachedAgents(user.id)
       if (cachedAgents) {
         setAgents(cachedAgents)
-        // Auto-select default agent (or first) if available and none selected
+        // Auto-select default agent (or first) if available. Also validate a
+        // URL-seeded `selectedAgentId` against the cached list — a stale cache
+        // can hold an agent that no longer belongs to this tenant if the user
+        // has switched tenants without refreshing the cache; the fresh fetch
+        // below will validate again authoritatively.
         if (cachedAgents.length > 0) {
-          setSelectedAgentId(currentId => currentId === null ? (cachedAgents.find(a => a.is_default) || cachedAgents[0]).id : currentId)
+          setSelectedAgentId(currentId => {
+            if (currentId !== null && cachedAgents.some(a => a.id === currentId)) {
+              return currentId
+            }
+            return (cachedAgents.find(a => a.is_default) || cachedAgents[0]).id
+          })
         }
       }
 
@@ -710,12 +750,23 @@ export default function PlaygroundPage() {
       // Update cache with fresh data
       setCachedAgents(user.id, data)
 
-      // Auto-select default agent (or first) if available and none selected
+      // Auto-select default agent (or first) if available. If a URL-seeded
+      // `selectedAgentId` does NOT belong to this tenant (e.g. a copy-pasted
+      // deep-link from a different tenant's session, or an agent that was
+      // deleted), fall back to the default so we never POST threads for a
+      // foreign agent id — the backend would either 403 or mis-scope the write.
       if (data.length > 0) {
-        setSelectedAgentId(currentId => currentId === null ? (data.find(a => a.is_default) || data[0]).id : currentId)
+        setSelectedAgentId(currentId => {
+          if (currentId !== null && data.some(a => a.id === currentId)) {
+            return currentId
+          }
+          return (data.find(a => a.is_default) || data[0]).id
+        })
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load agents')
+    } finally {
+      setIsLoadingAgents(false)
     }
   }
 
@@ -903,6 +954,45 @@ export default function PlaygroundPage() {
         if (process.env.NODE_ENV === 'development') console.log('[Phase 14.1] Loaded threads:', agentThreads.length)
 
         setThreads(agentThreads)
+
+        // Playground Mini handover: if a thread was requested via `?thread=` in
+        // the URL and it's present in this agent's list, SELECT IT NOW and bail
+        // out before the empty-thread auto-select / auto-create logic below.
+        // We read the URL directly (not via `useSearchParams` + a separate
+        // effect) because client-side navigation from MiniHeader.router.push
+        // can race: `loadAgents()` may fire and default-select an agent
+        // before the URL-sync effect runs, so the only reliable source of
+        // truth at initializeThreads time is `window.location.search` itself.
+        if (typeof window !== 'undefined') {
+          try {
+            const urlParams = new URLSearchParams(window.location.search)
+            const threadParam = urlParams.get('thread')
+            if (threadParam) {
+              const pending = Number(threadParam)
+              if (!Number.isNaN(pending) &&
+                  lastConsumedHandoverThreadRef.current !== pending) {
+                const found = agentThreads.find(t => t.id === pending)
+                if (found) {
+                  console.log('[Playground] Consuming Mini handover — thread', pending)
+                  lastConsumedHandoverThreadRef.current = pending
+                  setActiveThreadId(found.id)
+                  setActiveThread(found)
+                  // Fetch full thread via the same path as sidebar selection.
+                  void handleThreadSelect(found.id)
+                  // Strip query params after claim via a no-React URL update.
+                  try { window.history.replaceState(null, '', '/playground') } catch { /* no-op */ }
+                  return
+                } else {
+                  console.warn('[Playground] Mini handover thread', pending, 'not in agent list — falling back')
+                  // Still strip the URL so refresh doesn't keep re-attempting.
+                  try { window.history.replaceState(null, '', '/playground') } catch { /* no-op */ }
+                }
+              }
+            }
+          } catch {
+            /* non-fatal — proceed with default behavior */
+          }
+        }
 
         // BUG-335 Fix: Look for ANY empty thread (message_count === 0 or undefined),
         // not just the most recent one. This prevents creating a new orphan thread on
@@ -1724,6 +1814,7 @@ export default function PlaygroundPage() {
     <div className="h-full w-full overflow-hidden">
       <ExpertMode
         agents={agents}
+        isLoadingAgents={isLoadingAgents}
         projects={projects}
         selectedAgentId={selectedAgentId}
         agentName={agentName}

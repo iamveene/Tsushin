@@ -11,6 +11,7 @@ Layer 4: Shared Memory Pool - Cross-agent knowledge (accessed via manager)
 Each agent maintains their own isolated memory system.
 """
 
+import asyncio
 import logging
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -86,6 +87,7 @@ class AgentMemorySystem:
         # Fact extraction configuration
         self.auto_extract_facts = config.get("auto_extract_facts", True)
         self.extraction_threshold = config.get("fact_extraction_threshold", 5)  # messages
+        self._fact_extraction_tasks: Dict[str, asyncio.Task] = {}
 
         # Temporal decay configuration (Item 37)
         self.decay_config = DecayConfig.from_config_dict(config)
@@ -181,9 +183,18 @@ class AgentMemorySystem:
         # Persist to database (Memory table) for stats and conversation inspection
         self._persist_memory_to_db(user_id)
 
-        # Trigger fact extraction if enabled and threshold met
+        # Trigger fact extraction off the user-facing path. This keeps memory
+        # enrichment enabled without making reply latency wait on another LLM call.
         if self.auto_extract_facts and role == 'assistant':
-            await self._maybe_extract_facts(user_id)
+            existing_task = self._fact_extraction_tasks.get(user_id)
+            if existing_task and not existing_task.done():
+                self.logger.debug(
+                    f"Agent {self.agent_id}: fact extraction already pending for {user_id}, skipping duplicate trigger"
+                )
+            else:
+                self._fact_extraction_tasks[user_id] = asyncio.create_task(
+                    self._run_fact_extraction(user_id)
+                )
 
     async def get_context(
         self,
@@ -866,6 +877,15 @@ class AgentMemorySystem:
 
         except Exception as e:
             self.logger.error(f"Fact extraction failed: {e}")
+
+    async def _run_fact_extraction(self, user_id: str) -> None:
+        """Background wrapper for fact extraction with task bookkeeping."""
+        try:
+            await self._maybe_extract_facts(user_id)
+        except Exception as e:
+            self.logger.error(f"Background fact extraction failed for {user_id}: {e}", exc_info=True)
+        finally:
+            self._fact_extraction_tasks.pop(user_id, None)
 
     def _validate_facts_memguard(self, facts: List[Dict], user_id: str) -> List[Dict]:
         """

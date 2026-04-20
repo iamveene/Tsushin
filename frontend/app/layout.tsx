@@ -4,11 +4,14 @@ import { DM_Sans, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google'
 import { AuthProvider } from '@/contexts/AuthContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
 import { WhatsAppWizardProvider } from '@/contexts/WhatsAppWizardContext'
+import { GoogleWizardProvider } from '@/contexts/GoogleWizardContext'
+import { AudioWizardProvider } from '@/contexts/AudioWizardContext'
 import { ToastProvider } from '@/contexts/ToastContext'
 import LayoutContent from '@/components/LayoutContent'
 import OnboardingWizard from '@/components/OnboardingWizard'
 import WhatsAppSetupWizard from '@/components/whatsapp-wizard/WhatsAppSetupWizard'
 import ToastContainer from '@/components/ui/ToastContainer'
+import PlaygroundMini from '@/components/playground/mini/PlaygroundMini'
 
 // Primary body font - clean and modern
 const dmSans = DM_Sans({
@@ -54,12 +57,17 @@ export default function RootLayout({
         <AuthProvider>
           <OnboardingProvider>
             <WhatsAppWizardProvider>
-              <ToastProvider>
-                <LayoutContent>{children}</LayoutContent>
-                <OnboardingWizard />
-                <WhatsAppSetupWizard />
-                <ToastContainer />
-              </ToastProvider>
+              <GoogleWizardProvider>
+                <AudioWizardProvider>
+                <ToastProvider>
+                  <LayoutContent>{children}</LayoutContent>
+                  <OnboardingWizard />
+                  <WhatsAppSetupWizard />
+                  <PlaygroundMini />
+                  <ToastContainer />
+                </ToastProvider>
+                </AudioWizardProvider>
+              </GoogleWizardProvider>
             </WhatsAppWizardProvider>
           </OnboardingProvider>
         </AuthProvider>

@@ -130,9 +130,12 @@ export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps)
 
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop — BUG-603: z-[200] keeps the User Guide above every other app modal
+          (Modal.tsx uses z-50, route-level dialogs use z-50..z-100), so landing on
+          /flows while this panel is open cannot accidentally stack a flow modal on
+          top and steal clicks away from the Close Guide button. */}
       <div
-        className={`fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm transition-opacity duration-300 ${
+        className={`fixed inset-0 z-[200] bg-black/50 backdrop-blur-sm transition-opacity duration-300 ${
           isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
         onClick={onClose}
@@ -140,7 +143,7 @@ export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps)
 
       {/* Slide-over panel */}
       <div
-        className={`fixed top-0 right-0 z-[101] h-full w-full sm:max-w-2xl xl:max-w-3xl transform transition-transform duration-300 ease-in-out ${
+        className={`fixed top-0 right-0 z-[201] h-full w-full sm:max-w-2xl xl:max-w-3xl transform transition-transform duration-300 ease-in-out ${
           isOpen ? 'translate-x-0 pointer-events-auto' : 'translate-x-full pointer-events-none'
         }`}
         role="dialog"

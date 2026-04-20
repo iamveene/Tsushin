@@ -78,13 +78,34 @@ class ContactService:
         Returns:
             Contact object if found, None otherwise
         """
-        # Normalize sender (remove + prefix)
-        sender_normalized = sender.lstrip("+")
+        # Normalize sender (remove + prefix / JID suffix)
+        sender_normalized = (sender or "").split("@")[0].lstrip("+")
+
+        phone_candidates = []
+        for candidate in [sender_normalized]:
+            candidate = "".join(ch for ch in candidate if ch.isdigit())
+            if candidate and candidate not in phone_candidates:
+                phone_candidates.append(candidate)
+            if candidate.startswith("55") and len(candidate) > 11:
+                stripped = candidate[2:]
+                if stripped not in phone_candidates:
+                    phone_candidates.append(stripped)
+            elif candidate and len(candidate) in (10, 11):
+                with_country = f"55{candidate}"
+                if with_country not in phone_candidates:
+                    phone_candidates.append(with_country)
 
         # Search by phone number (query database directly) — V060-CHN-006 tenant scoped
+        phone_filters = []
+        for candidate in phone_candidates:
+            phone_filters.extend([
+                Contact.phone_number == candidate,
+                Contact.phone_number == f"+{candidate}",
+                Contact.phone_number.like(f"%{candidate}"),
+            ])
         contact = self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
-            Contact.phone_number.like(f"%{sender_normalized}")
+            or_(*phone_filters) if phone_filters else Contact.phone_number.like(f"%{sender_normalized}")
         )).first()
         if contact:
             return contact
@@ -92,13 +113,17 @@ class ContactService:
         # Search by WhatsApp ID (query database directly) — V060-CHN-006 tenant scoped
         contact = self._apply_tenant_filter(self.db.query(Contact).filter(
             Contact.is_active == True,
-            Contact.whatsapp_id == sender_normalized
+            Contact.whatsapp_id.in_(phone_candidates or [sender_normalized])
         )).first()
         if contact:
             return contact
 
         # Fallback: Search by channel mapping (supports Slack, Discord, etc.)
-        return self._lookup_by_channel_mapping(sender_normalized) or self._lookup_by_channel_mapping(sender)
+        for candidate in phone_candidates + [sender_normalized, sender]:
+            contact = self._lookup_by_channel_mapping(candidate)
+            if contact:
+                return contact
+        return None
 
     def _lookup_by_channel_mapping(self, identifier: str) -> Optional[Contact]:
         """

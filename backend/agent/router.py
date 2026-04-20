@@ -1,6 +1,7 @@
+import asyncio
 import logging
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -100,6 +101,12 @@ class AgentRouter:
         # V060-CHN-031: Stash inbound Slack thread_ts so _send_message auto-threads
         # outbound replies into the original message's thread. Set in route_message.
         self._inbound_slack_thread_ts: Optional[str] = None
+
+        # PR18 follow-up: Hold strong references to fire-and-forget post-response
+        # hook tasks. Without this, asyncio may GC the task before it finishes
+        # (Python docs explicitly warn about this) and we'd lose the knowledge
+        # extraction work silently. The done-callback discards the ref.
+        self._pending_post_response_tasks: Set[asyncio.Task] = set()
 
         # Phase 6.11.3: Initialize CachedContactService for faster lookups
         # V060-CHN-006: Pass tenant_id to prevent cross-tenant contact leakage.
@@ -214,15 +221,31 @@ class AgentRouter:
         """Resolve a DM sender using raw IDs, chat metadata, and WhatsApp auto-linking."""
         sender_normalized = sender.split("@")[0].lstrip("+")
 
+        phone_candidates = []
+        digits = "".join(ch for ch in sender_normalized if ch.isdigit())
+        for candidate in [sender_normalized, digits]:
+            if candidate and candidate not in phone_candidates:
+                phone_candidates.append(candidate)
+        if digits.startswith("55") and len(digits) > 11:
+            stripped = digits[2:]
+            if stripped not in phone_candidates:
+                phone_candidates.append(stripped)
+        elif digits and len(digits) in (10, 11):
+            with_country = f"55{digits}"
+            if with_country not in phone_candidates:
+                phone_candidates.append(with_country)
+
         if self.contact_service:
             contact = self.contact_service.identify_sender(sender)
             if contact:
+                self._auto_link_whatsapp_lid(contact, sender_normalized)
                 return contact
 
             chat_id = message.get("chat_id", "")
             if chat_id and chat_id != sender:
                 contact = self.contact_service.identify_sender(chat_id)
                 if contact:
+                    self._auto_link_whatsapp_lid(contact, sender_normalized)
                     return contact
 
         names_to_try = []
@@ -232,6 +255,36 @@ class AgentRouter:
                 names_to_try.append(candidate)
 
         tenant_id = self.tenant_id
+
+        # Before falling back to name-based heuristics, try a direct phone match
+        # that tolerates country-code differences (e.g. 2799... vs 55279...).
+        try:
+            base_query = self.db.query(Contact).filter(Contact.is_active == True)
+            if tenant_id:
+                base_query = base_query.filter(Contact.tenant_id == tenant_id)
+
+            phone_filters = []
+            for candidate in phone_candidates:
+                phone_filters.extend([
+                    Contact.phone_number == candidate,
+                    Contact.phone_number == f"+{candidate}",
+                    Contact.phone_number.like(f"%{candidate}"),
+                    Contact.whatsapp_id == candidate,
+                ])
+
+            phone_matches = base_query.filter(or_(*phone_filters)).all() if phone_filters else []
+            unique_matches = {contact.id: contact for contact in phone_matches}
+            if len(unique_matches) == 1:
+                contact = next(iter(unique_matches.values()))
+                self.logger.info(
+                    f"[DM RESOLUTION] Resolved sender {sender or message.get('chat_id')} "
+                    f"to contact '{contact.friendly_name}' via normalized phone match"
+                )
+                self._auto_link_whatsapp_lid(contact, sender_normalized)
+                return contact
+        except Exception as e:
+            self.logger.debug(f"[DM RESOLUTION] Phone fallback failed: {e}")
+
         for candidate in names_to_try:
             base_query = self.db.query(Contact).filter(Contact.is_active == True)
             if tenant_id:
@@ -262,7 +315,13 @@ class AgentRouter:
         try:
             from services.whatsapp_id_discovery import WhatsAppIDDiscovery
             discovery = WhatsAppIDDiscovery(time_window_minutes=60)
-            return discovery.auto_link_contact(self.db, sender_normalized, self.logger)
+            return discovery.auto_link_contact(
+                self.db,
+                sender_normalized,
+                self.logger,
+                tenant_id=tenant_id,
+                chat_name=message.get("chat_name") or message.get("sender_name"),
+            )
         except Exception:
             return None
 
@@ -277,17 +336,44 @@ class AgentRouter:
             return
         if contact.whatsapp_id and contact.whatsapp_id == sender_id:
             return
-        if not contact.whatsapp_id:
-            contact.whatsapp_id = sender_id
-            try:
+        try:
+            if not contact.whatsapp_id:
+                contact.whatsapp_id = sender_id
                 self.db.commit()
                 self.logger.info(
                     f"[LID AUTO-LINK] Linked WhatsApp LID {sender_id} to contact "
                     f"'{contact.friendly_name}' (phone: {contact.phone_number})"
                 )
-            except Exception as e:
-                self.db.rollback()
-                self.logger.warning(f"[LID AUTO-LINK] Failed to save: {e}")
+                return
+
+            if not contact.tenant_id:
+                self.logger.warning(
+                    f"[LID AUTO-LINK] Skipping alias write for contact id={contact.id} "
+                    f"('{contact.friendly_name}') sender_id={sender_id}: "
+                    f"contact.tenant_id is missing (legacy row). "
+                    f"Refusing to write orphaned channel_mapping under 'default'."
+                )
+                return
+
+            from services.contact_channel_mapping_service import ContactChannelMappingService
+            mapping_service = ContactChannelMappingService(self.db)
+            mapping_service.add_channel_mapping(
+                contact_id=contact.id,
+                channel_type="whatsapp",
+                channel_identifier=sender_id,
+                channel_metadata={
+                    "discovered_from": "router_name_match",
+                    "legacy_whatsapp_id": contact.whatsapp_id,
+                },
+                tenant_id=contact.tenant_id,
+            )
+            self.logger.info(
+                f"[LID AUTO-LINK] Added WhatsApp alias {sender_id} for contact "
+                f"'{contact.friendly_name}'"
+            )
+        except Exception as e:
+            self.db.rollback()
+            self.logger.warning(f"[LID AUTO-LINK] Failed to save: {e}")
 
     def get_agent_config(self, agent: Agent) -> Dict:
         """
@@ -1368,14 +1454,22 @@ class AgentRouter:
 
         self.logger.info(f"Routing message from {sender_key} (trigger: {trigger_type})")
 
-        # Item 32/33/34: Global emergency stop — blocks ALL channels (WhatsApp, Telegram, Slack, Discord)
+        # Emergency stop — blocks ALL channels (WhatsApp, Telegram, Slack, Discord).
+        # v0.7.3: Two-level — GLOBAL kill switch on Config (admin-only) OR the
+        # per-tenant flag on Tenant (tenant owner-controlled). Either → block.
         try:
             from models import Config as ConfigModel
             config_record = self.db.query(ConfigModel).first()
+            channel = message.get("channel", "whatsapp")
             if config_record and getattr(config_record, 'emergency_stop', False):
-                channel = message.get("channel", "whatsapp")
-                self.logger.warning(f"[EMERGENCY STOP] Blocking {channel} message from {sender_key} — emergency stop is active")
+                self.logger.warning(f"[EMERGENCY STOP:global] Blocking {channel} message from {sender_key} — GLOBAL emergency stop is active")
                 return
+            if self.tenant_id:
+                from models_rbac import Tenant as TenantModel
+                tenant_record = self.db.query(TenantModel).filter(TenantModel.id == self.tenant_id).first()
+                if tenant_record and getattr(tenant_record, 'emergency_stop', False):
+                    self.logger.warning(f"[EMERGENCY STOP:tenant] Blocking {channel} message from {sender_key} for tenant {self.tenant_id}")
+                    return
         except Exception:
             pass  # If check fails, continue normal processing
 
@@ -1912,7 +2006,6 @@ class AgentRouter:
 
                     # Cleanup temporary file after sending (with delay for upload)
                     try:
-                        import asyncio
                         await asyncio.sleep(3)  # Wait for upload to complete
                         if os.path.exists(media_path):
                             os.unlink(media_path)
@@ -2400,20 +2493,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                 use_contact_mapping=True  # Item 10: Enable contact-based memory
             )
 
-            # Task 3: Call post_response_hook for knowledge_sharing skill
-            await self._invoke_post_response_hooks(
-                agent_id=agent_id,
-                user_message=message_text,
-                agent_response=result['answer'],
-                context={
-                    "sender_key": sender_key,
-                    "sender_name": sender_name,
-                    "is_group": is_group,
-                    "chat_id": chat_id
-                },
-                ai_client=temp_agent_service.ai_client
-            )
-
         # Save agent run
         self._save_agent_run(
             sender_key=sender_key,
@@ -2444,46 +2523,60 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                 response=response_text
             )
 
-            recipient = message.get("chat_id", "")  # Use chat_id for reply
+            # Webhook inbound payloads put the sender in `sender`, not `chat_id`;
+            # fall back so the outbound adapter still runs (adapter resolves the
+            # real callback URL from its own integration row anyway).
+            recipient = message.get("chat_id") or message.get("sender") or ""
+            channel = message.get("channel", "whatsapp")
 
             # Phase 7.3: Check if agent has TTS skill enabled
             # Skip TTS for agent-switch confirmations — these should always be text
             _tool_used = result.get("tool_used") or ""
             _skip_tts = _tool_used in ("skill:switch_agent",)
+            incoming_media_type = (message.get("media_type") or "").lower()
+            # WhatsApp text replies should stay on the fast path by default.
+            # Keep TTS available for non-WhatsApp channels and voice-centric
+            # interactions where the inbound message was itself audio.
+            _tts_supported_for_message = (
+                channel != "whatsapp" or incoming_media_type == "audio"
+            )
             audio_path = None
             try:
-                tts_skill_config = await self.skill_manager.get_skill_config(
-                    db=self.db,
-                    agent_id=agent_id,
-                    skill_type="audio_tts"
-                )
-
-                # Note: Use 'is not None' because empty config {} is valid but falsy
-                if tts_skill_config is not None and not _skip_tts:
-                    self.logger.info("TTS skill enabled for this agent, converting response to audio")
-
-                    # Get TTS skill instance
-                    from agent.skills.audio_tts_skill import AudioTTSSkill
-                    tts_skill = AudioTTSSkill(token_tracker=self.token_tracker)
-                    # TTS-001 Fix: Set db_session so provider can access API keys from database
-                    tts_skill.set_db_session(self.db)
-
-                    # Process response through TTS
-                    tts_result = await tts_skill.process_response(
-                        response_text=formatted_response,
-                        config=tts_skill_config,
+                if _tts_supported_for_message and not _skip_tts:
+                    tts_skill_config = await self.skill_manager.get_skill_config(
+                        db=self.db,
                         agent_id=agent_id,
-                        sender_key=sender_key,
-                        message_id=message.get("id"),
-                        tenant_id=agent_tenant_id
+                        skill_type="audio_tts"
                     )
 
-                    if tts_result.success and tts_result.metadata.get("audio_path"):
-                        audio_path = tts_result.metadata["audio_path"]
-                        self.logger.info(f"TTS audio generated: {audio_path}")
-                    else:
-                        self.logger.warning(f"TTS generation failed: {tts_result.output}")
-                        # Fall back to text response
+                    # Note: Use 'is not None' because empty config {} is valid but falsy
+                    if tts_skill_config is not None:
+                        self.logger.info("TTS skill enabled for this agent, converting response to audio")
+
+                        # Get TTS skill instance
+                        from agent.skills.audio_tts_skill import AudioTTSSkill
+                        tts_skill = AudioTTSSkill(token_tracker=self.token_tracker)
+                        # TTS-001 Fix: Set db_session so provider can access API keys from database
+                        tts_skill.set_db_session(self.db)
+
+                        # Process response through TTS
+                        tts_result = await tts_skill.process_response(
+                            response_text=formatted_response,
+                            config=tts_skill_config,
+                            agent_id=agent_id,
+                            sender_key=sender_key,
+                            message_id=message.get("id"),
+                            tenant_id=agent_tenant_id
+                        )
+
+                        if tts_result.success and tts_result.metadata.get("audio_path"):
+                            audio_path = tts_result.metadata["audio_path"]
+                            self.logger.info(f"TTS audio generated: {audio_path}")
+                        else:
+                            self.logger.warning(f"TTS generation failed: {tts_result.output}")
+                            # Fall back to text response
+                elif channel == "whatsapp" and not _skip_tts:
+                    self.logger.info("Skipping TTS for WhatsApp text response to keep latency low")
 
             except Exception as tts_error:
                 self.logger.error(f"Error processing TTS: {tts_error}", exc_info=True)
@@ -2491,8 +2584,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
 
             # Send response (audio or text)
             # Phase 10.1.1: Detect channel and send via appropriate method
-            channel = message.get("channel", "whatsapp")
-
             # CRITICAL FIX 2026-01-18: Strip agent identity prefix BEFORE sending (normal message path)
             formatted_response = re.sub(r"^@?\w+:\s*", "", formatted_response, flags=re.IGNORECASE).strip()
 
@@ -2515,7 +2606,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
 
                     # Cleanup temporary file after sending (with delay for upload)
                     try:
-                        import asyncio
                         await asyncio.sleep(3)  # Wait for upload to complete
                         if os.path.exists(media_path):
                             os.unlink(media_path)
@@ -2544,7 +2634,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             # WhatsApp MCP needs time to fully upload the audio file
             if audio_path:
                 try:
-                    import asyncio
                     # VOICE-003 Fix: Configurable cleanup delay (default 5 seconds)
                     cleanup_delay = float(os.getenv("TTS_CLEANUP_DELAY_SECONDS", "5"))
                     await asyncio.sleep(cleanup_delay)
@@ -2553,6 +2642,47 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
                         self.logger.info(f"Cleaned up temporary audio file: {audio_path}")
                 except Exception as cleanup_error:
                     self.logger.warning(f"Failed to clean up audio file: {cleanup_error}")
+
+            # Passive post-response hooks can be AI-heavy (e.g. knowledge
+            # extraction). Fire them as a background task so the coroutine
+            # returns immediately after the user-facing reply is sent — this
+            # is what actually delivers the "4-5s WhatsApp response" target
+            # that PR #18 aimed for. Awaiting inline would still block on the
+            # hook's own LLM calls.
+            try:
+                hook_task = asyncio.create_task(
+                    self._invoke_post_response_hooks(
+                        agent_id=agent_id,
+                        user_message=message_text,
+                        agent_response=result['answer'],
+                        context={
+                            "sender_key": sender_key,
+                            "sender_name": sender_name,
+                            "is_group": is_group,
+                            "chat_id": chat_id
+                        },
+                        ai_client=temp_agent_service.ai_client
+                    )
+                )
+                # Hold a strong ref so asyncio doesn't GC the task mid-flight,
+                # and log any exception so we don't get a silent
+                # "Task exception was never retrieved" RuntimeError.
+                self._pending_post_response_tasks.add(hook_task)
+
+                def _on_post_response_done(task: asyncio.Task) -> None:
+                    self._pending_post_response_tasks.discard(task)
+                    if not task.cancelled():
+                        exc = task.exception()
+                        if exc is not None:
+                            self.logger.error(
+                                "Error running deferred post_response_hooks: %s",
+                                exc,
+                                exc_info=exc,
+                            )
+
+                hook_task.add_done_callback(_on_post_response_done)
+            except Exception as hook_error:
+                self.logger.error(f"Error scheduling deferred post_response_hooks: {hook_error}", exc_info=True)
 
         # Phase 8: Emit activity end event for watcher graph view (non-blocking)
         emit_agent_processing_async(
@@ -2723,7 +2853,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
 
         # Phase 6.11.2 + BUG-310: Broadcast agent run completion via tenant-scoped WebSocket
         try:
-            import asyncio
             from app import app
             if hasattr(app.state, 'ws_manager'):
                 # BUG-310: Resolve tenant_id so broadcast only reaches the owning tenant

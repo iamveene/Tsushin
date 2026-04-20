@@ -903,13 +903,21 @@ func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, 
 // Handle regular incoming messages with media support
 func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) {
 	// CRITICAL DEBUG: Log function entry
-	chatJID := msg.Info.Chat.String()
-	sender := msg.Info.Sender.User
-	fmt.Printf("🔍 handleMessage CALLED: ChatJID=%s, Sender=%s, IsFromMe=%v\n", chatJID, sender, msg.Info.IsFromMe)
+	rawChatJID := msg.Info.Chat.String()
+	canonicalChatJID, canonicalSenderJID := resolveMessageStorageIDs(client, &msg.Info, logger)
+	chatJID := canonicalChatJID.String()
+	if chatJID == "" {
+		chatJID = rawChatJID
+	}
+	sender := canonicalSenderJID.User
+	if sender == "" {
+		sender = msg.Info.Sender.User
+	}
+	fmt.Printf("🔍 handleMessage CALLED: RawChatJID=%s, ChatJID=%s, Sender=%s, IsFromMe=%v\n", rawChatJID, chatJID, sender, msg.Info.IsFromMe)
 
 	// Save message to database
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
-	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, msg.Info.PushName, logger)
+	name := GetChatName(client, messageStore, canonicalChatJID, chatJID, nil, sender, msg.Info.PushName, logger)
 
 	// Update chat in database with the message timestamp (keeps last message time updated)
 	err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp)
@@ -2639,17 +2647,93 @@ func looksLikeRawIdentifier(value string) bool {
 	return true
 }
 
+func normalizeUserJID(jid types.JID) types.JID {
+	if jid.IsEmpty() {
+		return jid
+	}
+
+	normalized := jid.ToNonAD()
+	switch normalized.Server {
+	case types.HostedServer:
+		normalized.Server = types.DefaultUserServer
+	case types.HostedLIDServer:
+		normalized.Server = types.HiddenUserServer
+	}
+
+	return normalized
+}
+
+func resolveCanonicalJID(client *whatsmeow.Client, jid types.JID, alt types.JID, logger waLog.Logger) types.JID {
+	normalized := normalizeUserJID(jid)
+	alt = normalizeUserJID(alt)
+
+	if normalized.IsEmpty() {
+		return alt
+	}
+	if normalized.Server != types.HiddenUserServer {
+		return normalized
+	}
+	if !alt.IsEmpty() && alt.Server == types.DefaultUserServer {
+		logger.Infof("Resolved hidden JID %s via message alt %s", normalized, alt)
+		return alt
+	}
+	if client == nil || client.Store == nil || client.Store.LIDs == nil {
+		return normalized
+	}
+
+	pn, err := client.Store.LIDs.GetPNForLID(context.Background(), normalized)
+	if err == nil && !pn.IsEmpty() {
+		pn = normalizeUserJID(pn)
+		logger.Infof("Resolved hidden JID %s via LID map %s", normalized, pn)
+		return pn
+	}
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
+		logger.Warnf("Failed to resolve hidden JID %s via LID map: %v", normalized, err)
+	}
+
+	return normalized
+}
+
+func resolveMessageStorageIDs(client *whatsmeow.Client, info *types.MessageInfo, logger waLog.Logger) (types.JID, types.JID) {
+	if info == nil {
+		return types.JID{}, types.JID{}
+	}
+
+	var chatAlt types.JID
+	if info.IsFromMe {
+		chatAlt = info.RecipientAlt
+	} else {
+		chatAlt = info.SenderAlt
+	}
+
+	chatJID := resolveCanonicalJID(client, info.Chat, chatAlt, logger)
+	senderJID := resolveCanonicalJID(client, info.Sender, info.SenderAlt, logger)
+
+	if !info.IsGroup && !info.IsFromMe && senderJID.IsEmpty() {
+		senderJID = chatJID
+	}
+
+	return chatJID, senderJID
+}
+
 // GetChatName determines the appropriate name for a chat based on JID and other info
 func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types.JID, chatJID string, conversation interface{}, sender string, fallbackName string, logger waLog.Logger) string {
 	// First, check if chat already exists in database with a usable name.
 	// Raw numeric IDs like "145230074499115" are refreshed because they break
 	// DM contact resolution when WhatsApp hides the real phone behind @lid.
+	// For DMs we also refresh previously saved nicknames/labels (for example
+	// "Doce amor") because they don't reliably match the address-book contact
+	// name that Tsushin uses for auto-linking contact -> LID.
 	var existingName string
 	err := messageStore.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chatJID).Scan(&existingName)
 	if err == nil && existingName != "" && existingName != chatJID && !looksLikeRawIdentifier(existingName) {
-		// Chat exists with a name, use that
-		logger.Infof("Using existing chat name for %s: %s", chatJID, existingName)
-		return existingName
+		if jid.Server == "g.us" {
+			// Group names are stable enough to reuse without a refresh.
+			logger.Infof("Using existing group name for %s: %s", chatJID, existingName)
+			return existingName
+		}
+
+		logger.Infof("Refreshing DM chat name for %s (existing=%s)", chatJID, existingName)
 	}
 
 	// Need to determine chat name
@@ -2716,6 +2800,8 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 			name = contact.FirstName
 		} else if err == nil && contact.BusinessName != "" {
 			name = contact.BusinessName
+		} else if existingName != "" && !looksLikeRawIdentifier(existingName) {
+			name = existingName
 		} else if fallbackName != "" && !looksLikeRawIdentifier(fallbackName) {
 			name = fallbackName
 		} else if sender != "" {
@@ -2752,8 +2838,14 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 			continue
 		}
 
+		canonicalChat := resolveCanonicalJID(client, jid, types.JID{}, logger)
+		canonicalChatJID := canonicalChat.String()
+		if canonicalChatJID == "" {
+			canonicalChatJID = chatJID
+		}
+
 		// Get appropriate chat name by passing the history sync conversation directly
-		name := GetChatName(client, messageStore, jid, chatJID, conversation, "", "", logger)
+		name := GetChatName(client, messageStore, canonicalChat, canonicalChatJID, conversation, "", "", logger)
 
 		// Process messages
 		messages := conversation.Messages
@@ -2772,7 +2864,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 				continue
 			}
 
-			messageStore.StoreChat(chatJID, name, timestamp)
+			messageStore.StoreChat(canonicalChatJID, name, timestamp)
 
 			// Store messages
 			for _, msg := range messages {
@@ -2809,20 +2901,26 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 
 				// Determine sender
 				var sender string
+				var senderJID types.JID
 				isFromMe := false
 				if msg.Message.Key != nil {
 					if msg.Message.Key.FromMe != nil {
 						isFromMe = *msg.Message.Key.FromMe
 					}
 					if !isFromMe && msg.Message.Key.Participant != nil && *msg.Message.Key.Participant != "" {
-						sender = *msg.Message.Key.Participant
+						senderJID, _ = types.ParseJID(*msg.Message.Key.Participant)
 					} else if isFromMe {
-						sender = client.Store.ID.User
+						senderJID = client.Store.ID.ToNonAD()
 					} else {
-						sender = jid.User
+						senderJID = jid
 					}
 				} else {
-					sender = jid.User
+					senderJID = jid
+				}
+
+				sender = resolveCanonicalJID(client, senderJID, types.JID{}, logger).User
+				if sender == "" {
+					sender = senderJID.User
 				}
 
 				// Store message
@@ -2841,7 +2939,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 
 				err = messageStore.StoreMessage(
 					msgID,
-					chatJID,
+					canonicalChatJID,
 					sender,
 					content,
 					timestamp,
@@ -2861,10 +2959,10 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					// Log successful message storage
 					if mediaType != "" {
 						logger.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, mediaType, filename, content)
+							timestamp.Format("2006-01-02 15:04:05"), sender, canonicalChatJID, mediaType, filename, content)
 					} else {
 						logger.Infof("Stored message: [%s] %s -> %s: %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, content)
+							timestamp.Format("2006-01-02 15:04:05"), sender, canonicalChatJID, content)
 					}
 				}
 			}

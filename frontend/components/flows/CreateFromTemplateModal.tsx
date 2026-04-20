@@ -279,7 +279,12 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
               {loadingTemplates && (
                 <div className="text-center py-12 text-slate-400">Loading templates…</div>
               )}
-              {!loadingTemplates && templates.length === 0 && (
+              {!loadingTemplates && submitError && (
+                <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-300">
+                  Failed to load templates: {submitError}
+                </div>
+              )}
+              {!loadingTemplates && !submitError && templates.length === 0 && (
                 <div className="text-center py-12 text-slate-400">No templates available.</div>
               )}
               {!loadingTemplates && templates.length > 0 && (

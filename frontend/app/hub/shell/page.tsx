@@ -1,9 +1,15 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, FormEvent } from 'react'
+import dynamic from 'next/dynamic'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
 import api, { authenticatedFetch, SecurityPattern, SecurityPatternCreate, SecurityPatternUpdate, PatternTestResult, SentinelConfig, SentinelLog, SentinelStats, SentinelConfigUpdate } from '@/lib/client'
+
+const ShellBeaconSetupWizard = dynamic(
+  () => import('@/components/shell/ShellBeaconSetupWizard'),
+  { ssr: false },
+)
 import { copyToClipboard } from '@/lib/clipboard'
 import {
   TerminalIcon,
@@ -109,6 +115,7 @@ export default function ShellDashboardPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showWizard, setShowWizard] = useState(false)
   const [newBeaconName, setNewBeaconName] = useState('')
   const [creating, setCreating] = useState(false)
   const [newApiKey, setNewApiKey] = useState<string | null>(null)
@@ -576,9 +583,14 @@ export default function ShellDashboardPage() {
             </h1>
             <p className="text-gray-400">Manage remote shell beacons and command execution</p>
           </div>
-          <button onClick={() => setShowCreateModal(true)} className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors">
-            + Register Beacon
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowWizard(true)} className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors">
+              + Register Beacon
+            </button>
+            <button onClick={() => setShowCreateModal(true)} className="text-xs text-gray-400 hover:text-white underline">
+              Advanced: bare form
+            </button>
+          </div>
         </div>
 
         {success && (
@@ -649,7 +661,7 @@ export default function ShellDashboardPage() {
                     <RadioIcon size={64} className="mx-auto mb-4 text-teal-400" />
                     <h3 className="text-xl font-semibold text-white mb-2">No Beacons Registered</h3>
                     <p className="text-gray-400 mb-4">Register a beacon to start executing remote commands</p>
-                    <button onClick={() => setShowCreateModal(true)} className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg">
+                    <button onClick={() => setShowWizard(true)} className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg">
                       + Register First Beacon
                     </button>
                   </div>
@@ -1651,6 +1663,16 @@ logging:
           </div>
         </div>
       )}
+
+      <ShellBeaconSetupWizard
+        isOpen={showWizard}
+        onClose={() => setShowWizard(false)}
+        onComplete={() => {
+          loadIntegrations()
+          setSuccess('Beacon registered')
+          setTimeout(() => setSuccess(null), 3000)
+        }}
+      />
     </div>
   )
 }

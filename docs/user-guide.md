@@ -106,6 +106,18 @@ Before your agents can think and respond, you need to connect at least one AI pr
 3. Type a message and press Enter.
 4. The agent will respond using the provider and model you configured.
 
+### Quick-testing with Playground Mini (without leaving the page you're on)
+
+If you're mid-flow on another page — inspecting the Watcher Graph, editing a Flow, reading a dashboard — you don't have to leave to try an agent. **Playground Mini** is a floating chat bubble available on every page:
+
+1. Click the circular chat icon in the **bottom-right** corner (it appears on Watcher, Studio, Hub, Flows, Core, Settings, and System pages). You can also open it anywhere with **Ctrl/Cmd + Shift + L**.
+2. Pick an **agent**, optionally a **project**, and either continue an existing **thread** or click **+** for a new one.
+3. Type a message and press **Enter** (`Shift+Enter` for a newline). Responses render with full markdown — headings, bullet lists, code blocks, tables, everything.
+4. If the conversation gets interesting and you want the full Playground's tools (memory inspector, document attachments, expert mode, streaming, etc.), click the **expand icon** (external-link arrow). You'll land in `/playground` with the same agent and thread already selected and every message preserved — no lost context.
+5. Close the bubble with **Esc** or the close button.
+
+Selection (agent, project, thread) persists across page navigation via session storage and resets cleanly on logout.
+
 ---
 
 ## 2. LLM Providers and Hub

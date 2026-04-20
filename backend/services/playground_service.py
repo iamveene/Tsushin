@@ -615,19 +615,8 @@ class PlaygroundService:
                     self.logger.info(f"Message processed by skill, output: {skill_result.output[:100]}...")
                     skills_processed = True
 
-                    # Store skill output in memory
-                    await memory_manager.add_message(
-                        agent_id=agent_id,
-                        sender_key=sender_key,
-                        role="assistant",
-                        content=skill_result.output,
-                        chat_id=chat_id,
-                        message_id=f"msg_skill_{agent_id}_{int(datetime.utcnow().timestamp() * 1000)}",
-                        metadata=skill_result.metadata,
-                        use_contact_mapping=use_contact_mapping,
-                    )
-
-                    # Phase 6: Cache generated images and include URL in response
+                    # Phase 6 / BUG-592: Cache generated images BEFORE persisting
+                    # so image URLs are embedded in metadata for thread reload.
                     image_url = None
                     image_urls = []
                     if skill_result.media_paths:
@@ -639,6 +628,24 @@ class PlaygroundService:
                                 image_urls.append(cached_url)
                                 if image_url is None:
                                     image_url = cached_url
+
+                    skill_metadata = dict(skill_result.metadata) if skill_result.metadata else {}
+                    if image_url:
+                        skill_metadata['image_url'] = image_url
+                    if image_urls:
+                        skill_metadata['image_urls'] = image_urls
+
+                    # Store skill output in memory
+                    await memory_manager.add_message(
+                        agent_id=agent_id,
+                        sender_key=sender_key,
+                        role="assistant",
+                        content=skill_result.output,
+                        chat_id=chat_id,
+                        message_id=f"msg_skill_{agent_id}_{int(datetime.utcnow().timestamp() * 1000)}",
+                        metadata=skill_metadata,
+                        use_contact_mapping=use_contact_mapping,
+                    )
 
                     # Return skill result directly
                     return {
@@ -797,6 +804,22 @@ class PlaygroundService:
                 channel="playground"
             )
 
+            # Phase 6 / BUG-592: Cache generated images BEFORE persisting the
+            # assistant message, so image_url/image_urls can be baked into
+            # memory_metadata and survive a thread reload.
+            image_url = None
+            image_urls: List[str] = []
+            media_paths = result.get("media_paths")
+            if media_paths:
+                import os
+                for media_path in media_paths:
+                    if os.path.exists(media_path):
+                        cached_url = self._cache_image(media_path)
+                        self.logger.info(f"Cached tool image: {media_path} -> {cached_url}")
+                        image_urls.append(cached_url)
+                        if image_url is None:
+                            image_url = cached_url
+
             # STEP 5: Store agent response in memory
             # Skip storing security-blocked messages to prevent memory contamination
             # (blocked messages can influence AI to generate similar responses in detect_only mode)
@@ -818,6 +841,13 @@ class PlaygroundService:
                 # Include KB usage tracking if available
                 if result.get('kb_used'):
                     memory_metadata['kb_used'] = result.get('kb_used')
+
+                # BUG-592: Persist generated image URLs alongside the message
+                # so the history serializer can surface them on thread reload.
+                if image_url:
+                    memory_metadata['image_url'] = image_url
+                if image_urls:
+                    memory_metadata['image_urls'] = image_urls
 
                 if result.get('tool_used'):
                     memory_metadata['is_tool_output'] = True
@@ -929,19 +959,8 @@ class PlaygroundService:
                     "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
 
-            # Phase 6: Cache generated images from tool execution
-            image_url = None
-            image_urls = []
-            media_paths = result.get("media_paths")
-            if media_paths:
-                import os
-                for media_path in media_paths:
-                    if os.path.exists(media_path):
-                        cached_url = self._cache_image(media_path)
-                        self.logger.info(f"Cached tool image: {media_path} -> {cached_url}")
-                        image_urls.append(cached_url)
-                        if image_url is None:
-                            image_url = cached_url
+            # image_url / image_urls were computed and persisted above
+            # (BUG-592). Reuse those values here for the response payload.
 
             return {
                 "status": "success",
@@ -1297,6 +1316,26 @@ class PlaygroundService:
                     for char in skill_output:
                         yield {"type": "token", "content": char}
 
+                    # Phase 6 / BUG-592: Cache generated images BEFORE persisting
+                    # so image URLs are embedded in metadata for thread reload.
+                    image_url = None
+                    image_urls = []
+                    if skill_result.media_paths:
+                        import os
+                        for media_path in skill_result.media_paths:
+                            if os.path.exists(media_path):
+                                cached_url = self._cache_image(media_path)
+                                self.logger.info(f"[STREAMING] Cached skill image: {media_path} -> {cached_url}")
+                                image_urls.append(cached_url)
+                                if image_url is None:
+                                    image_url = cached_url
+
+                    skill_metadata = dict(skill_result.metadata) if skill_result.metadata else {}
+                    if image_url:
+                        skill_metadata['image_url'] = image_url
+                    if image_urls:
+                        skill_metadata['image_urls'] = image_urls
+
                     # Store skill output in memory
                     await memory_manager.add_message(
                         agent_id=agent_id,
@@ -1305,7 +1344,7 @@ class PlaygroundService:
                         content=skill_output,
                         chat_id=chat_id,
                         message_id=f"msg_skill_{agent_id}_{int(datetime.utcnow().timestamp() * 1000)}",
-                        metadata=skill_result.metadata,
+                        metadata=skill_metadata,
                         use_contact_mapping=use_contact_mapping,
                     )
 
@@ -1338,20 +1377,8 @@ class PlaygroundService:
                         channel="playground"
                     )
 
-                    # Phase 6: Cache generated images from skill in streaming path
-                    image_url = None
-                    image_urls = []
-                    if skill_result.media_paths:
-                        import os
-                        for media_path in skill_result.media_paths:
-                            if os.path.exists(media_path):
-                                cached_url = self._cache_image(media_path)
-                                self.logger.info(f"[STREAMING] Cached skill image: {media_path} -> {cached_url}")
-                                image_urls.append(cached_url)
-                                if image_url is None:
-                                    image_url = cached_url
-
-                    # Return done
+                    # image_url / image_urls were computed and persisted above
+                    # (BUG-592). Reuse them for the done event.
                     yield {
                         "type": "done",
                         "message_id": message_id,
@@ -1661,7 +1688,7 @@ class PlaygroundService:
 
             messages = []
             for msg in raw_messages[-limit:]:
-                messages.append({
+                entry = {
                     "role": msg["role"],
                     "content": msg["content"],
                     "timestamp": msg.get("timestamp", datetime.utcnow().isoformat() + "Z"),
@@ -1671,7 +1698,17 @@ class PlaygroundService:
                     "edited_at": msg.get("edited_at"),
                     "bookmarked_at": msg.get("bookmarked_at"),
                     "original_content": msg.get("original_content")
-                })
+                }
+                # BUG-592: Expose persisted image URLs to non-thread callers
+                # (e.g. direct history endpoints) so images render on reload.
+                msg_meta = msg.get("metadata") if isinstance(msg.get("metadata"), dict) else None
+                image_url = msg.get("image_url") or (msg_meta.get("image_url") if msg_meta else None)
+                image_urls = msg.get("image_urls") or (msg_meta.get("image_urls") if msg_meta else None)
+                if image_url:
+                    entry["image_url"] = image_url
+                if image_urls:
+                    entry["image_urls"] = image_urls
+                messages.append(entry)
 
             return messages
 

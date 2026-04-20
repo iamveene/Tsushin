@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Modal from './ui/Modal'
+import CopyableBlock from './ui/CopyableBlock'
 import {
   AlertTriangleIcon,
   CheckCircleIcon,
@@ -26,7 +27,7 @@ import {
   EyeOffIcon,
   SlackIcon,
 } from '@/components/ui/icons'
-import { api, type SlackIntegrationCreate } from '@/lib/client'
+import { api, type SlackIntegrationCreate, type PublicIngressSource } from '@/lib/client'
 
 interface Props {
   isOpen: boolean
@@ -84,27 +85,7 @@ const MANIFEST_JSON = JSON.stringify(
   2,
 )
 
-function CopyableBlock({ value, label }: { value: string; label?: string }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <div className="relative">
-      <pre className="bg-gray-900 text-purple-200 text-xs font-mono rounded-lg p-3 overflow-x-auto max-h-48 border border-gray-700">
-        {value}
-      </pre>
-      <button
-        type="button"
-        onClick={() => {
-          navigator.clipboard?.writeText(value)
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        }}
-        className="absolute top-2 right-2 px-2 py-1 text-xs bg-purple-600/30 text-purple-200 border border-purple-500/40 rounded hover:bg-purple-600/50"
-      >
-        {copied ? 'Copied!' : `Copy${label ? ' ' + label : ''}`}
-      </button>
-    </div>
-  )
-}
+// CopyableBlock now imported from '@/components/ui/CopyableBlock' (see top of file).
 
 function StepPill({ idx, current, completed }: { idx: number; current: number; completed: boolean }) {
   return (
@@ -134,6 +115,8 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
   const [showApp, setShowApp] = useState(false)
   const [showSec, setShowSec] = useState(false)
   const [publicBaseUrl, setPublicBaseUrl] = useState<string | null>(null)
+  const [ingressSource, setIngressSource] = useState<PublicIngressSource>('none')
+  const [ingressWarning, setIngressWarning] = useState<string | null>(null)
   const [doneIntegrationId, setDoneIntegrationId] = useState<number | null>(null)
 
   // Reset when reopened
@@ -147,11 +130,27 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
       setAppId('')
       setDmPolicy('allowlist')
       setDoneIntegrationId(null)
-      api.getMyTenantSettings()
-        .then(s => setPublicBaseUrl(s.public_base_url))
-        .catch(() => setPublicBaseUrl(null))
+      // v0.6.1 — resolver replaces direct tenant.public_base_url read so the
+      // wizard shows the platform tunnel URL when no tenant override is set.
+      api.getMyPublicIngress()
+        .then(info => {
+          setPublicBaseUrl(info.url)
+          setIngressSource(info.source)
+          setIngressWarning(info.warning)
+        })
+        .catch(() => {
+          setPublicBaseUrl(null)
+          setIngressSource('none')
+          setIngressWarning(null)
+        })
     }
   }, [isOpen])
+
+  const sourceBadge =
+    ingressSource === 'tunnel' ? 'via platform tunnel'
+    : ingressSource === 'override' ? 'tenant override'
+    : ingressSource === 'dev' ? 'dev environment'
+    : null
 
   const totalSteps = 5
   const stepTitles = useMemo(
@@ -244,10 +243,18 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
           <p className="text-xs text-amber-200 flex items-start gap-2">
             <AlertTriangleIcon size={14} className="mt-0.5 flex-shrink-0" />
             <span>
-              HTTP mode needs your tenant's <strong>Public Base URL</strong> set in Hub → Communication first. For local dev:{' '}
-              <code className="bg-amber-900/40 px-1 rounded">cloudflared tunnel --url http://localhost:8081</code>
+              {ingressWarning ? (
+                <>Tenant override is set but invalid: {ingressWarning}. Fix it in Hub → Communication, or ask your admin to enable Remote Access.</>
+              ) : (
+                <>No public ingress configured. Ask a global admin to enable Remote Access for this tenant, or set an <strong>Ingress Override</strong> in Hub → Communication.</>
+              )}
             </span>
           </p>
+        </div>
+      )}
+      {mode === 'http' && publicBaseUrl && sourceBadge && (
+        <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 rounded text-xs text-emerald-200">
+          Using <code className="bg-emerald-900/40 px-1 rounded">{publicBaseUrl}</code> ({sourceBadge})
         </div>
       )}
 
@@ -288,7 +295,7 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
           <span className="w-6 h-6 rounded-full bg-purple-500/20 text-purple-300 flex items-center justify-center text-xs font-bold flex-shrink-0">3</span>
           <div>
             Switch to the <strong>JSON</strong> tab and replace the contents with this:
-            <div className="mt-2"><CopyableBlock value={MANIFEST_JSON} label="manifest" /></div>
+            <div className="mt-2"><CopyableBlock value={MANIFEST_JSON} label="manifest" tone="purple" /></div>
           </div>
         </li>
         <li className="flex gap-3">
@@ -489,7 +496,7 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
       {mode === 'http' && publicBaseUrl && doneIntegrationId && (
         <div className="p-4 bg-amber-500/10 border border-amber-500/40 rounded-lg">
           <h4 className="text-sm font-semibold text-amber-200 mb-2">Paste this Request URL into Slack</h4>
-          <CopyableBlock value={`${publicBaseUrl}/api/channels/slack/${doneIntegrationId}/events`} label="URL" />
+          <CopyableBlock value={`${publicBaseUrl}/api/channels/slack/${doneIntegrationId}/events`} label="URL" tone="purple" />
           <p className="text-xs text-amber-100/80 mt-2">
             In your Slack app → <strong>Event Subscriptions</strong> → toggle ON → paste into <strong>Request URL</strong>. Slack will verify it.
           </p>

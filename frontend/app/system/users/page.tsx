@@ -7,7 +7,28 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRequireGlobalAdmin } from '@/contexts/AuthContext'
-import { api, GlobalUser, GlobalUserStats, TenantInfo, UserCreateRequest, UserUpdateRequest } from '@/lib/client'
+import {
+  api,
+  GlobalUser,
+  GlobalUserStats,
+  GlobalInvitation,
+  TenantInfo,
+  UserCreateRequest,
+  UserUpdateRequest,
+} from '@/lib/client'
+import { copyToClipboard } from '@/lib/clipboard'
+
+// Backend may return either an absolute URL (multi-tenant / tunnel-aware)
+// or a legacy relative path. Fall back to the current origin when relative.
+function toAbsoluteInviteUrl(link: string): string {
+  if (/^https?:\/\//i.test(link)) return link
+  if (typeof window === 'undefined') return link
+  return `${window.location.origin}${link.startsWith('/') ? link : `/${link}`}`
+}
+
+type InviteKind = 'global_admin' | 'tenant_user'
+type TenantRole = 'owner' | 'admin' | 'member' | 'readonly'
+type AuthProvider = 'local' | 'google'
 
 export default function GlobalUsersPage() {
   const { user, loading: authLoading } = useRequireGlobalAdmin()
@@ -36,13 +57,49 @@ export default function GlobalUsersPage() {
   const [modalError, setModalError] = useState<string | null>(null)
 
   // Create form state
-  const [createForm, setCreateForm] = useState({
+  const [createForm, setCreateForm] = useState<{
+    kind: InviteKind
+    email: string
+    password: string
+    full_name: string
+    tenant_id: string
+    role_name: TenantRole
+  }>({
+    kind: 'tenant_user',
     email: '',
     password: '',
     full_name: '',
     tenant_id: '',
     role_name: 'member',
   })
+
+  // Invite modal state (platform-wide invitation)
+  const [showInviteModal, setShowInviteModal] = useState(false)
+  const [inviteForm, setInviteForm] = useState<{
+    kind: InviteKind
+    email: string
+    role: TenantRole
+    tenant_id: string
+    auth_provider: AuthProvider
+    message: string
+  }>({
+    kind: 'tenant_user',
+    email: '',
+    role: 'member',
+    tenant_id: '',
+    auth_provider: 'local',
+    message: '',
+  })
+  const [inviteLoading, setInviteLoading] = useState(false)
+  const [inviteError, setInviteError] = useState<string | null>(null)
+  const [inviteSuccessLink, setInviteSuccessLink] = useState<string | null>(null)
+
+  // Pending invitations state
+  const [invitations, setInvitations] = useState<GlobalInvitation[]>([])
+  const [invitationsTotal, setInvitationsTotal] = useState(0)
+  const [invitationsLoading, setInvitationsLoading] = useState(false)
+  const [invitationsError, setInvitationsError] = useState<string | null>(null)
+  const [showInvitations, setShowInvitations] = useState(true)
 
   // Fetch users
   const fetchUsers = useCallback(async () => {
@@ -82,12 +139,29 @@ export default function GlobalUsersPage() {
     }
   }, [])
 
+  // Fetch pending invitations
+  const fetchInvitations = useCallback(async () => {
+    setInvitationsLoading(true)
+    setInvitationsError(null)
+    try {
+      const resp = await api.getGlobalInvitations({ page: 1, page_size: 100 })
+      setInvitations(resp.invitations)
+      setInvitationsTotal(resp.total)
+    } catch (err: any) {
+      console.error('Failed to fetch invitations:', err)
+      setInvitationsError(err.message || 'Failed to load invitations')
+    } finally {
+      setInvitationsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (!authLoading && user) {
       fetchUsers()
       fetchStatsAndTenants()
+      fetchInvitations()
     }
-  }, [fetchUsers, fetchStatsAndTenants, authLoading, user])
+  }, [fetchUsers, fetchStatsAndTenants, fetchInvitations, authLoading, user])
 
   // Reset page when filters change
   useEffect(() => {
@@ -99,25 +173,35 @@ export default function GlobalUsersPage() {
     const handleRefresh = () => {
       fetchUsers()
       fetchStatsAndTenants()
+      fetchInvitations()
     }
     window.addEventListener('tsushin:refresh', handleRefresh)
     return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [fetchUsers, fetchStatsAndTenants])
+  }, [fetchUsers, fetchStatsAndTenants, fetchInvitations])
 
   // Handle create user
   const handleCreate = async () => {
     setModalLoading(true)
     setModalError(null)
     try {
+      const isGlobal = createForm.kind === 'global_admin'
       await api.createGlobalUser({
         email: createForm.email,
         password: createForm.password,
         full_name: createForm.full_name,
-        tenant_id: createForm.tenant_id,
-        role_name: createForm.role_name,
+        tenant_id: isGlobal ? null : createForm.tenant_id,
+        role_name: isGlobal ? null : createForm.role_name,
+        is_global_admin: isGlobal,
       })
       setShowCreateModal(false)
-      setCreateForm({ email: '', password: '', full_name: '', tenant_id: '', role_name: 'member' })
+      setCreateForm({
+        kind: 'tenant_user',
+        email: '',
+        password: '',
+        full_name: '',
+        tenant_id: '',
+        role_name: 'member',
+      })
       fetchUsers()
       fetchStatsAndTenants()
     } catch (err: any) {
@@ -179,6 +263,65 @@ export default function GlobalUsersPage() {
     }
   }
 
+  // Handle invite submit
+  const handleInviteSubmit = async () => {
+    setInviteLoading(true)
+    setInviteError(null)
+    setInviteSuccessLink(null)
+    try {
+      const isGlobal = inviteForm.kind === 'global_admin'
+      const resp = await api.inviteGlobalUser({
+        email: inviteForm.email.trim(),
+        tenant_id: isGlobal ? null : inviteForm.tenant_id,
+        role: isGlobal ? null : inviteForm.role,
+        is_global_admin: isGlobal,
+        auth_provider: inviteForm.auth_provider,
+        message: inviteForm.message.trim() || undefined,
+      })
+      setInviteSuccessLink(resp.invitation_link ? toAbsoluteInviteUrl(resp.invitation_link) : null)
+      fetchInvitations()
+    } catch (err: any) {
+      setInviteError(err.message || 'Failed to send invitation')
+    } finally {
+      setInviteLoading(false)
+    }
+  }
+
+  const resetInviteForm = () => {
+    setInviteForm({
+      kind: 'tenant_user',
+      email: '',
+      role: 'member',
+      tenant_id: '',
+      auth_provider: 'local',
+      message: '',
+    })
+    setInviteError(null)
+    setInviteSuccessLink(null)
+  }
+
+  const handleInviteCancel = async (invitationId: number, email: string) => {
+    if (!confirm(`Cancel the pending invitation for ${email}?`)) return
+    try {
+      await api.cancelGlobalInvitation(invitationId)
+      fetchInvitations()
+    } catch (err: any) {
+      alert(err.message || 'Failed to cancel invitation')
+    }
+  }
+
+  const formatDate = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+    } catch {
+      return iso
+    }
+  }
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -208,12 +351,21 @@ export default function GlobalUsersPage() {
             </p>
           </div>
 
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="btn-primary px-4 py-2 font-medium rounded-md transition-colors"
-          >
-            + Create User
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { resetInviteForm(); setShowInviteModal(true) }}
+              className="btn-primary px-4 py-2 font-medium rounded-md transition-colors"
+            >
+              + Invite User
+            </button>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="px-4 py-2 font-medium rounded-md bg-tsushin-elevated hover:bg-tsushin-surface text-white border border-tsushin-border transition-colors"
+              title="Create a user directly (break-glass / admin bootstrap)"
+            >
+              + Create User
+            </button>
+          </div>
         </div>
 
         {/* Stats */}
@@ -445,6 +597,342 @@ export default function GlobalUsersPage() {
           )}
         </div>
 
+        {/* Pending Invitations */}
+        <div className="mt-8 bg-tsushin-surface rounded-xl border border-tsushin-border overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowInvitations((v) => !v)}
+            className="w-full px-4 py-3 flex items-center justify-between bg-tsushin-ink border-b border-tsushin-border hover:bg-tsushin-elevated/40 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <svg
+                className={`w-4 h-4 text-tsushin-slate transition-transform ${showInvitations ? 'rotate-90' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              <span className="text-sm font-semibold text-white">Pending Invitations</span>
+              <span className="px-2 py-0.5 text-xs bg-tsushin-elevated text-tsushin-slate rounded-full">
+                {invitationsTotal}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); fetchInvitations() }}
+              className="text-xs text-teal-400 hover:text-teal-300"
+            >
+              Refresh
+            </button>
+          </button>
+
+          {showInvitations && (
+            <>
+              {invitationsError && (
+                <div className="p-4 bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 text-sm text-red-800 dark:text-red-200">
+                  {invitationsError}
+                </div>
+              )}
+              {invitationsLoading ? (
+                <div className="p-8 text-center text-tsushin-slate">Loading invitations...</div>
+              ) : invitations.length === 0 ? (
+                <div className="p-8 text-center text-tsushin-slate">No pending invitations.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-tsushin-ink border-b border-tsushin-border">
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-white">Email</th>
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-white">Scope</th>
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-white">Role</th>
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-white">Auth</th>
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-white">Invited By</th>
+                        <th className="text-left py-3 px-4 text-sm font-semibold text-white">Expires</th>
+                        <th className="text-right py-3 px-4 text-sm font-semibold text-white">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invitations.map((inv) => (
+                        <tr key={inv.id} className="border-b border-tsushin-border hover:bg-tsushin-elevated/30">
+                          <td className="py-3 px-4 text-sm text-white">{inv.email}</td>
+                          <td className="py-3 px-4 text-sm">
+                            {inv.is_global_admin ? (
+                              <span className="px-2 py-0.5 text-xs bg-purple-500/20 text-purple-300 rounded-full border border-purple-500/30">
+                                Global
+                              </span>
+                            ) : (
+                              <span className="text-tsushin-fog">{inv.tenant_name || '—'}</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-tsushin-fog">
+                            {inv.is_global_admin ? 'Global Admin' : (inv.role_display_name || '—')}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className={`px-2 py-1 text-xs font-semibold rounded ${
+                              inv.auth_provider === 'google'
+                                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-900 dark:text-blue-200'
+                                : 'bg-tsushin-elevated text-white'
+                            }`}>
+                              {inv.auth_provider === 'google' ? 'Google' : 'Local'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-sm text-tsushin-fog">{inv.invited_by_name}</td>
+                          <td className="py-3 px-4 text-sm text-tsushin-slate">{formatDate(inv.expires_at)}</td>
+                          <td className="py-3 px-4 text-right">
+                            <button
+                              onClick={() => handleInviteCancel(inv.id, inv.email)}
+                              className="text-sm text-red-600 hover:text-red-800 dark:text-red-400"
+                            >
+                              Cancel
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Invite User Modal */}
+        {showInviteModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border shadow-xl max-w-lg w-full">
+              <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
+                <h2 className="text-xl font-bold text-white">Invite User</h2>
+                <button
+                  onClick={() => { setShowInviteModal(false); resetInviteForm() }}
+                  className="text-tsushin-muted hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {inviteSuccessLink ? (
+                <div className="p-6 space-y-4">
+                  <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                    <h3 className="text-sm font-semibold text-green-900 dark:text-green-100 mb-1">
+                      ✓ Invitation Sent
+                    </h3>
+                    <p className="text-sm text-green-800 dark:text-green-200">
+                      An invitation was sent to <strong>{inviteForm.email}</strong>.
+                    </p>
+                  </div>
+                  <div className="bg-tsushin-ink rounded-md p-4">
+                    <label className="block text-xs font-medium text-tsushin-slate uppercase tracking-wider mb-2">
+                      Invitation Link
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={inviteSuccessLink}
+                        className="flex-1 px-3 py-2 border border-tsushin-border rounded-md text-sm text-white bg-tsushin-elevated"
+                      />
+                      <button
+                        onClick={() => {
+                          copyToClipboard(inviteSuccessLink)
+                          alert('Link copied!')
+                        }}
+                        className="px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium rounded-md"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <p className="text-xs text-tsushin-slate mt-2">Expires in 7 days.</p>
+                  </div>
+                  <div className="flex justify-end gap-3 pt-2">
+                    <button
+                      onClick={() => { resetInviteForm() }}
+                      className="px-4 py-2 bg-tsushin-elevated hover:bg-tsushin-surface text-white rounded-md border border-tsushin-border"
+                    >
+                      Invite Another
+                    </button>
+                    <button
+                      onClick={() => { setShowInviteModal(false); resetInviteForm() }}
+                      className="btn-primary px-4 py-2 rounded-md"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="p-6 space-y-4">
+                    {inviteError && (
+                      <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-800 dark:text-red-200">
+                        {inviteError}
+                      </div>
+                    )}
+
+                    {/* Kind picker — explicit Tenant User vs Global Admin branching */}
+                    <div>
+                      <label className="block text-sm font-medium text-tsushin-fog mb-2">Who are you inviting?</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setInviteForm({ ...inviteForm, kind: 'tenant_user' })}
+                          className={`text-left p-3 rounded-md border transition-colors ${
+                            inviteForm.kind === 'tenant_user'
+                              ? 'border-teal-500 bg-teal-500/10'
+                              : 'border-tsushin-border bg-tsushin-elevated hover:bg-tsushin-surface'
+                          }`}
+                        >
+                          <div className="text-sm font-semibold text-white">Tenant User</div>
+                          <div className="text-xs text-tsushin-slate mt-1">Invite into a specific organization. Most common.</div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInviteForm({ ...inviteForm, kind: 'global_admin', tenant_id: '', role: 'member' })}
+                          className={`text-left p-3 rounded-md border transition-colors ${
+                            inviteForm.kind === 'global_admin'
+                              ? 'border-purple-500 bg-purple-500/10'
+                              : 'border-tsushin-border bg-tsushin-elevated hover:bg-tsushin-surface'
+                          }`}
+                        >
+                          <div className="text-sm font-semibold text-white">Global Admin</div>
+                          <div className="text-xs text-tsushin-slate mt-1">Platform-wide administrator. No tenant.</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {inviteForm.kind === 'global_admin' && (
+                      <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded text-xs text-purple-200">
+                        Global admins have platform-wide access — they are not scoped to any tenant.
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-sm font-medium text-tsushin-fog mb-1">Email</label>
+                      <input
+                        type="email"
+                        value={inviteForm.email}
+                        onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                        required
+                      />
+                    </div>
+
+                    {inviteForm.kind === 'tenant_user' && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-tsushin-fog mb-1">
+                            Assign to Organization <span className="text-red-400">*</span>
+                          </label>
+                          <select
+                            value={inviteForm.tenant_id}
+                            onChange={(e) => setInviteForm({ ...inviteForm, tenant_id: e.target.value })}
+                            className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                            required
+                          >
+                            <option value="">Select organization...</option>
+                            {tenants.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} — {t.slug} ({t.user_count} {t.user_count === 1 ? 'member' : 'members'})
+                              </option>
+                            ))}
+                          </select>
+                          {!inviteForm.tenant_id && (
+                            <p className="mt-1 text-xs text-red-400">
+                              Select an organization. Invitees are not global admins and must belong to one tenant.
+                            </p>
+                          )}
+                          {tenants.length === 0 && (
+                            <p className="mt-1 text-xs text-amber-400">
+                              No organizations exist yet. Create one from System → Tenant Management first.
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-tsushin-fog mb-1">Role within organization</label>
+                          <select
+                            value={inviteForm.role}
+                            onChange={(e) => setInviteForm({ ...inviteForm, role: e.target.value as TenantRole })}
+                            className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                          >
+                            <option value="owner">Owner</option>
+                            <option value="admin">Admin</option>
+                            <option value="member">Member</option>
+                            <option value="readonly">Read-Only</option>
+                          </select>
+                        </div>
+                      </>
+                    )}
+
+                    <div>
+                      <label className="block text-sm font-medium text-tsushin-fog mb-2">Sign-in method</label>
+                      <div className="space-y-2">
+                        <label className="flex items-start gap-3 p-3 border border-tsushin-border rounded-md cursor-pointer hover:bg-tsushin-elevated/50 transition-colors">
+                          <input
+                            type="radio"
+                            name="invite-auth"
+                            value="local"
+                            checked={inviteForm.auth_provider === 'local'}
+                            onChange={() => setInviteForm({ ...inviteForm, auth_provider: 'local' })}
+                            className="mt-1"
+                          />
+                          <div className="flex-1">
+                            <div className="text-sm font-medium text-white">Local password</div>
+                            <div className="text-xs text-tsushin-slate">User creates a password on accept.</div>
+                          </div>
+                        </label>
+                        <label className="flex items-start gap-3 p-3 border border-tsushin-border rounded-md cursor-pointer hover:bg-tsushin-elevated/50 transition-colors">
+                          <input
+                            type="radio"
+                            name="invite-auth"
+                            value="google"
+                            checked={inviteForm.auth_provider === 'google'}
+                            onChange={() => setInviteForm({ ...inviteForm, auth_provider: 'google' })}
+                            className="mt-1"
+                          />
+                          <div className="flex-1">
+                            <div className="text-sm font-medium text-white">Google SSO</div>
+                            <div className="text-xs text-tsushin-slate">User must accept via Google with the matching email.</div>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-tsushin-fog mb-1">
+                        Personal Message (Optional)
+                      </label>
+                      <textarea
+                        value={inviteForm.message}
+                        onChange={(e) => setInviteForm({ ...inviteForm, message: e.target.value })}
+                        rows={3}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-3 p-6 border-t border-tsushin-border">
+                    <button
+                      onClick={() => { setShowInviteModal(false); resetInviteForm() }}
+                      className="px-4 py-2 bg-tsushin-elevated hover:bg-tsushin-surface text-white rounded-md border border-tsushin-border"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleInviteSubmit}
+                      disabled={
+                        inviteLoading
+                        || !inviteForm.email
+                        || (inviteForm.kind === 'tenant_user' && (!inviteForm.tenant_id || !inviteForm.role))
+                      }
+                      className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
+                    >
+                      {inviteLoading ? 'Sending...' : 'Send Invitation'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Create User Modal */}
         {showCreateModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -459,6 +947,44 @@ export default function GlobalUsersPage() {
                     {modalError}
                   </div>
                 )}
+
+                {/* Kind picker — same Tenant User vs Global Admin branching as Invite */}
+                <div>
+                  <label className="block text-sm font-medium text-tsushin-fog mb-2">What kind of user?</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCreateForm({ ...createForm, kind: 'tenant_user' })}
+                      className={`text-left p-3 rounded-md border transition-colors ${
+                        createForm.kind === 'tenant_user'
+                          ? 'border-teal-500 bg-teal-500/10'
+                          : 'border-tsushin-border bg-tsushin-elevated hover:bg-tsushin-surface'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold text-white">Tenant User</div>
+                      <div className="text-xs text-tsushin-slate mt-1">Belongs to a specific organization.</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCreateForm({ ...createForm, kind: 'global_admin', tenant_id: '', role_name: 'member' })}
+                      className={`text-left p-3 rounded-md border transition-colors ${
+                        createForm.kind === 'global_admin'
+                          ? 'border-purple-500 bg-purple-500/10'
+                          : 'border-tsushin-border bg-tsushin-elevated hover:bg-tsushin-surface'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold text-white">Global Admin</div>
+                      <div className="text-xs text-tsushin-slate mt-1">Platform-wide administrator. No tenant.</div>
+                    </button>
+                  </div>
+                </div>
+
+                {createForm.kind === 'global_admin' && (
+                  <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded text-xs text-purple-200">
+                    Global admins have platform-wide access — they are not scoped to any tenant.
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-sm font-medium text-tsushin-fog mb-1">Email</label>
                   <input
@@ -490,33 +1016,52 @@ export default function GlobalUsersPage() {
                     required
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-tsushin-fog mb-1">Organization</label>
-                  <select
-                    value={createForm.tenant_id}
-                    onChange={(e) => setCreateForm({ ...createForm, tenant_id: e.target.value })}
-                    className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
-                    required
-                  >
-                    <option value="">Select organization...</option>
-                    {tenants.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-tsushin-fog mb-1">Role</label>
-                  <select
-                    value={createForm.role_name}
-                    onChange={(e) => setCreateForm({ ...createForm, role_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
-                  >
-                    <option value="owner">Owner</option>
-                    <option value="admin">Admin</option>
-                    <option value="member">Member</option>
-                    <option value="readonly">Read Only</option>
-                  </select>
-                </div>
+
+                {createForm.kind === 'tenant_user' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-tsushin-fog mb-1">
+                        Assign to Organization <span className="text-red-400">*</span>
+                      </label>
+                      <select
+                        value={createForm.tenant_id}
+                        onChange={(e) => setCreateForm({ ...createForm, tenant_id: e.target.value })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                        required
+                      >
+                        <option value="">Select organization...</option>
+                        {tenants.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name} — {t.slug} ({t.user_count} {t.user_count === 1 ? 'member' : 'members'})
+                          </option>
+                        ))}
+                      </select>
+                      {!createForm.tenant_id && (
+                        <p className="mt-1 text-xs text-red-400">
+                          Select an organization. Tenant users must belong to one tenant.
+                        </p>
+                      )}
+                      {tenants.length === 0 && (
+                        <p className="mt-1 text-xs text-amber-400">
+                          No organizations exist yet. Create one from System → Tenant Management first.
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-tsushin-fog mb-1">Role within organization</label>
+                      <select
+                        value={createForm.role_name}
+                        onChange={(e) => setCreateForm({ ...createForm, role_name: e.target.value as TenantRole })}
+                        className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-elevated"
+                      >
+                        <option value="owner">Owner</option>
+                        <option value="admin">Admin</option>
+                        <option value="member">Member</option>
+                        <option value="readonly">Read Only</option>
+                      </select>
+                    </div>
+                  </>
+                )}
               </div>
               <div className="flex justify-end gap-3 p-6 border-t border-tsushin-border">
                 <button
@@ -527,7 +1072,13 @@ export default function GlobalUsersPage() {
                 </button>
                 <button
                   onClick={handleCreate}
-                  disabled={modalLoading || !createForm.email || !createForm.password || !createForm.full_name || !createForm.tenant_id}
+                  disabled={
+                    modalLoading
+                    || !createForm.email
+                    || !createForm.password
+                    || !createForm.full_name
+                    || (createForm.kind === 'tenant_user' && (!createForm.tenant_id || !createForm.role_name))
+                  }
                   className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
                 >
                   {modalLoading ? 'Creating...' : 'Create User'}

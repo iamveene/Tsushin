@@ -10,6 +10,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import { usePathname, useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 import { isPublicPath } from '@/lib/public-paths'
+import * as playgroundMiniStore from '@/lib/playgroundMiniSessionStore'
 
 // User type matching backend response
 interface User {
@@ -45,6 +46,15 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+const AUTH_BOOTSTRAP_TIMEOUT_MS = 8000
+
+function buildRecoveryLoginUrl(): string {
+  const params = new URLSearchParams({
+    force: '1',
+    reason: 'session-recovery',
+  })
+  return `/auth/login?${params.toString()}`
+}
 
 // SEC-005 Phase 3: localStorage token storage removed entirely.
 // All auth now relies on httpOnly cookie (tsushin_session) set by backend.
@@ -87,28 +97,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       _cleanupLegacyToken()
       setLoading(true)
       try {
-        const userData = await api.getCurrentUser()
+        const userData = await api.getCurrentUser({
+          timeoutMs: AUTH_BOOTSTRAP_TIMEOUT_MS,
+        })
         if (!isCancelled) {
           setUser(userData)
         }
       } catch (error) {
-        // No valid session cookie — user is not authenticated
+        // Fail closed into the forced-login recovery flow whenever the existing
+        // session cannot be validated promptly. This covers stale cookies,
+        // backend hangs, and transient network failures without leaving the UI
+        // on the global loading spinner forever.
         if (!isCancelled) {
-          console.debug('No active session:', error)
+          console.warn('Session bootstrap failed, redirecting to recovery login:', error)
           setUser(null)
           setLoading(false)
-          // BUG-4: hard-redirect unauthenticated users (mirrors logout pattern,
-          // avoids the router.push-vs-spinner race referenced by BUG-544).
-          //
-          // CRITICAL: if the request failed because the cookie is STALE (present
-          // but invalid — e.g., DB wiped but browser still has the old JWT),
-          // the middleware will keep bouncing /auth/login → / while AuthContext
-          // bounces / → /auth/login. We must clear the cookie on the backend
-          // first (HttpOnly can't be cleared client-side) so the next request
-          // is truly unauthenticated and the middleware stops redirecting.
           if (typeof window !== 'undefined' && !isPublicPath(pathname)) {
-            api.logout().catch(() => { /* best-effort — cookie may already be gone */ })
-              .finally(() => { window.location.href = '/auth/login' })
+            window.location.href = buildRecoveryLoginUrl()
             return
           }
         }
@@ -132,9 +137,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(response.user)
     setLoading(false)
 
-    // Redirect based on user type
+    // Redirect based on user type.
+    // Global admins land on Core settings where the System card group lives.
     if (response.user.is_global_admin) {
-      router.push('/system/integrations')
+      router.push('/settings')
     } else {
       router.push('/')
     }
@@ -193,6 +199,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // SEC-005: Call logout endpoint — backend clears the httpOnly cookie
     api.logout().catch(console.error)
     _cleanupLegacyToken()
+    // Playground Mini: clear per-user sessionStorage so the next user on this tab
+    // doesn't momentarily inherit stale selection state from the outgoing user.
+    if (user?.id != null) {
+      playgroundMiniStore.clear(user.id)
+    } else {
+      playgroundMiniStore.clearAll()
+    }
     setUser(null)
     // BUG-544: Hard navigation to /auth/login. router.push() raced the
     // LayoutContent spinner branch (`if (loading || !user)` at

@@ -106,6 +106,16 @@ function transformBatchToAgentsGraphData(
   })
   channelNodeIds.add('channel-playground')
 
+  // Suppress the synthetic "WhatsApp Unassigned" placeholder on truly fresh tenants
+  // (no instances + no stale explicit bindings). Keep it when it carries real signal.
+  const tenantHasWhatsAppInstances = (data.channels.whatsapp?.length ?? 0) > 0
+  const hasStaleWhatsAppBinding = filteredAgents.some(agent =>
+    (agent.enabled_channels || []).includes('whatsapp') &&
+    !!agent.whatsapp_integration_id &&
+    !agent.resolved_whatsapp_integration_id
+  )
+  const showWhatsAppUnassignedPlaceholder = tenantHasWhatsAppInstances || hasStaleWhatsAppBinding
+
   // Create edges for channel connections
   // Phase 7: Edges now flow from Channel (source) → Agent (target) for hierarchical layout
   // This ensures: Channels (left) → Agents (center) → Skills/KB (right when expanded)
@@ -114,6 +124,8 @@ function transformBatchToAgentsGraphData(
     const enabledChannels = agent.enabled_channels || []
 
     // Playground channel - connect all active agents (dotted line for potential, solid for enabled)
+    // Static `animated` is intentionally omitted; GraphCanvas applies edge-active-cyan when the
+    // specific agent is actually responding to a playground message.
     if (agent.is_active) {
       const isPlaygroundEnabled = enabledChannels.includes('playground')
       edges.push({
@@ -121,7 +133,6 @@ function transformBatchToAgentsGraphData(
         source: 'channel-playground',  // Channel is source (left)
         target: agentId,               // Agent is target (right)
         style: isPlaygroundEnabled ? undefined : { strokeDasharray: '5,5', opacity: 0.4 },
-        animated: isPlaygroundEnabled,
       })
     }
 
@@ -139,6 +150,7 @@ function transformBatchToAgentsGraphData(
           : undefined,
       })
     } else if (
+      showWhatsAppUnassignedPlaceholder &&
       enabledChannels.includes('whatsapp') &&
       ['ambiguous', 'unassigned', 'stale_explicit'].includes(agent.whatsapp_binding_status || '')
     ) {
@@ -203,7 +215,7 @@ function transformBatchToAgentsGraphData(
       }
     })
 
-  if (needsWhatsAppUnassignedNode && !channelNodeIds.has('channel-whatsapp-unassigned')) {
+  if (needsWhatsAppUnassignedNode && showWhatsAppUnassignedPlaceholder && !channelNodeIds.has('channel-whatsapp-unassigned')) {
     nodes.push({
       id: 'channel-whatsapp-unassigned',
       type: 'channel',

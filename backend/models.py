@@ -122,6 +122,13 @@ class Config(Base):
         nullable=True
     )
 
+    # v0.6.0-patch.5: Default TTS instance (tenant-wide) — pull-forward from v0.7.0 roadmap K8
+    default_tts_instance_id = Column(
+        Integer,
+        ForeignKey("tts_instance.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -481,6 +488,24 @@ class ProviderInstance(Base):
     health_status = Column(String(20), default='unknown')  # healthy|degraded|unavailable|unknown
     health_status_reason = Column(String(500), nullable=True)
     last_health_check = Column(DateTime, nullable=True)
+
+    # v0.6.0-patch.5: Auto-provisioning (pull-forward from v0.7.0 roadmap O1)
+    # Ollama gets container lifecycle columns so a tenant can opt into a
+    # tsushin-managed Ollama container instead of pointing at host Ollama.
+    # All columns are nullable / safe-default so host-Ollama rows
+    # (is_auto_provisioned=False) are unaffected.
+    is_auto_provisioned = Column(Boolean, default=False, nullable=False)
+    container_name = Column(String(200), nullable=True)
+    container_id = Column(String(80), nullable=True)
+    container_port = Column(Integer, nullable=True)
+    container_status = Column(String(20), default='none', nullable=False)  # none|creating|running|stopped|error
+    container_image = Column(String(200), nullable=True)
+    volume_name = Column(String(150), nullable=True)
+    gpu_enabled = Column(Boolean, default=False, nullable=False)
+    pulled_models = Column(JSON, default=list, nullable=True)  # list[str] of pulled Ollama model names
+    mem_limit = Column(String(20), nullable=True)
+    cpu_quota = Column(Integer, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -2972,6 +2997,10 @@ class WebhookIntegration(Base):
     tenant_id = Column(String(50), ForeignKey('tenant.id'), nullable=False, index=True)
     integration_name = Column(String(100), nullable=False)
 
+    # v0.7.1: human-readable slug used in inbound path. Globally unique.
+    # Auto mode: wh-{6-hex}. Custom mode: user-supplied, validated.
+    slug = Column(String(64), nullable=False, unique=True, index=True)
+
     # Inbound identity (HMAC key, encrypted with Fernet)
     api_secret_encrypted = Column(Text, nullable=False)
     api_secret_preview = Column(String(16), nullable=False)  # first 8 chars + "…" for UI
@@ -3466,6 +3495,10 @@ class AgentCommunicationPermission(Base):
     is_enabled = Column(Boolean, default=True)
     max_depth = Column(Integer, default=3)  # Max delegation depth for this pair
     rate_limit_rpm = Column(Integer, default=30)  # Rate limit for this pair
+    # When true, the target agent may invoke its own skills (gmail, sandboxed_tools, etc.)
+    # during an A2A call. Default false preserves the original LLM-knowledge-only behavior
+    # and keeps the capability amplification surface opt-in per source→target pair.
+    allow_target_skills = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -3683,6 +3716,74 @@ class RemoteAccessConfig(Base):
 
     updated_by = Column(Integer, ForeignKey("user.id"), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ============================================================================
+# v0.6.0-patch.5: TTS Instance (Auto-Provisioned Speech Synthesis Containers)
+# Pulled forward from v0.7.0 roadmap K1 so tenants can manage per-tenant Kokoro
+# TTS containers the same way they manage Qdrant / MongoDB vector stores.
+# ============================================================================
+
+class TTSInstance(Base):
+    """Per-tenant TTS provider instance with optional auto-provisioned Docker container.
+
+    Mirrors VectorStoreInstance shape. Vendor=`kokoro` is the only supported
+    vendor in v0.6.0-patch.5; `speaches`/Whisper lands in v0.7.0.
+
+    When is_auto_provisioned=True, tsushin manages the container lifecycle via
+    KokoroContainerManager. The TTS provider resolves base_url from the selected
+    instance at synthesis time via the chain:
+        AgentSkill.config.tts_instance_id → Config.default_tts_instance_id
+        → error response.
+    (v0.7.0 removed the legacy KOKORO_SERVICE_URL env fallback and the stack-
+    level kokoro-tts compose service — per-tenant instances are now the only
+    way to run Kokoro.)
+    """
+    __tablename__ = "tts_instance"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+
+    vendor = Column(String(20), nullable=False)  # kokoro (others in v0.7.x)
+    instance_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Connection — base_url populated post-provision with DNS alias URL
+    base_url = Column(String(500), nullable=True)
+
+    # Health monitoring
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+
+    # Flags
+    is_default = Column(Boolean, default=False, nullable=False)  # Legacy — use Config.default_tts_instance_id
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    # Auto-provisioning (Docker-managed containers)
+    is_auto_provisioned = Column(Boolean, default=False, nullable=False)
+    container_name = Column(String(200), nullable=True)
+    container_id = Column(String(80), nullable=True)
+    container_port = Column(Integer, nullable=True)
+    container_status = Column(String(20), default="none", nullable=False)  # none|creating|running|stopped|error
+    container_image = Column(String(200), nullable=True)
+    volume_name = Column(String(150), nullable=True)
+    mem_limit = Column(String(20), nullable=True)
+    cpu_quota = Column(Integer, nullable=True)
+
+    # Per-instance synthesis defaults (override agent-level skill config)
+    default_voice = Column(String(50), default="pf_dora", nullable=True)
+    default_speed = Column(Float, default=1.0, nullable=True)
+    default_language = Column(String(10), default="pt", nullable=True)
+    default_format = Column(String(10), default="opus", nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "instance_name", name="uq_tts_instance_tenant_name"),
+        Index("idx_tsi_tenant_vendor", "tenant_id", "vendor"),
+    )
 
 
 # ============================================================================

@@ -63,6 +63,13 @@ function browserSafeFetch(url: string, options: RequestInit = {}): Promise<Respo
   return fetch(normalizeBrowserApiUrl(url), options)
 }
 
+function isAbortError(error: unknown): boolean {
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
+    return error.name === 'AbortError'
+  }
+  return error instanceof Error && error.name === 'AbortError'
+}
+
 /**
  * Helper function to handle API response errors with user-friendly messages
  */
@@ -1763,11 +1770,12 @@ export interface TelegramHealthStatus {
   error: string | null
 }
 
-// v0.6.0: Webhook-as-a-Channel Integration
+// v0.6.0: Webhook-as-a-Channel Integration (v0.7.1 adds human-readable slug)
 export interface WebhookIntegration {
   id: number
   tenant_id: string
   integration_name: string
+  slug: string                 // v0.7.1: human-readable URI component
   api_secret_preview: string
   callback_url: string | null
   callback_enabled: boolean
@@ -1787,6 +1795,7 @@ export interface WebhookIntegration {
 
 export interface WebhookIntegrationCreate {
   integration_name: string
+  slug?: string | null          // v0.7.1: optional; omit for auto-generated
   callback_url?: string | null
   callback_enabled?: boolean
   ip_allowlist?: string[] | null
@@ -1796,6 +1805,7 @@ export interface WebhookIntegrationCreate {
 
 export interface WebhookIntegrationUpdate {
   integration_name?: string
+  slug?: string | null          // v0.7.1: optional rename
   callback_url?: string | null
   callback_enabled?: boolean
   ip_allowlist?: string[] | null
@@ -1814,6 +1824,11 @@ export interface WebhookSecretRotateResponse {
   api_secret: string
   api_secret_preview: string
   warning: string
+}
+
+export interface WebhookSlugAvailability {
+  available: boolean
+  reason: string | null
 }
 
 // v0.6.0: Slack Integration
@@ -1883,6 +1898,20 @@ export interface DiscordIntegrationCreate {
 export interface TenantSelfSettings {
   tenant_id: string
   public_base_url: string | null
+}
+
+// v0.6.1 Public Ingress Resolver — authoritative public URL for this tenant.
+// `source` indicates where the resolver picked the URL from (tenant override,
+// platform Cloudflare tunnel, dev env var, or none). `override_url` echoes
+// the raw tenant.public_base_url regardless of which source wins, so the
+// override card can render its input correctly.
+export type PublicIngressSource = 'override' | 'tunnel' | 'dev' | 'none'
+
+export interface PublicIngressInfo {
+  url: string | null
+  source: PublicIngressSource
+  warning: string | null
+  override_url: string | null
 }
 
 // Playground Feature
@@ -2405,12 +2434,54 @@ export interface RoleInfo {
 
 export interface InvitationInfo {
   email: string
-  tenant_name: string
-  role: string
-  role_display_name: string
+  tenant_name: string | null
+  role: string | null
+  role_display_name: string | null
   inviter_name: string
   expires_at: string
   is_valid: boolean
+  auth_provider: 'local' | 'google'
+  is_global_admin: boolean
+}
+
+// Admin-level (global) invitation with optional invitation_link
+export interface GlobalInvitation {
+  id: number
+  email: string
+  tenant_id: string | null
+  tenant_name: string | null
+  role: string | null
+  role_display_name: string | null
+  is_global_admin: boolean
+  auth_provider: 'local' | 'google'
+  invited_by_name: string
+  expires_at: string
+  created_at: string
+  invitation_link?: string
+}
+
+// Global (platform-wide) Google SSO configuration
+export interface GlobalSSOConfig {
+  id: number
+  google_sso_enabled: boolean
+  google_client_id: string | null
+  has_client_secret: boolean
+  google_client_secret: string | null
+  allowed_domains: string[]
+  auto_provision_users: boolean
+  default_role_id: number | null
+  default_role_name: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface GlobalSSOConfigUpdate {
+  google_sso_enabled?: boolean
+  google_client_id?: string | null
+  google_client_secret?: string | null
+  allowed_domains?: string[]
+  auto_provision_users?: boolean
+  default_role_id?: number | null
 }
 
 // Subscription Plans
@@ -2561,17 +2632,18 @@ export interface UserCreateRequest {
   email: string
   password: string
   full_name: string
-  tenant_id: string
-  role_name?: string
+  tenant_id?: string | null
+  role_name?: string | null
   is_active?: boolean
+  is_global_admin?: boolean
 }
 
 export interface UserUpdateRequest {
   full_name?: string
   is_active?: boolean
   email_verified?: boolean
-  tenant_id?: string
-  role_name?: string
+  tenant_id?: string | null
+  role_name?: string | null
 }
 
 // Canonical vendor label map — used by any component that needs human-readable vendor names
@@ -2605,6 +2677,11 @@ export interface ProviderInstance {
   health_status: string
   health_status_reason: string | null
   last_health_check: string | null
+  // v0.6.x: Ollama per-tenant auto-provisioning
+  is_auto_provisioned?: boolean
+  container_status?: string | null  // none | creating | provisioning | running | stopped | error
+  container_name?: string | null
+  container_port?: number | null
 }
 
 export interface ProviderInstanceCreate {
@@ -2655,6 +2732,68 @@ export interface VectorStoreInstanceCreate {
   auto_provision?: boolean
   mem_limit?: string
   cpu_quota?: number
+}
+
+// ==================== TTS Instances (v0.6.x Kokoro per-tenant) ====================
+
+export interface TTSInstance {
+  id: number
+  tenant_id: string
+  vendor: string  // kokoro
+  instance_name: string
+  description?: string | null
+  base_url?: string | null
+  extra_config?: Record<string, any> | null
+  default_voice?: string | null
+  default_speed?: number | null
+  default_language?: string | null
+  default_format?: string | null
+  health_status: string  // unknown | healthy | degraded | unavailable
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  is_default: boolean
+  is_active: boolean
+  is_auto_provisioned: boolean
+  container_status?: string | null  // none | creating | provisioning | running | stopped | error
+  container_name?: string | null
+  container_port?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TTSInstanceCreate {
+  vendor?: string  // defaults to 'kokoro'
+  instance_name: string
+  description?: string
+  base_url?: string
+  is_default?: boolean
+  auto_provision?: boolean
+  mem_limit?: string
+  default_voice?: string
+  default_speed?: number
+  default_language?: string
+  default_format?: string
+}
+
+// Generic container status payload (shared by TTS + Ollama + Vector Stores)
+export interface ContainerStatusResponse {
+  status?: string  // none | creating | provisioning | running | stopped | error
+  name?: string | null
+  image?: string | null
+  port?: number | null
+  message?: string | null
+  [key: string]: any
+}
+
+// Ollama model pull job progress
+export interface PullJobResponse {
+  job_id: string
+  status: string  // pulling | done | error
+  percent?: number
+  bytes_downloaded?: number
+  bytes_total?: number
+  error?: string | null
+  model?: string
 }
 
 // ==================== Custom Skills (Phase 22/23) ====================
@@ -2770,6 +2909,7 @@ export interface AgentCommPermission {
   is_enabled: boolean
   max_depth: number
   rate_limit_rpm: number
+  allow_target_skills: boolean
   created_at?: string | null
   updated_at?: string | null
 }
@@ -4323,7 +4463,7 @@ export const api = {
     return res.json()
   },
 
-  async getCurrentUser(): Promise<{
+  async getCurrentUser(options?: { timeoutMs?: number }): Promise<{
     id: number
     email: string
     full_name: string
@@ -4336,9 +4476,34 @@ export const api = {
     last_login_at: string | null
   }> {
     // SEC-005 Phase 3: Auth via httpOnly cookie only — no token param needed
-    const res = await authenticatedFetch(`${API_URL}/api/auth/me`)
-    if (!res.ok) await handleApiError(res, 'Failed to fetch current user')
-    return res.json()
+    const controller = new AbortController()
+    const timeoutMs = options?.timeoutMs
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    let didTimeout = false
+
+    if (timeoutMs && timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        didTimeout = true
+        controller.abort()
+      }, timeoutMs)
+    }
+
+    try {
+      const res = await authenticatedFetch(`${API_URL}/api/auth/me`, {
+        signal: controller.signal,
+      })
+      if (!res.ok) await handleApiError(res, 'Failed to fetch current user')
+      return res.json()
+    } catch (error) {
+      if (didTimeout || (timeoutMs && isAbortError(error))) {
+        throw new Error(`Authentication bootstrap timed out after ${timeoutMs}ms`)
+      }
+      throw error
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+      }
+    }
   },
 
   async requestPasswordReset(email: string): Promise<{ message: string }> {
@@ -4633,6 +4798,21 @@ export const api = {
     return res.json()
   },
 
+  // v0.7.1: live validation of a custom slug before submit. Pass excludeId
+  // from the edit flow so the integration's own current slug isn't treated
+  // as a collision with itself.
+  async checkWebhookSlugAvailable(slug: string, excludeId?: number): Promise<WebhookSlugAvailability> {
+    const params = new URLSearchParams({ slug })
+    if (typeof excludeId === 'number') params.set('exclude_id', String(excludeId))
+    const res = await authenticatedFetch(
+      `${API_URL}/api/webhook-integrations/slug-available?${params.toString()}`
+    )
+    if (!res.ok) {
+      return { available: false, reason: 'Unable to check availability' }
+    }
+    return res.json()
+  },
+
   // v0.6.0: Slack Integration
   async getSlackIntegrations(): Promise<SlackIntegration[]> {
     const res = await authenticatedFetch(`${API_URL}/api/slack/integrations/`)
@@ -4757,6 +4937,16 @@ export const api = {
       body: JSON.stringify(data),
     })
     if (!res.ok) await handleApiError(res, 'Failed to update tenant settings')
+    return res.json()
+  },
+
+  // v0.6.1 Public Ingress Resolver — authoritative public URL for the caller's
+  // tenant. Consumers (Slack/Discord wizards, WebhookSetupModal, PublicBaseUrlCard)
+  // should use this rather than reading tenant.public_base_url directly or
+  // inferring a URL from window.location.origin.
+  async getMyPublicIngress(): Promise<PublicIngressInfo> {
+    const res = await authenticatedFetch(`${API_URL}/api/tenant/me/public-ingress`)
+    if (!res.ok) await handleApiError(res, 'Failed to resolve public ingress')
     return res.json()
   },
 
@@ -5293,6 +5483,7 @@ export const api = {
     email: string
     role?: string
     message?: string
+    auth_provider?: 'local' | 'google'
   }): Promise<TeamInvitation> {
     const res = await authenticatedFetch(`${API_URL}/api/team/invite`, {
       method: 'POST',
@@ -5746,6 +5937,96 @@ export const api = {
     if (!res.ok) {
       const error = await res.json().catch(() => ({ detail: 'Failed to toggle admin status' }))
       throw new Error(error.detail || 'Failed to toggle admin status')
+    }
+    return res.json()
+  },
+
+  // ========================================================================
+  // Global Admin Invitations API (platform-wide)
+  // ========================================================================
+
+  async inviteGlobalUser(data: {
+    email: string
+    tenant_id: string | null
+    role: string | null
+    is_global_admin: boolean
+    auth_provider: 'local' | 'google'
+    message?: string
+  }): Promise<GlobalInvitation> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/invitations/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to send invitation' }))
+      throw new Error(error.detail || 'Failed to send invitation')
+    }
+    return res.json()
+  },
+
+  async getGlobalInvitations(params?: {
+    is_global_admin?: boolean
+    tenant_id?: string
+    email_contains?: string
+    include_expired?: boolean
+    page?: number
+    page_size?: number
+  }): Promise<{ invitations: GlobalInvitation[]; total: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.is_global_admin !== undefined) searchParams.append('is_global_admin', params.is_global_admin.toString())
+    if (params?.tenant_id !== undefined) searchParams.append('tenant_id', params.tenant_id)
+    if (params?.email_contains) searchParams.append('email_contains', params.email_contains)
+    if (params?.include_expired) searchParams.append('include_expired', 'true')
+    if (params?.page) searchParams.append('page', params.page.toString())
+    if (params?.page_size) searchParams.append('page_size', params.page_size.toString())
+
+    const qs = searchParams.toString()
+    const url = `${API_URL}/api/admin/invitations/${qs ? `?${qs}` : ''}`
+    const res = await authenticatedFetch(url)
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to fetch invitations' }))
+      throw new Error(error.detail || 'Failed to fetch invitations')
+    }
+    return res.json()
+  },
+
+  async cancelGlobalInvitation(invitationId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/invitations/${invitationId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to cancel invitation' }))
+      throw new Error(error.detail || 'Failed to cancel invitation')
+    }
+  },
+
+  // ========================================================================
+  // Global SSO Configuration API (platform-wide Google SSO)
+  // ========================================================================
+
+  async getGlobalSSOConfig(includeSecret: boolean = false): Promise<GlobalSSOConfig> {
+    const params = new URLSearchParams()
+    if (includeSecret) params.append('include_secret', 'true')
+    const qs = params.toString()
+    const url = `${API_URL}/api/admin/sso-config/${qs ? `?${qs}` : ''}`
+    const res = await authenticatedFetch(url)
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to fetch SSO config' }))
+      throw new Error(error.detail || 'Failed to fetch SSO config')
+    }
+    return res.json()
+  },
+
+  async updateGlobalSSOConfig(data: GlobalSSOConfigUpdate): Promise<GlobalSSOConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/admin/sso-config/`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to update SSO config' }))
+      throw new Error(error.detail || 'Failed to update SSO config')
     }
     return res.json()
   },
@@ -7015,6 +7296,173 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to update default vector store')
   },
 
+  // ==================== TTS Instances (v0.6.x Kokoro per-tenant) ====================
+
+  async getTTSInstances(): Promise<TTSInstance[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch TTS instances')
+    return res.json()
+  },
+
+  async createTTSInstance(data: TTSInstanceCreate): Promise<TTSInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create TTS instance')
+    return res.json()
+  },
+
+  async getTTSInstance(id: number): Promise<TTSInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch TTS instance')
+    return res.json()
+  },
+
+  async updateTTSInstance(id: number, data: Partial<TTSInstanceCreate>): Promise<TTSInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update TTS instance')
+    return res.json()
+  },
+
+  async deleteTTSInstance(id: number, removeVolume: boolean = false): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}?remove_volume=${removeVolume}`, { method: 'DELETE' })
+    if (!res.ok) await handleApiError(res, 'Failed to delete TTS instance')
+  },
+
+  async ttsContainerAction(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}/container/${action}`, { method: 'POST' })
+    if (!res.ok) await handleApiError(res, `Failed to ${action} TTS container`)
+    return res.json()
+  },
+
+  async getTTSContainerStatus(id: number): Promise<ContainerStatusResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}/container/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to get TTS container status')
+    return res.json()
+  },
+
+  async getTTSContainerLogs(id: number, tail: number = 100): Promise<{ logs: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}/container/logs?tail=${tail}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get TTS container logs')
+    return res.json()
+  },
+
+  async getDefaultTTSInstance(): Promise<{ default_tts_instance_id: number | null; instance: TTSInstance | null }> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/tts/default`)
+    if (!res.ok) await handleApiError(res, 'Failed to get default TTS instance')
+    return res.json()
+  },
+
+  async setDefaultTTSInstance(instanceId: number | null): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/tts/default`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ default_tts_instance_id: instanceId }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update default TTS instance')
+  },
+
+  async assignTTSInstanceToAgent(id: number, data: {
+    agent_id: number
+    voice?: string
+    speed?: number
+    language?: string
+    response_format?: string
+  }): Promise<{ agent_id: number; skill_id: number }> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-instances/${id}/assign-to-agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to assign TTS instance to agent')
+    return res.json()
+  },
+
+  // ==================== Ollama container management (extends provider instances) ====================
+
+  async provisionOllamaContainer(id: number, gpu_enabled: boolean, mem_limit: string): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/provision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gpu_enabled, mem_limit }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to provision Ollama container')
+    return res.json()
+  },
+
+  async deprovisionOllamaContainer(id: number, removeVolume: boolean = false): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/deprovision?remove_volume=${removeVolume}`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to deprovision Ollama container')
+  },
+
+  async controlOllamaContainer(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/container/${action}`, { method: 'POST' })
+    if (!res.ok) await handleApiError(res, `Failed to ${action} Ollama container`)
+    return res.json()
+  },
+
+  async getOllamaContainerStatus(id: number): Promise<ContainerStatusResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/container/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to get Ollama container status')
+    return res.json()
+  },
+
+  async getOllamaContainerLogs(id: number, tail: number = 100): Promise<{ logs: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/container/logs?tail=${tail}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get Ollama container logs')
+    return res.json()
+  },
+
+  async pullOllamaModel(id: number, model: string): Promise<PullJobResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/models/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to start Ollama model pull')
+    return res.json()
+  },
+
+  async getPullJobStatus(id: number, job_id: string): Promise<PullJobResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/models/pull/${encodeURIComponent(job_id)}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get pull job status')
+    return res.json()
+  },
+
+  async deleteOllamaModel(id: number, model_name: string): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/models/${encodeURIComponent(model_name)}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete Ollama model')
+  },
+
+  async assignOllamaInstanceToAgent(id: number, data: {
+    agent_id: number
+    model_name: string
+  }): Promise<{ agent_id: number; provider_instance_id: number; model_name: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/assign-to-agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to assign Ollama instance to agent')
+    return res.json()
+  },
+
+  async listOllamaModels(id: number): Promise<{ models: string[] }> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/models`)
+    if (!res.ok) await handleApiError(res, 'Failed to list Ollama models')
+    return res.json()
+  },
+
   // ==================== Custom Skills (Phase 22/23) ====================
 
   async listCustomSkills(): Promise<CustomSkill[]> {
@@ -7203,7 +7651,7 @@ export const api = {
     return res.json()
   },
 
-  async createAgentCommPermission(data: { source_agent_id: number; target_agent_id: number; max_depth?: number; rate_limit_rpm?: number }): Promise<AgentCommPermission> {
+  async createAgentCommPermission(data: { source_agent_id: number; target_agent_id: number; max_depth?: number; rate_limit_rpm?: number; allow_target_skills?: boolean }): Promise<AgentCommPermission> {
     const res = await authenticatedFetch(`${API_URL}/api/agent-communication/permissions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -7213,7 +7661,7 @@ export const api = {
     return res.json()
   },
 
-  async updateAgentCommPermission(id: number, data: { is_enabled?: boolean; max_depth?: number; rate_limit_rpm?: number }): Promise<AgentCommPermission> {
+  async updateAgentCommPermission(id: number, data: { is_enabled?: boolean; max_depth?: number; rate_limit_rpm?: number; allow_target_skills?: boolean }): Promise<AgentCommPermission> {
     const res = await authenticatedFetch(`${API_URL}/api/agent-communication/permissions/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -7447,7 +7895,7 @@ export const api = {
 // v0.6.0 Remote Access — TypeScript types
 // ============================================================================
 export type RemoteAccessState =
-  | 'stopped' | 'starting' | 'running' | 'stopping'
+  | 'stopped' | 'starting' | 'verifying' | 'running' | 'stopping'
   | 'crashed' | 'error' | 'unavailable'
 export type RemoteAccessMode = 'quick' | 'named'
 export type RemoteAccessProtocol = 'auto' | 'http2' | 'quic'

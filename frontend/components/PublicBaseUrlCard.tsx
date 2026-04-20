@@ -1,63 +1,82 @@
 'use client'
 
 /**
- * v0.6.0 V060-CHN-002: Public Base URL settings card.
+ * Ingress Override (Advanced) — v0.6.1.
  *
- * Slack HTTP Events mode and Discord Interactions endpoint both require a
- * publicly-reachable HTTPS URL pointing at the Tsushin backend (port 8081).
- * This card lets a tenant admin configure that URL once so the Slack/Discord
- * setup modals can render the exact webhook URL the user must paste back into
- * the third-party portal.
+ * Renamed from "Public Base URL" and demoted from the default-visible primary
+ * setup field to a collapsible override. The platform-managed Remote Access
+ * tunnel is now the default ingress source; this card is for tenants who need
+ * to route Slack/Discord/webhook callbacks through a different URL (their own
+ * cloudflared, corporate reverse proxy, branded domain, etc.).
  *
- * Slack Socket Mode does NOT need this — the bot dials out to Slack instead.
+ * Display logic:
+ *   - Always shows the current resolver output at the top ("Currently used: X
+ *     via platform tunnel / override / dev").
+ *   - The override input lives inside a <details> block that auto-expands
+ *     when source === 'none' (tenant has no ingress and would otherwise be
+ *     stuck) or when an override is already stored.
+ *   - When the override is saved but invalid (DNS / format fails), a warning
+ *     is surfaced above the input so the tenant knows what's broken.
  */
 
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/client'
+import { api, type PublicIngressSource } from '@/lib/client'
 
 interface Props {
   canEdit: boolean
 }
 
+const SOURCE_LABELS: Record<PublicIngressSource, string> = {
+  override: 'tenant override',
+  tunnel: 'platform tunnel',
+  dev: 'dev environment',
+  none: 'not configured',
+}
+
 export default function PublicBaseUrlCard({ canEdit }: Props) {
   const [value, setValue] = useState('')
-  const [savedValue, setSavedValue] = useState<string | null>(null)
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null)
+  const [source, setSource] = useState<PublicIngressSource>('none')
+  const [resolverWarning, setResolverWarning] = useState<string | null>(null)
+  const [overrideSaved, setOverrideSaved] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
+  const loadIngress = () => {
     setLoading(true)
-    api
-      .getMyTenantSettings()
-      .then(s => {
-        if (cancelled) return
-        setSavedValue(s.public_base_url)
-        setValue(s.public_base_url || '')
+    return api
+      .getMyPublicIngress()
+      .then(info => {
+        setResolvedUrl(info.url)
+        setSource(info.source)
+        setResolverWarning(info.warning)
+        setOverrideSaved(info.override_url)
+        setValue(info.override_url || '')
       })
-      .catch(err => {
-        if (!cancelled) setError(err?.message || 'Failed to load tenant settings')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+      .catch(err => setError(err?.message || 'Failed to load ingress info'))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    loadIngress()
   }, [])
 
   const trimmed = value.trim()
-  const isHttp = trimmed === '' || trimmed.startsWith('http://') || trimmed.startsWith('https://')
+  const isHttpShape =
+    trimmed === '' || trimmed.startsWith('https://') || trimmed.startsWith('http://')
 
   const handleSave = async () => {
-    if (!isHttp) return
+    if (!isHttpShape) return
     setSaving(true)
     setError(null)
     setStatusMessage(null)
     try {
       const next = trimmed === '' ? null : trimmed.replace(/\/+$/, '')
-      const updated = await api.updateMyTenantSettings({ public_base_url: next })
-      setSavedValue(updated.public_base_url)
-      setValue(updated.public_base_url || '')
-      setStatusMessage(updated.public_base_url ? 'Public base URL saved' : 'Public base URL cleared')
+      await api.updateMyTenantSettings({ public_base_url: next })
+      await loadIngress()
+      setStatusMessage(next ? 'Override saved' : 'Override cleared')
     } catch (err: any) {
       setError(err?.message || 'Failed to save')
     } finally {
@@ -65,61 +84,93 @@ export default function PublicBaseUrlCard({ canEdit }: Props) {
     }
   }
 
+  const hasOverrideSaved = !!overrideSaved
+  const detailsOpen = source === 'none' || hasOverrideSaved
+
   return (
     <div className="card p-4 border border-tsushin-border/60">
       <div className="flex flex-col gap-3">
         <div>
-          <h4 className="text-sm font-semibold text-white">Public Base URL</h4>
+          <h4 className="text-sm font-semibold text-white">Ingress Override (Advanced)</h4>
           <p className="text-xs text-tsushin-slate">
-            HTTPS URL where Slack (HTTP Events mode) and Discord (Interactions endpoint) can reach this
-            Tsushin backend. Used by the setup modals to show you the exact webhook URL to paste back.
-            Slack Socket Mode does <strong>not</strong> need this. For local dev:{' '}
-            <code className="px-1 bg-tsushin-elevated rounded text-amber-300">cloudflared tunnel --url http://localhost:8081</code>.
+            The Slack HTTP Events, Discord Interactions, and Webhook channels use the
+            platform-managed Remote Access tunnel by default. Set an override here only
+            when you need callbacks routed through a different public URL (e.g. your own
+            cloudflared, a corporate reverse proxy, or a branded domain).
           </p>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="text"
-              value={value}
-              placeholder="https://your-tunnel.trycloudflare.com"
-              onChange={(e) => { setValue(e.target.value); setStatusMessage(null) }}
-              className="input flex-1 min-w-[280px] text-sm font-mono"
-              disabled={!canEdit || saving || loading}
-            />
-            <button
-              onClick={handleSave}
-              className="px-4 py-2 bg-teal-600/20 text-teal-300 border border-teal-600/50 rounded text-xs disabled:opacity-50"
-              disabled={!canEdit || saving || loading || !isHttp || trimmed === (savedValue || '')}
-            >
-              {saving ? 'Saving...' : 'Save URL'}
-            </button>
-          </div>
-
-          {!isHttp && (
-            <p className="text-xs text-amber-300">
-              Must start with <code className="px-1 bg-tsushin-elevated rounded">https://</code> (or{' '}
-              <code className="px-1 bg-tsushin-elevated rounded">http://</code> for local-only testing).
-            </p>
-          )}
-
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          {statusMessage && <p className="text-xs text-emerald-300">{statusMessage}</p>}
-
-          {!canEdit && (
-            <p className="text-xs text-amber-300">
-              You need <code className="px-1 bg-tsushin-elevated rounded">org.settings.write</code> permission to edit this value.
-            </p>
-          )}
-
-          {savedValue && (
-            <p className="text-xs text-tsushin-slate">
-              Currently saved:{' '}
-              <code className="px-1 bg-tsushin-elevated rounded text-tsushin-fog">{savedValue}</code>
-            </p>
+        <div className="rounded bg-tsushin-elevated/40 border border-tsushin-border/50 p-3 text-xs">
+          {loading ? (
+            <span className="text-tsushin-slate">Loading…</span>
+          ) : source === 'none' ? (
+            <span className="text-amber-200">
+              No public ingress available. Ask a global admin to enable Remote Access for this tenant, or configure an override below.
+            </span>
+          ) : (
+            <div className="flex flex-col gap-1">
+              <span className="text-tsushin-slate">
+                Currently resolved:{' '}
+                <code className="px-1 bg-tsushin-elevated rounded text-emerald-300 break-all">
+                  {resolvedUrl || '(invalid override, not in use)'}
+                </code>{' '}
+                <span className="text-tsushin-fog">via {SOURCE_LABELS[source]}</span>
+              </span>
+              {resolverWarning && (
+                <span className="text-amber-200">Warning: {resolverWarning}</span>
+              )}
+            </div>
           )}
         </div>
+
+        <details open={detailsOpen} className="group">
+          <summary className="cursor-pointer text-xs font-medium text-teal-300 hover:text-teal-200 select-none">
+            {hasOverrideSaved ? 'Edit override URL' : 'Configure override URL'}
+          </summary>
+
+          <div className="flex flex-col gap-2 mt-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                type="text"
+                value={value}
+                placeholder="https://your-tunnel.trycloudflare.com"
+                onChange={(e) => { setValue(e.target.value); setStatusMessage(null) }}
+                className="input flex-1 min-w-[280px] text-sm font-mono"
+                disabled={!canEdit || saving || loading}
+              />
+              <button
+                onClick={handleSave}
+                className="px-4 py-2 bg-teal-600/20 text-teal-300 border border-teal-600/50 rounded text-xs disabled:opacity-50"
+                disabled={!canEdit || saving || loading || !isHttpShape || trimmed === (overrideSaved || '')}
+              >
+                {saving ? 'Saving...' : 'Save override'}
+              </button>
+            </div>
+
+            {!isHttpShape && (
+              <p className="text-xs text-amber-300">
+                Must start with <code className="px-1 bg-tsushin-elevated rounded">https://</code> (or{' '}
+                <code className="px-1 bg-tsushin-elevated rounded">http://</code> when the dev env var is set).
+              </p>
+            )}
+
+            {error && <p className="text-xs text-red-400">{error}</p>}
+            {statusMessage && <p className="text-xs text-emerald-300">{statusMessage}</p>}
+
+            {!canEdit && (
+              <p className="text-xs text-amber-300">
+                You need <code className="px-1 bg-tsushin-elevated rounded">org.settings.write</code> permission to edit this value.
+              </p>
+            )}
+
+            {overrideSaved && (
+              <p className="text-xs text-tsushin-slate">
+                Override stored:{' '}
+                <code className="px-1 bg-tsushin-elevated rounded text-tsushin-fog break-all">{overrideSaved}</code>
+              </p>
+            )}
+          </div>
+        </details>
       </div>
     </div>
   )

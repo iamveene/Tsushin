@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import logging
 import os
 import secrets
+from urllib.parse import urlparse
 
 # MED-004 FIX: Rate limiting
 from slowapi import Limiter
@@ -110,16 +111,81 @@ def _enforce_remote_access_gate(request: Request, user: User, db: Session) -> No
     )
 
 
-def _set_session_cookie(response: JSONResponse, token: str) -> None:
+def _resolve_request_origin(request: Request, fallback_origin: str) -> str:
+    """
+    Resolve the user-facing origin for a request, preferring reverse-proxy
+    headers so local HTTP and self-signed HTTPS can coexist safely.
+    """
+    fallback_origin = fallback_origin.rstrip("/")
+    proto = (
+        request.headers.get("x-forwarded-proto")
+        or request.url.scheme
+        or ""
+    )
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+        or ""
+    )
+
+    proto = proto.split(",")[0].strip().rstrip(":")
+    host = host.split(",")[0].strip()
+
+    if proto and host:
+        return f"{proto}://{host}"
+
+    return fallback_origin
+
+
+def _resolve_google_sso_redirect_uri(request: Request) -> str:
+    """
+    Local loopback HTTP installs can start the flow from 127.0.0.1:3030, but
+    Google commonly only has the self-signed HTTPS callback registered. When
+    HTTPS is enabled locally, hand the callback off to the configured HTTPS
+    frontend origin instead of emitting a loopback HTTP redirect URI that
+    Google will reject.
+    """
+    request_origin = _resolve_request_origin(request, settings.FRONTEND_URL)
+    parsed_origin = urlparse(request_origin)
+
+    ssl_mode = os.environ.get("TSN_SSL_MODE", "").strip().lower()
+    ssl_enabled = ssl_mode not in ("", "off", "none", "disabled")
+    loopback_hosts = {"127.0.0.1", "::1", "[::1]"}
+
+    if ssl_enabled and parsed_origin.scheme == "http" and parsed_origin.hostname in loopback_hosts:
+        configured_frontend = settings.FRONTEND_URL.rstrip("/")
+        parsed_frontend = urlparse(configured_frontend)
+        if parsed_frontend.scheme == "https" and parsed_frontend.netloc:
+            return f"{configured_frontend}/api/auth/google/callback"
+        return "https://localhost/api/auth/google/callback"
+
+    return f"{request_origin}/api/auth/google/callback"
+
+
+def _set_session_cookie(
+    response: JSONResponse,
+    token: str,
+    request: Optional[Request] = None,
+) -> None:
     """
     SEC-005: Set the httpOnly session cookie on the response.
-    Secure flag: controlled by TSN_SSL_MODE env var (defaults to True for HTTPS installs).
+    Secure flag follows the effective request scheme when available so local
+    HTTP and HTTPS entrypoints can both authenticate correctly.
     SameSite=lax: sent on top-level navigations, protects against CSRF.
     max_age=86400: matches JWT 24-hour expiry.
     """
-    import os
-    ssl_mode = os.environ.get("TSN_SSL_MODE", "").lower()
-    use_secure = ssl_mode not in ("", "off", "none", "disabled")
+    use_secure = False
+    if request is not None:
+        proto = (
+            request.headers.get("x-forwarded-proto")
+            or request.url.scheme
+            or ""
+        )
+        use_secure = proto.split(",")[0].strip().rstrip(":").lower() == "https"
+    else:
+        ssl_mode = os.environ.get("TSN_SSL_MODE", "").lower()
+        use_secure = ssl_mode not in ("", "off", "none", "disabled")
     response.set_cookie(
         key="tsushin_session",
         value=token,
@@ -430,7 +496,7 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
                 "permissions": permissions,
             },
         })
-        _set_session_cookie(response, token)
+        _set_session_cookie(response, token, request)
         return response
     except AuthenticationError as e:
         # Audit: failed login (only if user exists — password mismatch)
@@ -477,7 +543,7 @@ async def signup(request: Request, signup_request: SignupRequest, db: Session = 
                 "permissions": permissions,
             },
         })
-        _set_session_cookie(response, token)
+        _set_session_cookie(response, token, request)
         return response
     except AuthenticationError as e:
         raise HTTPException(
@@ -525,7 +591,7 @@ async def setup_wizard(
             "tenant_id": "uuid",
             "user_id": 123,
             "access_token": "jwt_token",
-            "agents_created": ["Tsushin", "Kokoro", ...]
+            "agents_created": ["Tsushin", "Shellboy", "CustomerService"]
         }
     """
     # Security check: Only allow if no users exist (first-time setup)
@@ -985,7 +1051,7 @@ async def setup_wizard(
             "warnings": setup_warnings,
             "message": setup_message,
         })
-        _set_session_cookie(response, tenant_owner_token)
+        _set_session_cookie(response, tenant_owner_token, request)
         return response
 
     except HTTPException:
@@ -1188,12 +1254,14 @@ class InvitationAcceptRequest(BaseModel):
 
 class InvitationInfoResponse(BaseModel):
     email: str
-    tenant_name: str
-    role: str
-    role_display_name: str
+    tenant_name: Optional[str] = None
+    role: Optional[str] = None
+    role_display_name: Optional[str] = None
     inviter_name: str
     expires_at: str
     is_valid: bool
+    auth_provider: str = "local"
+    is_global_admin: bool = False
 
 
 @router.get("/invitation/{token}", response_model=InvitationInfoResponse)
@@ -1225,24 +1293,31 @@ async def get_invitation_info(token: str, db: Session = Depends(get_db)):
     # Check if expired
     is_valid = invitation.expires_at > datetime.utcnow()
 
-    # Get related data
-    tenant = db.query(Tenant).filter(Tenant.id == invitation.tenant_id).first()
-    role = db.query(Role).filter(Role.id == invitation.role_id).first()
+    # Get related data (tenant/role are null for global-admin invites)
+    tenant = None
+    role = None
+    if invitation.tenant_id:
+        tenant = db.query(Tenant).filter(Tenant.id == invitation.tenant_id).first()
+    if invitation.role_id:
+        role = db.query(Role).filter(Role.id == invitation.role_id).first()
     inviter = db.query(User).filter(User.id == invitation.invited_by).first()
 
     return InvitationInfoResponse(
         email=invitation.email,
-        tenant_name=tenant.name if tenant else "Unknown Organization",
-        role=role.name if role else "member",
-        role_display_name=role.display_name if role else "Member",
+        tenant_name=tenant.name if tenant else (None if invitation.is_global_admin else "Unknown Organization"),
+        role=role.name if role else (None if invitation.is_global_admin else "member"),
+        role_display_name=role.display_name if role else (None if invitation.is_global_admin else "Member"),
         inviter_name=inviter.full_name if inviter else "Unknown",
         expires_at=invitation.expires_at.isoformat(),
         is_valid=is_valid,
+        auth_provider=invitation.auth_provider or "local",
+        is_global_admin=bool(invitation.is_global_admin),
     )
 
 
 @router.post("/invitation/{token}/accept", response_model=AuthResponse)
 async def accept_invitation(
+    http_request: Request,
     token: str,
     request: InvitationAcceptRequest,
     db: Session = Depends(get_db)
@@ -1286,6 +1361,14 @@ async def accept_invitation(
             detail="Email is already registered"
         )
 
+    # Google-SSO invitations must be accepted via the Google OAuth flow so
+    # the user never picks a local password. See auth_google.find_or_create_user.
+    if (invitation.auth_provider or "local") == "google":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This invitation must be accepted via Google SSO",
+        )
+
     password_error = get_password_min_length_error(request.password)
     if password_error:
         raise HTTPException(
@@ -1293,37 +1376,40 @@ async def accept_invitation(
             detail=password_error
         )
 
-    # Create user
+    # Create user. Global-admin invites skip tenant/role assignment entirely.
     user = User(
-        tenant_id=invitation.tenant_id,
+        tenant_id=invitation.tenant_id,  # None for global-admin invites
         email=invitation.email,
         password_hash=hash_password(request.password),
         full_name=request.full_name,
-        is_global_admin=False,
+        is_global_admin=bool(invitation.is_global_admin),
         is_active=True,
         email_verified=True,  # Accepted via invitation
+        auth_provider="local",
     )
     db.add(user)
     db.flush()
 
-    # Assign role
-    user_role = UserRole(
-        user_id=user.id,
-        role_id=invitation.role_id,
-        tenant_id=invitation.tenant_id,
-        assigned_by=invitation.invited_by,
-    )
-    db.add(user_role)
+    role_name = "global_admin" if invitation.is_global_admin else "member"
+    if not invitation.is_global_admin:
+        # Assign tenant role (only for tenant-scoped invites)
+        user_role = UserRole(
+            user_id=user.id,
+            role_id=invitation.role_id,
+            tenant_id=invitation.tenant_id,
+            assigned_by=invitation.invited_by,
+        )
+        db.add(user_role)
+
+        # Get role name for token
+        role = db.query(Role).filter(Role.id == invitation.role_id).first()
+        role_name = role.name if role else "member"
 
     # Mark invitation as accepted
     invitation.accepted_at = datetime.utcnow()
 
     db.commit()
     db.refresh(user)
-
-    # Get role name for token
-    role = db.query(Role).filter(Role.id == invitation.role_id).first()
-    role_name = role.name if role else "member"
 
     # Generate access token
     pwd_ts = None
@@ -1356,7 +1442,7 @@ async def accept_invitation(
             "permissions": permissions,
         },
     })
-    _set_session_cookie(response, access_token)
+    _set_session_cookie(response, access_token, http_request)
     return response
 
 
@@ -1387,6 +1473,23 @@ async def get_google_sso_status(
     When no tenant_slug is provided, checks if ANY tenant has SSO configured.
     """
     platform_configured = bool(settings.GOOGLE_SSO_CLIENT_ID and settings.GOOGLE_SSO_CLIENT_SECRET)
+    # Platform-wide Google SSO configured via the global admin UI
+    # (global_sso_config table) also counts as "platform configured" — it's
+    # the same end-user capability regardless of whether credentials came
+    # from env vars or the system → integrations page.
+    if not platform_configured:
+        try:
+            from models_rbac import GlobalSSOConfig
+            global_sso = db.query(GlobalSSOConfig).first()
+            if (
+                global_sso
+                and global_sso.google_sso_enabled
+                and global_sso.google_client_id
+                and global_sso.google_client_secret_encrypted
+            ):
+                platform_configured = True
+        except Exception as exc:
+            logger.debug("GlobalSSOConfig lookup failed: %s", exc)
     tenant_configured = False
 
     if tenant_slug:
@@ -1439,6 +1542,7 @@ async def get_google_sso_status(
 
 @router.get("/google/authorize", response_model=GoogleAuthURLResponse)
 async def get_google_auth_url(
+    request: Request,
     tenant_slug: Optional[str] = Query(None, description="Tenant slug for tenant-specific auth"),
     redirect_after: str = Query("/", description="URL to redirect to after authentication"),
     invitation_token: Optional[str] = Query(None, description="Invitation token if accepting an invite"),
@@ -1465,6 +1569,7 @@ async def get_google_auth_url(
             tenant_slug=tenant_slug,
             redirect_after=redirect_after,
             invitation_token=invitation_token,
+            redirect_uri=_resolve_google_sso_redirect_uri(request),
         )
         return GoogleAuthURLResponse(auth_url=auth_url)
     except GoogleSSOError as e:
@@ -1476,6 +1581,7 @@ async def get_google_auth_url(
 
 @router.get("/google/callback")
 async def google_sso_callback(
+    request: Request,
     code: Optional[str] = Query(None, description="Authorization code from Google"),
     state: Optional[str] = Query(None, description="State token"),
     error: Optional[str] = Query(None, description="Error from Google"),
@@ -1492,24 +1598,31 @@ async def google_sso_callback(
     The frontend exchanges the code for JWT via /api/auth/sso-exchange endpoint.
     This prevents JWT exposure in browser history, server logs, and referrer headers.
     """
+    frontend_origin = _resolve_request_origin(request, settings.FRONTEND_URL)
+    redirect_uri = _resolve_google_sso_redirect_uri(request)
+
     # Handle errors from Google
     if error:
         logger.error(f"Google OAuth error: {error} - {error_description}")
         error_msg = error_description or error
         return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/auth/login?error={error_msg}",
+            url=f"{frontend_origin}/auth/login?error={error_msg}",
             status_code=302
         )
 
     if not code or not state:
         return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/auth/login?error=Missing+authorization+code",
+            url=f"{frontend_origin}/auth/login?error=Missing+authorization+code",
             status_code=302
         )
 
     try:
         sso_service = get_google_sso_service(db, get_encryption_key(db))
-        user, jwt_token, redirect_after = await sso_service.authenticate(code, state)
+        user, jwt_token, redirect_after = await sso_service.authenticate(
+            code,
+            state,
+            redirect_uri=redirect_uri,
+        )
 
         # MED-009 Security Fix: Generate one-time code instead of putting JWT in URL
         # Code expires in 60 seconds and can only be used once
@@ -1517,7 +1630,7 @@ async def google_sso_callback(
 
         # Redirect to frontend with code (not JWT)
         # Frontend will call /api/auth/sso-exchange to get the actual JWT
-        redirect_url = f"{settings.FRONTEND_URL}/auth/sso-callback?code={callback_code}"
+        redirect_url = f"{frontend_origin}/auth/sso-callback?code={callback_code}"
 
         logger.info(f"Google SSO successful for user: {user.email}")
         return RedirectResponse(url=redirect_url, status_code=302)
@@ -1525,7 +1638,7 @@ async def google_sso_callback(
     except GoogleSSOError as e:
         logger.error(f"Google SSO authentication failed: {e}")
         return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/auth/login?error={str(e)}",
+            url=f"{frontend_origin}/auth/login?error={str(e)}",
             status_code=302
         )
     except Exception as e:
@@ -1533,7 +1646,7 @@ async def google_sso_callback(
         import urllib.parse
         error_detail = urllib.parse.quote(str(e) or "Authentication failed")
         return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/auth/login?error={error_detail}",
+            url=f"{frontend_origin}/auth/login?error={error_detail}",
             status_code=302
         )
 
@@ -1579,7 +1692,7 @@ async def exchange_sso_code(
             "token_type": "bearer",
             "redirect_after": redirect_after,
         })
-        _set_session_cookie(response, jwt_token)
+        _set_session_cookie(response, jwt_token, request)
         return response
 
     except HTTPException:

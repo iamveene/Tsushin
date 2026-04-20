@@ -1070,12 +1070,25 @@ class SkillManager:
                     # Transcribe audio
                     skill_class = self.registry.get('audio_transcript')
                     if skill_class:
-                        # Phase 7.2: Pass token_tracker to audio skill for usage tracking
-                        skill_instance = skill_class(token_tracker=self.token_tracker)
+                        # Use the same centralized setup path as other skills so
+                        # the transcription skill gets DB access and token tracking.
+                        skill_instance = self._create_skill_instance(skill_class, db, agent_id)
+                        if hasattr(skill_instance, 'set_db_session'):
+                            skill_instance.set_db_session(db)
+                        if hasattr(skill_instance, 'set_token_tracker') and self.token_tracker:
+                            skill_instance.set_token_tracker(self.token_tracker)
                         skill_instance._agent_id = agent_id
 
-                        config = audio_skill.config or {}
+                        config = dict(audio_skill.config or {})
                         config['agent_id'] = agent_id
+
+                        from models import Agent
+                        agent = db.query(Agent).filter(Agent.id == agent_id).first()
+                        if agent:
+                            if agent.tenant_id and not config.get('tenant_id'):
+                                config['tenant_id'] = agent.tenant_id
+                            if agent.provider_instance_id and not config.get('provider_instance_id'):
+                                config['provider_instance_id'] = agent.provider_instance_id
 
                         try:
                             transcript_result = await skill_instance.process(message, config)
