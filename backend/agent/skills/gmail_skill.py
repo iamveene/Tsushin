@@ -48,6 +48,8 @@ class GmailSkill(BaseSkill):
     skill_name = "Gmail"
     skill_description = "Read and search emails from connected Gmail accounts"
     execution_mode = "tool"
+    # Hidden from the agent creation wizard: requires Google OAuth flow (Hub → Integrations → Gmail).
+    wizard_visible = False
 
     # Keywords that trigger this skill
     EMAIL_KEYWORDS = [

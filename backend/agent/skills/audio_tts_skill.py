@@ -44,8 +44,11 @@ class AudioTTSSkill(BaseSkill):
 
     skill_type = "audio_tts"
     skill_name = "Audio TTS Response"
-    skill_description = "Convert text responses to audio using OpenAI, Kokoro, or ElevenLabs TTS"
+    skill_description = "Convert text responses to audio using OpenAI, Kokoro, ElevenLabs, or Google Gemini TTS"
     execution_mode = "passive"  # Response processing hook for TTS conversion
+    # Wizard metadata: only relevant for audio/hybrid agents; force-enabled for those types.
+    applies_to = ["audio", "hybrid"]
+    auto_enabled_for = ["audio", "hybrid"]
 
     def __init__(self, token_tracker: Optional["TokenTracker"] = None):
         super().__init__()

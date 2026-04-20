@@ -3,30 +3,88 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAgentWizard } from '@/contexts/AgentWizardContext'
 import { api } from '@/lib/client'
-import type { CustomSkill } from '@/lib/client'
+import type { CustomSkill, SkillDefinition } from '@/lib/client'
 import { BUILT_IN_SKILLS } from '../defaults'
+import { SKILL_DISPLAY_INFO, HIDDEN_SKILLS } from '@/components/skills/skill-constants'
+
+// Shape rendered by the wizard — merges backend catalog (skill_type/applies_to/
+// auto_enabled_for/wizard_visible/descriptions) with optional frontend decoration
+// (display label overrides from skill-constants, or static fallback in BUILT_IN_SKILLS).
+interface WizardSkillRow {
+  type: string
+  label: string
+  description: string
+  appliesTo: string[]
+  autoEnabledFor: string[]
+}
+
+// Derive the wizard's skill catalog from the backend's /api/skills/available
+// response. This is the single source of truth; the static BUILT_IN_SKILLS list
+// is retained ONLY as a fallback when the API is unreachable, and is cross-checked
+// against the backend registry by a CI test in backend/tests/test_wizard_drift.py.
+function rowsFromBackend(skills: SkillDefinition[]): WizardSkillRow[] {
+  return skills
+    .filter(s => s.wizard_visible !== false)
+    .filter(s => !HIDDEN_SKILLS.has(s.skill_type))
+    .map(s => {
+      const display = SKILL_DISPLAY_INFO[s.skill_type]
+      return {
+        type: s.skill_type,
+        label: display?.displayName || s.skill_name,
+        description: display?.description || s.skill_description,
+        appliesTo: s.applies_to || ['text', 'audio', 'hybrid'],
+        autoEnabledFor: s.auto_enabled_for || [],
+      }
+    })
+}
+
+function rowsFromFallback(): WizardSkillRow[] {
+  return BUILT_IN_SKILLS.map(s => ({
+    type: s.type,
+    label: s.label,
+    description: s.description,
+    appliesTo: s.appliesTo,
+    autoEnabledFor: s.autoEnabledFor || [],
+  }))
+}
 
 export default function StepSkills() {
   const { state, patchSkills, markStepComplete } = useAgentWizard()
   const [customSkills, setCustomSkills] = useState<CustomSkill[]>([])
+  const [catalog, setCatalog] = useState<WizardSkillRow[]>(() => rowsFromFallback())
 
   useEffect(() => {
     api.getCustomSkills().then(setCustomSkills).catch(() => setCustomSkills([]))
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    api.getAvailableSkills()
+      .then(skills => {
+        if (cancelled) return
+        const rows = rowsFromBackend(skills)
+        // If the backend returned an empty/degraded list, keep the fallback.
+        if (rows.length > 0) setCatalog(rows)
+      })
+      .catch(() => {
+        // Network or auth failure — keep the fallback rows already in state.
+      })
+    return () => { cancelled = true }
+  }, [])
+
   const agentType = state.draft.type
   const available = useMemo(() => {
     if (!agentType) return []
-    return BUILT_IN_SKILLS.filter(s => s.appliesTo.includes(agentType))
-  }, [agentType])
+    return catalog.filter(s => s.appliesTo.includes(agentType))
+  }, [agentType, catalog])
 
   // Auto-enable skills that are locked for audio/hybrid
   useEffect(() => {
     if (!agentType) return
     const next = { ...state.draft.skills.builtIns }
     let changed = false
-    for (const s of BUILT_IN_SKILLS) {
-      if (s.autoEnabledFor?.includes(agentType) && !next[s.type]?.is_enabled) {
+    for (const s of catalog) {
+      if (s.autoEnabledFor.includes(agentType) && !next[s.type]?.is_enabled) {
         next[s.type] = { is_enabled: true, config: next[s.type]?.config || {} }
         changed = true
       }
@@ -35,11 +93,11 @@ export default function StepSkills() {
     // Skills step is always valid; mark it complete
     markStepComplete('skills', true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentType])
+  }, [agentType, catalog])
 
   const isLocked = (skillType: string) => {
-    const def = BUILT_IN_SKILLS.find(s => s.type === skillType)
-    return !!def?.autoEnabledFor?.includes(agentType!)
+    const def = catalog.find(s => s.type === skillType)
+    return !!def?.autoEnabledFor.includes(agentType!)
   }
 
   const toggleBuiltin = (skillType: string) => {

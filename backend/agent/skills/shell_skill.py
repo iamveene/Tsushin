@@ -40,6 +40,8 @@ class ShellSkill(BaseSkill):
     skill_name = "Shell Commands"
     skill_description = "Execute shell commands on registered remote hosts via secure beacon agents"
     execution_mode = "hybrid"  # Supports both /shell command and AI tool calls
+    # Hidden from the agent creation wizard: requires a paired beacon (Settings → Shell).
+    wizard_visible = False
 
     # Regex patterns for slash command
     SHELL_COMMAND_PATTERN = re.compile(

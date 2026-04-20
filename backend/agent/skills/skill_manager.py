@@ -181,12 +181,21 @@ class SkillManager:
         """
         skills = []
         for skill_type, skill_class in self.registry.items():
+            # Wizard-facing metadata (BaseSkill defaults, overridden per skill).
+            # Read via getattr so older skill classes without the attrs still work.
+            applies_to = list(getattr(skill_class, "applies_to", ["text", "audio", "hybrid"]))
+            auto_enabled_for = list(getattr(skill_class, "auto_enabled_for", []))
+            wizard_visible = bool(getattr(skill_class, "wizard_visible", True))
+
             skills.append({
                 "skill_type": skill_type,
                 "skill_name": skill_class.skill_name,
                 "skill_description": skill_class.skill_description,
                 "config_schema": skill_class.get_config_schema(),
-                "default_config": skill_class.get_default_config()
+                "default_config": skill_class.get_default_config(),
+                "wizard_visible": wizard_visible,
+                "applies_to": applies_to,
+                "auto_enabled_for": auto_enabled_for,
             })
         return skills
 

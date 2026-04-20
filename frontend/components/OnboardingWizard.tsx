@@ -179,6 +179,46 @@ export default function OnboardingWizard() {
     return () => window.removeEventListener('tsushin:advance-tour-step', handleAdvance)
   }, [nextStep])
 
+  // Keep the tour's provider / skill bullets in sync with the internal wizards
+  // by fetching the same catalogs the wizards use. Avoids drift between the
+  // onboarding tour copy and what the user actually sees inside the wizards.
+  const [ttsProviderSummaries, setTtsProviderSummaries] = useState<
+    Array<{ id: string; name: string; is_free: boolean; voice_count: number; status: string }>
+  >([])
+  useEffect(() => {
+    let cancelled = false
+    api.getTTSProviders()
+      .then(providers => {
+        if (cancelled) return
+        setTtsProviderSummaries(
+          providers
+            .filter(p => p.status !== 'coming_soon')
+            .map(p => ({
+              id: p.id,
+              name: p.name,
+              is_free: p.is_free,
+              voice_count: p.voice_count,
+              status: p.status,
+            }))
+        )
+      })
+      .catch(() => { /* leave empty; bullets fall back to static hints below */ })
+    return () => { cancelled = true }
+  }, [])
+
+  // Derived bullet list for the Voice Capabilities tour step. Built from the
+  // live /api/tts-providers catalog so a new backend provider auto-appears in
+  // the tour without manual edits. Falls back to a single generic line if the
+  // fetch failed.
+  const voiceProviderBullets: string[] = ttsProviderSummaries.length > 0
+    ? ttsProviderSummaries.map(p => {
+        const label = p.name
+        const voiceCount = p.voice_count > 0 ? ` — ${p.voice_count} voice${p.voice_count === 1 ? '' : 's'}` : ''
+        const cost = p.is_free ? ' (free)' : p.status === 'preview' ? ' (preview)' : ''
+        return `${label}${voiceCount}${cost}`
+      })
+    : ['Multiple TTS providers: Kokoro (free/local), OpenAI, ElevenLabs, and Google Gemini TTS (preview)']
+
   const tourSteps: TourStep[] = [
     {
       // Step 1
@@ -372,12 +412,12 @@ export default function OnboardingWizard() {
       // Step 12 — v0.7.0: Voice Capabilities (optional)
       title: 'Voice Capabilities (optional)',
       targetSelector: null,
-      content: 'Want your agents to reply with audio or transcribe incoming voice messages? Launch the Audio Agents wizard — it walks you through picking a TTS provider (Kokoro free/local, OpenAI, ElevenLabs, or Google Gemini), configuring a voice, and either scaffolding a brand-new Voice Assistant agent or attaching audio capabilities to an existing one. This step is entirely optional; skip if you do not need audio.',
+      content: 'Want your agents to reply with audio or transcribe incoming voice messages? Launch the Audio Agents wizard — it walks you through picking a TTS provider, configuring a voice, and either scaffolding a brand-new Voice Assistant agent or attaching audio capabilities to an existing one. This step is entirely optional; skip if you do not need audio.',
+      // NOTE: The TTS-provider bullets are derived from the live /api/tts-providers
+      // catalog so adding a provider to backend/hub/providers/tts_registry.py
+      // auto-propagates here without touching this file. See voiceProviderBullets above.
       highlightFeatures: [
-        'Kokoro TTS — free, open-source, runs in a local Docker container (~30–90s auto-provision)',
-        'OpenAI TTS — high-quality cloud voices, uses your existing OpenAI API key',
-        'ElevenLabs — premium voice cloning, requires an ElevenLabs API key',
-        'Google Gemini TTS (preview) — 30 prebuilt voices, reuses your Gemini API key, WAV output',
+        ...voiceProviderBullets,
         'Create a new Voice Assistant OR attach audio_tts/audio_transcript to an existing agent',
         'Pick "Hybrid" to both transcribe incoming voice AND reply with synthesized audio',
       ],

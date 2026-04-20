@@ -47,6 +47,9 @@ class AudioTranscriptSkill(BaseSkill):
     skill_name = "Audio Communication"
     skill_description = "Process audio messages with conversational AI or transcription-only mode"
     execution_mode = "special"  # Media-triggered (audio file detection)
+    # Wizard metadata: only for audio/hybrid agents; force-enabled for those types.
+    applies_to = ["audio", "hybrid"]
+    auto_enabled_for = ["audio", "hybrid"]
 
     # Supported audio MIME types
     SUPPORTED_FORMATS = {
