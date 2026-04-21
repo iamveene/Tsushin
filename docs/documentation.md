@@ -2337,6 +2337,17 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
   CRUD + lifecycle endpoints at `/api/hub/searxng/instances`. Setup flow:
   **Hub > Tool APIs > Add Integration > Web Search > SearXNG**. External-URL
   installs are also supported (toggle off auto-provision in the wizard).
+  Instance names are tenant-scoped and must be unique; the wizard fetches the
+  tenant's existing instances, auto-suggests a fresh name (`SearXNG`,
+  `SearXNG (2)`, …), and offers inline delete for any listed row. The Hub
+  **Tool APIs** tab renders a management panel (list / start / stop / restart /
+  delete with provisioning-status polling) once at least one instance exists,
+  matching the Kokoro and Ollama panels. Stale failed provisions
+  (`container_status ∈ {error, failed, none, null}` with no `container_name`)
+  are auto-purged on the next create so tenants don't get stuck; genuinely-
+  healthy conflicts still 409 but with a structured detail payload
+  (`code: 'searxng_instance_exists'`) the wizard surfaces as a recovery hint
+  (BUG-669, 2026-04-20).
 - **Tavily** — since v0.6.0-patch.6. AI-optimized web search wrapping
   `https://api.tavily.com/search`. Request posts JSON `{api_key, query,
   search_depth: 'basic', max_results, include_answer: true}`; response carries

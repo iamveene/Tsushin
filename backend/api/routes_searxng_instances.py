@@ -208,17 +208,43 @@ async def create_searxng_instance(
 ):
     from services.searxng_instance_service import SearxngInstanceService
 
-    # Duplicate-name guard
+    # Duplicate-name guard — with auto-recovery for stale failed provisions.
     existing = db.query(SearxngInstance).filter(
         SearxngInstance.tenant_id == ctx.tenant_id,
         SearxngInstance.instance_name == data.instance_name,
         SearxngInstance.is_active == True,
     ).first()
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"SearXNG instance '{data.instance_name}' already exists",
+        # A failed prior provision leaves container_status='error' (or null with
+        # no container_name) and blocks future creates. Auto-purge those so the
+        # wizard can succeed without tenant intervention.
+        stale_statuses = {"error", "failed", "none", None, ""}
+        is_stale = (
+            (existing.container_status in stale_statuses)
+            and not existing.container_name
         )
+        if is_stale:
+            logger.info(
+                "Auto-purging stale SearXNG instance %s (status=%s) for tenant %s",
+                existing.id, existing.container_status, ctx.tenant_id,
+            )
+            db.delete(existing)
+            db.commit()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": (
+                        f"SearXNG instance '{data.instance_name}' already exists "
+                        f"(status: {existing.container_status or 'unknown'}). "
+                        "Delete it from Hub → Web Search, or choose a different name."
+                    ),
+                    "code": "searxng_instance_exists",
+                    "existing_instance_id": existing.id,
+                    "existing_instance_name": existing.instance_name,
+                    "existing_container_status": existing.container_status,
+                },
+            )
 
     # Clear any soft-deleted row with the same name (UniqueConstraint)
     db.query(SearxngInstance).filter(

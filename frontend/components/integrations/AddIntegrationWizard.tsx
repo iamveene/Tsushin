@@ -18,7 +18,7 @@
 
 import { useState, useEffect } from 'react'
 import Modal from '@/components/ui/Modal'
-import { api, authenticatedFetch, Agent, SearchProviderInfo, TravelProviderInfo } from '@/lib/client'
+import { api, authenticatedFetch, Agent, SearchProviderInfo, TravelProviderInfo, SearxngInstance } from '@/lib/client'
 
 interface Props {
   isOpen: boolean
@@ -225,8 +225,13 @@ export default function AddIntegrationWizard({
   // searxng mode
   const [autoProvision, setAutoProvision] = useState(true)
   const [externalUrl, setExternalUrl] = useState('')
+  const [searxngInstanceName, setSearxngInstanceName] = useState('SearXNG')
+  const [existingSearxngInstances, setExistingSearxngInstances] = useState<SearxngInstance[]>([])
+  const [existingSearxngLoading, setExistingSearxngLoading] = useState(false)
+  const [deletingSearxngId, setDeletingSearxngId] = useState<number | null>(null)
 
   const [credentialError, setCredentialError] = useState<string | null>(null)
+  const [credentialErrorInstanceId, setCredentialErrorInstanceId] = useState<number | null>(null)
   const [savingCredentials, setSavingCredentials] = useState(false)
   const [savedSearxngInstanceId, setSavedSearxngInstanceId] = useState<number | null>(null)
 
@@ -270,7 +275,11 @@ export default function AddIntegrationWizard({
     setAmadeusEnv('test')
     setAutoProvision(true)
     setExternalUrl('')
+    setSearxngInstanceName('SearXNG')
+    setExistingSearxngInstances([])
+    setDeletingSearxngId(null)
     setCredentialError(null)
+    setCredentialErrorInstanceId(null)
     setSavingCredentials(false)
     setSavedSearxngInstanceId(null)
     setAgents([])
@@ -285,6 +294,28 @@ export default function AddIntegrationWizard({
     setAgentsLoading(true)
     api.getAgents(true).then(setAgents).finally(() => setAgentsLoading(false))
   }, [step, agents.length])
+
+  // Fetch existing SearXNG instances when entering step 3 for searxng_autoprovision
+  useEffect(() => {
+    if (step !== 3 || provider !== 'searxng') return
+    let cancelled = false
+    setExistingSearxngLoading(true)
+    api.listSearxngInstances()
+      .then((list) => {
+        if (cancelled) return
+        setExistingSearxngInstances(list || [])
+        // Suggest a unique name when the default 'SearXNG' is already taken.
+        const taken = new Set((list || []).map((i) => i.instance_name))
+        if (taken.has('SearXNG')) {
+          let n = 2
+          while (taken.has(`SearXNG (${n})`)) n++
+          setSearxngInstanceName(`SearXNG (${n})`)
+        }
+      })
+      .catch(() => { /* non-fatal; user can still proceed */ })
+      .finally(() => { if (!cancelled) setExistingSearxngLoading(false) })
+    return () => { cancelled = true }
+  }, [step, provider])
 
   const meta = (providers.find((p) => p.id === provider) ?? FALLBACK_PROVIDERS.find((p) => p.id === provider))!
   const categoryProviders = providers.filter((p) => p.category === category)
@@ -323,8 +354,9 @@ export default function AddIntegrationWizard({
       }
 
       if (meta.credentialMode === 'searxng_autoprovision') {
+        const name = (searxngInstanceName || '').trim() || 'SearXNG'
         const payload: any = {
-          instance_name: 'default',
+          instance_name: name,
           auto_provision: autoProvision,
         }
         if (!autoProvision) {
@@ -340,7 +372,13 @@ export default function AddIntegrationWizard({
         })
         if (!res.ok && res.status !== 202) {
           const body = await res.json().catch(() => ({}))
-          throw new Error(body.detail || `HTTP ${res.status}`)
+          const detail = body?.detail
+          if (detail && typeof detail === 'object' && detail.code === 'searxng_instance_exists') {
+            setCredentialError(detail.message || `Instance '${name}' already exists.`)
+            setCredentialErrorInstanceId(detail.existing_instance_id ?? null)
+            return false
+          }
+          throw new Error(typeof detail === 'string' ? detail : `HTTP ${res.status}`)
         }
         const body = await res.json().catch(() => ({}))
         if (body?.id) setSavedSearxngInstanceId(body.id)
@@ -578,7 +616,7 @@ export default function AddIntegrationWizard({
       meta.credentialMode === 'api_key'
         ? !!apiKey.trim()
         : meta.credentialMode === 'searxng_autoprovision'
-        ? (autoProvision || !!externalUrl.trim())
+        ? (!!searxngInstanceName.trim() && (autoProvision || !!externalUrl.trim()))
         : meta.credentialMode === 'amadeus'
         ? !!amadeusKey.trim() && !!amadeusSecret.trim()
         : false
@@ -649,6 +687,55 @@ export default function AddIntegrationWizard({
                   <code className="px-1 text-teal-200"> secret_key</code> is generated per instance.
                 </p>
               </div>
+
+              {(existingSearxngLoading || existingSearxngInstances.length > 0) && (
+                <div className="border border-white/10 rounded-lg bg-white/[0.02] p-3 space-y-2">
+                  <div className="text-xs font-medium text-gray-300">Existing SearXNG instances</div>
+                  {existingSearxngLoading ? (
+                    <div className="text-xs text-gray-500">Loading…</div>
+                  ) : (
+                    <ul className="space-y-1">
+                      {existingSearxngInstances.map((inst) => (
+                        <li key={inst.id} className="flex items-center justify-between gap-2 p-2 rounded bg-white/[0.03] border border-white/5">
+                          <div className="min-w-0">
+                            <div className="text-sm text-white truncate">{inst.instance_name}</div>
+                            <div className="text-[11px] text-gray-500 truncate">
+                              {inst.container_status || 'unknown'}
+                              {inst.container_port ? ` · port ${inst.container_port}` : ''}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={deletingSearxngId === inst.id}
+                            onClick={async () => {
+                              if (!confirm(`Delete SearXNG instance '${inst.instance_name}'? Its container will be removed.`)) return
+                              setDeletingSearxngId(inst.id)
+                              try {
+                                await api.deleteSearxngInstance(inst.id)
+                                const fresh = await api.listSearxngInstances().catch(() => [] as SearxngInstance[])
+                                setExistingSearxngInstances(fresh)
+                                setCredentialError(null)
+                                setCredentialErrorInstanceId(null)
+                              } catch (e: any) {
+                                setCredentialError(e?.message || 'Failed to delete instance')
+                              } finally {
+                                setDeletingSearxngId(null)
+                              }
+                            }}
+                            className="text-[11px] px-2 py-1 rounded bg-red-500/15 hover:bg-red-500/25 text-red-300 disabled:opacity-50"
+                          >
+                            {deletingSearxngId === inst.id ? 'Deleting…' : 'Delete'}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="text-[11px] text-gray-500">
+                    Tip: pick a fresh name below, or delete an existing instance to free up its name.
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-3">
                 <label className="flex items-start gap-3 cursor-pointer">
                   <input
@@ -683,6 +770,20 @@ export default function AddIntegrationWizard({
                     />
                   </div>
                 </label>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1.5">Instance name</label>
+                <input
+                  type="text"
+                  value={searxngInstanceName}
+                  onChange={(e) => { setSearxngInstanceName(e.target.value); setCredentialError(null); setCredentialErrorInstanceId(null) }}
+                  placeholder="SearXNG"
+                  className="w-full px-3 py-2 border border-white/10 rounded-lg text-white bg-[#0a0a0f] text-sm focus:border-teal-500/50 focus:outline-none"
+                />
+                <p className="text-[11px] text-gray-500 mt-1">
+                  Must be unique per tenant. We pre-filled a fresh name based on your existing instances.
+                </p>
               </div>
             </>
           )}
@@ -744,8 +845,13 @@ export default function AddIntegrationWizard({
           )}
 
           {credentialError && (
-            <div className="text-sm text-red-400 bg-red-900/20 border border-red-700/40 rounded px-3 py-2">
-              {credentialError}
+            <div className="text-sm text-red-400 bg-red-900/20 border border-red-700/40 rounded px-3 py-2 space-y-1">
+              <div>{credentialError}</div>
+              {credentialErrorInstanceId != null && (
+                <div className="text-xs text-red-300/90">
+                  Tip: delete the existing instance in the list above, or change the name below and try again.
+                </div>
+              )}
             </div>
           )}
         </div>
