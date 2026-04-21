@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### BUG-669 — SearXNG wizard `default already exists` unblock + Hub management panel (2026-04-20)
+
+Tenants who hit a partial/failed SearXNG auto-provision (or simply re-opened the wizard) were stuck: the Add-Integration wizard hardcoded `instance_name='default'` and the backend rejected the duplicate with a bare 409 `"SearXNG instance 'default' already exists"` — no recovery UI, no way to rename, no way to delete from the frontend. Mirrors the same pattern Ollama and Kokoro avoided by (a) letting users name instances and (b) exposing a Hub management panel.
+
+- **Backend auto-recovery.** `backend/api/routes_searxng_instances.py create_searxng_instance()` now inspects the conflicting active row and auto-purges it if it's a stale failed provision (`container_status ∈ {error, failed, none, null}` and `container_name` is null). Only genuinely-healthy conflicts keep the 409 — and the response body is now a structured `{code: 'searxng_instance_exists', existing_instance_id, existing_instance_name, existing_container_status, message}` so the UI can link to recovery actions.
+- **Frontend wizard.** `frontend/components/integrations/AddIntegrationWizard.tsx` no longer hardcodes the name. Step 3 fetches `GET /api/hub/searxng/instances`, lists any existing rows with an inline delete action, and auto-suggests a unique name (`SearXNG`, `SearXNG (2)`, …). The 409 structured-detail is parsed and surfaces a recovery hint rather than a raw error.
+- **Frontend Hub management panel.** `frontend/app/hub/page.tsx` Tool APIs tab now renders a SearXNG instances card (auto-hidden when empty) with list, start/stop/restart, delete, and provisioning-status polling — same pattern as the Kokoro/Ollama panels that already exist.
+- **Client helpers.** `frontend/lib/client.ts` gains `SearxngInstance` + `SearxngInstanceCreate` types and `listSearxngInstances`, `createSearxngInstance`, `deleteSearxngInstance`, `searxngContainerAction`, `getSearxngContainerStatus`.
+
+Container-manager failure path already marks `container_status='error'` and clears `container_name` (`backend/services/searxng_container_manager.py`), so the auto-purge guard catches the common stuck-state without further service-layer changes.
+
 ### AddIntegrationWizard fetches providers from live registry (2026-04-20)
 
 Continuation of the wizard-drift-prevention work. `AddIntegrationWizard` (Hub > Tool APIs > Add Integration) no longer treats its hardcoded `PROVIDERS` array as canonical — the wizard now fetches the live catalog at mount and falls back to a renamed static `FALLBACK_PROVIDERS` array only when the API is unreachable.

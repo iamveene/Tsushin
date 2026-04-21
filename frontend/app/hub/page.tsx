@@ -23,7 +23,7 @@ const AddIntegrationWizard = dynamic(
   { ssr: false },
 )
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -425,6 +425,10 @@ export default function HubPage() {
   const [kokoroLogsContent, setKokoroLogsContent] = useState<string>('')
   const [kokoroLogsLoading, setKokoroLogsLoading] = useState(false)
   const [kokoroConfirmDelete, setKokoroConfirmDelete] = useState<{ id: number; removeVolume: boolean } | null>(null)
+  // v0.6.0-patch.7: Per-tenant SearXNG auto-provisioning (Hub Tool APIs panel)
+  const [searxngInstances, setSearxngInstances] = useState<SearxngInstance[]>([])
+  const [searxngLoading, setSearxngLoading] = useState(false)
+  const [searxngActionLoading, setSearxngActionLoading] = useState<number | null>(null)
   const [ollamaEnabled, setOllamaEnabled] = useState(false)
   const [ollamaToggleLoading, setOllamaToggleLoading] = useState(false)
   const [ollamaUrlEditing, setOllamaUrlEditing] = useState(false)
@@ -746,6 +750,7 @@ export default function HubPage() {
         fetchOllamaHealth(),
         fetchKokoroHealth(),
         refreshKokoroInstances(),  // v0.7.0: per-tenant Kokoro (Hub-consolidated)
+        refreshSearxngInstances(),  // v0.6.0-patch.7: per-tenant SearXNG (Hub-consolidated)
         loadHubIntegrations(),
         loadMcpInstances(),
         loadTesterStatus(),
@@ -1108,6 +1113,67 @@ export default function HubPage() {
       setKokoroLogsLoading(false)
     }
   }
+
+  // ==================== SearXNG Instance Management (v0.6.0-patch.7) ====================
+
+  const refreshSearxngInstances = async () => {
+    setSearxngLoading(true)
+    try {
+      const list = await api.listSearxngInstances().catch(() => [] as SearxngInstance[])
+      setSearxngInstances(list || [])
+    } finally {
+      setSearxngLoading(false)
+    }
+  }
+
+  const handleSearxngAction = async (id: number, action: 'start' | 'stop' | 'restart') => {
+    setSearxngActionLoading(id)
+    try {
+      await api.searxngContainerAction(id, action)
+      toast.success(`${action === 'start' ? 'Starting' : action === 'stop' ? 'Stopping' : 'Restarting'} SearXNG container…`)
+      setTimeout(() => refreshSearxngInstances(), 1200)
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to ${action} SearXNG container`)
+    } finally {
+      setSearxngActionLoading(null)
+    }
+  }
+
+  const handleSearxngDelete = async (id: number, name: string) => {
+    if (!confirm(`Delete SearXNG instance '${name}'? Its container will be stopped and removed.`)) return
+    setSearxngActionLoading(id)
+    try {
+      await api.deleteSearxngInstance(id)
+      toast.success('SearXNG instance deleted')
+      await refreshSearxngInstances()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete instance')
+    } finally {
+      setSearxngActionLoading(null)
+    }
+  }
+
+  // Poll container status for SearXNG instances still provisioning
+  useEffect(() => {
+    const pending = searxngInstances.filter(i => {
+      const s = (i.container_status || '').toLowerCase()
+      return s === 'creating' || s === 'provisioning'
+    })
+    if (pending.length === 0) return
+    const interval = setInterval(async () => {
+      try {
+        const updates = await Promise.all(
+          pending.map(i => api.getSearxngContainerStatus(i.id).catch(() => null))
+        )
+        const anyTerminal = updates.some(u => {
+          const s = (u?.status || '').toLowerCase()
+          return s === 'running' || s === 'error' || s === 'stopped'
+        })
+        if (anyTerminal) refreshSearxngInstances()
+      } catch { /* transient */ }
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [searxngInstances])
 
   // Poll container status for Kokoro instances that are creating/provisioning
   useEffect(() => {
@@ -4757,6 +4823,106 @@ export default function HubPage() {
                   {TOOL_APIS.map(tool => renderIntegrationCard(tool, 'tool'))}
                 </div>
 
+                {/* SearXNG Per-Tenant Instances (v0.6.0-patch.7) */}
+                {(searxngInstances.length > 0 || searxngLoading) && (
+                  <div className="card p-5 border-teal-700/30">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="font-semibold text-white">SearXNG Instances</h3>
+                        <p className="text-[11px] text-tsushin-slate">Per-tenant self-hosted metasearch containers</p>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className={`w-2 h-2 rounded-full ${
+                          searxngInstances.some(i => (i.container_status || '').toLowerCase() === 'running')
+                            ? 'bg-tsushin-success animate-pulse'
+                            : searxngInstances.length > 0 ? 'bg-yellow-400' : 'bg-tsushin-slate'
+                        }`} />
+                        <span className="text-[11px] text-tsushin-slate">
+                          {searxngInstances.length} instance{searxngInstances.length !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    </div>
+                    {searxngLoading ? (
+                      <div className="text-xs text-tsushin-slate py-2">Loading…</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {searxngInstances.map(inst => {
+                          const status = (inst.container_status || 'none').toLowerCase()
+                          const isProvisioning = status === 'creating' || status === 'provisioning'
+                          const isRunning = status === 'running'
+                          const isStopped = status === 'stopped'
+                          const isBusy = searxngActionLoading === inst.id
+                          return (
+                            <div key={inst.id} className="p-3 bg-tsushin-ink/40 border border-white/5 rounded-lg">
+                              <div className="flex items-start justify-between gap-2 flex-wrap">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-sm text-white font-medium truncate">{inst.instance_name}</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-400">searxng</span>
+                                    {inst.is_auto_provisioned && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">Auto</span>
+                                    )}
+                                  </div>
+                                  {inst.base_url && (
+                                    <p className="text-[11px] font-mono text-tsushin-muted mt-1 truncate">{inst.base_url}</p>
+                                  )}
+                                </div>
+                                <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${
+                                  isRunning ? 'bg-tsushin-success/20 text-tsushin-success' :
+                                  isProvisioning ? 'bg-yellow-500/20 text-yellow-400' :
+                                  isStopped ? 'bg-gray-500/20 text-gray-400' :
+                                  status === 'error' ? 'bg-tsushin-vermilion/20 text-tsushin-vermilion' :
+                                  'bg-gray-500/20 text-gray-400'
+                                }`}>
+                                  {isProvisioning ? 'Provisioning…' : status || 'n/a'}
+                                </span>
+                              </div>
+                              {canEditSettings && inst.is_auto_provisioned && (
+                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                  {!isRunning && !isProvisioning && (
+                                    <button
+                                      onClick={() => handleSearxngAction(inst.id, 'start')}
+                                      disabled={isBusy}
+                                      className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-0.5 disabled:opacity-50"
+                                    >
+                                      {isBusy ? '…' : 'Start'}
+                                    </button>
+                                  )}
+                                  {isRunning && (
+                                    <button
+                                      onClick={() => handleSearxngAction(inst.id, 'stop')}
+                                      disabled={isBusy}
+                                      className="text-[11px] bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded px-2 py-0.5 disabled:opacity-50"
+                                    >
+                                      {isBusy ? '…' : 'Stop'}
+                                    </button>
+                                  )}
+                                  {(isRunning || isStopped) && (
+                                    <button
+                                      onClick={() => handleSearxngAction(inst.id, 'restart')}
+                                      disabled={isBusy}
+                                      className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5 disabled:opacity-50"
+                                    >
+                                      Restart
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => handleSearxngDelete(inst.id, inst.instance_name)}
+                                    disabled={isBusy}
+                                    className="text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-0.5 ml-auto disabled:opacity-50"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Built-in Tools Info */}
                 <div className="bg-teal-500/5 border border-teal-500/20 rounded-xl p-5">
                   <h3 className="text-sm font-semibold text-teal-300 mb-2 flex items-center gap-2">
@@ -5927,6 +6093,7 @@ export default function HubPage() {
       <AddIntegrationWizard
         isOpen={showSearchWizard}
         onClose={() => { setShowSearchWizard(false); setAddIntegrationInitialProvider(undefined) }}
+        onComplete={() => { refreshSearxngInstances(); loadHubIntegrations() }}
         initialProviderId={addIntegrationInitialProvider as any}
       />
     </div>
