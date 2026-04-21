@@ -76,7 +76,7 @@ export default function StepReview() {
     label: 'Models',
     value: draft.available_models.length > 0
       ? <span className="font-mono text-xs">{draft.available_models.join(', ')}</span>
-      : '(none yet — auto-detect on save)',
+      : <span className="text-tsushin-vermilion">Missing — go back and add at least one.</span>,
     editStep: 'testAndModels',
   })
   rows.push({ label: 'Default instance', value: draft.is_default ? 'Yes' : 'No', editStep: 'testAndModels' })

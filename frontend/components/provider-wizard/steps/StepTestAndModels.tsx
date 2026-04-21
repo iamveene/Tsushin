@@ -22,10 +22,15 @@ export default function StepTestAndModels() {
   const [modelInput, setModelInput] = useState('')
   const [predefined, setPredefined] = useState<string[]>([])
 
-  // Step is always completable — users can skip the test and enter models manually.
+  // The backend `ProviderInstanceCreate` schema requires
+  // `available_models.length >= 1` — POSTing with an empty list returns 400.
+  // Previously this step always marked complete and the empty state copy
+  // hinted "Auto-detect after saving", which is false: save fails without
+  // models. Gate Next on having at least one model (entered manually,
+  // added from suggestions, or populated via Auto-detect).
   useEffect(() => {
-    markStepComplete('testAndModels', true)
-  }, [markStepComplete])
+    markStepComplete('testAndModels', draft.available_models.length > 0)
+  }, [markStepComplete, draft.available_models.length])
 
   // Load curated model suggestions once.
   useEffect(() => {
@@ -177,7 +182,10 @@ export default function StepTestAndModels() {
             ))}
           </div>
         ) : (
-          <p className="text-[11px] text-tsushin-slate">No models yet — add at least one, or use Auto-detect after saving.</p>
+          <p className="text-[11px] text-tsushin-vermilion">
+            At least one model is required before you can create the instance.
+            {canDiscover ? ' Use Auto-detect above, or type a model name and click Add.' : ' Pick a suggestion or type a custom model ID, then click Add.'}
+          </p>
         )}
       </div>
 

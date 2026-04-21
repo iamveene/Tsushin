@@ -72,6 +72,14 @@ class SlackIntegrationCreate(BaseModel):
     workspace_name: Optional[str] = Field(None, description="Workspace display name")
     signing_secret: Optional[str] = Field(None, description="Slack Signing Secret (required for mode='http')")
     app_level_token: Optional[str] = Field(None, description="Slack App-Level Token (xapp-*, required for mode='socket')")
+    # v0.7.x: wizard sends dm_policy; previously the schema ignored it and
+    # Pydantic silently dropped the value, so the user's choice never made
+    # it to the database — the row fell back to the column default. This is
+    # a direct repeat of BUG-582 for a different surface.
+    dm_policy: Optional[str] = Field(
+        "allowlist",
+        description="DM handling policy: 'open' (accept all), 'allowlist' (default), 'disabled'",
+    )
 
     @field_validator('mode')
     @classmethod
@@ -79,6 +87,16 @@ class SlackIntegrationCreate(BaseModel):
         v = v.strip().lower()
         if v not in ("socket", "http"):
             raise ValueError("mode must be 'socket' or 'http'")
+        return v
+
+    @field_validator('dm_policy')
+    @classmethod
+    def validate_dm_policy(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if v not in ("open", "allowlist", "disabled"):
+            raise ValueError("dm_policy must be one of: 'open', 'allowlist', 'disabled'")
         return v
 
     @field_validator('bot_token')
@@ -115,6 +133,7 @@ class SlackIntegrationUpdate(BaseModel):
     signing_secret: Optional[str] = Field(None, description="Slack Signing Secret")
     app_level_token: Optional[str] = Field(None, description="Slack App-Level Token")
     is_active: Optional[bool] = Field(None, description="Enable/disable integration")
+    dm_policy: Optional[str] = Field(None, description="DM handling: 'open', 'allowlist', or 'disabled'")
 
     @field_validator('mode')
     @classmethod
@@ -151,6 +170,7 @@ class SlackIntegrationResponse(BaseModel):
     has_signing_secret: bool = False
     has_app_level_token: bool = False
     events_endpoint_url: Optional[str] = None
+    dm_policy: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -176,6 +196,7 @@ def _to_response(integration: SlackIntegration) -> SlackIntegrationResponse:
         has_signing_secret=bool(integration.signing_secret_encrypted),
         has_app_level_token=bool(integration.app_token_encrypted),
         events_endpoint_url=events_url,
+        dm_policy=integration.dm_policy,
         created_at=integration.created_at,
         updated_at=integration.updated_at,
     )
@@ -229,6 +250,7 @@ async def create_slack_integration(
             app_token_encrypted=app_token_encrypted,
             signing_secret_encrypted=signing_secret_encrypted,
             mode=data.mode,
+            dm_policy=data.dm_policy or "allowlist",
             is_active=True,
             status="inactive",
             health_status="unknown",
@@ -332,6 +354,8 @@ async def update_slack_integration(
             integration.workspace_name = data.workspace_name
         if data.is_active is not None:
             integration.is_active = data.is_active
+        if data.dm_policy is not None:
+            integration.dm_policy = data.dm_policy
 
         db.commit()
         db.refresh(integration)

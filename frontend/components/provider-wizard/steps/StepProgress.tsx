@@ -39,6 +39,14 @@ export default function StepProgress() {
       let createdInstanceId: number | null = null
 
       // Branch 1: TTS Kokoro (self-hosted) — /api/tts-instances
+      // NOTE: default_voice/default_language/default_speed/default_format
+      // are schema-supported on TTSInstanceCreate. The guided wizard doesn't
+      // yet collect them (advanced KokoroSetupWizard does), so we forward the
+      // same sane defaults here so the created instance has a usable voice
+      // out of the box instead of nulls. Without this, picking Kokoro via
+      // the guided path silently produced a TTS instance with no voice
+      // config — same class of bug as BUG-582 (wizard value never reaches
+      // the server), just in the opposite direction.
       if (draft.modality === 'tts' && draft.vendor === 'kokoro') {
         const body: TTSInstanceCreate = {
           vendor: 'kokoro',
@@ -46,6 +54,10 @@ export default function StepProgress() {
           is_default: draft.is_default,
           auto_provision: true,
           mem_limit: draft.mem_limit || '1.5g',
+          default_voice: 'pf_dora',
+          default_language: 'pt',
+          default_speed: 1.0,
+          default_format: 'opus',
         }
         const result = await api.createTTSInstance(body)
         createdInstanceId = result.id
