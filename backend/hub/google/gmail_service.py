@@ -153,7 +153,8 @@ class GmailService(HubIntegrationBase):
         method: str,
         endpoint: str,
         params: Optional[Dict] = None,
-        json_data: Optional[Dict] = None
+        json_data: Optional[Dict] = None,
+        timeout: float = 10.0,
     ) -> Dict:
         """
         Make authenticated request to Gmail API.
@@ -163,6 +164,12 @@ class GmailService(HubIntegrationBase):
             endpoint: API endpoint (relative to BASE_URL)
             params: Query parameters
             json_data: JSON body data
+            timeout: httpx request timeout (seconds). Default 10s — BUG-684:
+                was 30s, which caused the DB session to be held for 30s per
+                failing call. When `*.googleapis.com` was unreachable, the
+                FastAPI worker's `QueuePool` exhausted at ~50 concurrent
+                failing calls and the backend deadlocked. 10s is well inside
+                normal Gmail latency but caps the blast radius of outages.
 
         Returns:
             API response as dict
@@ -184,7 +191,7 @@ class GmailService(HubIntegrationBase):
                 "Content-Type": "application/json",
             }
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(
                     method,
                     url,
