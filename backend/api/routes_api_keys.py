@@ -9,7 +9,7 @@ Provides endpoints for CRUD operations on API keys for LLM providers and tool se
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from datetime import datetime
 import httpx
@@ -101,6 +101,62 @@ SUPPORTED_SERVICES = {
     'vertex_ai_sa_email': 'Vertex AI Service Account Email',
     'tavily': 'Tavily (Web Search)',
 }
+
+
+# BUG-666: minimum shape checks per service so the Tool-API card cannot be
+# "activated" with a 1-character placeholder. These are intentionally loose —
+# a real test-connection roundtrip is still the authoritative health signal —
+# but they reject keys that obviously cannot work.
+_API_KEY_SHAPE: Dict[str, Dict[str, Any]] = {
+    # OpenAI-family keys: start with sk- and are ≥ ~30 chars in practice.
+    'openai':      {'prefix': 'sk-',   'min_len': 20},
+    'deepseek':    {'prefix': 'sk-',   'min_len': 20},
+    # Anthropic: sk-ant-* (long).
+    'anthropic':   {'prefix': 'sk-ant', 'min_len': 30},
+    # Groq: gsk_*
+    'groq':        {'prefix': 'gsk_',  'min_len': 20},
+    # xAI Grok: xai-*
+    'grok':        {'prefix': 'xai-',  'min_len': 20},
+    # Google / Vertex / Gemini / Brave / Amadeus / SerpAPI / Tavily / OpenRouter:
+    # no canonical prefix, just require a minimum length.
+    'gemini':      {'min_len': 20},
+    'vertex_ai':   {'min_len': 20},
+    'openrouter':  {'min_len': 20},
+    'elevenlabs':  {'min_len': 20},
+    'brave_search': {'min_len': 20},
+    'amadeus':     {'min_len': 20},
+    'google_flights': {'min_len': 20},
+    'serpapi':     {'min_len': 32},
+    'tavily':      {'prefix': 'tvly-', 'min_len': 20},
+}
+
+
+def _validate_api_key_shape(service: str, api_key: str) -> Optional[str]:
+    """Return an error string when the key obviously cannot be valid, else None.
+
+    Intentionally only checks structural red flags — empty, trivially short,
+    or missing a mandatory vendor prefix. Full correctness is still verified
+    by the per-provider test-connection flow.
+    """
+    if not api_key or not api_key.strip():
+        return "API key cannot be empty."
+    key = api_key.strip()
+    # URL-style services are validated elsewhere (SSRF).
+    if service in ('searxng', 'vertex_ai_project_id', 'vertex_ai_region', 'vertex_ai_sa_email'):
+        return None
+    rule = _API_KEY_SHAPE.get(service)
+    if not rule:
+        # Unknown service → just require a minimum length.
+        if len(key) < 8:
+            return "API key looks too short (≥ 8 chars expected)."
+        return None
+    min_len = rule.get('min_len', 8)
+    if len(key) < min_len:
+        return f"API key looks too short (≥ {min_len} chars expected for {service})."
+    prefix = rule.get('prefix')
+    if prefix and not key.startswith(prefix):
+        return f"API key should start with '{prefix}' for {service}."
+    return None
 
 
 def mask_api_key(key: str, service: Optional[str] = None) -> str:
@@ -310,6 +366,12 @@ def create_or_update_api_key(
             detail=f"Unsupported service. Must be one of: {', '.join(SUPPORTED_SERVICES.keys())}"
         )
 
+    # BUG-666: reject obviously invalid keys (empty / too short / wrong prefix)
+    # before encrypting. The card used to accept "test" and mark itself Active.
+    shape_err = _validate_api_key_shape(data.service, data.api_key)
+    if shape_err:
+        raise HTTPException(status_code=400, detail=shape_err)
+
     if data.service == "searxng":
         from utils.ssrf_validator import SSRFValidationError, validate_url
 
@@ -399,6 +461,10 @@ def update_api_key(
 
     plaintext_key_for_sync = None
     if data.api_key is not None:
+        # BUG-666: apply the same shape check on update as on create.
+        shape_err = _validate_api_key_shape(service, data.api_key)
+        if shape_err:
+            raise HTTPException(status_code=400, detail=shape_err)
         if service == "searxng":
             from utils.ssrf_validator import SSRFValidationError, validate_url
 

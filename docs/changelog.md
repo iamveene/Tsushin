@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Second Sweep — 8 more bugs fixed on develop (2026-04-21)
+
+User asked to "fix all remaining bugs with comprehensive validation for perfection." This pass landed:
+
+- **BUG-592 — `/api/v2/agents` 500 (`backend/api/routes_agents_protected.py`).** `Agent` has no `.contact` relationship attribute; handler was calling `agent.contact.friendly_name` and raising `AttributeError`. Replaced with explicit `Contact.id.in_(contact_ids)` prefetch. Now returns 200.
+- **BUG-593 — Webhook inbound status code (`backend/api/routes_webhook_inbound.py`).** `POST /api/webhooks/{slug}/inbound` now returns **202 Accepted** (was 200), matching documented queued semantics.
+- **BUG-590 — `new_contact_welcome` flow template (`backend/flows/flow_engine.py`).** `SummarizationStepHandler` now handles `source_step="trigger"`: serializes `flow.trigger_context` as JSON and feeds it as the source text for the LLM to follow `summary_prompt`. The template runs end-to-end instead of failing with "No thread_id or source text found."
+- **BUG-666 — Tool API key validation (`backend/api/routes_api_keys.py`).** Added `_validate_api_key_shape()` with per-service minimum-length + optional prefix rules (OpenAI `sk-*`, Anthropic `sk-ant-*`, Tavily `tvly-*`, Grok `xai-*`, Groq `gsk_*`, etc.). POST and PUT `/api/api-keys` reject structurally invalid keys with 400 before encryption. Cards can no longer be "activated" with placeholder strings like `"test"`.
+- **BUG-675 — Hub Slack/Discord Test Connection (`backend/api/routes_slack.py`, `backend/api/routes_discord.py`).** Added 4 missing endpoints: `POST /api/slack/integrations/{id}/test` (Slack `auth.test`), `GET /api/slack/integrations/{id}/channels` (`conversations.list`), `POST /api/discord/integrations/{id}/test` (Discord `/users/@me` + guild count), `GET /api/discord/integrations/{id}/guilds` (`/users/@me/guilds`). Hub UI buttons now hit real endpoints instead of 404-ing.
+- **BUG-683 — Public setup calls authenticated `/api/tts-providers` (`frontend/components/OnboardingWizard.tsx`).** `useEffect` that fires `api.getTTSProviders()` now short-circuits on `/auth/*` and `/setup/*` — matches the existing render-guard so no 401 fires before login.
+- **BUG-589 (FP) — Tavily registered but reportedly rejected.** Verified in `SearchProviderRegistry.initialize_providers()`; Tavily IS registered and `get_provider("tavily")` returns an instance. Not reproducible on current `develop`. Closing as FP / already fixed.
+- **BUG-591 (FP) — `proactive_watcher` flow `tool_name` mismatch.** `_execute_sandboxed_tool` already accepts both tool-slug strings and numeric ids (lines 740-757 look up the id internally). Template works as-is. Closing as FP / already fixed.
+
+Still open (deferred, non-trivial): BUG-684 (architectural session-leak refactor — mitigated, deeper fix deferred), BUG-539 (Sentinel DetachedInstanceError — can't reproduce, pending concrete repro), BUG-540 (OKG Qdrant auto-connect — fresh-install specific), BUG-681 (cross-cutting frontend RBAC gating — backend already 403s), BUG-682 (Qdrant port collision on side-by-side installs).
+
+**Validation:** `output/playwright/full-regression-20260421/preflight/final-regression.txt` = PASS 32 / FAIL 0.
+
 ### Post-Abort Bug Sweep — 9 bugs fixed on develop (2026-04-21)
 
 After the 4-audit regression aborted on the `BUG-684` backend deadlock, I fixed the remaining backend-side open bugs and validated them against a rebuilt stack. 19/20 smoke checks pass (the 20th is a `/api/hub/integrations/` 307 trailing-slash redirect — not a regression).
