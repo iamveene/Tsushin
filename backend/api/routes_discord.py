@@ -279,3 +279,102 @@ async def delete_discord_integration(
 
     logger.info(f"Deleted Discord integration {integration_id} (tenant={current_user.tenant_id})")
     return {"status": "deleted", "id": integration_id}
+
+
+# ============================================================================
+# BUG-675: Test Connection + Guilds list endpoints
+# The Hub frontend has buttons that hit these paths; previously they 404'd.
+# ============================================================================
+
+@router.post("/{integration_id}/test")
+async def test_discord_connection(
+    integration_id: int,
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("integrations.discord.read")),
+    db: Session = Depends(get_db),
+):
+    """Verify the Discord bot token via `/users/@me`."""
+    integration = db.query(DiscordIntegration).filter(
+        DiscordIntegration.id == integration_id,
+        DiscordIntegration.tenant_id == current_user.tenant_id,
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Discord integration not found")
+
+    encryption_key = get_discord_encryption_key(db)
+    if not encryption_key:
+        raise HTTPException(status_code=500, detail="Discord encryption key not available")
+    enc = TokenEncryption(encryption_key.encode())
+    try:
+        bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+    except Exception as e:
+        logger.warning(f"Discord test: decrypt failed for integration {integration_id}: {e}")
+        return {"success": False, "error": "Stored bot token could not be decrypted."}
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://discord.com/api/v10/users/@me",
+                headers={"Authorization": f"Bot {bot_token}"},
+            )
+        if resp.status_code == 200:
+            data = resp.json()
+            bot_user = f"{data.get('username', '?')}#{data.get('discriminator', '0000')}"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                g_resp = await client.get(
+                    "https://discord.com/api/v10/users/@me/guilds",
+                    headers={"Authorization": f"Bot {bot_token}"},
+                )
+            guild_count = len(g_resp.json()) if g_resp.status_code == 200 else 0
+            return {"success": True, "bot_user": bot_user, "guilds": guild_count}
+        return {"success": False, "error": f"Discord rejected token (HTTP {resp.status_code})"}
+    except Exception as e:
+        logger.warning(f"Discord test for integration {integration_id} failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/{integration_id}/guilds")
+async def list_discord_guilds(
+    integration_id: int,
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("integrations.discord.read")),
+    db: Session = Depends(get_db),
+):
+    """List the guilds the bot is a member of."""
+    integration = db.query(DiscordIntegration).filter(
+        DiscordIntegration.id == integration_id,
+        DiscordIntegration.tenant_id == current_user.tenant_id,
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Discord integration not found")
+
+    encryption_key = get_discord_encryption_key(db)
+    if not encryption_key:
+        raise HTTPException(status_code=500, detail="Discord encryption key not available")
+    enc = TokenEncryption(encryption_key.encode())
+    try:
+        bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not decrypt stored bot token")
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://discord.com/api/v10/users/@me/guilds",
+                headers={"Authorization": f"Bot {bot_token}"},
+            )
+        if resp.status_code != 200:
+            return {"guilds": [], "error": f"HTTP {resp.status_code}"}
+        return {
+            "guilds": [
+                {"id": g.get("id"), "name": g.get("name"), "owner": bool(g.get("owner"))}
+                for g in resp.json()
+            ]
+        }
+    except Exception as e:
+        logger.warning(f"Discord guilds list for integration {integration_id} failed: {e}")
+        return {"guilds": [], "error": str(e)}

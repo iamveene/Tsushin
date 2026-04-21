@@ -154,7 +154,7 @@ async def send_chat_message(
     request: PlaygroundChatRequest,
     sync: bool = False,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(require_permission("agents.execute"))
 ):
     """
     Send a message to an agent and get a response.
@@ -172,6 +172,13 @@ async def send_chat_message(
         ).first()
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {request.agent_id} not found")
+
+        # BUG-680: inactive agents must not execute via direct agent_id call
+        if not agent.is_active:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent {request.agent_id} not found",
+            )
 
         from services.playground_thread_service import (
             PlaygroundThreadService,
@@ -406,6 +413,12 @@ async def send_chat_message(
 
         return PlaygroundChatResponse(**result)
 
+    except HTTPException:
+        # Preserve intended HTTP status codes (e.g., 404 for inactive/missing
+        # agents per BUG-680, 403 for cross-tenant access). Without this,
+        # the blanket `except Exception` below swallowed HTTPExceptions
+        # into a 200 with `status=error`.
+        raise
     except Exception as e:
         return PlaygroundChatResponse(
             status="error",
@@ -1676,12 +1689,13 @@ async def list_threads(
 async def create_thread(
     request: ThreadCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(require_permission("agents.execute"))
 ):
     """
     Create a new conversation thread.
 
     Phase 14.1: Thread Management
+    BUG-672: gated on `agents.execute` so read-only roles cannot create threads.
     """
     from services.playground_thread_service import PlaygroundThreadService
 

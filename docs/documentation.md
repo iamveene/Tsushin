@@ -2201,6 +2201,8 @@ Encryption uses the same pattern as `api_key_service.py` — `TokenEncryption` k
 
 During first-run setup, the `/setup` wizard can create multiple provider instances in one pass. Every supported provider key entered in the wizard is provisioned as its own tenant-scoped instance, and the selected primary provider is also written to the system-AI configuration.
 
+Hub provider setup uses a guided multi-step **Add Provider** wizard (see §19.8). The wizard branches on modality (LLM / TTS / Image) and hosting (Cloud / Self-hosted) to show only the relevant vendors, collects credentials or container settings, runs a live connection test, and creates the instance via the same backend endpoints the legacy form used. The previous provider-instance form remains available as a one-click fallback via the wizard footer's **Switch to Advanced** button (`ProviderInstanceModal`).
+
 ### 19.2 Provider Matrix
 
 From `backend/services/provider_instance_service.py:20-32`:
@@ -2225,6 +2227,8 @@ An Ollama default is auto-provisioned per tenant on demand via `ensure_ollama_in
 All agent creation and configuration UIs — the `/agents` Create Agent modal, the Studio `+` button (`StudioAgentSelector`), `AgentConfigurationManager`, and the Playground config panel — fetch the provider list **at runtime** from `GET /api/provider-instances`. The dropdown shows only vendors that have at least one active instance configured in Hub > AI Providers. Models shown for each vendor come from that instance's `available_models` list (set during hub configuration or model discovery).
 
 This means: adding a new provider in Hub automatically makes it available everywhere without any code change. The shared `VENDOR_LABELS` map (`frontend/lib/client.ts`) provides human-readable vendor names.
+
+The Hub AI Providers tab follows the same runtime shape: vendor sections render only when at least one active instance exists. Empty static provider panels, unused local-service panels, and unconfigured fallback-key cards are hidden until the user adds the corresponding provider through the guided setup flow.
 
 **Vendor catalog endpoint (`GET /api/providers/vendors`)** — returns every vendor from backend `VALID_VENDORS` + `VENDOR_DISPLAY_NAMES` with `{id, display_name, default_base_url, supports_discovery, tenant_has_configured}`. The **Add Provider Instance** modal (`ProviderInstanceModal.tsx`) fetches this list on open and falls back to a reduced static array only when the call fails, so a vendor added to `VALID_VENDORS` backend-side surfaces in the dropdown without any frontend edit. `tenant_has_configured` is resolved in one DB round-trip (distinct `ProviderInstance.vendor` rows for the tenant). `backend/tests/test_wizard_drift.py` Guard 6 keeps the fallback consistent with the backend set.
 
@@ -2293,6 +2297,100 @@ Google's Gemini 3.x preview line is first-class across every picker and pricing 
 
 **Wizards covered.** Setup Wizard, Playground ConfigPanel, Agent Wizard → Step Audio, and Audio Agents Wizard all include the 3.x models. The Agent Wizard → Step Basics picker is API-fed from `ProviderInstance.available_models`, so 3.x preview models appear there automatically once model discovery hits Google's `/models` endpoint.
 
+### 19.8 ProviderWizard — guided multi-step setup (v0.7.x)
+
+**Sources:**
+- `frontend/components/provider-wizard/ProviderWizard.tsx` — Modal shell, step pills, Back/Next/Advanced/Cancel footer.
+- `frontend/components/provider-wizard/steps/*` — one component per step.
+- `frontend/contexts/ProviderWizardContext.tsx` — global provider mounted in `app/layout.tsx`. Exposes `openWizard(preset?)`, `closeWizard`, `patchDraft`, `registerOnComplete`.
+- `frontend/lib/provider-wizard/reducer.ts` — pure reducer + step-order branching.
+
+The guided wizard replaces the flat `ProviderSetupWizard` category picker (deleted) with a step-based flow that mirrors the Agent, WhatsApp, Gmail, and Audio wizards. Entry points in `app/hub/page.tsx`:
+
+- **`+ New Instance`** (tab header) → opens wizard at Step 1 (modality).
+- **Per-vendor `+ Add Instance`** (inside each vendor group) → opens wizard prefilled with that vendor so the user lands on the credentials/container step directly. Modality and hosting are inferred from the vendor.
+- **Empty-state `Add Provider`** → Step 1.
+
+**Step order (branching).** Computed in `reducer.getStepOrder(draft)`:
+
+| Step | When rendered | Component |
+|---|---|---|
+| Modality | Always | `StepModality` — LLM / TTS / Image |
+| Hosting | Skipped when `modality='image'` (auto-cloud today) | `StepHosting` — Cloud / Self-hosted |
+| Vendor | Always | `StepVendorSelect` — filtered by `(modality, hosting)` |
+| Credentials | `hosting='cloud'` | `StepCredentials` — api_key, base_url, Vertex AI fields |
+| Container | `hosting='local'` | `StepContainerProvision` — instance_name, mem_limit, GPU |
+| Pull models | `vendor='ollama' && hosting='local'` | `StepOllamaPullModels` — curated starter models, skippable |
+| Test & models | Always | `StepTestAndModels` — Test Connection, Auto-detect models, default toggle |
+| Review | Always | `StepReview` — summary with jump-to-edit rows |
+| Progress | Always (terminal) | `StepProgress` — fires the actual create call |
+
+**Vendor catalog per branch:**
+
+| Modality | Hosting | Vendors |
+|---|---|---|
+| LLM | Cloud | openai, anthropic, gemini, vertex_ai, groq, grok, deepseek, openrouter, custom |
+| LLM | Local | ollama |
+| TTS | Cloud | elevenlabs |
+| TTS | Local | kokoro |
+| Image | Cloud | gemini (pre-tagged "Uses Nano Banana / Nano Banana Pro") |
+
+**Backend endpoints used (no new endpoints introduced):**
+
+- `POST /api/provider-instances` — LLM cloud, LLM local (Ollama), Image (Gemini).
+- `POST /api/tts-instances` — TTS Kokoro (auto-provisions its own container).
+- `POST /api/api-keys` — TTS ElevenLabs (legacy api_keys surface).
+- `POST /api/settings/ollama/provision` — Ollama container lifecycle after `ProviderInstance` create.
+- `api.pullOllamaModel(id, model)` — each selected starter model.
+- `api.testProviderConnectionRaw({...})` — unsaved connection test on Step 5.
+- `api.discoverModelsRaw(vendor, apiKey, baseUrl)` — live model discovery on Step 5.
+
+**Advanced mode.** The wizard footer's **Switch to Advanced** button:
+
+1. Persists the current non-secret draft to `localStorage['tsushin:providerWizardDraft']`.
+2. Closes the wizard.
+3. Dispatches a `tsushin:open-provider-advanced-modal` `CustomEvent` with `detail.vendor`.
+4. `hub/page.tsx` listens for that event and opens the existing `ProviderInstanceModal` with the current vendor pre-selected.
+
+Mode preference persists to `localStorage['tsushin:providerWizardMode']` (`'guided' | 'advanced'`).
+
+**Security invariants.** Secrets (`api_key`, Vertex AI `private_key`) are stripped from the persisted draft before writing to localStorage — only non-sensitive fields survive a page refresh or a mode switch. The wizard never echoes a saved key back into the DOM.
+
+### 19.9 ManagedContainerPanel — unified local-service controls (v0.7.x)
+
+**Source:** `frontend/components/hub/ManagedContainerPanel.tsx`.
+
+All three auto-provisioned services (Ollama, Kokoro, SearXNG) render through the same `<ManagedContainerPanel />` component, giving tenants one consistent control strip instead of per-service variations.
+
+| Control | Behavior |
+|---|---|
+| **Enable/Disable toggle** | Single source of truth for start/stop. Hooked to the service-specific lifecycle endpoint (`/container/start\|stop`). |
+| **Restart** | Visible when container is `running` or `stopped` and an `onRestart` handler is passed. |
+| **Logs** | Visible when `running`. Toggles between "Logs" and "Hide Logs" based on `logsOpen` prop. |
+| **Test** | Optional — only rendered when `onTest` is passed. |
+| **Delete** | Optional — destructive; confirms in the host before calling the handler. |
+
+Props are documented in the component itself. Call sites in `hub/page.tsx`:
+
+- Ollama (auto-provisioned, per-instance) — start↔stop / restart / logs / test / delete.
+- Ollama (host mode, per-instance) — inline `Test` / `Refresh Models` / `Delete` strip (no container lifecycle — the URL points at an external daemon).
+- Kokoro instance row — start↔stop / restart / logs / delete.
+- SearXNG instance row — start↔stop / restart / logs / delete.
+
+The legacy Ollama panel-level **Enable Ollama** `ToggleSwitch` at the card header was removed in favor of the per-instance panel; this eliminates the drift where Ollama had two lifecycle toggles (panel + instance) while Kokoro and SearXNG only had one.
+
+**v0.7.x follow-up — full Ollama/Kokoro parity.** The Ollama panel also no longer renders when the tenant has no `ollama` provider instance, matching Kokoro (`kokoroInstances.length > 0`) and SearXNG (`searxngInstances.length > 0`). Mode (host vs. auto-provision) is derived from `instance.is_auto_provisioned` rather than a live radio on the card — it's a creation-time choice made in the wizard. The separate **Deprovision** / **Test Connection** / **Refresh Models** / **Manage Instance** buttons that used to live at the bottom of the Ollama card were removed; `ManagedContainerPanel.onTest` + `onDelete` + the inline host-mode action strip cover those affordances. A new `ollamaConfirmDelete` modal (mirroring the Kokoro modal) handles the Delete action, including the optional "remove container volume" checkbox for pulled-model cleanup.
+
+### 19.10 Service API Keys disclosure (v0.7.x)
+
+The **Hub → AI Providers** tab no longer renders the legacy Service API Keys block as an always-visible grid. Instead it's a collapsed `<details>` disclosure that:
+
+- Only renders when `visibleAiFallbackProviders.length > 0` (i.e., at least one vendor has a fallback api_key configured).
+- Filters out any vendor that already has a `ProviderInstance` row (`vendorsWithInstances` set at `hub/page.tsx`). This removes the duplicate-Gemini display by construction: a vendor with an instance is configured via the instance grid; a vendor with only a legacy `api_keys` row falls into this disclosure.
+- Stays collapsed by default so the Hub is clean for tenants who only use instances.
+
+The inline "Fallback — instance key takes priority" amber label has been removed — with the new filtering, the fallback card and the instance card can never appear on the same page simultaneously.
+
 ---
 
 ## 20. Hub Integrations
@@ -2340,12 +2438,10 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
   Instance names are tenant-scoped and must be unique; the wizard fetches the
   tenant's existing instances, auto-suggests a fresh name (`SearXNG`,
   `SearXNG (2)`, …), and offers inline delete for any listed row. The Hub
-  **Tool APIs** tab renders a management panel (list / start / stop / restart /
-  **Logs** / delete with provisioning-status polling) with the same structure,
-  action set, and delete-confirmation modal as the Kokoro and Ollama panels —
-  the panel always renders (empty state shows "No SearXNG instances yet") and
-  offers a `+ Setup with Wizard` header button that opens the
-  AddIntegrationWizard pre-selected on SearXNG. Stale failed provisions
+  **Tool APIs** tab only renders SearXNG cards/panels after the tenant has at
+  least one SearXNG instance. Configured rows use the shared managed-container
+  control pattern: an enable/disable toggle maps to container start/stop, while
+  Restart, Logs, and Delete stay separate actions. Stale failed provisions
   (`container_status ∈ {error, failed, none, null}` with no `container_name`)
   are auto-purged on the next create so tenants don't get stuck; genuinely-
   healthy conflicts still 409 but with a structured detail payload
@@ -2425,7 +2521,7 @@ The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate
 #### 20.6.1 Kokoro TTS Setup Wizard
 
 **Component:** `frontend/components/tts/KokoroSetupWizard.tsx`
-**Entry point:** `/hub` page → AI Providers tab → Kokoro TTS card → "Setup with Wizard" button. Per-tenant Kokoro instance management is consolidated inside the Hub Kokoro card (mirroring the Ollama auto-provisioning UX). The card renders the full instance list with per-instance Start / Stop / Restart / Logs / Delete controls and a default-selector radio. (The legacy `/settings/tts` page and the compose `tts` profile toggle were removed in v0.7.0.)
+**Entry point:** `/hub` page → AI Providers tab → `+ New Instance` → Add Provider → Audio/TTS → Kokoro. Per-tenant Kokoro instance management is consolidated inside the Hub Kokoro card after an instance exists. The card renders the full instance list with a per-instance enable/disable container toggle, Restart / Logs / Delete controls, and a default-selector radio. (The legacy `/settings/tts` page and the compose `tts` profile toggle were removed in v0.7.0.)
 
 Four-step guided flow for creating a per-tenant Kokoro TTS container and (optionally) wiring it to agents:
 
@@ -2465,7 +2561,7 @@ On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instance
 #### 20.6.2 Ollama Setup Wizard
 
 **Component:** `frontend/components/ollama/OllamaSetupWizard.tsx`
-**Entry point:** `/hub` page — "Setup with Wizard" button on the Ollama card (the inline auto-provision panel stays for power users).
+**Entry point:** `/hub` page → AI Providers tab → `+ New Instance` → Add Provider → Local LLM → Ollama. Once an Ollama instance exists, the Hub Local Services card appears; auto-provisioned containers use the same enable/disable toggle pattern as Kokoro and SearXNG, with Restart / Logs / deprovision kept as explicit secondary actions. Host-mode Ollama keeps host URL management semantics.
 
 Five-step guided flow for provisioning an Ollama container, pulling a model, and wiring agents:
 

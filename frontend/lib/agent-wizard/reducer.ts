@@ -29,6 +29,14 @@ export interface BasicsConfig {
   agent_phone: string
   model_provider: string
   model_name: string
+  /**
+   * Specific provider_instance to bind this agent to. Required when the tenant
+   * has configured one or more instances for the chosen vendor — without it,
+   * the backend would fall back to flat-field creds and break agents whose
+   * vendor doesn't support flat fields (e.g. Vertex AI, which needs a
+   * project_id/sa_email/private_key triple carried on the instance).
+   */
+  provider_instance_id: number | null
 }
 
 export interface PersonalityConfig {
@@ -108,6 +116,7 @@ export const EMPTY_DRAFT: WizardDraft = {
     agent_phone: '',
     model_provider: '',
     model_name: '',
+    provider_instance_id: null,
   },
   personality: {
     persona_id: null,
@@ -347,6 +356,10 @@ export function reducer(state: WizardState, action: WizardAction): WizardState {
 export function isBasicsValid(b: BasicsConfig): boolean {
   if (!b.agent_name.trim()) return false
   if (!b.model_provider || !b.model_name) return false
+  // Non-local vendors must bind to a specific provider_instance so the backend
+  // can resolve credentials. Ollama is the only vendor that can run without
+  // one (local daemon, no auth).
+  if (b.model_provider !== 'ollama' && !b.provider_instance_id) return false
   if (b.agent_phone && b.agent_phone.trim()) {
     const cleaned = b.agent_phone.replace(/\s/g, '')
     if (!/^\+?\d{10,15}$/.test(cleaned)) return false

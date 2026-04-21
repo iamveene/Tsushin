@@ -1467,6 +1467,34 @@ async def websocket_endpoint(websocket: WebSocket):
             return
 
         user_id = int(user_id) if isinstance(user_id, str) else user_id
+
+        # BUG-671: reject disabled or deleted users before attaching to the
+        # realtime stream. Mirrors the /ws/shell/status check.
+        try:
+            from sqlalchemy.orm import sessionmaker as _sessionmaker
+            from models_rbac import User as _User
+            _SessionLocal = _sessionmaker(bind=engine)
+            _db = _SessionLocal()
+            try:
+                user_row = _db.query(_User).filter(_User.id == user_id).first()
+                if user_row is None:
+                    logger.warning(f"WebSocket /ws rejected: user {user_id} not found")
+                    await websocket.close(code=4003, reason="User not found")
+                    return
+                if (not getattr(user_row, "is_active", False)) or (getattr(user_row, "deleted_at", None) is not None):
+                    logger.warning(
+                        f"WebSocket /ws rejected: user {user_id} is_active={user_row.is_active} "
+                        f"deleted_at={getattr(user_row, 'deleted_at', None)}"
+                    )
+                    await websocket.close(code=4003, reason="Account disabled")
+                    return
+            finally:
+                _db.close()
+        except Exception as user_lookup_err:
+            logger.error(f"WebSocket /ws user lookup failed: {user_lookup_err}", exc_info=True)
+            await websocket.close(code=4003, reason="Authentication failed")
+            return
+
         logger.info(f"WebSocket /ws authenticated: user={user_id}, tenant={tenant_id}")
 
         # Register with manager (already accepted above, so skip accept in connect)
@@ -1573,6 +1601,7 @@ async def playground_websocket_endpoint(websocket: WebSocket):
 
         # Verify JWT token
         try:
+            global engine
             from auth_utils import decode_access_token
             # Decode token directly (doesn't need DB)
             payload = decode_access_token(token)
@@ -1589,6 +1618,29 @@ async def playground_websocket_endpoint(websocket: WebSocket):
                 return
             # Convert to int if string
             user_id = int(user_id) if isinstance(user_id, str) else user_id
+
+            # BUG-671: reject disabled or deleted users before registering
+            # the Playground stream.
+            from sqlalchemy.orm import sessionmaker as _sessionmaker
+            from models_rbac import User as _User
+            _SessionLocal = _sessionmaker(bind=engine)
+            _db = _SessionLocal()
+            try:
+                user_row = _db.query(_User).filter(_User.id == user_id).first()
+                if user_row is None:
+                    logger.warning(f"Playground WebSocket rejected: user {user_id} not found")
+                    await websocket.close(code=4003, reason="User not found")
+                    return
+                if (not getattr(user_row, "is_active", False)) or (getattr(user_row, "deleted_at", None) is not None):
+                    logger.warning(
+                        f"Playground WebSocket rejected: user {user_id} is_active={user_row.is_active} "
+                        f"deleted_at={getattr(user_row, 'deleted_at', None)}"
+                    )
+                    await websocket.close(code=4003, reason="Account disabled")
+                    return
+            finally:
+                _db.close()
+
             logger.info(f"WebSocket auth successful for user {user_id}")
         except Exception as auth_error:
             logger.error(f"WebSocket auth error: {auth_error}", exc_info=True)
@@ -1609,7 +1661,6 @@ async def playground_websocket_endpoint(websocket: WebSocket):
         # Initialize service - use short-lived DB sessions per Playground
         # message instead of holding one open for the full WebSocket lifetime.
         from sqlalchemy.orm import sessionmaker
-        global engine
         SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
         ws_service = PlaygroundWebSocketService(SessionLocal, user_id)
 

@@ -210,6 +210,14 @@ class AgentCreate(BaseModel):
     memory_decay_archive_threshold: Optional[float] = Field(0.05, ge=0.0, le=1.0, description="Auto-archive below this threshold")
     memory_decay_mmr_lambda: Optional[float] = Field(0.5, ge=0.0, le=1.0, description="MMR diversity weight (0=diverse, 1=relevant)")
 
+    # Provider Instance binding (BUG-582 FIX: previously missing here, causing
+    # wizard-created agents to lose their credential binding and hit the flat-
+    # field path — fatal for Vertex AI where flat fields are never populated).
+    provider_instance_id: Optional[int] = Field(None, description="Provider instance ID for credential/base-URL binding")
+
+    # Memory isolation mode (was silently dropped by the update path too)
+    memory_isolation_mode: Optional[str] = Field(None, description="Memory isolation: 'isolated' (per sender) or 'shared' (per agent)")
+
     # v0.6.0: Vector Store Configuration
     vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field("override", description="Vector store mode: override, complement, shadow")
@@ -255,6 +263,9 @@ class AgentUpdate(BaseModel):
 
     # Provider Instance (BUG-351 FIX)
     provider_instance_id: Optional[int] = Field(None, description="Provider instance ID for custom model provider configuration")
+
+    # Memory isolation mode (wizard sends this in the update step)
+    memory_isolation_mode: Optional[str] = Field(None, description="Memory isolation: 'isolated' (per sender) or 'shared' (per agent)")
 
     # v0.6.0: Vector Store Configuration
     vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
@@ -308,8 +319,10 @@ def get_tone_preset(
     if not tone:
         raise HTTPException(status_code=404, detail="Tone preset not found")
 
-    if not ctx.can_access_resource(tone.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
+    # BUG-673: system tone presets (tenant_id IS NULL) are returned by the list
+    # endpoint and must also be readable by detail. Use allow_shared=True.
+    if not ctx.can_access_resource(tone.tenant_id, allow_shared=True):
+        raise HTTPException(status_code=404, detail="Tone preset not found")
 
     return tone
 
@@ -574,9 +587,10 @@ def get_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Verify tenant access
+    # BUG-674: normalize cross-tenant responses to 404 to match API v1 behavior
+    # and avoid leaking resource existence to other tenants.
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Enrich with contact, tone preset, and persona names
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -760,6 +774,23 @@ def create_agent(
         if not whatsapp_instance:
             raise HTTPException(status_code=404, detail="WhatsApp integration not found")
 
+    # BUG-582 FIX: Validate provider_instance_id belongs to caller's tenant and
+    # matches the requested vendor. Previously this field was missing from
+    # AgentCreate entirely — so wizard-created agents silently lost their
+    # credential binding and hit the flat-field path (fatal for Vertex AI).
+    if agent.provider_instance_id is not None:
+        from services.provider_instance_service import ProviderInstanceService
+        pi = ProviderInstanceService.get_instance(agent.provider_instance_id, ctx.tenant_id, db)
+        if not pi:
+            raise HTTPException(status_code=404, detail="Provider instance not found")
+        if not pi.is_active:
+            raise HTTPException(status_code=400, detail="Provider instance is disabled")
+        if pi.vendor != agent.model_provider:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Provider instance vendor '{pi.vendor}' does not match agent model_provider '{agent.model_provider}'",
+            )
+
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
         db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).update({"is_default": False})
@@ -888,6 +919,22 @@ def update_agent(
         if not whatsapp_instance:
             raise HTTPException(status_code=404, detail="WhatsApp integration not found")
 
+    # BUG-582: Validate provider_instance_id belongs to caller's tenant and
+    # matches the effective vendor (existing agent's or the update's).
+    if agent.provider_instance_id is not None:
+        from services.provider_instance_service import ProviderInstanceService
+        pi = ProviderInstanceService.get_instance(agent.provider_instance_id, ctx.tenant_id, db)
+        if not pi:
+            raise HTTPException(status_code=404, detail="Provider instance not found")
+        if not pi.is_active:
+            raise HTTPException(status_code=400, detail="Provider instance is disabled")
+        effective_vendor = agent.model_provider or db_agent.model_provider
+        if effective_vendor and pi.vendor != effective_vendor:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Provider instance vendor '{pi.vendor}' does not match agent model_provider '{effective_vendor}'",
+            )
+
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
         db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id, Agent.id != agent_id).update({"is_default": False})
@@ -896,7 +943,8 @@ def update_agent(
     UPDATABLE_AGENT_FIELDS = {
         "contact_id", "system_prompt", "tone_preset_id", "custom_tone",
         "persona_id", "keywords", "model_provider", "model_name",
-        "response_template", "memory_size", "trigger_dm_enabled",
+        "response_template", "memory_size", "memory_isolation_mode",
+        "trigger_dm_enabled",
         "trigger_group_filters", "trigger_number_filters",
         "context_message_count", "context_char_limit", "enabled_channels",
         "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id", "discord_integration_id", "webhook_integration_id",

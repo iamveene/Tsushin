@@ -124,7 +124,19 @@ export default function OllamaSetupWizard({ isOpen, onClose, onComplete }: Ollam
     setPhaseMessage('Creating Ollama provider instance...')
     try {
       // 1) Ensure Ollama instance exists (reuses or creates)
-      const inst = await api.ensureOllamaInstance()
+      let inst = await api.ensureOllamaInstance()
+      // ensureOllamaInstance ignores body — the backend always names the row
+      // "Ollama (Local)". If the user picked a different instance_name in
+      // step 2, honour that by renaming immediately after create. Skip the
+      // rename when the two already match or when the user left the default.
+      const desiredName = (config.instance_name || '').trim()
+      if (desiredName && desiredName !== inst.instance_name) {
+        try {
+          inst = await api.updateProviderInstance(inst.id, { instance_name: desiredName })
+        } catch {
+          // Rename is cosmetic — do not block provisioning on a name collision.
+        }
+      }
       setInstance(inst)
 
       setPhaseMessage('Provisioning Ollama container (may take 1–2 min to pull image)...')

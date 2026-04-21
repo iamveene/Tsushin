@@ -85,7 +85,9 @@ def _ip_in_allowlist(client_ip: str, allowlist_json: str) -> bool:
         return False
 
 
-@router.post("/api/webhooks/{slug}/inbound")
+# BUG-593: queued responses are semantically 202 Accepted, not 200. The
+# contract/docs already said 202; the route was silently emitting 200.
+@router.post("/api/webhooks/{slug}/inbound", status_code=202)
 async def receive_webhook(
     slug: str,
     request: Request,
