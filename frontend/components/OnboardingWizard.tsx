@@ -186,6 +186,13 @@ export default function OnboardingWizard() {
     Array<{ id: string; name: string; is_free: boolean; voice_count: number; status: string }>
   >([])
   useEffect(() => {
+    // BUG-683: skip the authenticated /api/tts-providers fetch on public
+    // surfaces (/setup, /auth/*). The tour isn't visible there anyway (see
+    // early-return below), and firing the request emits a 401 in the network
+    // tab before the user even has a session.
+    if (isAuthPage || pathname?.startsWith('/setup')) {
+      return
+    }
     let cancelled = false
     api.getTTSProviders()
       .then(providers => {
@@ -204,7 +211,7 @@ export default function OnboardingWizard() {
       })
       .catch(() => { /* leave empty; bullets fall back to static hints below */ })
     return () => { cancelled = true }
-  }, [])
+  }, [isAuthPage, pathname])
 
   // Derived bullet list for the Voice Capabilities tour step. Built from the
   // live /api/tts-providers catalog so a new backend provider auto-appears in

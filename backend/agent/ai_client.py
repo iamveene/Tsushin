@@ -55,6 +55,26 @@ class AIClient:
         # (e.g., flight search results with multiple options). Most modern LLMs support 8K-128K+ tokens.
         self.max_tokens = max_tokens if max_tokens is not None else 16384
 
+        # BUG-582 SAFETY NET: if the caller didn't pass a provider_instance_id
+        # (e.g. an agent row where the FK was silently dropped by an older
+        # wizard schema), fall back to the tenant's default instance for the
+        # requested vendor. This protects Vertex/Bedrock-style providers whose
+        # creds are multi-field and can't live in the flat `api_key` fallback.
+        if provider_instance_id is None and db is not None and tenant_id is not None:
+            try:
+                from services.provider_instance_service import ProviderInstanceService
+                default_inst = ProviderInstanceService.get_default_instance(
+                    self.provider, tenant_id, db
+                )
+                if default_inst is not None:
+                    provider_instance_id = default_inst.id
+                    self.logger.info(
+                        "AIClient: resolved missing provider_instance_id to tenant default "
+                        f"{default_inst.id} ({default_inst.instance_name}) for vendor={self.provider}"
+                    )
+            except Exception as exc:
+                self.logger.debug(f"AIClient: default-instance lookup failed: {exc}")
+
         # Provider Instance resolution — takes precedence over flat fields
         if provider_instance_id is not None and db is not None:
             from services.provider_instance_service import ProviderInstanceService, get_vendor_default_base_url

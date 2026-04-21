@@ -1506,6 +1506,19 @@ class SummarizationStepHandler(FlowStepHandler):
             source_text = config.get("text") or config.get("content")
 
         if not thread_id and source_step:
+            # BUG-590: `source_step="trigger"` lets templates summarize the
+            # flow's trigger_context (e.g., new-contact welcome). Expose the
+            # trigger payload as the raw source text so the agent can follow
+            # `summary_prompt` using the context fields.
+            if source_step == "trigger":
+                trigger_ctx = input_data.get("flow", {}).get("trigger_context") \
+                    if isinstance(input_data.get("flow"), dict) else None
+                if trigger_ctx:
+                    try:
+                        source_text = json.dumps(trigger_ctx, ensure_ascii=False)
+                    except Exception:
+                        source_text = str(trigger_ctx)
+
             # Use proper nested dict access (source_step is a context key like "step_1")
             source_data = input_data.get(source_step, {})
             if isinstance(source_data, dict):

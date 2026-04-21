@@ -534,6 +534,9 @@ def ensure_rbac_permissions(session):
         "owner": ["skills.custom.create", "skills.custom.read", "skills.custom.execute", "skills.custom.delete"],
         "admin": ["skills.custom.create", "skills.custom.read", "skills.custom.execute", "skills.custom.delete"],
         "member": ["skills.custom.read", "skills.custom.execute"],
+        # BUG-677 (existing): read-only users should be able to browse MCP
+        # servers / custom skills in Hub just like other integrations.
+        "readonly": ["skills.custom.read"],
     }
 
     custom_skill_perms_added = False

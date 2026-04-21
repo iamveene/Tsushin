@@ -6,8 +6,8 @@
  * Manages all integrations organized by category:
  * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI, ElevenLabs
  * - Communication: WhatsApp, Telegram, Discord, Slack, Email (coming soon)
- * - Productivity: Asana, Google Calendar, Notion (coming soon)
- * - Developer Tools: Shell, Sandboxed Tools, GitHub (coming soon)
+ * - Productivity: Asana, Google Calendar
+ * - Developer Tools: Shell, Sandboxed Tools
  * - Tool APIs: Brave Search, Tavily, Amadeus
  */
 
@@ -41,6 +41,7 @@ import WebhookSecretRevealModal from '@/components/WebhookSecretRevealModal'
 import WebhookEditModal from '@/components/WebhookEditModal'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
+import ManagedContainerPanel from '@/components/hub/ManagedContainerPanel'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
 import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
 import MCPServerWizard from '@/components/mcp/MCPServerWizard'
@@ -50,6 +51,7 @@ import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/Typeah
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 import { useGoogleWizard, useGoogleWizardComplete } from '@/contexts/GoogleWizardContext'
+import { useProviderWizard, useProviderWizardComplete } from '@/contexts/ProviderWizardContext'
 import IntegrationSummary from '@/components/hub/IntegrationSummary'
 import {
   GeminiIcon,
@@ -65,9 +67,7 @@ import {
   BriefcaseIcon,
   CheckCircleIcon,
   CalendarIcon,
-  DocumentIcon,
   TerminalIcon as TerminalIconSvg,
-  GitHubIcon,
   SearchIcon,
   BotIcon as BotIconSvg,
   BrainIcon,
@@ -91,9 +91,11 @@ import {
   WebhookIcon,
   CopyIcon,
   CloudIcon,
+  ChevronRightIcon,
   type IconProps
 } from '@/components/ui/icons'
-import ToggleSwitch from '@/components/ui/ToggleSwitch'
+// ToggleSwitch — formerly used for the Ollama panel-level Enable toggle;
+// now encapsulated inside ManagedContainerPanel.
 
 type TabType = 'ai-providers' | 'communication' | 'productivity' | 'developer' | 'tool-apis' | 'mcp-servers' | 'vector-stores'
 
@@ -254,12 +256,10 @@ const COMMUNICATION_CHANNELS: { value: string; label: string; Icon: React.FC<Ico
 const PRODUCTIVITY_APPS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
   { value: 'asana', label: 'Asana', Icon: CheckCircleIcon, description: 'Task & project management', status: 'available' },
   { value: 'google_calendar', label: 'Google Calendar', Icon: CalendarIcon, description: 'Calendar & scheduling', status: 'available' },
-  { value: 'notion', label: 'Notion', Icon: DocumentIcon, description: 'Knowledge base & docs', status: 'coming_soon' },
 ]
 
 const DEVELOPER_TOOLS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
   { value: 'shell', label: 'Shell Command Center', Icon: TerminalIconSvg, description: 'Remote shell execution & beacon management', status: 'available' },
-  { value: 'github', label: 'GitHub', Icon: GitHubIcon, description: 'Issues, PRs, repositories', status: 'coming_soon' },
 ]
 
 const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
@@ -321,6 +321,7 @@ export default function HubPage() {
   // even if the user previously dismissed it.
   const { forceOpenWizard: openWhatsAppWizard } = useWhatsAppWizard()
   const { openWizard: openGoogleWizard } = useGoogleWizard()
+  const { openWizard: openProviderWizard } = useProviderWizard()
   // loadHubIntegrations is defined later in the component; keep a ref so we can
   // invoke the latest version from the wizard-complete callback without
   // dancing around declaration order.
@@ -348,6 +349,26 @@ export default function HubPage() {
       setActiveTab(requested)
     }
   }, [searchParams])
+
+  // Advanced-mode fallback from ProviderWizard → opens legacy ProviderInstanceModal
+  // with the vendor pre-selected.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ vendor?: string }>).detail
+      setEditingInstance(null)
+      setSelectedVendor(detail?.vendor || '')
+      setInstanceModalOpen(true)
+    }
+    window.addEventListener('tsushin:open-provider-advanced-modal', handler)
+    return () => window.removeEventListener('tsushin:open-provider-advanced-modal', handler)
+  }, [])
+
+  // Refetch provider instances / TTS instances when the new ProviderWizard completes.
+  useProviderWizardComplete(() => {
+    fetchProviderInstances()
+    refreshKokoroInstances().catch(() => {})
+    fetchAPIKeys()
+  })
 
   // API Keys state
   const [apiKeys, setApiKeys] = useState<APIKey[]>([])
@@ -410,6 +431,10 @@ export default function HubPage() {
   // Provider Instances state (Phase 21)
   const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
   const [instanceModalOpen, setInstanceModalOpen] = useState(false)
+  // (v0.7.x) Old flat provider picker was replaced by the multi-step
+  // ProviderWizard — state for the old picker has been removed. The Advanced
+  // fallback listens for `tsushin:open-provider-advanced-modal` and opens
+  // the existing ProviderInstanceModal below.
   const [editingInstance, setEditingInstance] = useState<ProviderInstance | null>(null)
   const [selectedVendor, setSelectedVendor] = useState<string>('')
   const [instanceMenuOpen, setInstanceMenuOpen] = useState<number | null>(null)
@@ -443,6 +468,7 @@ export default function HubPage() {
   // v0.6.x: Ollama per-tenant auto-provisioning
   const [ollamaMode, setOllamaMode] = useState<'host' | 'auto'>('host')
   const [ollamaProvisionLoading, setOllamaProvisionLoading] = useState(false)
+  const [ollamaContainerActionLoading, setOllamaContainerActionLoading] = useState(false)
   const [showOllamaSetupWizard, setShowOllamaSetupWizard] = useState(false)
   const [ollamaContainerStatus, setOllamaContainerStatus] = useState<any | null>(null)
   const [ollamaGpuEnabled, setOllamaGpuEnabled] = useState(false)
@@ -453,6 +479,10 @@ export default function HubPage() {
   const [ollamaPullJobId, setOllamaPullJobId] = useState<string | null>(null)
   const [ollamaPullProgress, setOllamaPullProgress] = useState<any | null>(null)
   const [ollamaPulledModels, setOllamaPulledModels] = useState<string[]>([])
+  const [ollamaLogsOpen, setOllamaLogsOpen] = useState(false)
+  const [ollamaLogsContent, setOllamaLogsContent] = useState<string>('')
+  const [ollamaLogsLoading, setOllamaLogsLoading] = useState(false)
+  const [ollamaConfirmDelete, setOllamaConfirmDelete] = useState<{ id: number; removeVolume: boolean } | null>(null)
 
   // MCP Servers state (Phase 26)
   const [mcpServers, setMcpServers] = useState<any[]>([])
@@ -1257,11 +1287,16 @@ export default function HubPage() {
     setOllamaToggleLoading(true)
     try {
       if (ollamaEnabled) {
-        // Disable: soft-delete the Ollama instance
         const ollamaInstance = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
         if (ollamaInstance) {
-          await api.deleteProviderInstance(ollamaInstance.id)
-          toast.success('Ollama disabled')
+          if (ollamaInstance.is_auto_provisioned) {
+            await api.controlOllamaContainer(ollamaInstance.id, 'stop')
+            toast.success('Stopping Ollama container...')
+            setTimeout(() => { refreshOllamaContainerStatus() }, 1200)
+          } else {
+            await api.deleteProviderInstance(ollamaInstance.id)
+            toast.success('Ollama disabled')
+          }
         }
       } else {
         // Enable: ensure an Ollama instance exists
@@ -1441,15 +1476,66 @@ export default function HubPage() {
     }
   }
 
+  // Unified Ollama instance delete — mirrors handleKokoroInstanceDelete so
+  // the ManagedContainerPanel `onDelete` action behaves identically across
+  // Ollama and Kokoro (soft-delete the provider instance; backend tears down
+  // the container for auto-provisioned rows, see routes_provider_instances).
+  const handleOllamaInstanceDelete = async () => {
+    if (!ollamaConfirmDelete) return
+    const { id, removeVolume } = ollamaConfirmDelete
+    try {
+      const inst = providerInstances.find(i => i.id === id)
+      if (inst?.is_auto_provisioned) {
+        try {
+          await api.deprovisionOllamaContainer(id, removeVolume)
+        } catch {
+          // Deprovision is best-effort; the delete below is the source of truth.
+        }
+      }
+      await api.deleteProviderInstance(id)
+      toast.success('Ollama instance deleted')
+      setOllamaConfirmDelete(null)
+      setOllamaContainerStatus(null)
+      setOllamaPulledModels([])
+      await fetchProviderInstances()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete instance')
+      setOllamaConfirmDelete(null)
+    }
+  }
+
   const handleOllamaContainerAction = async (action: 'start' | 'stop' | 'restart') => {
     const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
     if (!inst) return
+    setOllamaContainerActionLoading(true)
     try {
       await api.controlOllamaContainer(inst.id, action)
-      toast.success(`Container ${action === 'start' ? 'started' : action === 'stop' ? 'stopped' : 'restarted'}`)
+      toast.success(`${action === 'start' ? 'Starting' : action === 'stop' ? 'Stopping' : 'Restarting'} Ollama container...`)
       setTimeout(() => { refreshOllamaContainerStatus() }, 1200)
     } catch (err: any) {
       toast.error(err.message || `Failed to ${action} container`)
+    } finally {
+      setOllamaContainerActionLoading(false)
+    }
+  }
+
+  const handleOllamaViewLogs = async () => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    if (ollamaLogsOpen) {
+      setOllamaLogsOpen(false)
+      setOllamaLogsContent('')
+      return
+    }
+    setOllamaLogsOpen(true)
+    setOllamaLogsLoading(true)
+    try {
+      const { logs } = await api.getOllamaContainerLogs(inst.id, 100)
+      setOllamaLogsContent(logs || '(no logs)')
+    } catch (e: any) {
+      setOllamaLogsContent(`Error loading logs: ${e?.message || 'unknown'}`)
+    } finally {
+      setOllamaLogsLoading(false)
     }
   }
 
@@ -1648,6 +1734,26 @@ export default function HubPage() {
     setEditingKey(key)
     setModalData({ service: key.service, api_key: '', is_active: key.is_active })
     setShowApiKeyModal(true)
+  }
+
+  // Bridge function: maintained for the existing call sites inside this
+  // file. Routes everything to the new multi-step ProviderWizard. A vendor
+  // preset lands the user directly on the credentials/container step (the
+  // reducer skips any earlier steps whose answers are already implied).
+  const openProviderSetupWizard = (vendor?: string) => {
+    setEditingInstance(null)
+    setSelectedVendor('')
+    if (vendor) {
+      // TTS Kokoro lands on the container branch; everything else is LLM cloud.
+      const isTTSKokoro = vendor === 'kokoro'
+      const isTTSEleven = vendor === 'elevenlabs'
+      const isOllamaLocal = vendor === 'ollama'
+      const modality = isTTSKokoro || isTTSEleven ? 'tts' as const : 'llm' as const
+      const hosting = isTTSKokoro || isOllamaLocal ? 'local' as const : 'cloud' as const
+      openProviderWizard({ vendor, modality, hosting })
+    } else {
+      openProviderWizard()
+    }
   }
 
   // Vertex AI handlers
@@ -2525,9 +2631,11 @@ export default function HubPage() {
             </div>
             <div>
               <h3 className="font-semibold text-white">{item.label}</h3>
-              {hasInstanceKey && apiKey && (
-                <span className="text-[10px] text-amber-400/80">Fallback — instance key takes priority</span>
-              )}
+              {/* (v0.7.x) The inline "Fallback — instance key takes priority"
+                  amber label was removed; the Service API Keys surface is now
+                  collapsed by default and only lists vendors that have NO
+                  matching ProviderInstance, so duplicate display is impossible
+                  by construction. */}
               {configuredViaInstance && (
                 <span className="text-[10px] text-teal-400/80">
                   Configured via instance: {configuredInstance?.instance_name}
@@ -2611,6 +2719,10 @@ export default function HubPage() {
     )
   }
 
+  // (v0.7.x) The inline `renderManagedContainerControls` helper was extracted
+  // into `@/components/hub/ManagedContainerPanel` so Ollama / Kokoro / SearXNG
+  // all render identical lifecycle affordances. See that file for the body.
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -2634,6 +2746,24 @@ export default function HubPage() {
     { key: 'mcp-servers', label: 'MCP Servers', Icon: ServerIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'vector-stores', label: 'Vector Stores', Icon: VectorStoreIcon, color: 'text-emerald-400', iconBg: 'bg-emerald-400/10' },
   ]
+  // (v0.7.x) Service API Keys — surface ONLY vendors that have a fallback
+  // api_key configured AND zero `ProviderInstance` rows. This eliminates the
+  // duplicate-Gemini display by construction: if you have a Gemini instance,
+  // Gemini never appears in the fallback disclosure below.
+  const vendorsWithInstances = new Set(providerInstances.map(i => i.vendor))
+  const visibleAiFallbackProviders = AI_PROVIDERS.filter(provider =>
+    Boolean(getApiKeyForService(provider.value)) && !vendorsWithInstances.has(provider.value)
+  )
+  const visibleToolApis = TOOL_APIS.filter(tool => {
+    if (tool.value === 'searxng') return searxngInstances.some(i => i.is_active)
+    return Boolean(getApiKeyForService(tool.value))
+  })
+  // v0.7.x: align Ollama visibility with Kokoro — show panel only when an
+  // active provider_instance exists. `ollamaEnabled` (tenant setting) remains
+  // the gate for background health polling, but the Hub card itself is driven
+  // by the instance list so unused providers never take visual space.
+  const ollamaInstance = providerInstances.find(i => i.vendor === 'ollama' && i.is_active) ?? null
+  const showLocalServices = !!ollamaInstance || kokoroInstances.length > 0
 
   return (
     <div className="min-h-screen animate-fade-in">
@@ -2737,18 +2867,14 @@ export default function HubPage() {
             {/* ==================== AI PROVIDERS TAB ==================== */}
             {activeTab === 'ai-providers' && (
               <div className="space-y-6 animate-fade-in">
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h2 className="text-lg font-display font-semibold text-white">AI Model Providers</h2>
                     <p className="text-sm text-tsushin-slate">Manage provider instances and API keys for AI models</p>
                   </div>
                   <button
-                    onClick={() => {
-                      setEditingInstance(null)
-                      setSelectedVendor('')
-                      setInstanceModalOpen(true)
-                    }}
-                    className="btn-primary"
+                    onClick={() => openProviderSetupWizard()}
+                    className="btn-primary w-full sm:w-auto justify-center"
                   >
                     + New Instance
                   </button>
@@ -2816,13 +2942,25 @@ export default function HubPage() {
                   // LLM provider instances grid — excludes:
                   // - 'ollama': has its own dedicated Local Services section above with health monitoring
                   // - 'elevenlabs': TTS-only provider configured via API Keys, not provider instances
-                  const allVendors = Array.from(new Set([
-                    ...Object.keys(vendorGroups),
-                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'deepseek', 'openrouter', 'vertex_ai',
-                  ])).filter(v => v !== 'ollama' && v !== 'elevenlabs').sort()
+                  const allVendors = Object.keys(vendorGroups)
+                    .filter(v => v !== 'ollama' && v !== 'elevenlabs')
+                    .sort()
 
                   return (
                     <div className="space-y-6">
+                      {allVendors.length === 0 && (
+                        <div className="border border-dashed border-tsushin-border rounded-xl p-5 text-center">
+                          <p className="text-sm text-tsushin-slate">No LLM provider instances configured yet.</p>
+                          {canEditSettings && (
+                            <button
+                              onClick={() => openProviderSetupWizard()}
+                              className="mt-3 btn-secondary px-4 py-2 text-sm"
+                            >
+                              Add Provider
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {allVendors.map(vendor => {
                         const instances = vendorGroups[vendor] || []
                         const VendorIcon = VENDOR_ICONS[vendor] || BeakerIcon
@@ -2830,8 +2968,8 @@ export default function HubPage() {
 
                         return (
                           <div key={vendor} className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2.5">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex items-center gap-2.5 min-w-0">
                                 <VendorIcon size={18} className={vendorColor} />
                                 <h3 className="text-sm font-semibold text-white">{VENDOR_LABELS[vendor] || vendor}</h3>
                                 <span className="text-xs text-tsushin-slate">
@@ -2839,24 +2977,15 @@ export default function HubPage() {
                                 </span>
                               </div>
                               <button
-                                onClick={() => {
-                                  setEditingInstance(null)
-                                  setSelectedVendor(vendor)
-                                  setInstanceModalOpen(true)
-                                }}
-                                className="flex items-center gap-1 text-xs text-tsushin-accent hover:text-white transition-colors"
+                                onClick={() => openProviderSetupWizard(vendor)}
+                                className="inline-flex w-fit items-center gap-1 rounded-md border border-tsushin-accent/25 bg-tsushin-accent/10 px-2.5 py-1 text-xs text-tsushin-accent hover:text-white hover:bg-tsushin-accent/15 transition-colors"
                               >
                                 <PlusIconSvg size={14} />
                                 Add Instance
                               </button>
                             </div>
 
-                            {instances.length === 0 ? (
-                              <div className="border border-dashed border-tsushin-border rounded-xl p-4 text-center">
-                                <p className="text-xs text-tsushin-slate">No instances configured</p>
-                              </div>
-                            ) : (
-                              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                                 {instances.map(inst => (
                                   <div key={inst.id} className="card p-4 hover-glow group relative">
                                     <div className="flex items-start justify-between mb-3">
@@ -2993,7 +3122,6 @@ export default function HubPage() {
                                   </div>
                                 ))}
                               </div>
-                            )}
                           </div>
                         )
                       })}
@@ -3002,115 +3130,153 @@ export default function HubPage() {
                 })()}
 
                 {/* Local Services Section */}
+                {showLocalServices && (
                 <div className="pt-2">
                   <h3 className="text-sm font-semibold text-tsushin-fog mb-3">Local Services</h3>
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {/* Ollama Card (Enhanced - Local LLM) */}
-                    <div className="card p-5 hover-glow group">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
-                            <BotIconSvg size={20} className="text-purple-400" />
-                          </div>
-                          <h3 className="font-semibold text-white">Ollama (Local)</h3>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          {/* Status indicator — aligned with Kokoro/SearXNG pattern */}
-                          <div className="flex items-center gap-1.5">
-                            <div className={`w-2 h-2 rounded-full ${
-                              ollamaHealth?.available
-                                ? 'bg-tsushin-success animate-pulse'
-                                : ollamaEnabled ? 'bg-yellow-400' : 'bg-tsushin-slate'
-                            }`} />
-                            <span className="text-[11px] text-tsushin-slate">
-                              {ollamaEnabled ? (ollamaHealth?.available ? '1 instance' : 'pending') : 'disabled'}
-                            </span>
-                          </div>
-                          {/* Enable/Disable Toggle — only once the tenant has opted in;
-                              the initial "Setup with Wizard" CTA below handles activation. */}
-                          {canEditSettings && ollamaEnabled && (
-                            <ToggleSwitch
-                              checked={ollamaEnabled}
-                              onChange={() => handleOllamaToggle()}
-                              disabled={ollamaToggleLoading}
-                              title="Disable Ollama"
-                              activeColor="bg-tsushin-success"
-                            />
-                          )}
-                        </div>
-                      </div>
-                      <p className="text-xs text-tsushin-slate mb-3">Run LLMs locally - no API key needed</p>
-
-                      {/* Setup wizard CTA — visible only when not yet activated. Once
-                          enabled, the header toggle + mode/container controls below
-                          replace this button so there's a single primary action per state. */}
-                      {canEditSettings && !ollamaEnabled && (
-                        <button
-                          onClick={() => setShowOllamaSetupWizard(true)}
-                          className="w-full mb-3 bg-purple-500 hover:bg-purple-400 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors"
-                        >
-                          + Setup with Wizard
-                        </button>
-                      )}
-
-                      {/* v0.6.x: Mode selector (host vs auto-provision) */}
-                      {ollamaEnabled && canEditSettings && (
-                        <div className="mb-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
-                          <p className="text-xs font-medium text-tsushin-accent mb-1.5">Mode</p>
-                          <label className="flex items-start gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="ollama-mode"
-                              value="host"
-                              checked={ollamaMode === 'host'}
-                              onChange={() => setOllamaMode('host')}
-                              className="mt-0.5 accent-tsushin-success"
-                            />
-                            <div className="flex-1">
-                              <span className="text-xs text-white">Use host Ollama (URL)</span>
-                              <p className="text-[11px] text-tsushin-muted">Point at an Ollama server you manage.</p>
+                    {/* Ollama Card (Local LLM) — aligned with Kokoro pattern:
+                        renders only when an Ollama provider_instance exists,
+                        mode (host vs. auto) is derived from the instance, and
+                        lifecycle controls go through the shared
+                        `ManagedContainerPanel` so Ollama ↔ Kokoro ↔ SearXNG
+                        expose the same affordances (toggle, restart, logs,
+                        test, delete). The legacy Mode radio + separate
+                        Deprovision/Test/Refresh/Manage buttons were removed. */}
+                    {ollamaInstance && (() => {
+                      const isAuto = !!ollamaInstance.is_auto_provisioned
+                      const raw = (ollamaContainerStatus?.status || 'none').toLowerCase()
+                      // Docker reports 'exited' for a cleanly-stopped container that still exists.
+                      const state = raw === 'exited' ? 'stopped' : raw
+                      const isProvisioning = state === 'creating' || state === 'provisioning'
+                      const isRunning = isAuto ? state === 'running' : !!ollamaHealth?.available
+                      const isNoneOrError = state === 'none' || state === 'error' || !state
+                      return (
+                        <div className="card p-5 hover-glow group border-purple-700/30">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                <BotIconSvg size={20} className="text-purple-400" />
+                              </div>
+                              <div>
+                                <h3 className="font-semibold text-white">Ollama (Local)</h3>
+                                <p className="text-[11px] text-tsushin-slate">Run LLMs locally — host URL or auto-provisioned container</p>
+                              </div>
                             </div>
-                          </label>
-                          <label className="flex items-start gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="ollama-mode"
-                              value="auto"
-                              checked={ollamaMode === 'auto'}
-                              onChange={() => setOllamaMode('auto')}
-                              className="mt-0.5 accent-tsushin-success"
-                            />
-                            <div className="flex-1">
-                              <span className="text-xs text-white">Auto-provision container</span>
-                              <p className="text-[11px] text-tsushin-muted">Tsushin manages a dedicated Ollama container for this tenant.</p>
+                            <div className="flex items-center gap-1.5">
+                              <div className={`w-2 h-2 rounded-full ${
+                                isRunning
+                                  ? 'bg-tsushin-success animate-pulse'
+                                  : isProvisioning ? 'bg-yellow-400' : 'bg-tsushin-slate'
+                              }`} />
+                              <span className="text-[11px] text-tsushin-slate">1 instance</span>
                             </div>
-                          </label>
-                        </div>
-                      )}
+                          </div>
 
-                      {/* v0.6.x: Auto-provision panel */}
-                      {ollamaMode === 'auto' && ollamaEnabled && (() => {
-                        const state = (ollamaContainerStatus?.status || 'none').toLowerCase()
-                        const isProvisioning = state === 'creating' || state === 'provisioning'
-                        const isRunning = state === 'running'
-                        const isStopped = state === 'stopped'
-                        const isNoneOrError = state === 'none' || state === 'error' || !state
-                        return (
-                          <div className="mb-3 p-3 bg-tsushin-ink/40 border border-white/10 rounded-lg space-y-3">
-                            <div className="flex items-center justify-between">
-                              <p className="text-xs font-medium text-tsushin-accent">Container Management</p>
-                              <span className={`text-[11px] px-2 py-0.5 rounded ${
+                          {/* Per-instance row — mirrors Kokoro's per-instance card */}
+                          <div className="p-3 bg-tsushin-ink/40 border border-white/5 rounded-lg space-y-3">
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <div className="flex items-start gap-2 min-w-0">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-sm text-white font-medium truncate">{ollamaInstance.instance_name}</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">ollama</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">{isAuto ? 'Auto' : 'Host'}</span>
+                                    {ollamaInstance.is_default && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-tsushin-success/20 text-tsushin-success">Default</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${
                                 isRunning ? 'bg-tsushin-success/20 text-tsushin-success' :
                                 isProvisioning ? 'bg-yellow-500/20 text-yellow-400' :
-                                isStopped ? 'bg-gray-500/20 text-gray-400' :
                                 state === 'error' ? 'bg-tsushin-vermilion/20 text-tsushin-vermilion' :
                                 'bg-gray-500/20 text-gray-400'
                               }`}>
-                                {isProvisioning ? 'Provisioning...' : state || 'not created'}
+                                {isProvisioning
+                                  ? 'Provisioning…'
+                                  : isAuto
+                                    ? (state || 'n/a')
+                                    : (ollamaHealth?.available ? 'running' : 'offline')}
                               </span>
                             </div>
 
-                            {isNoneOrError && canEditSettings && (
+                            {/* Host mode: URL editor + Docker networking note + health summary */}
+                            {!isAuto && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[11px] text-tsushin-muted shrink-0">URL:</span>
+                                  {ollamaUrlEditing ? (
+                                    <>
+                                      <input
+                                        type="text"
+                                        value={ollamaUrlValue}
+                                        onChange={(e) => setOllamaUrlValue(e.target.value)}
+                                        className="bg-tsushin-ink border border-white/10 rounded-lg px-2.5 py-1 text-white text-xs font-mono flex-1 min-w-0"
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') handleOllamaUrlSave()
+                                          if (e.key === 'Escape') setOllamaUrlEditing(false)
+                                        }}
+                                      />
+                                      <button
+                                        onClick={handleOllamaUrlSave}
+                                        disabled={ollamaUrlSaving}
+                                        className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-1 shrink-0"
+                                      >
+                                        {ollamaUrlSaving ? '…' : 'Save'}
+                                      </button>
+                                      <button
+                                        onClick={() => setOllamaUrlEditing(false)}
+                                        className="text-[11px] text-tsushin-slate hover:text-white px-1.5 py-1 shrink-0"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <p
+                                      className="text-[11px] font-mono text-tsushin-accent cursor-pointer hover:text-white transition-colors flex-1 truncate"
+                                      onClick={() => canEditSettings && setOllamaUrlEditing(true)}
+                                      title={canEditSettings ? 'Click to edit URL' : ''}
+                                    >
+                                      {ollamaHealth?.base_url || ollamaInstance.base_url || '(not set)'}
+                                    </p>
+                                  )}
+                                </div>
+
+                                {ollamaHealth?.available ? (
+                                  <p className="text-[11px] text-tsushin-slate">
+                                    {ollamaHealth.models_count || 0} model{(ollamaHealth.models_count || 0) !== 1 ? 's' : ''} available
+                                  </p>
+                                ) : (
+                                  <>
+                                    <p className="text-[11px] text-tsushin-vermilion">{ollamaHealth?.error || 'Not running'}</p>
+                                    <p className="text-[11px] text-tsushin-slate">
+                                      Start with: <code className="bg-tsushin-deep px-1 py-0.5 rounded font-mono text-tsushin-accent">ollama serve</code>
+                                    </p>
+                                  </>
+                                )}
+
+                                {/* BUG-331: Docker networking guidance (host mode only) */}
+                                <div className="p-2 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1">
+                                  <p className="text-[11px] font-medium text-tsushin-accent">Docker Networking Note</p>
+                                  <p className="text-[11px] text-tsushin-slate">
+                                    Tsushin runs inside Docker. Use <code className="bg-tsushin-ink px-1 rounded font-mono text-tsushin-accent">http://172.18.0.1:11434</code> instead of <code className="bg-tsushin-ink px-1 rounded font-mono">localhost</code> so the backend container can reach Ollama on the host.
+                                  </p>
+                                  <code className="block text-[11px] bg-tsushin-ink px-2 py-1 rounded font-mono text-tsushin-success overflow-x-auto">
+                                    Environment=&quot;OLLAMA_HOST=0.0.0.0:11434&quot;
+                                  </code>
+                                </div>
+
+                                {ollamaTestResult && (
+                                  <p className={`text-[11px] ${ollamaTestResult.success ? 'text-tsushin-success' : 'text-tsushin-vermilion'}`}>
+                                    {ollamaTestResult.success ? 'Connection successful' : ollamaTestResult.message}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Auto mode — provision config when no container */}
+                            {isAuto && isNoneOrError && canEditSettings && (
                               <div className="space-y-2">
                                 <label className="flex items-center gap-2 text-xs text-tsushin-slate">
                                   <input
@@ -3139,29 +3305,28 @@ export default function HubPage() {
                                   disabled={ollamaProvisionLoading}
                                   className="w-full bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded-lg px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
                                 >
-                                  {ollamaProvisionLoading ? 'Starting...' : 'Provision Container'}
+                                  {ollamaProvisionLoading ? 'Starting…' : 'Provision Container'}
                                 </button>
                               </div>
                             )}
 
-                            {isProvisioning && (
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-2 text-xs text-yellow-400">
-                                  <span className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-yellow-400" />
-                                  Setting up Ollama container (may take 1-2 minutes to pull image)...
-                                </div>
+                            {/* Auto mode — provisioning spinner */}
+                            {isAuto && isProvisioning && (
+                              <div className="flex items-center gap-2 text-xs text-yellow-400">
+                                <span className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-yellow-400" />
+                                Setting up Ollama container (may take 1–2 minutes)…
                                 <button
                                   onClick={refreshOllamaContainerStatus}
-                                  className="text-[11px] text-tsushin-accent hover:text-white"
+                                  className="ml-auto text-[11px] text-tsushin-accent hover:text-white"
                                 >
-                                  Refresh status
+                                  Refresh
                                 </button>
                               </div>
                             )}
 
-                            {isRunning && (
+                            {/* Auto mode — pulled models + pull a new model (when running) */}
+                            {isAuto && isRunning && (
                               <div className="space-y-3">
-                                {/* Pulled models */}
                                 <div>
                                   <p className="text-[11px] text-tsushin-muted mb-1.5">Pulled models</p>
                                   {ollamaPulledModels.length === 0 ? (
@@ -3185,8 +3350,6 @@ export default function HubPage() {
                                     </div>
                                   )}
                                 </div>
-
-                                {/* Pull model */}
                                 {canEditSettings && (
                                   <div className="space-y-2 pt-2 border-t border-white/5">
                                     <p className="text-[11px] text-tsushin-muted">Pull a new model</p>
@@ -3206,7 +3369,7 @@ export default function HubPage() {
                                         disabled={ollamaPullLoading || (ollamaSelectedModel === 'custom' && !ollamaCustomModel.trim())}
                                         className="bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded-lg px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
                                       >
-                                        {ollamaPullLoading ? 'Pulling...' : 'Pull'}
+                                        {ollamaPullLoading ? 'Pulling…' : 'Pull'}
                                       </button>
                                     </div>
                                     {ollamaSelectedModel === 'custom' && (
@@ -3223,7 +3386,7 @@ export default function HubPage() {
                                       <div className="space-y-1">
                                         <div className="flex items-center justify-between text-[11px] text-tsushin-slate">
                                           <span>Pulling {ollamaPullProgress.model || ollamaSelectedModel}</span>
-                                          <span>{ollamaPullProgress.percent != null ? `${Math.round(ollamaPullProgress.percent)}%` : '...'}</span>
+                                          <span>{ollamaPullProgress.percent != null ? `${Math.round(ollamaPullProgress.percent)}%` : '…'}</span>
                                         </div>
                                         <div className="h-1.5 w-full bg-tsushin-ink rounded-full overflow-hidden">
                                           <div
@@ -3235,169 +3398,93 @@ export default function HubPage() {
                                     )}
                                   </div>
                                 )}
-
-                                {/* Container controls */}
-                                {canEditSettings && (
-                                  <div className="flex gap-1.5 pt-2 border-t border-white/5">
-                                    <button
-                                      onClick={() => handleOllamaContainerAction('stop')}
-                                      className="flex-1 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors"
-                                    >
-                                      Stop
-                                    </button>
-                                    <button
-                                      onClick={() => handleOllamaContainerAction('restart')}
-                                      className="flex-1 bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors"
-                                    >
-                                      Restart
-                                    </button>
-                                  </div>
-                                )}
                               </div>
                             )}
 
-                            {isStopped && canEditSettings && (
-                              <div className="flex gap-1.5">
-                                <button
-                                  onClick={() => handleOllamaContainerAction('start')}
-                                  className="flex-1 bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
-                                >
-                                  Start Container
-                                </button>
-                                <button
-                                  onClick={() => handleOllamaDeprovision(true)}
-                                  className="flex-1 bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
-                                >
-                                  Deprovision
-                                </button>
-                              </div>
+                            {/* Unified lifecycle controls — ManagedContainerPanel for
+                                auto-provisioned instances (matches Kokoro), a compact
+                                Test+Refresh+Delete strip for host-mode where there's
+                                no container to toggle. */}
+                            {canEditSettings && isAuto && (
+                              <ManagedContainerPanel
+                                status={state}
+                                isBusy={ollamaContainerActionLoading || ollamaTestLoading}
+                                onToggle={() => handleOllamaContainerAction(isRunning ? 'stop' : 'start')}
+                                onRestart={() => handleOllamaContainerAction('restart')}
+                                onLogs={handleOllamaViewLogs}
+                                logsOpen={ollamaLogsOpen}
+                                onTest={handleOllamaTest}
+                                testLabel={ollamaTestLoading ? 'Testing…' : 'Test'}
+                                onDelete={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: true })}
+                              />
                             )}
-                          </div>
-                        )
-                      })()}
 
-                      <div className="text-sm text-tsushin-slate space-y-2">
-                        {ollamaMode === 'host' && ollamaHealth?.available ? (
-                          <>
-                            <p className="text-xs">{ollamaHealth.models_count || 0} models available</p>
-                            {/* Inline URL editor */}
-                            {ollamaUrlEditing ? (
-                              <div className="flex items-center gap-1.5">
-                                <input
-                                  type="text"
-                                  value={ollamaUrlValue}
-                                  onChange={(e) => setOllamaUrlValue(e.target.value)}
-                                  className="bg-tsushin-ink border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm font-mono flex-1 min-w-0"
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleOllamaUrlSave()
-                                    if (e.key === 'Escape') setOllamaUrlEditing(false)
+                            {canEditSettings && !isAuto && (
+                              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
+                                <button
+                                  onClick={handleOllamaTest}
+                                  disabled={ollamaTestLoading}
+                                  className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-1 disabled:opacity-50"
+                                >
+                                  {ollamaTestLoading ? 'Testing…' : 'Test'}
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    await fetchOllamaHealth()
+                                    try {
+                                      const models = await api.discoverProviderModels(ollamaInstance.id)
+                                      toast.success(`Discovered ${models.length} model${models.length !== 1 ? 's' : ''}`)
+                                      await fetchProviderInstances()
+                                    } catch { /* ignore */ }
                                   }}
-                                />
-                                <button
-                                  onClick={handleOllamaUrlSave}
-                                  disabled={ollamaUrlSaving}
-                                  className="bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-2.5 py-1.5 text-xs shrink-0"
+                                  className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-1"
                                 >
-                                  {ollamaUrlSaving ? '...' : 'Save'}
+                                  Refresh Models
                                 </button>
                                 <button
-                                  onClick={() => setOllamaUrlEditing(false)}
-                                  className="text-tsushin-slate hover:text-white px-1.5 py-1.5 text-xs shrink-0"
+                                  onClick={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: true })}
+                                  className="ml-auto text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-1"
                                 >
-                                  Cancel
+                                  Delete
                                 </button>
                               </div>
-                            ) : (
-                              <p
-                                className="text-xs font-mono text-tsushin-accent cursor-pointer hover:text-white transition-colors"
-                                onClick={() => canEditSettings && setOllamaUrlEditing(true)}
-                                title={canEditSettings ? 'Click to edit URL' : ''}
-                              >
-                                {ollamaHealth.base_url}
-                                {canEditSettings && (
-                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="inline ml-1.5 opacity-50">
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                                    <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                                  </svg>
-                                )}
-                              </p>
                             )}
-                            {ollamaHealth.models?.slice(0, 3).map((m, i) => (
-                              <p key={i} className="text-xs text-tsushin-muted">- {m.name}</p>
-                            ))}
-                            {(ollamaHealth.models_count || 0) > 3 && (
-                              <p className="text-xs text-tsushin-slate">... and {(ollamaHealth.models_count || 0) - 3} more</p>
+
+                            {/* Logs drawer — auto mode only (host mode has no container logs) */}
+                            {isAuto && ollamaLogsOpen && (
+                              <div className="p-2 bg-black/50 border border-white/5 rounded">
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
+                                  <button
+                                    onClick={async () => {
+                                      setOllamaLogsLoading(true)
+                                      try {
+                                        const { logs } = await api.getOllamaContainerLogs(ollamaInstance.id, 100)
+                                        setOllamaLogsContent(logs || '(no logs)')
+                                      } catch (e: any) {
+                                        setOllamaLogsContent(`Error: ${e?.message || 'unknown'}`)
+                                      } finally {
+                                        setOllamaLogsLoading(false)
+                                      }
+                                    }}
+                                    disabled={ollamaLogsLoading}
+                                    className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
+                                  >
+                                    {ollamaLogsLoading ? 'Loading…' : 'Refresh'}
+                                  </button>
+                                </div>
+                                <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
+                                  {ollamaLogsContent || (ollamaLogsLoading ? 'Loading logs…' : '(no logs loaded)')}
+                                </pre>
+                              </div>
                             )}
-                          </>
-                        ) : ollamaMode === 'host' ? (
-                          <>
-                            <p className="text-xs text-tsushin-vermilion">{ollamaHealth?.error || 'Not running'}</p>
-                            <p className="text-xs">Start with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">ollama serve</code></p>
-                          </>
-                        ) : null}
-                        {/* BUG-331: Docker networking guidance — visible only in host mode */}
-                        {ollamaMode === 'host' && (
-                          <div className="mt-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
-                            <p className="text-xs font-medium text-tsushin-accent">Docker Networking Note</p>
-                            <p className="text-xs text-tsushin-slate">
-                              Tsushin runs inside Docker. Use <code className="bg-tsushin-ink px-1 rounded font-mono text-tsushin-accent">http://172.18.0.1:11434</code> instead of <code className="bg-tsushin-ink px-1 rounded font-mono">localhost</code> so the backend container can reach Ollama on the host.
-                            </p>
-                            <p className="text-xs text-tsushin-slate">
-                              Also ensure Ollama listens on all interfaces — add to its systemd override:
-                            </p>
-                            <code className="block text-xs bg-tsushin-ink px-2 py-1.5 rounded font-mono text-tsushin-success whitespace-nowrap overflow-x-auto">
-                              Environment=&quot;OLLAMA_HOST=0.0.0.0:11434&quot;
-                            </code>
                           </div>
-                        )}
-                        {/* Test result display */}
-                        {ollamaTestResult && (
-                          <p className={`text-xs ${ollamaTestResult.success ? 'text-tsushin-success' : 'text-tsushin-vermilion'}`}>
-                            {ollamaTestResult.success ? 'Connection successful' : ollamaTestResult.message}
-                          </p>
-                        )}
-                      </div>
-                      {/* Action buttons */}
-                      <div className="flex gap-2 mt-4">
-                        <button
-                          onClick={handleOllamaTest}
-                          disabled={ollamaTestLoading}
-                          className="flex-1 bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
-                        >
-                          {ollamaTestLoading ? 'Testing...' : 'Test Connection'}
-                        </button>
-                        <button
-                          onClick={async () => {
-                            await fetchOllamaHealth()
-                            const ollamaInst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
-                            if (ollamaInst) {
-                              try {
-                                const models = await api.discoverProviderModels(ollamaInst.id)
-                                toast.success(`Discovered ${models.length} model${models.length !== 1 ? 's' : ''}`)
-                                await fetchProviderInstances()
-                              } catch { /* ignore */ }
-                            }
-                          }}
-                          className="flex-1 btn-secondary py-1.5 text-sm"
-                        >
-                          Refresh Models
-                        </button>
-                      </div>
-                      {/* Manage instance link */}
-                      {canEditSettings && (() => {
-                        const ollamaInst = providerInstances.find(i => i.vendor === 'ollama')
-                        return ollamaInst ? (
-                          <button
-                            onClick={() => { setEditingInstance(ollamaInst); setInstanceModalOpen(true) }}
-                            className="w-full mt-2 text-xs text-tsushin-slate hover:text-white transition-colors text-center py-1"
-                          >
-                            Manage Instance
-                          </button>
-                        ) : null
-                      })()}
-                    </div>
+                        </div>
+                      )
+                    })()}
 
                     {/* Kokoro TTS Card (v0.7.0 consolidated — per-tenant instances + legacy) */}
+                    {kokoroInstances.length > 0 && (
                     <div className="card p-5 hover-glow group border-green-700/30">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
@@ -3446,7 +3533,8 @@ export default function HubPage() {
                         ) : (
                           <div className="space-y-2">
                             {kokoroInstances.map(inst => {
-                              const status = (inst.container_status || 'none').toLowerCase()
+                              const raw = (inst.container_status || 'none').toLowerCase()
+                              const status = raw === 'exited' ? 'stopped' : raw
                               const isProvisioning = status === 'creating' || status === 'provisioning'
                               const isRunning = status === 'running'
                               const isStopped = status === 'stopped'
@@ -3493,49 +3581,15 @@ export default function HubPage() {
 
                                   {/* Actions */}
                                   {canEditSettings && inst.is_auto_provisioned && (
-                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                      {!isRunning && !isProvisioning && (
-                                        <button
-                                          onClick={() => handleKokoroInstanceStart(inst.id)}
-                                          disabled={isBusy}
-                                          className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-0.5 disabled:opacity-50"
-                                        >
-                                          {isBusy ? '...' : 'Start'}
-                                        </button>
-                                      )}
-                                      {isRunning && (
-                                        <button
-                                          onClick={() => handleKokoroInstanceStop(inst.id)}
-                                          disabled={isBusy}
-                                          className="text-[11px] bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded px-2 py-0.5 disabled:opacity-50"
-                                        >
-                                          {isBusy ? '...' : 'Stop'}
-                                        </button>
-                                      )}
-                                      {(isRunning || isStopped) && (
-                                        <button
-                                          onClick={() => handleKokoroInstanceRestart(inst.id)}
-                                          disabled={isBusy}
-                                          className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5 disabled:opacity-50"
-                                        >
-                                          Restart
-                                        </button>
-                                      )}
-                                      {isRunning && (
-                                        <button
-                                          onClick={() => handleKokoroViewLogs(inst.id)}
-                                          className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5"
-                                        >
-                                          {kokoroLogsOpenFor === inst.id ? 'Hide Logs' : 'Logs'}
-                                        </button>
-                                      )}
-                                      <button
-                                        onClick={() => setKokoroConfirmDelete({ id: inst.id, removeVolume: false })}
-                                        className="text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-0.5 ml-auto"
-                                      >
-                                        Delete
-                                      </button>
-                                    </div>
+                                    <ManagedContainerPanel
+                                      status={status}
+                                      isBusy={isBusy}
+                                      onToggle={() => isRunning ? handleKokoroInstanceStop(inst.id) : handleKokoroInstanceStart(inst.id)}
+                                      onRestart={() => handleKokoroInstanceRestart(inst.id)}
+                                      onLogs={() => handleKokoroViewLogs(inst.id)}
+                                      logsOpen={kokoroLogsOpenFor === inst.id}
+                                      onDelete={() => setKokoroConfirmDelete({ id: inst.id, removeVolume: true })}
+                                    />
                                   )}
 
                                   {/* Logs drawer (inline) */}
@@ -3620,28 +3674,30 @@ export default function HubPage() {
                         )}
                       </div>
                     </div>
+                    )}
                   </div>
                 </div>
+                )}
 
-                {/* Service API Keys Section */}
-                <div className="pt-2">
-                  <h3 className="text-sm font-semibold text-tsushin-fog mb-1">Service API Keys</h3>
-                  <p className="text-xs text-tsushin-slate mb-3">API keys for non-LLM integrations (e.g. ElevenLabs TTS) and LLM provider fallbacks</p>
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {AI_PROVIDERS.map(provider => renderIntegrationCard(provider, 'ai'))}
-                  </div>
-                </div>
-
-                {/* Info Box */}
-                <div className="bg-purple-500/5 border border-purple-500/20 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-purple-300 mb-2 flex items-center gap-2">
-                    <LightbulbIcon size={16} className="text-purple-300" /> AI Providers
-                  </h3>
-                  <p className="text-xs text-tsushin-slate">
-                    Provider instances let you configure multiple endpoints for the same vendor (e.g., different OpenAI-compatible servers).
-                    Service API Keys below are used as fallbacks when instances don't have their own key configured.
-                  </p>
-                </div>
+                {/* (v0.7.x) Service API Keys — collapsed disclosure.
+                    Only renders vendors that have a fallback api_key AND no
+                    matching ProviderInstance, so vendors already covered by
+                    an instance never duplicate here. Collapsed by default to
+                    keep the Hub clean for users who only use instances. */}
+                {visibleAiFallbackProviders.length > 0 && (
+                  <details className="pt-2 group">
+                    <summary className="cursor-pointer list-none flex items-center gap-2 select-none">
+                      <ChevronRightIcon size={14} className="text-tsushin-slate transition-transform group-open:rotate-90" />
+                      <div>
+                        <h3 className="text-sm font-semibold text-tsushin-fog">Service API Keys — fallback keys</h3>
+                        <p className="text-xs text-tsushin-slate">{visibleAiFallbackProviders.length} vendor{visibleAiFallbackProviders.length !== 1 ? 's' : ''} using a fallback key (no provider instance)</p>
+                      </div>
+                    </summary>
+                    <div className="mt-3 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      {visibleAiFallbackProviders.map(provider => renderIntegrationCard(provider, 'ai'))}
+                    </div>
+                  </details>
+                )}
               </div>
             )}
 
@@ -4622,29 +4678,6 @@ export default function HubPage() {
                     </button>
                   </div>
 
-                  {/* Coming Soon Productivity Apps */}
-                  {PRODUCTIVITY_APPS.filter(app => app.value !== 'asana' && app.value !== 'google_calendar').map(app => {
-                    const AppIcon = app.Icon
-                    return (
-                      <div key={app.value} className="card p-5 opacity-60">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-gray-700/50 flex items-center justify-center text-gray-400">
-                              <AppIcon size={20} />
-                            </div>
-                            <h3 className="font-semibold text-white">{app.label}</h3>
-                        </div>
-                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-600/30 text-gray-400 border border-gray-600/50">
-                          Coming Soon
-                        </span>
-                        </div>
-                        <p className="text-xs text-tsushin-slate mb-4">{app.description}</p>
-                        <div className="text-center py-2">
-                          <span className="text-xs text-gray-500">Coming Soon</span>
-                        </div>
-                      </div>
-                    )
-                  })}
                 </div>
 
                 {/* Info Box */}
@@ -4654,7 +4687,6 @@ export default function HubPage() {
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     Connect your favorite productivity tools to let agents manage tasks, schedule meetings, and sync with your knowledge bases.
-                    Google Calendar and Notion integrations are high priority for Q1 2026.
                   </p>
                 </div>
               </div>
@@ -4801,29 +4833,6 @@ export default function HubPage() {
                     </div>
                   </div>
 
-                  {/* Coming Soon Developer Tools */}
-                  {DEVELOPER_TOOLS.filter(tool => tool.status === 'coming_soon').map(tool => {
-                    const ToolIcon = tool.Icon
-                    return (
-                      <div key={tool.value} className="card p-5 opacity-60">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-gray-700/50 flex items-center justify-center text-gray-400">
-                              <ToolIcon size={20} />
-                            </div>
-                            <h3 className="font-semibold text-white">{tool.label}</h3>
-                          </div>
-                          <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-600/30 text-gray-400 border border-gray-600/50">
-                            Coming Soon
-                          </span>
-                        </div>
-                        <p className="text-xs text-tsushin-slate mb-4">{tool.description}</p>
-                        <div className="text-center py-2">
-                          <span className="text-xs text-gray-500">Coming Soon</span>
-                        </div>
-                      </div>
-                    )
-                  })}
                 </div>
 
                 {/* Info Box */}
@@ -4833,8 +4842,7 @@ export default function HubPage() {
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     The Shell Command Center enables remote command execution with security approval workflows. Sandboxed Tools provide
-                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts. GitHub integration
-                    is coming soon, enabling agents to create issues, summarize PRs, and respond to repository events.
+                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts.
                   </p>
                 </div>
               </div>
@@ -4843,24 +4851,27 @@ export default function HubPage() {
             {/* ==================== TOOL APIS TAB ==================== */}
             {activeTab === 'tool-apis' && (
               <div className="space-y-6 animate-fade-in">
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h2 className="text-lg font-display font-semibold text-white">Tool APIs</h2>
                     <p className="text-sm text-tsushin-slate">External APIs for agent capabilities</p>
                   </div>
                   <button
                     onClick={() => { setAddIntegrationInitialProvider(undefined); setShowSearchWizard(true) }}
-                    className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors"
+                    className="w-full sm:w-auto px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors"
                   >
                     + Add Integration
                   </button>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 animate-stagger">
-                  {TOOL_APIS.map(tool => renderIntegrationCard(tool, 'tool'))}
-                </div>
+                {visibleToolApis.length > 0 && (
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 animate-stagger">
+                    {visibleToolApis.map(tool => renderIntegrationCard(tool, 'tool'))}
+                  </div>
+                )}
 
                 {/* SearXNG Per-Tenant Instances (v0.6.0-patch.7) — structure mirrors Kokoro panel */}
+                {searxngInstances.length > 0 && (
                 <div className="card p-5 hover-glow group border-teal-700/30">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-3">
@@ -4910,7 +4921,8 @@ export default function HubPage() {
                     ) : (
                       <div className="space-y-2">
                         {searxngInstances.map(inst => {
-                          const status = (inst.container_status || 'none').toLowerCase()
+                          const raw = (inst.container_status || 'none').toLowerCase()
+                          const status = raw === 'exited' ? 'stopped' : raw
                           const isProvisioning = status === 'creating' || status === 'provisioning'
                           const isRunning = status === 'running'
                           const isStopped = status === 'stopped'
@@ -4941,50 +4953,15 @@ export default function HubPage() {
                                 </span>
                               </div>
                               {canEditSettings && inst.is_auto_provisioned && (
-                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                  {!isRunning && !isProvisioning && (
-                                    <button
-                                      onClick={() => handleSearxngAction(inst.id, 'start')}
-                                      disabled={isBusy}
-                                      className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-0.5 disabled:opacity-50"
-                                    >
-                                      {isBusy ? '...' : 'Start'}
-                                    </button>
-                                  )}
-                                  {isRunning && (
-                                    <button
-                                      onClick={() => handleSearxngAction(inst.id, 'stop')}
-                                      disabled={isBusy}
-                                      className="text-[11px] bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded px-2 py-0.5 disabled:opacity-50"
-                                    >
-                                      {isBusy ? '...' : 'Stop'}
-                                    </button>
-                                  )}
-                                  {(isRunning || isStopped) && (
-                                    <button
-                                      onClick={() => handleSearxngAction(inst.id, 'restart')}
-                                      disabled={isBusy}
-                                      className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5 disabled:opacity-50"
-                                    >
-                                      Restart
-                                    </button>
-                                  )}
-                                  {isRunning && (
-                                    <button
-                                      onClick={() => handleSearxngViewLogs(inst.id)}
-                                      className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5"
-                                    >
-                                      {searxngLogsOpenFor === inst.id ? 'Hide Logs' : 'Logs'}
-                                    </button>
-                                  )}
-                                  <button
-                                    onClick={() => setSearxngConfirmDelete({ id: inst.id, instance_name: inst.instance_name })}
-                                    disabled={isBusy}
-                                    className="text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-0.5 ml-auto disabled:opacity-50"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
+                                <ManagedContainerPanel
+                                  status={status}
+                                  isBusy={isBusy}
+                                  onToggle={() => isRunning ? handleSearxngAction(inst.id, 'stop') : handleSearxngAction(inst.id, 'start')}
+                                  onRestart={() => handleSearxngAction(inst.id, 'restart')}
+                                  onLogs={() => handleSearxngViewLogs(inst.id)}
+                                  logsOpen={searxngLogsOpenFor === inst.id}
+                                  onDelete={() => setSearxngConfirmDelete({ id: inst.id, instance_name: inst.instance_name })}
+                                />
                               )}
                               {searxngLogsOpenFor === inst.id && (
                                 <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
@@ -5020,6 +4997,7 @@ export default function HubPage() {
                     )}
                   </div>
                 </div>
+                )}
 
                 {/* Built-in Tools Info */}
                 <div className="bg-teal-500/5 border border-teal-500/20 rounded-xl p-5">
@@ -5923,6 +5901,13 @@ export default function HubPage() {
         </div>
       </Modal>
 
+      {/* (v0.7.x) The legacy flat `ProviderSetupWizard` picker has been
+          replaced by the guided multi-step ProviderWizard mounted from
+          `ProviderWizardProvider` at the app root (see layout.tsx). The
+          ProviderInstanceModal below remains in place as the Advanced-mode
+          fallback — it listens for the `tsushin:open-provider-advanced-modal`
+          event dispatched by the new wizard footer. */}
+
       {/* Provider Instance Modal — rendered at root level to avoid z-index/overflow issues (BUG-109) */}
       <ProviderInstanceModal
         isOpen={instanceModalOpen}
@@ -6206,6 +6191,48 @@ export default function HubPage() {
                 </button>
                 <button
                   onClick={handleKokoroInstanceDelete}
+                  className="px-4 py-2 rounded-lg bg-tsushin-vermilion text-white text-sm font-medium hover:bg-red-400"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ollama delete confirmation — mirrors the Kokoro modal so the Delete
+          action offered by <ManagedContainerPanel /> (and the host-mode
+          action strip) feels identical across both services. */}
+      {ollamaConfirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+          <div className="bg-[#12121a] border border-white/10 rounded-xl w-full max-w-md">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">Delete Ollama instance?</h3>
+              <p className="text-sm text-tsushin-slate mb-4">
+                This will soft-delete the instance and (if auto-provisioned) stop the container.
+              </p>
+              <label className="flex items-start gap-2 p-3 rounded-lg bg-tsushin-vermilion/5 border border-tsushin-vermilion/20 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={ollamaConfirmDelete.removeVolume}
+                  onChange={e => setOllamaConfirmDelete({ ...ollamaConfirmDelete, removeVolume: e.target.checked })}
+                  className="mt-0.5 accent-tsushin-vermilion"
+                />
+                <div>
+                  <div className="text-sm text-white">Also remove container volume</div>
+                  <div className="text-xs text-tsushin-vermilion mt-0.5">Permanent data loss — pulled models will be deleted and must be re-downloaded.</div>
+                </div>
+              </label>
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setOllamaConfirmDelete(null)}
+                  className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-tsushin-slate text-sm hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleOllamaInstanceDelete}
                   className="px-4 py-2 rounded-lg bg-tsushin-vermilion text-white text-sm font-medium hover:bg-red-400"
                 >
                   Delete

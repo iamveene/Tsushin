@@ -132,6 +132,13 @@ export function useCreateAgentChain() {
         is_active: true,
         is_default: false,
       }
+      // Bind the agent to the exact provider_instance the user picked. Without
+      // this, the backend falls back to flat-field tenant creds — which works
+      // for OpenAI/Anthropic keys but is fatal for Vertex AI (project_id +
+      // sa_email + private_key triple lives on the instance, not flat fields).
+      if (draft.basics.provider_instance_id) {
+        payload.provider_instance_id = draft.basics.provider_instance_id
+      }
       if (!personality.skip_persona && personality.persona_id) {
         payload.persona_id = personality.persona_id
       }
@@ -177,7 +184,21 @@ export function useCreateAgentChain() {
     try {
       setStage('skills')
       wiz.setProgress({ message: STAGE_MESSAGES.skills })
-      for (const [skillType, cfg] of Object.entries(draft.skills.builtIns)) {
+      // Memory-step mode drives the semantic_search skill — without this, the
+      // "Built-in + semantic" / "External vector store" options in StepMemory
+      // would set `enable_semantic_search` on the draft but never actually
+      // flip the AgentSkill row, so the feature silently stayed off.
+      const memoryWantsSemantic = draft.memory.mode === 'semantic' || draft.memory.mode === 'vector'
+      const skillMap: Record<string, { is_enabled: boolean; config: Record<string, any> }> = {
+        ...draft.skills.builtIns,
+      }
+      if (memoryWantsSemantic) {
+        skillMap.semantic_search = {
+          is_enabled: true,
+          config: skillMap.semantic_search?.config || {},
+        }
+      }
+      for (const [skillType, cfg] of Object.entries(skillMap)) {
         if (!cfg.is_enabled) continue
         // Audio skills are handled via the audio chain below (with TTS binding).
         if (skillType === 'audio_tts' || skillType === 'audio_transcript' || skillType === 'audio_response') continue

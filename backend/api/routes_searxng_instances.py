@@ -347,6 +347,8 @@ async def delete_searxng_instance(
     try:
         rows = (
             db.query(AgentSkill)
+            .join(Agent, AgentSkill.agent_id == Agent.id)
+            .filter(Agent.tenant_id == ctx.tenant_id)
             .filter(AgentSkill.skill_type == "web_search")
             .all()
         )

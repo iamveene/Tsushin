@@ -72,6 +72,14 @@ class SlackIntegrationCreate(BaseModel):
     workspace_name: Optional[str] = Field(None, description="Workspace display name")
     signing_secret: Optional[str] = Field(None, description="Slack Signing Secret (required for mode='http')")
     app_level_token: Optional[str] = Field(None, description="Slack App-Level Token (xapp-*, required for mode='socket')")
+    # v0.7.x: wizard sends dm_policy; previously the schema ignored it and
+    # Pydantic silently dropped the value, so the user's choice never made
+    # it to the database — the row fell back to the column default. This is
+    # a direct repeat of BUG-582 for a different surface.
+    dm_policy: Optional[str] = Field(
+        "allowlist",
+        description="DM handling policy: 'open' (accept all), 'allowlist' (default), 'disabled'",
+    )
 
     @field_validator('mode')
     @classmethod
@@ -79,6 +87,16 @@ class SlackIntegrationCreate(BaseModel):
         v = v.strip().lower()
         if v not in ("socket", "http"):
             raise ValueError("mode must be 'socket' or 'http'")
+        return v
+
+    @field_validator('dm_policy')
+    @classmethod
+    def validate_dm_policy(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if v not in ("open", "allowlist", "disabled"):
+            raise ValueError("dm_policy must be one of: 'open', 'allowlist', 'disabled'")
         return v
 
     @field_validator('bot_token')
@@ -115,6 +133,7 @@ class SlackIntegrationUpdate(BaseModel):
     signing_secret: Optional[str] = Field(None, description="Slack Signing Secret")
     app_level_token: Optional[str] = Field(None, description="Slack App-Level Token")
     is_active: Optional[bool] = Field(None, description="Enable/disable integration")
+    dm_policy: Optional[str] = Field(None, description="DM handling: 'open', 'allowlist', or 'disabled'")
 
     @field_validator('mode')
     @classmethod
@@ -151,6 +170,7 @@ class SlackIntegrationResponse(BaseModel):
     has_signing_secret: bool = False
     has_app_level_token: bool = False
     events_endpoint_url: Optional[str] = None
+    dm_policy: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -176,6 +196,7 @@ def _to_response(integration: SlackIntegration) -> SlackIntegrationResponse:
         has_signing_secret=bool(integration.signing_secret_encrypted),
         has_app_level_token=bool(integration.app_token_encrypted),
         events_endpoint_url=events_url,
+        dm_policy=integration.dm_policy,
         created_at=integration.created_at,
         updated_at=integration.updated_at,
     )
@@ -204,6 +225,16 @@ async def create_slack_integration(
     failures the moment anything tried to use the tokens.
     """
     try:
+        # BUG-678: Slack integrations are tenant-scoped. A global admin with
+        # no tenant context would otherwise reach the encryption + insert path
+        # with an empty workspace identifier, bubbling a generic 500. Fail
+        # closed with a clear 400 up front.
+        if not getattr(current_user, "tenant_id", None):
+            raise HTTPException(
+                status_code=400,
+                detail="Slack integrations are tenant-scoped. Select a tenant before creating.",
+            )
+
         encryption_key = get_slack_encryption_key(db)
         if not encryption_key:
             raise HTTPException(status_code=500, detail="Slack encryption key not available")
@@ -229,6 +260,7 @@ async def create_slack_integration(
             app_token_encrypted=app_token_encrypted,
             signing_secret_encrypted=signing_secret_encrypted,
             mode=data.mode,
+            dm_policy=data.dm_policy or "allowlist",
             is_active=True,
             status="inactive",
             health_status="unknown",
@@ -322,6 +354,22 @@ async def update_slack_integration(
         if data.app_level_token is not None and enc:
             integration.app_token_encrypted = enc.encrypt(data.app_level_token, tenant_key)
 
+        # BUG-676: re-validate mode-specific requirements on update. The create
+        # path enforces app_level_token for socket mode; the update path must
+        # too, otherwise an HTTP-mode row can flip to active Socket Mode
+        # without tokens and silently fail to start the worker.
+        proposed_mode = data.mode if data.mode is not None else integration.mode
+        if proposed_mode == "socket":
+            has_app_token = bool(
+                getattr(integration, "app_token_encrypted", None)
+                or (data.app_level_token is not None and data.app_level_token.strip())
+            )
+            if not has_app_token:
+                raise HTTPException(
+                    status_code=400,
+                    detail="app_level_token is required when mode='socket'.",
+                )
+
         if data.mode is not None:
             integration.mode = data.mode
         if data.app_id is not None:
@@ -332,6 +380,8 @@ async def update_slack_integration(
             integration.workspace_name = data.workspace_name
         if data.is_active is not None:
             integration.is_active = data.is_active
+        if data.dm_policy is not None:
+            integration.dm_policy = data.dm_policy
 
         db.commit()
         db.refresh(integration)
@@ -382,3 +432,103 @@ async def delete_slack_integration(
 
     logger.info(f"Deleted Slack integration {integration_id} (tenant={current_user.tenant_id})")
     return {"status": "deleted", "id": integration_id}
+
+
+# ============================================================================
+# BUG-675: Test Connection + Channels list endpoints
+# The Hub frontend has buttons that hit these paths; previously they 404'd.
+# ============================================================================
+
+@router.post("/{integration_id}/test")
+async def test_slack_connection(
+    integration_id: int,
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("integrations.slack.read")),
+    db: Session = Depends(get_db),
+):
+    """Verify the Slack bot token via `auth.test`."""
+    integration = db.query(SlackIntegration).filter(
+        SlackIntegration.id == integration_id,
+        SlackIntegration.tenant_id == current_user.tenant_id,
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Slack integration not found")
+
+    encryption_key = get_slack_encryption_key(db)
+    if not encryption_key:
+        raise HTTPException(status_code=500, detail="Slack encryption key not available")
+    enc = TokenEncryption(encryption_key.encode())
+    try:
+        bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+    except Exception as e:
+        logger.warning(f"Slack test: decrypt failed for integration {integration_id}: {e}")
+        return {"success": False, "message": "Stored bot token could not be decrypted."}
+
+    try:
+        import asyncio
+        from slack_sdk import WebClient
+
+        client = WebClient(token=bot_token)
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(None, client.auth_test)
+        if resp.get("ok"):
+            return {
+                "success": True,
+                "message": f"Bot @{resp.get('user', '?')} in {resp.get('team', '?')}",
+                "details": {
+                    "bot_user": resp.get("user"),
+                    "team": resp.get("team"),
+                    "team_id": resp.get("team_id"),
+                    "bot_id": resp.get("bot_id"),
+                },
+            }
+        return {"success": False, "message": resp.get("error", "Slack rejected auth.test")}
+    except Exception as e:
+        logger.warning(f"Slack test for integration {integration_id} failed: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.get("/{integration_id}/channels")
+async def list_slack_channels(
+    integration_id: int,
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("integrations.slack.read")),
+    db: Session = Depends(get_db),
+):
+    """List the bot's visible Slack conversations (public + private channels, DMs excluded)."""
+    integration = db.query(SlackIntegration).filter(
+        SlackIntegration.id == integration_id,
+        SlackIntegration.tenant_id == current_user.tenant_id,
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Slack integration not found")
+
+    encryption_key = get_slack_encryption_key(db)
+    if not encryption_key:
+        raise HTTPException(status_code=500, detail="Slack encryption key not available")
+    enc = TokenEncryption(encryption_key.encode())
+    try:
+        bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not decrypt stored bot token")
+
+    try:
+        import asyncio
+        from slack_sdk import WebClient
+
+        client = WebClient(token=bot_token)
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(
+            None, lambda: client.conversations_list(types="public_channel,private_channel", limit=200)
+        )
+        if not resp.get("ok"):
+            return {"channels": [], "error": resp.get("error", "unknown")}
+        return {
+            "channels": [
+                {"id": c.get("id"), "name": c.get("name"), "is_private": bool(c.get("is_private"))}
+                for c in resp.get("channels", [])
+            ]
+        }
+    except Exception as e:
+        logger.warning(f"Slack channels list for integration {integration_id} failed: {e}")
+        return {"channels": [], "error": str(e)}
