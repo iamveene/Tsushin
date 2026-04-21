@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Hub Productivity + Communication rework — guided wizards replace fixed cards (2026-04-21)
+
+User follow-up to the v0.7 Hub rework: apply the same judgement used for AI Providers and Tool APIs (single guided "+ Add …" launcher, no placeholder cards for unused services) to the Productivity and Communication tabs. Both tabs previously leaned on fixed/placeholder cards that took screen space for services the tenant had not chosen to use; they now collapse to configured-instance cards only, with a single wizard launcher per tab.
+
+**Productivity tab (`frontend/app/hub/page.tsx`)**
+
+- Removed the fixed **Google Integration** status card, the **Asana — Not Connected** placeholder card, and the **Google Calendar — Not Connected** placeholder card.
+- Added a single top-right **"+ Add Productivity Integration"** launcher that opens the new `ProductivityWizard`. The wizard runs Category (calendar / email / tasks / knowledge base) → Service (Google Calendar / Gmail / Asana / …), then hands off to the existing per-service setup flow (`GmailSetupWizard`, `GoogleCalendarSetupWizard`, Asana OAuth redirect) — dispatcher pattern, no rewrite of deep OAuth flows.
+- Google OAuth configuration state is now a compact inline badge instead of a full card. Empty tab state shows one centred "No productivity integrations yet" CTA; with at least one configured service, only the matching instance cards render.
+- Gmail cards are intentionally surfaced only under **Communication** (email-as-channel) to avoid the duplicate placement the v0.6 layout had.
+
+**Communication tab (`frontend/app/hub/page.tsx`)**
+
+- Consolidated six scattered CTAs (top-level `+ Create WhatsApp Instance`; per-section `+ Create Bot` / `+ Connect Workspace` / `+ Connect Bot` / `+ New Webhook` / `+ Add Gmail Account`; plus duplicate empty-state body buttons) into one top-level **"+ Add Channel"** launcher that opens the new `ChannelsWizard`.
+- Per-channel sections (WhatsApp, Telegram, Slack, Discord, Webhooks, Gmail Email Integration) are hidden when the tenant has zero instances of that channel — so an unused Telegram / Slack / Discord section no longer occupies a full empty-state card. Section-level `+ Create …` buttons are retained when at least one instance exists, so a second instance can be added without round-tripping through the wizard.
+- The dashed **"Add Another Gmail"** placeholder is gone — adding a Gmail account now flows through `+ Add Channel` → Gmail, or `+ Add Productivity Integration` → Email → Gmail.
+- The Public-Base-URL advanced card renders only when a Slack / Discord / Webhook integration actually exists (the setting is irrelevant otherwise).
+- Unified empty-state card shown only when zero channels are configured anywhere on the tab.
+
+**New wizards**
+
+- `frontend/components/integrations/ProductivityWizard.tsx` — two-step picker (Category → Service), fetches `/api/hub/productivity-services`, falls back to a static array on offline/degraded boot. Dispatches to existing sub-wizards via a caller-provided `onServiceSelected` callback so modals don't stack.
+- `frontend/components/integrations/ChannelsWizard.tsx` — one-step picker (Channel), fetches `/api/channels`, merges per-tenant `tenant_has_configured` badges into the fallback. Dispatches to `WhatsAppSetupWizard` / `TelegramBotModal` / `SlackSetupWizard` / `DiscordSetupWizard` / `WebhookSetupModal` / `GmailSetupWizard`. Includes an inbound-email `gmail` entry the backend catalog doesn't currently expose; Guard 9 (below) allowlists that extra.
+
+**Backend catalog**
+
+- New `backend/hub/productivity_catalog.py` — `ProductivityServiceInfo` dataclass + `PRODUCTIVITY_CATALOG` array (google_calendar, gmail, asana). Pattern mirrors `backend/channels/catalog.py`.
+- New `GET /api/hub/productivity-services` endpoint in `backend/api/routes_hub_providers.py` — returns the catalog annotated with `tenant_has_configured` (per integration type) and `tenant_has_oauth_credentials` (per OAuth provider; surfaced to the wizard so successive Google-backed picks don't re-ask for the same secret).
+- `frontend/lib/client.ts` — `ProductivityServiceInfo` interface + `api.getProductivityServices()` method.
+
+**Drift prevention (item 5)**
+
+- `backend/tests/test_wizard_drift.py` extended with **Guard 8** (backend `PRODUCTIVITY_CATALOG` ⇄ `ProductivityWizard` `FALLBACK_SERVICES`) and **Guard 9** (backend `CHANNEL_CATALOG` actionable entries ⇄ `ChannelsWizard` `FALLBACK_CHANNELS`, with a narrow `{gmail}` allowlist for wizard-only extras). Adding a new productivity service or channel to the backend without updating the wizard fallback now fails CI.
+- New `frontend/lib/wizard-registry.ts` — a pure-metadata registry that enumerates every wizard + the backend catalog each one depends on. Not imported by the wizards themselves (keeps offline mode robust), but documents the coupling in one place so future wizard additions pick up the drift guard.
+
+**Before/after cosmetic baseline (captured 2026-04-21 via Playwright)**
+
+- Productivity before: 0 configured cards, 3 fixed/placeholder cards (Google Integration, Asana, Google Calendar).
+- Productivity after: 0 configured cards → single centred empty-state CTA; ≥1 configured → only configured cards + inline OAuth badge.
+- Communication before: 5 configured cards, 1 dashed "Add Another Gmail" placeholder, 3 empty-state shells (Telegram/Slack/Discord), 6 scattered CTAs.
+- Communication after: configured-only sections, zero placeholders, 1 top-level "+ Add Channel" (plus per-section "+" only when ≥1 instance exists).
+
+Evidence under `output/playwright/hub-wizard-v0.7/pre-impl/` (pre-impl screenshots).
+
 ### Fourth Sweep — Zero open bugs (2026-04-21)
 
 User wanted no open bugs. Closed the final 2 architectural items with fixes + live verification.

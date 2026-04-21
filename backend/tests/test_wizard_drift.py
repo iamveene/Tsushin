@@ -530,5 +530,128 @@ def test_flight_providers_registered_match_wizard_fallback():
     )
 
 
+# ---------------------------------------------------------------------------
+# Guard 8 — Productivity catalog drift
+# ---------------------------------------------------------------------------
+
+def test_productivity_catalog_frontend_fallback_matches_backend():
+    """
+    Every service in ``backend/hub/productivity_catalog.PRODUCTIVITY_CATALOG``
+    must have a matching entry in the ``FALLBACK_SERVICES`` array inside
+    ``frontend/components/integrations/ProductivityWizard.tsx``. The wizard
+    renders the fallback when the live ``/api/hub/productivity-services``
+    fetch fails (offline/degraded boot), and drift would mean a service
+    registered in the backend catalog is invisible in the picker.
+
+    Also asserts every backend entry carries a non-empty display_name and a
+    recognised category so a silently-blank or mis-categorised card can't
+    ship.
+    """
+    from hub.productivity_catalog import PRODUCTIVITY_CATALOG
+
+    assert PRODUCTIVITY_CATALOG, "PRODUCTIVITY_CATALOG is empty — registration broken?"
+
+    valid_categories = {"calendar", "email", "tasks", "knowledge_base"}
+    backend_ids: Set[str] = set()
+    for svc in PRODUCTIVITY_CATALOG:
+        assert svc.id, "Productivity entry with missing id"
+        assert svc.display_name and svc.display_name.strip(), (
+            f"Productivity entry {svc.id!r} has empty display_name."
+        )
+        assert svc.category in valid_categories, (
+            f"Productivity entry {svc.id!r} has unknown category "
+            f"{svc.category!r}. Allowed: {sorted(valid_categories)}."
+        )
+        backend_ids.add(svc.id)
+
+    wizard_path = FRONTEND / "components" / "integrations" / "ProductivityWizard.tsx"
+    assert wizard_path.exists(), f"ProductivityWizard.tsx not found at {wizard_path}"
+    text = _read(wizard_path)
+
+    fallback_match = re.search(
+        r"const FALLBACK_SERVICES[^=]*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert fallback_match, (
+        "Fallback FALLBACK_SERVICES array not found in ProductivityWizard.tsx. "
+        "If you refactored the fallback shape, update this regex too."
+    )
+    frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_match.group(1)))
+
+    missing_in_frontend = backend_ids - frontend_ids
+    extra_in_frontend = frontend_ids - backend_ids
+
+    assert not missing_in_frontend, (
+        f"Productivity services registered in backend PRODUCTIVITY_CATALOG "
+        f"are missing from the frontend FALLBACK_SERVICES array in "
+        f"ProductivityWizard.tsx: {sorted(missing_in_frontend)}. Add matching "
+        f"entries so offline mode still renders them."
+    )
+    assert not extra_in_frontend, (
+        f"Services present in ProductivityWizard.tsx fallback but not in "
+        f"backend PRODUCTIVITY_CATALOG: {sorted(extra_in_frontend)}. Either "
+        f"register them in backend/hub/productivity_catalog.py or remove "
+        f"from the frontend fallback."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 9 — ChannelsWizard fallback vs. backend channel catalog
+# ---------------------------------------------------------------------------
+
+def test_channels_wizard_fallback_matches_backend():
+    """
+    Sibling to Guard 5. Guard 5 asserts the Agent Wizard's StepChannels
+    fallback matches backend CHANNEL_CATALOG; this one does the same for the
+    Hub > Communication tab's ChannelsWizard (the "+ Add Channel" launcher).
+    The two fallbacks aren't literally the same array — ChannelsWizard drops
+    'playground' (not actionable from the Hub) and adds 'gmail' (inbound
+    email-as-channel) — but every *actionable* channel id registered in
+    CHANNEL_CATALOG must appear in the ChannelsWizard fallback.
+    """
+    from channels.catalog import CHANNEL_CATALOG
+
+    actionable_backend_ids = {ch.id for ch in CHANNEL_CATALOG if ch.requires_setup}
+
+    wizard_path = FRONTEND / "components" / "integrations" / "ChannelsWizard.tsx"
+    assert wizard_path.exists(), f"ChannelsWizard.tsx not found at {wizard_path}"
+    text = _read(wizard_path)
+
+    fallback_match = re.search(
+        r"const FALLBACK_CHANNELS[^=]*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert fallback_match, (
+        "Fallback FALLBACK_CHANNELS array not found in ChannelsWizard.tsx. "
+        "If you refactored the fallback shape, update this regex too."
+    )
+    # ``id: '…'`` fields — the wizard's channel_id (typed union) mirrors id.
+    frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_match.group(1)))
+
+    missing_in_wizard = actionable_backend_ids - frontend_ids
+    assert not missing_in_wizard, (
+        f"Actionable channels in backend CHANNEL_CATALOG are missing from "
+        f"the ChannelsWizard FALLBACK_CHANNELS array: "
+        f"{sorted(missing_in_wizard)}. Every channel the backend accepts "
+        f"setup for must also be offered in the + Add Channel launcher."
+    )
+
+    # The wizard is allowed to include channels beyond CHANNEL_CATALOG (e.g.
+    # 'gmail' which is a productivity service re-exposed as an inbound
+    # channel). Enforce the extras stay on an explicit allowlist so new
+    # drift doesn't slip in under this exception.
+    wizard_extras = frontend_ids - actionable_backend_ids
+    allowed_extras = {"gmail"}
+    unexpected_extras = wizard_extras - allowed_extras
+    assert not unexpected_extras, (
+        f"ChannelsWizard fallback has channel ids not in CHANNEL_CATALOG "
+        f"and not on the extras allowlist ({sorted(allowed_extras)}): "
+        f"{sorted(unexpected_extras)}. Either register them in "
+        f"backend/channels/catalog.py or extend the allowlist in this test."
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
