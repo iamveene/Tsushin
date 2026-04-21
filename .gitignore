@@ -259,6 +259,7 @@ backend/tests/*
 !backend/tests/test_mcp_container_manager.py
 !backend/tests/test_routes_mcp_instances_tester.py
 !backend/tests/test_searxng_container_manager.py
+!backend/tests/test_provider_instance_hardening.py
 !backend/tests/test_sentinel_unified_parse.py
 !backend/tests/test_wizard_drift.py
 !backend/tests/test_memory_tenant_scoping.py

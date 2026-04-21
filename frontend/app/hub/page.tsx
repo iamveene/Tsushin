@@ -41,6 +41,7 @@ import WebhookSecretRevealModal from '@/components/WebhookSecretRevealModal'
 import WebhookEditModal from '@/components/WebhookEditModal'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
+import ProviderSetupWizard from '@/components/providers/ProviderSetupWizard'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
 import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
 import MCPServerWizard from '@/components/mcp/MCPServerWizard'
@@ -410,6 +411,8 @@ export default function HubPage() {
   // Provider Instances state (Phase 21)
   const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
   const [instanceModalOpen, setInstanceModalOpen] = useState(false)
+  const [providerSetupWizardOpen, setProviderSetupWizardOpen] = useState(false)
+  const [providerSetupInitialVendor, setProviderSetupInitialVendor] = useState<string | undefined>(undefined)
   const [editingInstance, setEditingInstance] = useState<ProviderInstance | null>(null)
   const [selectedVendor, setSelectedVendor] = useState<string>('')
   const [instanceMenuOpen, setInstanceMenuOpen] = useState<number | null>(null)
@@ -443,6 +446,7 @@ export default function HubPage() {
   // v0.6.x: Ollama per-tenant auto-provisioning
   const [ollamaMode, setOllamaMode] = useState<'host' | 'auto'>('host')
   const [ollamaProvisionLoading, setOllamaProvisionLoading] = useState(false)
+  const [ollamaContainerActionLoading, setOllamaContainerActionLoading] = useState(false)
   const [showOllamaSetupWizard, setShowOllamaSetupWizard] = useState(false)
   const [ollamaContainerStatus, setOllamaContainerStatus] = useState<any | null>(null)
   const [ollamaGpuEnabled, setOllamaGpuEnabled] = useState(false)
@@ -453,6 +457,9 @@ export default function HubPage() {
   const [ollamaPullJobId, setOllamaPullJobId] = useState<string | null>(null)
   const [ollamaPullProgress, setOllamaPullProgress] = useState<any | null>(null)
   const [ollamaPulledModels, setOllamaPulledModels] = useState<string[]>([])
+  const [ollamaLogsOpen, setOllamaLogsOpen] = useState(false)
+  const [ollamaLogsContent, setOllamaLogsContent] = useState<string>('')
+  const [ollamaLogsLoading, setOllamaLogsLoading] = useState(false)
 
   // MCP Servers state (Phase 26)
   const [mcpServers, setMcpServers] = useState<any[]>([])
@@ -1257,11 +1264,16 @@ export default function HubPage() {
     setOllamaToggleLoading(true)
     try {
       if (ollamaEnabled) {
-        // Disable: soft-delete the Ollama instance
         const ollamaInstance = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
         if (ollamaInstance) {
-          await api.deleteProviderInstance(ollamaInstance.id)
-          toast.success('Ollama disabled')
+          if (ollamaInstance.is_auto_provisioned) {
+            await api.controlOllamaContainer(ollamaInstance.id, 'stop')
+            toast.success('Stopping Ollama container...')
+            setTimeout(() => { refreshOllamaContainerStatus() }, 1200)
+          } else {
+            await api.deleteProviderInstance(ollamaInstance.id)
+            toast.success('Ollama disabled')
+          }
         }
       } else {
         // Enable: ensure an Ollama instance exists
@@ -1444,12 +1456,35 @@ export default function HubPage() {
   const handleOllamaContainerAction = async (action: 'start' | 'stop' | 'restart') => {
     const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
     if (!inst) return
+    setOllamaContainerActionLoading(true)
     try {
       await api.controlOllamaContainer(inst.id, action)
-      toast.success(`Container ${action === 'start' ? 'started' : action === 'stop' ? 'stopped' : 'restarted'}`)
+      toast.success(`${action === 'start' ? 'Starting' : action === 'stop' ? 'Stopping' : 'Restarting'} Ollama container...`)
       setTimeout(() => { refreshOllamaContainerStatus() }, 1200)
     } catch (err: any) {
       toast.error(err.message || `Failed to ${action} container`)
+    } finally {
+      setOllamaContainerActionLoading(false)
+    }
+  }
+
+  const handleOllamaViewLogs = async () => {
+    const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+    if (!inst) return
+    if (ollamaLogsOpen) {
+      setOllamaLogsOpen(false)
+      setOllamaLogsContent('')
+      return
+    }
+    setOllamaLogsOpen(true)
+    setOllamaLogsLoading(true)
+    try {
+      const { logs } = await api.getOllamaContainerLogs(inst.id, 100)
+      setOllamaLogsContent(logs || '(no logs)')
+    } catch (e: any) {
+      setOllamaLogsContent(`Error loading logs: ${e?.message || 'unknown'}`)
+    } finally {
+      setOllamaLogsLoading(false)
     }
   }
 
@@ -1648,6 +1683,35 @@ export default function HubPage() {
     setEditingKey(key)
     setModalData({ service: key.service, api_key: '', is_active: key.is_active })
     setShowApiKeyModal(true)
+  }
+
+  const openProviderSetupWizard = (vendor?: string) => {
+    setEditingInstance(null)
+    setSelectedVendor('')
+    setProviderSetupInitialVendor(vendor)
+    setProviderSetupWizardOpen(true)
+  }
+
+  const openAdvancedProviderForm = (vendor?: string) => {
+    setProviderSetupWizardOpen(false)
+    setEditingInstance(null)
+    setSelectedVendor(vendor || '')
+    setInstanceModalOpen(true)
+  }
+
+  const openToolSetupWizard = (providerId?: string) => {
+    setProviderSetupWizardOpen(false)
+    setAddIntegrationInitialProvider(providerId)
+    setShowSearchWizard(true)
+  }
+
+  const openApiKeyFromWizard = (service: string) => {
+    setProviderSetupWizardOpen(false)
+    if (service === 'vertex_ai') {
+      setShowVertexAiModal(true)
+      return
+    }
+    openAddApiKeyModal(service)
   }
 
   // Vertex AI handlers
@@ -2611,6 +2675,72 @@ export default function HubPage() {
     )
   }
 
+  const renderManagedContainerControls = ({
+    status,
+    isBusy,
+    onToggle,
+    onRestart,
+    onLogs,
+    logsOpen,
+    onDelete,
+  }: {
+    status: string
+    isBusy: boolean
+    onToggle: () => void
+    onRestart?: () => void
+    onLogs?: () => void
+    logsOpen?: boolean
+    onDelete?: () => void
+  }) => {
+    const normalized = (status || 'none').toLowerCase()
+    const isRunning = normalized === 'running'
+    const isProvisioning = normalized === 'creating' || normalized === 'provisioning'
+    const canRestart = normalized === 'running' || normalized === 'stopped'
+
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
+          <ToggleSwitch
+            checked={isRunning}
+            onChange={onToggle}
+            disabled={isBusy || isProvisioning}
+            title={isRunning ? 'Stop container' : 'Start container'}
+            activeColor="bg-tsushin-success"
+          />
+          <span className="text-[11px] text-tsushin-slate">
+            {isProvisioning ? 'Provisioning' : isRunning ? 'Enabled' : 'Disabled'}
+          </span>
+        </div>
+        {canRestart && onRestart && (
+          <button
+            onClick={onRestart}
+            disabled={isBusy}
+            className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-1 disabled:opacity-50"
+          >
+            Restart
+          </button>
+        )}
+        {isRunning && onLogs && (
+          <button
+            onClick={onLogs}
+            className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-1"
+          >
+            {logsOpen ? 'Hide Logs' : 'Logs'}
+          </button>
+        )}
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            disabled={isBusy}
+            className="ml-auto text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-1 disabled:opacity-50"
+          >
+            Delete
+          </button>
+        )}
+      </div>
+    )
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -2634,6 +2764,12 @@ export default function HubPage() {
     { key: 'mcp-servers', label: 'MCP Servers', Icon: ServerIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'vector-stores', label: 'Vector Stores', Icon: VectorStoreIcon, color: 'text-emerald-400', iconBg: 'bg-emerald-400/10' },
   ]
+  const visibleAiFallbackProviders = AI_PROVIDERS.filter(provider => Boolean(getApiKeyForService(provider.value)))
+  const visibleToolApis = TOOL_APIS.filter(tool => {
+    if (tool.value === 'searxng') return searxngInstances.some(i => i.is_active)
+    return Boolean(getApiKeyForService(tool.value))
+  })
+  const showLocalServices = ollamaEnabled || kokoroInstances.length > 0
 
   return (
     <div className="min-h-screen animate-fade-in">
@@ -2737,18 +2873,14 @@ export default function HubPage() {
             {/* ==================== AI PROVIDERS TAB ==================== */}
             {activeTab === 'ai-providers' && (
               <div className="space-y-6 animate-fade-in">
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h2 className="text-lg font-display font-semibold text-white">AI Model Providers</h2>
                     <p className="text-sm text-tsushin-slate">Manage provider instances and API keys for AI models</p>
                   </div>
                   <button
-                    onClick={() => {
-                      setEditingInstance(null)
-                      setSelectedVendor('')
-                      setInstanceModalOpen(true)
-                    }}
-                    className="btn-primary"
+                    onClick={() => openProviderSetupWizard()}
+                    className="btn-primary w-full sm:w-auto justify-center"
                   >
                     + New Instance
                   </button>
@@ -2816,13 +2948,25 @@ export default function HubPage() {
                   // LLM provider instances grid — excludes:
                   // - 'ollama': has its own dedicated Local Services section above with health monitoring
                   // - 'elevenlabs': TTS-only provider configured via API Keys, not provider instances
-                  const allVendors = Array.from(new Set([
-                    ...Object.keys(vendorGroups),
-                    'openai', 'anthropic', 'gemini', 'groq', 'grok', 'deepseek', 'openrouter', 'vertex_ai',
-                  ])).filter(v => v !== 'ollama' && v !== 'elevenlabs').sort()
+                  const allVendors = Object.keys(vendorGroups)
+                    .filter(v => v !== 'ollama' && v !== 'elevenlabs')
+                    .sort()
 
                   return (
                     <div className="space-y-6">
+                      {allVendors.length === 0 && (
+                        <div className="border border-dashed border-tsushin-border rounded-xl p-5 text-center">
+                          <p className="text-sm text-tsushin-slate">No LLM provider instances configured yet.</p>
+                          {canEditSettings && (
+                            <button
+                              onClick={() => openProviderSetupWizard()}
+                              className="mt-3 btn-secondary px-4 py-2 text-sm"
+                            >
+                              Add Provider
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {allVendors.map(vendor => {
                         const instances = vendorGroups[vendor] || []
                         const VendorIcon = VENDOR_ICONS[vendor] || BeakerIcon
@@ -2830,8 +2974,8 @@ export default function HubPage() {
 
                         return (
                           <div key={vendor} className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2.5">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex items-center gap-2.5 min-w-0">
                                 <VendorIcon size={18} className={vendorColor} />
                                 <h3 className="text-sm font-semibold text-white">{VENDOR_LABELS[vendor] || vendor}</h3>
                                 <span className="text-xs text-tsushin-slate">
@@ -2839,24 +2983,15 @@ export default function HubPage() {
                                 </span>
                               </div>
                               <button
-                                onClick={() => {
-                                  setEditingInstance(null)
-                                  setSelectedVendor(vendor)
-                                  setInstanceModalOpen(true)
-                                }}
-                                className="flex items-center gap-1 text-xs text-tsushin-accent hover:text-white transition-colors"
+                                onClick={() => openProviderSetupWizard(vendor)}
+                                className="inline-flex w-fit items-center gap-1 rounded-md border border-tsushin-accent/25 bg-tsushin-accent/10 px-2.5 py-1 text-xs text-tsushin-accent hover:text-white hover:bg-tsushin-accent/15 transition-colors"
                               >
                                 <PlusIconSvg size={14} />
                                 Add Instance
                               </button>
                             </div>
 
-                            {instances.length === 0 ? (
-                              <div className="border border-dashed border-tsushin-border rounded-xl p-4 text-center">
-                                <p className="text-xs text-tsushin-slate">No instances configured</p>
-                              </div>
-                            ) : (
-                              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                                 {instances.map(inst => (
                                   <div key={inst.id} className="card p-4 hover-glow group relative">
                                     <div className="flex items-start justify-between mb-3">
@@ -2993,7 +3128,6 @@ export default function HubPage() {
                                   </div>
                                 ))}
                               </div>
-                            )}
                           </div>
                         )
                       })}
@@ -3002,10 +3136,12 @@ export default function HubPage() {
                 })()}
 
                 {/* Local Services Section */}
+                {showLocalServices && (
                 <div className="pt-2">
                   <h3 className="text-sm font-semibold text-tsushin-fog mb-3">Local Services</h3>
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     {/* Ollama Card (Enhanced - Local LLM) */}
+                    {ollamaEnabled && (
                     <div className="card p-5 hover-glow group">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-3">
@@ -3028,7 +3164,7 @@ export default function HubPage() {
                           </div>
                           {/* Enable/Disable Toggle — only once the tenant has opted in;
                               the initial "Setup with Wizard" CTA below handles activation. */}
-                          {canEditSettings && ollamaEnabled && (
+                          {canEditSettings && ollamaEnabled && ollamaMode === 'host' && (
                             <ToggleSwitch
                               checked={ollamaEnabled}
                               onChange={() => handleOllamaToggle()}
@@ -3237,36 +3373,88 @@ export default function HubPage() {
                                 )}
 
                                 {/* Container controls */}
-                                {canEditSettings && (
-                                  <div className="flex gap-1.5 pt-2 border-t border-white/5">
-                                    <button
-                                      onClick={() => handleOllamaContainerAction('stop')}
-                                      className="flex-1 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors"
-                                    >
-                                      Stop
-                                    </button>
-                                    <button
-                                      onClick={() => handleOllamaContainerAction('restart')}
-                                      className="flex-1 bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors"
-                                    >
-                                      Restart
-                                    </button>
+                                {canEditSettings && renderManagedContainerControls({
+                                  status: state,
+                                  isBusy: ollamaContainerActionLoading,
+                                  onToggle: () => handleOllamaContainerAction('stop'),
+                                  onRestart: () => handleOllamaContainerAction('restart'),
+                                  onLogs: handleOllamaViewLogs,
+                                  logsOpen: ollamaLogsOpen,
+                                })}
+                                {ollamaLogsOpen && (
+                                  <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
+                                      <button
+                                        onClick={async () => {
+                                          const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+                                          if (!inst) return
+                                          setOllamaLogsLoading(true)
+                                          try {
+                                            const { logs } = await api.getOllamaContainerLogs(inst.id, 100)
+                                            setOllamaLogsContent(logs || '(no logs)')
+                                          } catch (e: any) {
+                                            setOllamaLogsContent(`Error: ${e?.message || 'unknown'}`)
+                                          } finally {
+                                            setOllamaLogsLoading(false)
+                                          }
+                                        }}
+                                        disabled={ollamaLogsLoading}
+                                        className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
+                                      >
+                                        {ollamaLogsLoading ? 'Loading...' : 'Refresh'}
+                                      </button>
+                                    </div>
+                                    <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
+                                      {ollamaLogsContent || (ollamaLogsLoading ? 'Loading logs...' : '(no logs loaded)')}
+                                    </pre>
                                   </div>
                                 )}
                               </div>
                             )}
 
                             {isStopped && canEditSettings && (
-                              <div className="flex gap-1.5">
-                                <button
-                                  onClick={() => handleOllamaContainerAction('start')}
-                                  className="flex-1 bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
-                                >
-                                  Start Container
-                                </button>
+                              <div className="space-y-2">
+                                {renderManagedContainerControls({
+                                  status: state,
+                                  isBusy: ollamaContainerActionLoading,
+                                  onToggle: () => handleOllamaContainerAction('start'),
+                                  onRestart: () => handleOllamaContainerAction('restart'),
+                                  onLogs: handleOllamaViewLogs,
+                                  logsOpen: ollamaLogsOpen,
+                                })}
+                                {ollamaLogsOpen && (
+                                  <div className="p-2 bg-black/50 border border-white/5 rounded">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
+                                      <button
+                                        onClick={async () => {
+                                          const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
+                                          if (!inst) return
+                                          setOllamaLogsLoading(true)
+                                          try {
+                                            const { logs } = await api.getOllamaContainerLogs(inst.id, 100)
+                                            setOllamaLogsContent(logs || '(no logs)')
+                                          } catch (e: any) {
+                                            setOllamaLogsContent(`Error: ${e?.message || 'unknown'}`)
+                                          } finally {
+                                            setOllamaLogsLoading(false)
+                                          }
+                                        }}
+                                        disabled={ollamaLogsLoading}
+                                        className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
+                                      >
+                                        {ollamaLogsLoading ? 'Loading...' : 'Refresh'}
+                                      </button>
+                                    </div>
+                                    <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
+                                      {ollamaLogsContent || (ollamaLogsLoading ? 'Loading logs...' : '(no logs loaded)')}
+                                    </pre>
+                                  </div>
+                                )}
                                 <button
                                   onClick={() => handleOllamaDeprovision(true)}
-                                  className="flex-1 bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
+                                  className="w-full bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
                                 >
                                   Deprovision
                                 </button>
@@ -3396,8 +3584,10 @@ export default function HubPage() {
                         ) : null
                       })()}
                     </div>
+                    )}
 
                     {/* Kokoro TTS Card (v0.7.0 consolidated — per-tenant instances + legacy) */}
+                    {kokoroInstances.length > 0 && (
                     <div className="card p-5 hover-glow group border-green-700/30">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
@@ -3449,7 +3639,6 @@ export default function HubPage() {
                               const status = (inst.container_status || 'none').toLowerCase()
                               const isProvisioning = status === 'creating' || status === 'provisioning'
                               const isRunning = status === 'running'
-                              const isStopped = status === 'stopped'
                               const isBusy = kokoroInstanceActionLoading === inst.id
                               const isDefault = kokoroDefault?.default_tts_instance_id === inst.id
                               return (
@@ -3493,49 +3682,15 @@ export default function HubPage() {
 
                                   {/* Actions */}
                                   {canEditSettings && inst.is_auto_provisioned && (
-                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                      {!isRunning && !isProvisioning && (
-                                        <button
-                                          onClick={() => handleKokoroInstanceStart(inst.id)}
-                                          disabled={isBusy}
-                                          className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-0.5 disabled:opacity-50"
-                                        >
-                                          {isBusy ? '...' : 'Start'}
-                                        </button>
-                                      )}
-                                      {isRunning && (
-                                        <button
-                                          onClick={() => handleKokoroInstanceStop(inst.id)}
-                                          disabled={isBusy}
-                                          className="text-[11px] bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded px-2 py-0.5 disabled:opacity-50"
-                                        >
-                                          {isBusy ? '...' : 'Stop'}
-                                        </button>
-                                      )}
-                                      {(isRunning || isStopped) && (
-                                        <button
-                                          onClick={() => handleKokoroInstanceRestart(inst.id)}
-                                          disabled={isBusy}
-                                          className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5 disabled:opacity-50"
-                                        >
-                                          Restart
-                                        </button>
-                                      )}
-                                      {isRunning && (
-                                        <button
-                                          onClick={() => handleKokoroViewLogs(inst.id)}
-                                          className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5"
-                                        >
-                                          {kokoroLogsOpenFor === inst.id ? 'Hide Logs' : 'Logs'}
-                                        </button>
-                                      )}
-                                      <button
-                                        onClick={() => setKokoroConfirmDelete({ id: inst.id, removeVolume: false })}
-                                        className="text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-0.5 ml-auto"
-                                      >
-                                        Delete
-                                      </button>
-                                    </div>
+                                    renderManagedContainerControls({
+                                      status,
+                                      isBusy,
+                                      onToggle: () => isRunning ? handleKokoroInstanceStop(inst.id) : handleKokoroInstanceStart(inst.id),
+                                      onRestart: () => handleKokoroInstanceRestart(inst.id),
+                                      onLogs: () => handleKokoroViewLogs(inst.id),
+                                      logsOpen: kokoroLogsOpenFor === inst.id,
+                                      onDelete: () => setKokoroConfirmDelete({ id: inst.id, removeVolume: false }),
+                                    })
                                   )}
 
                                   {/* Logs drawer (inline) */}
@@ -3620,28 +3775,21 @@ export default function HubPage() {
                         )}
                       </div>
                     </div>
+                    )}
                   </div>
                 </div>
+                )}
 
                 {/* Service API Keys Section */}
-                <div className="pt-2">
-                  <h3 className="text-sm font-semibold text-tsushin-fog mb-1">Service API Keys</h3>
-                  <p className="text-xs text-tsushin-slate mb-3">API keys for non-LLM integrations (e.g. ElevenLabs TTS) and LLM provider fallbacks</p>
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {AI_PROVIDERS.map(provider => renderIntegrationCard(provider, 'ai'))}
+                {visibleAiFallbackProviders.length > 0 && (
+                  <div className="pt-2">
+                    <h3 className="text-sm font-semibold text-tsushin-fog mb-1">Service API Keys</h3>
+                    <p className="text-xs text-tsushin-slate mb-3">Configured fallback keys and non-LLM service credentials</p>
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      {visibleAiFallbackProviders.map(provider => renderIntegrationCard(provider, 'ai'))}
+                    </div>
                   </div>
-                </div>
-
-                {/* Info Box */}
-                <div className="bg-purple-500/5 border border-purple-500/20 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-purple-300 mb-2 flex items-center gap-2">
-                    <LightbulbIcon size={16} className="text-purple-300" /> AI Providers
-                  </h3>
-                  <p className="text-xs text-tsushin-slate">
-                    Provider instances let you configure multiple endpoints for the same vendor (e.g., different OpenAI-compatible servers).
-                    Service API Keys below are used as fallbacks when instances don't have their own key configured.
-                  </p>
-                </div>
+                )}
               </div>
             )}
 
@@ -4622,29 +4770,6 @@ export default function HubPage() {
                     </button>
                   </div>
 
-                  {/* Coming Soon Productivity Apps */}
-                  {PRODUCTIVITY_APPS.filter(app => app.value !== 'asana' && app.value !== 'google_calendar').map(app => {
-                    const AppIcon = app.Icon
-                    return (
-                      <div key={app.value} className="card p-5 opacity-60">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-gray-700/50 flex items-center justify-center text-gray-400">
-                              <AppIcon size={20} />
-                            </div>
-                            <h3 className="font-semibold text-white">{app.label}</h3>
-                        </div>
-                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-600/30 text-gray-400 border border-gray-600/50">
-                          Coming Soon
-                        </span>
-                        </div>
-                        <p className="text-xs text-tsushin-slate mb-4">{app.description}</p>
-                        <div className="text-center py-2">
-                          <span className="text-xs text-gray-500">Coming Soon</span>
-                        </div>
-                      </div>
-                    )
-                  })}
                 </div>
 
                 {/* Info Box */}
@@ -4654,7 +4779,6 @@ export default function HubPage() {
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     Connect your favorite productivity tools to let agents manage tasks, schedule meetings, and sync with your knowledge bases.
-                    Google Calendar and Notion integrations are high priority for Q1 2026.
                   </p>
                 </div>
               </div>
@@ -4801,29 +4925,6 @@ export default function HubPage() {
                     </div>
                   </div>
 
-                  {/* Coming Soon Developer Tools */}
-                  {DEVELOPER_TOOLS.filter(tool => tool.status === 'coming_soon').map(tool => {
-                    const ToolIcon = tool.Icon
-                    return (
-                      <div key={tool.value} className="card p-5 opacity-60">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-gray-700/50 flex items-center justify-center text-gray-400">
-                              <ToolIcon size={20} />
-                            </div>
-                            <h3 className="font-semibold text-white">{tool.label}</h3>
-                          </div>
-                          <span className="px-2 py-1 text-xs font-medium rounded-full bg-gray-600/30 text-gray-400 border border-gray-600/50">
-                            Coming Soon
-                          </span>
-                        </div>
-                        <p className="text-xs text-tsushin-slate mb-4">{tool.description}</p>
-                        <div className="text-center py-2">
-                          <span className="text-xs text-gray-500">Coming Soon</span>
-                        </div>
-                      </div>
-                    )
-                  })}
                 </div>
 
                 {/* Info Box */}
@@ -4833,8 +4934,7 @@ export default function HubPage() {
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     The Shell Command Center enables remote command execution with security approval workflows. Sandboxed Tools provide
-                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts. GitHub integration
-                    is coming soon, enabling agents to create issues, summarize PRs, and respond to repository events.
+                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts.
                   </p>
                 </div>
               </div>
@@ -4843,24 +4943,27 @@ export default function HubPage() {
             {/* ==================== TOOL APIS TAB ==================== */}
             {activeTab === 'tool-apis' && (
               <div className="space-y-6 animate-fade-in">
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h2 className="text-lg font-display font-semibold text-white">Tool APIs</h2>
                     <p className="text-sm text-tsushin-slate">External APIs for agent capabilities</p>
                   </div>
                   <button
                     onClick={() => { setAddIntegrationInitialProvider(undefined); setShowSearchWizard(true) }}
-                    className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors"
+                    className="w-full sm:w-auto px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors"
                   >
                     + Add Integration
                   </button>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 animate-stagger">
-                  {TOOL_APIS.map(tool => renderIntegrationCard(tool, 'tool'))}
-                </div>
+                {visibleToolApis.length > 0 && (
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 animate-stagger">
+                    {visibleToolApis.map(tool => renderIntegrationCard(tool, 'tool'))}
+                  </div>
+                )}
 
                 {/* SearXNG Per-Tenant Instances (v0.6.0-patch.7) — structure mirrors Kokoro panel */}
+                {searxngInstances.length > 0 && (
                 <div className="card p-5 hover-glow group border-teal-700/30">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-3">
@@ -4913,7 +5016,6 @@ export default function HubPage() {
                           const status = (inst.container_status || 'none').toLowerCase()
                           const isProvisioning = status === 'creating' || status === 'provisioning'
                           const isRunning = status === 'running'
-                          const isStopped = status === 'stopped'
                           const isBusy = searxngActionLoading === inst.id
                           return (
                             <div key={inst.id} className="p-3 bg-tsushin-ink/40 border border-white/5 rounded-lg">
@@ -4940,52 +5042,15 @@ export default function HubPage() {
                                   {isProvisioning ? 'Provisioning...' : status || 'n/a'}
                                 </span>
                               </div>
-                              {canEditSettings && inst.is_auto_provisioned && (
-                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                  {!isRunning && !isProvisioning && (
-                                    <button
-                                      onClick={() => handleSearxngAction(inst.id, 'start')}
-                                      disabled={isBusy}
-                                      className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-0.5 disabled:opacity-50"
-                                    >
-                                      {isBusy ? '...' : 'Start'}
-                                    </button>
-                                  )}
-                                  {isRunning && (
-                                    <button
-                                      onClick={() => handleSearxngAction(inst.id, 'stop')}
-                                      disabled={isBusy}
-                                      className="text-[11px] bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded px-2 py-0.5 disabled:opacity-50"
-                                    >
-                                      {isBusy ? '...' : 'Stop'}
-                                    </button>
-                                  )}
-                                  {(isRunning || isStopped) && (
-                                    <button
-                                      onClick={() => handleSearxngAction(inst.id, 'restart')}
-                                      disabled={isBusy}
-                                      className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5 disabled:opacity-50"
-                                    >
-                                      Restart
-                                    </button>
-                                  )}
-                                  {isRunning && (
-                                    <button
-                                      onClick={() => handleSearxngViewLogs(inst.id)}
-                                      className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5"
-                                    >
-                                      {searxngLogsOpenFor === inst.id ? 'Hide Logs' : 'Logs'}
-                                    </button>
-                                  )}
-                                  <button
-                                    onClick={() => setSearxngConfirmDelete({ id: inst.id, instance_name: inst.instance_name })}
-                                    disabled={isBusy}
-                                    className="text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-0.5 ml-auto disabled:opacity-50"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              )}
+                              {canEditSettings && inst.is_auto_provisioned && renderManagedContainerControls({
+                                status,
+                                isBusy,
+                                onToggle: () => isRunning ? handleSearxngAction(inst.id, 'stop') : handleSearxngAction(inst.id, 'start'),
+                                onRestart: () => handleSearxngAction(inst.id, 'restart'),
+                                onLogs: () => handleSearxngViewLogs(inst.id),
+                                logsOpen: searxngLogsOpenFor === inst.id,
+                                onDelete: () => setSearxngConfirmDelete({ id: inst.id, instance_name: inst.instance_name }),
+                              })}
                               {searxngLogsOpenFor === inst.id && (
                                 <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
                                   <div className="flex items-center justify-between mb-1">
@@ -5020,6 +5085,7 @@ export default function HubPage() {
                     )}
                   </div>
                 </div>
+                )}
 
                 {/* Built-in Tools Info */}
                 <div className="bg-teal-500/5 border border-teal-500/20 rounded-xl p-5">
@@ -5922,6 +5988,20 @@ export default function HubPage() {
           </div>
         </div>
       </Modal>
+
+      <ProviderSetupWizard
+        isOpen={providerSetupWizardOpen}
+        initialVendor={providerSetupInitialVendor}
+        onClose={() => {
+          setProviderSetupWizardOpen(false)
+          setProviderSetupInitialVendor(undefined)
+        }}
+        onAdvanced={openAdvancedProviderForm}
+        onOpenOllama={() => setShowOllamaSetupWizard(true)}
+        onOpenKokoro={() => setKokoroWizardOpen(true)}
+        onOpenApiKey={openApiKeyFromWizard}
+        onOpenToolWizard={openToolSetupWizard}
+      />
 
       {/* Provider Instance Modal — rendered at root level to avoid z-index/overflow issues (BUG-109) */}
       <ProviderInstanceModal

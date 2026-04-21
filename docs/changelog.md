@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Hub provider setup UX cleanup (2026-04-21)
+
+Tenant-facing cleanup for Hub > AI Providers and Hub > Tool APIs so unused provider configuration no longer appears as fixed empty cards.
+
+- **Hub AI Providers**: empty static vendor panels are gone. The tab now renders only configured provider-instance vendor groups, hides unused Local Services cards until Ollama/Kokoro exists, and only shows Service API Key fallback cards when an actual fallback key is configured.
+- **Guided setup default**: `+ New Instance` now opens a guided Add Provider wizard with Cloud/API LLM, Local LLM, Audio/TTS, and Web Search/Tool API routes. The existing provider instance form remains available through Advanced Form, while Ollama/Kokoro/SearXNG continue through their existing guided flows.
+- **Tool APIs / SearXNG**: the SearXNG top card and self-hosted management panel no longer render before an instance exists. SearXNG remains available from `+ Add Integration` and the guided provider wizard.
+- **Container controls**: Ollama, Kokoro, and SearXNG managed rows now use a consistent enable/disable toggle for container start/stop. Restart, Logs, Delete, and deprovision remain explicit secondary/destructive actions.
+- **Mobile polish**: Hub section headers stack their primary setup actions on small screens, provider-level add actions render as compact pills, and the shell header no longer creates horizontal overflow on Hub mobile views.
+- **Backend hardening**: provider-instance responses include Ollama container metadata for reliable UI state, auto-provisioned Ollama deletes deprovision before soft-delete, and SearXNG delete cleanup is scoped through tenant-owned agents only.
+- **Validation**: `npm run build` passed for the frontend; focused backend regression `pytest -o addopts='' tests/test_provider_instance_hardening.py -q` passed with 3 tests; `docker-compose build --no-cache frontend && docker-compose up -d frontend` refreshed the Hub bundle after polish. Baseline browser artifacts were captured under `output/playwright/hub-provider-setup-baseline-20260421/`; final desktop/mobile screenshots and overflow checks are under `output/playwright/hub-provider-setup-final-20260421/`.
+
 ### Fresh-install VM regression audit — current `develop` (2026-04-20)
 
 Audit-only pass from a brand-new Ubuntu VM clone at `~/tsushin-v060-audit-20260420`, with evidence under `.private/qa/vm-fresh-install-20260420/run-20260420-230152/` and browser artifacts under `output/playwright/vm-fresh-install-20260420/run-20260420-230152/`. The clone captured `2317397e0d97222981a5b9a69c8a6f6b43ca8c62`; `origin/develop` advanced after the install evidence was captured. The requested `sudo python3 install.py` path was attempted and logged, but the disposable VM user could not provide a sudo password, so the installer was run non-sudo from the same fresh clone without `.env`, Caddy, Docker, certificate-store, or generated-file edits.
