@@ -418,14 +418,30 @@ async def list_integrations(
             if hub.type == 'asana':
                 asana = db.query(AsanaIntegration).filter(AsanaIntegration.id == hub.id).first()
                 # Optionally refresh health
+                # BUG-684: bound per-integration health-check to 8s so the request's
+                # DB session cannot be held for minutes when external APIs are down.
+                # The old 30s-per-integration inline pattern was the trigger for the
+                # QueuePool deadlock filed as BUG-684.
                 if refresh_health:
+                    import asyncio as _asyncio
                     service = None
                     try:
                         service = _create_asana_service(hub.id, db)
-                        health_result = await service.check_health()
+                        health_result = await _asyncio.wait_for(service.check_health(), timeout=8.0)
                         hub.health_status = health_result['status']
                         hub.last_health_check = datetime.utcnow()
                         db.commit()
+                    except _asyncio.TimeoutError:
+                        logger.warning(f"Asana health check timed out for integration {hub.id} (>8s)")
+                        try:
+                            hub.health_status = 'unavailable'
+                            hub.last_health_check = datetime.utcnow()
+                            db.commit()
+                        except Exception:
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.warning(f"Health check failed for integration {hub.id}: {e}")
                         try:
@@ -434,17 +450,33 @@ async def list_integrations(
                             pass
                     finally:
                         if service:
-                            await service.close()
+                            try:
+                                await service.close()
+                            except Exception:
+                                pass
             elif hub.type == 'calendar':
                 calendar = db.query(CalendarIntegration).filter(CalendarIntegration.id == hub.id).first()
                 # Optionally refresh health for calendar integrations
+                # BUG-684: bound per-integration health-check to 8s — see Asana branch above.
                 if refresh_health:
+                    import asyncio as _asyncio
                     try:
                         service = CalendarService(db, hub.id)
-                        health_result = await service.check_health()
+                        health_result = await _asyncio.wait_for(service.check_health(), timeout=8.0)
                         hub.health_status = health_result['status']
                         hub.last_health_check = datetime.utcnow()
                         db.commit()
+                    except _asyncio.TimeoutError:
+                        logger.warning(f"Calendar health check timed out for integration {hub.id} (>8s)")
+                        try:
+                            hub.health_status = 'unavailable'
+                            hub.last_health_check = datetime.utcnow()
+                            db.commit()
+                        except Exception:
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.warning(f"Calendar health check failed for integration {hub.id}: {e}")
                         try:
@@ -462,13 +494,26 @@ async def list_integrations(
             elif hub.type == 'gmail':
                 gmail = db.query(GmailIntegration).filter(GmailIntegration.id == hub.id).first()
                 # Optionally refresh health for gmail integrations
+                # BUG-684: bound per-integration health-check to 8s — see Asana branch above.
                 if refresh_health:
+                    import asyncio as _asyncio
                     try:
                         service = GmailService(db, hub.id)
-                        health_result = await service.check_health()
+                        health_result = await _asyncio.wait_for(service.check_health(), timeout=8.0)
                         hub.health_status = health_result['status']
                         hub.last_health_check = datetime.utcnow()
                         db.commit()
+                    except _asyncio.TimeoutError:
+                        logger.warning(f"Gmail health check timed out for integration {hub.id} (>8s)")
+                        try:
+                            hub.health_status = 'unavailable'
+                            hub.last_health_check = datetime.utcnow()
+                            db.commit()
+                        except Exception:
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.warning(f"Gmail health check failed for integration {hub.id}: {e}")
                         try:
