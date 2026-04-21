@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### BUG-582: Agent wizard dropped provider_instance_id (2026-04-21)
+
+Root-cause fix for a silent-data-loss bug in the Agent Creation Wizard where the user-selected provider binding was never persisted — fatal for Vertex AI (and any vendor whose credentials live on the instance, not on a flat `api_key` row).
+
+- **Backend schema.** `AgentCreate` in `backend/api/routes_agents.py` was missing `provider_instance_id` entirely, so Pydantic silently dropped the field on `POST /api/agents`. Added the field plus a tenant-scoped validator that verifies the instance belongs to the caller, is active, and matches the requested vendor. The same validator was added to the update path. `memory_isolation_mode` was also missing from both schemas and the update allowlist — added.
+- **Frontend wizard.** `StepBasics` now renders a real **Provider instance** selector filtered to `(vendor, is_active, api_key_configured)`. Previously the step deduplicated instances down to one per vendor and only captured the vendor name, so a tenant with three Vertex instances had no way to pick one. The wizard draft (`BasicsConfig`) now carries `provider_instance_id`, the validator requires it for every non-Ollama vendor, and `useCreateAgentChain` sends it in the create payload. The "Built-in + semantic" / "External vector store" memory modes now also toggle the `semantic_search` skill — previously the setting was recorded on the draft but never wired through to an `AgentSkill` row.
+- **Runtime safety net.** `AIClient.__init__` now resolves the tenant's default `ProviderInstance` for the requested vendor when no `provider_instance_id` is passed. This recovers pre-fix orphan agents (NULL FK) and prevents the Vertex flat-field path (which can never succeed) from being hit when a working default instance exists.
+- **Files modified.** `backend/api/routes_agents.py`, `backend/agent/ai_client.py`, `frontend/components/agent-wizard/steps/StepBasics.tsx`, `frontend/components/agent-wizard/hooks/useCreateAgentChain.ts`, `frontend/lib/agent-wizard/reducer.ts`.
+- **Validation.** (1) Orphan agent 211 (`provider_instance_id = NULL`, vendor `vertex_ai`) — chat via `POST /api/v1/agents/211/chat` returned `"pong"` in 19s, confirming the safety net auto-bound to the tenant default Vertex instance. (2) Wizard-created agent 212 (`WizardFixTest`) — DB row shows `provider_instance_id = 2`, `memory_isolation_mode = 'isolated'`; chat returned `"wizard-fix-confirmed"` in 7s. (3) Backend rebuilt with `docker-compose build --no-cache backend && docker-compose up -d backend` and frontend with `--force-recreate`, both healthy post-restart, zero backend errors.
+
 ### Hub: guided ProviderWizard + unified ManagedContainerPanel (2026-04-21)
 
 Second-pass refactor on top of the earlier Hub cleanup. The flat `ProviderSetupWizard` picker was replaced with a guided multi-step wizard that mirrors the Agent/WhatsApp/Audio/Gmail wizard pattern, and the three auto-provisioned local services (Ollama, Kokoro, SearXNG) now share a single `<ManagedContainerPanel />` for lifecycle controls.
