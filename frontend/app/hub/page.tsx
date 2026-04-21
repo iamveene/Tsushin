@@ -41,7 +41,7 @@ import WebhookSecretRevealModal from '@/components/WebhookSecretRevealModal'
 import WebhookEditModal from '@/components/WebhookEditModal'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
-import ProviderSetupWizard from '@/components/providers/ProviderSetupWizard'
+import ManagedContainerPanel from '@/components/hub/ManagedContainerPanel'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
 import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
 import MCPServerWizard from '@/components/mcp/MCPServerWizard'
@@ -51,6 +51,7 @@ import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/Typeah
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 import { useGoogleWizard, useGoogleWizardComplete } from '@/contexts/GoogleWizardContext'
+import { useProviderWizard, useProviderWizardComplete } from '@/contexts/ProviderWizardContext'
 import IntegrationSummary from '@/components/hub/IntegrationSummary'
 import {
   GeminiIcon,
@@ -92,9 +93,11 @@ import {
   WebhookIcon,
   CopyIcon,
   CloudIcon,
+  ChevronRightIcon,
   type IconProps
 } from '@/components/ui/icons'
-import ToggleSwitch from '@/components/ui/ToggleSwitch'
+// ToggleSwitch — formerly used for the Ollama panel-level Enable toggle;
+// now encapsulated inside ManagedContainerPanel.
 
 type TabType = 'ai-providers' | 'communication' | 'productivity' | 'developer' | 'tool-apis' | 'mcp-servers' | 'vector-stores'
 
@@ -322,6 +325,7 @@ export default function HubPage() {
   // even if the user previously dismissed it.
   const { forceOpenWizard: openWhatsAppWizard } = useWhatsAppWizard()
   const { openWizard: openGoogleWizard } = useGoogleWizard()
+  const { openWizard: openProviderWizard } = useProviderWizard()
   // loadHubIntegrations is defined later in the component; keep a ref so we can
   // invoke the latest version from the wizard-complete callback without
   // dancing around declaration order.
@@ -349,6 +353,26 @@ export default function HubPage() {
       setActiveTab(requested)
     }
   }, [searchParams])
+
+  // Advanced-mode fallback from ProviderWizard → opens legacy ProviderInstanceModal
+  // with the vendor pre-selected.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ vendor?: string }>).detail
+      setEditingInstance(null)
+      setSelectedVendor(detail?.vendor || '')
+      setInstanceModalOpen(true)
+    }
+    window.addEventListener('tsushin:open-provider-advanced-modal', handler)
+    return () => window.removeEventListener('tsushin:open-provider-advanced-modal', handler)
+  }, [])
+
+  // Refetch provider instances / TTS instances when the new ProviderWizard completes.
+  useProviderWizardComplete(() => {
+    fetchProviderInstances()
+    refreshKokoroInstances().catch(() => {})
+    fetchAPIKeys()
+  })
 
   // API Keys state
   const [apiKeys, setApiKeys] = useState<APIKey[]>([])
@@ -411,8 +435,10 @@ export default function HubPage() {
   // Provider Instances state (Phase 21)
   const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
   const [instanceModalOpen, setInstanceModalOpen] = useState(false)
-  const [providerSetupWizardOpen, setProviderSetupWizardOpen] = useState(false)
-  const [providerSetupInitialVendor, setProviderSetupInitialVendor] = useState<string | undefined>(undefined)
+  // (v0.7.x) Old flat provider picker was replaced by the multi-step
+  // ProviderWizard — state for the old picker has been removed. The Advanced
+  // fallback listens for `tsushin:open-provider-advanced-modal` and opens
+  // the existing ProviderInstanceModal below.
   const [editingInstance, setEditingInstance] = useState<ProviderInstance | null>(null)
   const [selectedVendor, setSelectedVendor] = useState<string>('')
   const [instanceMenuOpen, setInstanceMenuOpen] = useState<number | null>(null)
@@ -1685,33 +1711,24 @@ export default function HubPage() {
     setShowApiKeyModal(true)
   }
 
+  // Bridge function: maintained for the existing call sites inside this
+  // file. Routes everything to the new multi-step ProviderWizard. A vendor
+  // preset lands the user directly on the credentials/container step (the
+  // reducer skips any earlier steps whose answers are already implied).
   const openProviderSetupWizard = (vendor?: string) => {
     setEditingInstance(null)
     setSelectedVendor('')
-    setProviderSetupInitialVendor(vendor)
-    setProviderSetupWizardOpen(true)
-  }
-
-  const openAdvancedProviderForm = (vendor?: string) => {
-    setProviderSetupWizardOpen(false)
-    setEditingInstance(null)
-    setSelectedVendor(vendor || '')
-    setInstanceModalOpen(true)
-  }
-
-  const openToolSetupWizard = (providerId?: string) => {
-    setProviderSetupWizardOpen(false)
-    setAddIntegrationInitialProvider(providerId)
-    setShowSearchWizard(true)
-  }
-
-  const openApiKeyFromWizard = (service: string) => {
-    setProviderSetupWizardOpen(false)
-    if (service === 'vertex_ai') {
-      setShowVertexAiModal(true)
-      return
+    if (vendor) {
+      // TTS Kokoro lands on the container branch; everything else is LLM cloud.
+      const isTTSKokoro = vendor === 'kokoro'
+      const isTTSEleven = vendor === 'elevenlabs'
+      const isOllamaLocal = vendor === 'ollama'
+      const modality = isTTSKokoro || isTTSEleven ? 'tts' as const : 'llm' as const
+      const hosting = isTTSKokoro || isOllamaLocal ? 'local' as const : 'cloud' as const
+      openProviderWizard({ vendor, modality, hosting })
+    } else {
+      openProviderWizard()
     }
-    openAddApiKeyModal(service)
   }
 
   // Vertex AI handlers
@@ -2589,9 +2606,11 @@ export default function HubPage() {
             </div>
             <div>
               <h3 className="font-semibold text-white">{item.label}</h3>
-              {hasInstanceKey && apiKey && (
-                <span className="text-[10px] text-amber-400/80">Fallback — instance key takes priority</span>
-              )}
+              {/* (v0.7.x) The inline "Fallback — instance key takes priority"
+                  amber label was removed; the Service API Keys surface is now
+                  collapsed by default and only lists vendors that have NO
+                  matching ProviderInstance, so duplicate display is impossible
+                  by construction. */}
               {configuredViaInstance && (
                 <span className="text-[10px] text-teal-400/80">
                   Configured via instance: {configuredInstance?.instance_name}
@@ -2675,71 +2694,9 @@ export default function HubPage() {
     )
   }
 
-  const renderManagedContainerControls = ({
-    status,
-    isBusy,
-    onToggle,
-    onRestart,
-    onLogs,
-    logsOpen,
-    onDelete,
-  }: {
-    status: string
-    isBusy: boolean
-    onToggle: () => void
-    onRestart?: () => void
-    onLogs?: () => void
-    logsOpen?: boolean
-    onDelete?: () => void
-  }) => {
-    const normalized = (status || 'none').toLowerCase()
-    const isRunning = normalized === 'running'
-    const isProvisioning = normalized === 'creating' || normalized === 'provisioning'
-    const canRestart = normalized === 'running' || normalized === 'stopped'
-
-    return (
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
-          <ToggleSwitch
-            checked={isRunning}
-            onChange={onToggle}
-            disabled={isBusy || isProvisioning}
-            title={isRunning ? 'Stop container' : 'Start container'}
-            activeColor="bg-tsushin-success"
-          />
-          <span className="text-[11px] text-tsushin-slate">
-            {isProvisioning ? 'Provisioning' : isRunning ? 'Enabled' : 'Disabled'}
-          </span>
-        </div>
-        {canRestart && onRestart && (
-          <button
-            onClick={onRestart}
-            disabled={isBusy}
-            className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-1 disabled:opacity-50"
-          >
-            Restart
-          </button>
-        )}
-        {isRunning && onLogs && (
-          <button
-            onClick={onLogs}
-            className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-1"
-          >
-            {logsOpen ? 'Hide Logs' : 'Logs'}
-          </button>
-        )}
-        {onDelete && (
-          <button
-            onClick={onDelete}
-            disabled={isBusy}
-            className="ml-auto text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-1 disabled:opacity-50"
-          >
-            Delete
-          </button>
-        )}
-      </div>
-    )
-  }
+  // (v0.7.x) The inline `renderManagedContainerControls` helper was extracted
+  // into `@/components/hub/ManagedContainerPanel` so Ollama / Kokoro / SearXNG
+  // all render identical lifecycle affordances. See that file for the body.
 
   if (loading) {
     return (
@@ -2764,7 +2721,14 @@ export default function HubPage() {
     { key: 'mcp-servers', label: 'MCP Servers', Icon: ServerIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'vector-stores', label: 'Vector Stores', Icon: VectorStoreIcon, color: 'text-emerald-400', iconBg: 'bg-emerald-400/10' },
   ]
-  const visibleAiFallbackProviders = AI_PROVIDERS.filter(provider => Boolean(getApiKeyForService(provider.value)))
+  // (v0.7.x) Service API Keys — surface ONLY vendors that have a fallback
+  // api_key configured AND zero `ProviderInstance` rows. This eliminates the
+  // duplicate-Gemini display by construction: if you have a Gemini instance,
+  // Gemini never appears in the fallback disclosure below.
+  const vendorsWithInstances = new Set(providerInstances.map(i => i.vendor))
+  const visibleAiFallbackProviders = AI_PROVIDERS.filter(provider =>
+    Boolean(getApiKeyForService(provider.value)) && !vendorsWithInstances.has(provider.value)
+  )
   const visibleToolApis = TOOL_APIS.filter(tool => {
     if (tool.value === 'searxng') return searxngInstances.some(i => i.is_active)
     return Boolean(getApiKeyForService(tool.value))
@@ -3162,17 +3126,11 @@ export default function HubPage() {
                               {ollamaEnabled ? (ollamaHealth?.available ? '1 instance' : 'pending') : 'disabled'}
                             </span>
                           </div>
-                          {/* Enable/Disable Toggle — only once the tenant has opted in;
-                              the initial "Setup with Wizard" CTA below handles activation. */}
-                          {canEditSettings && ollamaEnabled && ollamaMode === 'host' && (
-                            <ToggleSwitch
-                              checked={ollamaEnabled}
-                              onChange={() => handleOllamaToggle()}
-                              disabled={ollamaToggleLoading}
-                              title="Disable Ollama"
-                              activeColor="bg-tsushin-success"
-                            />
-                          )}
+                          {/* (v0.7.x) Panel-level Enable/Disable toggle removed —
+                              the per-instance controls rendered by
+                              <ManagedContainerPanel /> below are the single
+                              source of truth for Ollama lifecycle, matching
+                              Kokoro and SearXNG. */}
                         </div>
                       </div>
                       <p className="text-xs text-tsushin-slate mb-3">Run LLMs locally - no API key needed</p>
@@ -3226,7 +3184,10 @@ export default function HubPage() {
 
                       {/* v0.6.x: Auto-provision panel */}
                       {ollamaMode === 'auto' && ollamaEnabled && (() => {
-                        const state = (ollamaContainerStatus?.status || 'none').toLowerCase()
+                        const raw = (ollamaContainerStatus?.status || 'none').toLowerCase()
+                        // Docker reports 'exited' for a cleanly-stopped container that still exists;
+                        // treat it as 'stopped' so the ManagedContainerPanel branch actually renders.
+                        const state = raw === 'exited' ? 'stopped' : raw
                         const isProvisioning = state === 'creating' || state === 'provisioning'
                         const isRunning = state === 'running'
                         const isStopped = state === 'stopped'
@@ -3373,14 +3334,16 @@ export default function HubPage() {
                                 )}
 
                                 {/* Container controls */}
-                                {canEditSettings && renderManagedContainerControls({
-                                  status: state,
-                                  isBusy: ollamaContainerActionLoading,
-                                  onToggle: () => handleOllamaContainerAction('stop'),
-                                  onRestart: () => handleOllamaContainerAction('restart'),
-                                  onLogs: handleOllamaViewLogs,
-                                  logsOpen: ollamaLogsOpen,
-                                })}
+                                {canEditSettings && (
+                                  <ManagedContainerPanel
+                                    status={state}
+                                    isBusy={ollamaContainerActionLoading}
+                                    onToggle={() => handleOllamaContainerAction('stop')}
+                                    onRestart={() => handleOllamaContainerAction('restart')}
+                                    onLogs={handleOllamaViewLogs}
+                                    logsOpen={ollamaLogsOpen}
+                                  />
+                                )}
                                 {ollamaLogsOpen && (
                                   <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
                                     <div className="flex items-center justify-between mb-1">
@@ -3415,14 +3378,14 @@ export default function HubPage() {
 
                             {isStopped && canEditSettings && (
                               <div className="space-y-2">
-                                {renderManagedContainerControls({
-                                  status: state,
-                                  isBusy: ollamaContainerActionLoading,
-                                  onToggle: () => handleOllamaContainerAction('start'),
-                                  onRestart: () => handleOllamaContainerAction('restart'),
-                                  onLogs: handleOllamaViewLogs,
-                                  logsOpen: ollamaLogsOpen,
-                                })}
+                                <ManagedContainerPanel
+                                  status={state}
+                                  isBusy={ollamaContainerActionLoading}
+                                  onToggle={() => handleOllamaContainerAction('start')}
+                                  onRestart={() => handleOllamaContainerAction('restart')}
+                                  onLogs={handleOllamaViewLogs}
+                                  logsOpen={ollamaLogsOpen}
+                                />
                                 {ollamaLogsOpen && (
                                   <div className="p-2 bg-black/50 border border-white/5 rounded">
                                     <div className="flex items-center justify-between mb-1">
@@ -3577,7 +3540,7 @@ export default function HubPage() {
                         return ollamaInst ? (
                           <button
                             onClick={() => { setEditingInstance(ollamaInst); setInstanceModalOpen(true) }}
-                            className="w-full mt-2 text-xs text-tsushin-slate hover:text-white transition-colors text-center py-1"
+                            className="w-full mt-2 text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 hover:text-white rounded px-2 py-1 transition-colors"
                           >
                             Manage Instance
                           </button>
@@ -3636,9 +3599,11 @@ export default function HubPage() {
                         ) : (
                           <div className="space-y-2">
                             {kokoroInstances.map(inst => {
-                              const status = (inst.container_status || 'none').toLowerCase()
+                              const raw = (inst.container_status || 'none').toLowerCase()
+                              const status = raw === 'exited' ? 'stopped' : raw
                               const isProvisioning = status === 'creating' || status === 'provisioning'
                               const isRunning = status === 'running'
+                              const isStopped = status === 'stopped'
                               const isBusy = kokoroInstanceActionLoading === inst.id
                               const isDefault = kokoroDefault?.default_tts_instance_id === inst.id
                               return (
@@ -3682,15 +3647,15 @@ export default function HubPage() {
 
                                   {/* Actions */}
                                   {canEditSettings && inst.is_auto_provisioned && (
-                                    renderManagedContainerControls({
-                                      status,
-                                      isBusy,
-                                      onToggle: () => isRunning ? handleKokoroInstanceStop(inst.id) : handleKokoroInstanceStart(inst.id),
-                                      onRestart: () => handleKokoroInstanceRestart(inst.id),
-                                      onLogs: () => handleKokoroViewLogs(inst.id),
-                                      logsOpen: kokoroLogsOpenFor === inst.id,
-                                      onDelete: () => setKokoroConfirmDelete({ id: inst.id, removeVolume: false }),
-                                    })
+                                    <ManagedContainerPanel
+                                      status={status}
+                                      isBusy={isBusy}
+                                      onToggle={() => isRunning ? handleKokoroInstanceStop(inst.id) : handleKokoroInstanceStart(inst.id)}
+                                      onRestart={() => handleKokoroInstanceRestart(inst.id)}
+                                      onLogs={() => handleKokoroViewLogs(inst.id)}
+                                      logsOpen={kokoroLogsOpenFor === inst.id}
+                                      onDelete={() => setKokoroConfirmDelete({ id: inst.id, removeVolume: false })}
+                                    />
                                   )}
 
                                   {/* Logs drawer (inline) */}
@@ -3780,15 +3745,24 @@ export default function HubPage() {
                 </div>
                 )}
 
-                {/* Service API Keys Section */}
+                {/* (v0.7.x) Service API Keys — collapsed disclosure.
+                    Only renders vendors that have a fallback api_key AND no
+                    matching ProviderInstance, so vendors already covered by
+                    an instance never duplicate here. Collapsed by default to
+                    keep the Hub clean for users who only use instances. */}
                 {visibleAiFallbackProviders.length > 0 && (
-                  <div className="pt-2">
-                    <h3 className="text-sm font-semibold text-tsushin-fog mb-1">Service API Keys</h3>
-                    <p className="text-xs text-tsushin-slate mb-3">Configured fallback keys and non-LLM service credentials</p>
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <details className="pt-2 group">
+                    <summary className="cursor-pointer list-none flex items-center gap-2 select-none">
+                      <ChevronRightIcon size={14} className="text-tsushin-slate transition-transform group-open:rotate-90" />
+                      <div>
+                        <h3 className="text-sm font-semibold text-tsushin-fog">Service API Keys — fallback keys</h3>
+                        <p className="text-xs text-tsushin-slate">{visibleAiFallbackProviders.length} vendor{visibleAiFallbackProviders.length !== 1 ? 's' : ''} using a fallback key (no provider instance)</p>
+                      </div>
+                    </summary>
+                    <div className="mt-3 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                       {visibleAiFallbackProviders.map(provider => renderIntegrationCard(provider, 'ai'))}
                     </div>
-                  </div>
+                  </details>
                 )}
               </div>
             )}
@@ -5013,9 +4987,11 @@ export default function HubPage() {
                     ) : (
                       <div className="space-y-2">
                         {searxngInstances.map(inst => {
-                          const status = (inst.container_status || 'none').toLowerCase()
+                          const raw = (inst.container_status || 'none').toLowerCase()
+                          const status = raw === 'exited' ? 'stopped' : raw
                           const isProvisioning = status === 'creating' || status === 'provisioning'
                           const isRunning = status === 'running'
+                          const isStopped = status === 'stopped'
                           const isBusy = searxngActionLoading === inst.id
                           return (
                             <div key={inst.id} className="p-3 bg-tsushin-ink/40 border border-white/5 rounded-lg">
@@ -5042,15 +5018,17 @@ export default function HubPage() {
                                   {isProvisioning ? 'Provisioning...' : status || 'n/a'}
                                 </span>
                               </div>
-                              {canEditSettings && inst.is_auto_provisioned && renderManagedContainerControls({
-                                status,
-                                isBusy,
-                                onToggle: () => isRunning ? handleSearxngAction(inst.id, 'stop') : handleSearxngAction(inst.id, 'start'),
-                                onRestart: () => handleSearxngAction(inst.id, 'restart'),
-                                onLogs: () => handleSearxngViewLogs(inst.id),
-                                logsOpen: searxngLogsOpenFor === inst.id,
-                                onDelete: () => setSearxngConfirmDelete({ id: inst.id, instance_name: inst.instance_name }),
-                              })}
+                              {canEditSettings && inst.is_auto_provisioned && (
+                                <ManagedContainerPanel
+                                  status={status}
+                                  isBusy={isBusy}
+                                  onToggle={() => isRunning ? handleSearxngAction(inst.id, 'stop') : handleSearxngAction(inst.id, 'start')}
+                                  onRestart={() => handleSearxngAction(inst.id, 'restart')}
+                                  onLogs={() => handleSearxngViewLogs(inst.id)}
+                                  logsOpen={searxngLogsOpenFor === inst.id}
+                                  onDelete={() => setSearxngConfirmDelete({ id: inst.id, instance_name: inst.instance_name })}
+                                />
+                              )}
                               {searxngLogsOpenFor === inst.id && (
                                 <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
                                   <div className="flex items-center justify-between mb-1">
@@ -5989,19 +5967,12 @@ export default function HubPage() {
         </div>
       </Modal>
 
-      <ProviderSetupWizard
-        isOpen={providerSetupWizardOpen}
-        initialVendor={providerSetupInitialVendor}
-        onClose={() => {
-          setProviderSetupWizardOpen(false)
-          setProviderSetupInitialVendor(undefined)
-        }}
-        onAdvanced={openAdvancedProviderForm}
-        onOpenOllama={() => setShowOllamaSetupWizard(true)}
-        onOpenKokoro={() => setKokoroWizardOpen(true)}
-        onOpenApiKey={openApiKeyFromWizard}
-        onOpenToolWizard={openToolSetupWizard}
-      />
+      {/* (v0.7.x) The legacy flat `ProviderSetupWizard` picker has been
+          replaced by the guided multi-step ProviderWizard mounted from
+          `ProviderWizardProvider` at the app root (see layout.tsx). The
+          ProviderInstanceModal below remains in place as the Advanced-mode
+          fallback — it listens for the `tsushin:open-provider-advanced-modal`
+          event dispatched by the new wizard footer. */}
 
       {/* Provider Instance Modal — rendered at root level to avoid z-index/overflow issues (BUG-109) */}
       <ProviderInstanceModal
