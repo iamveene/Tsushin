@@ -2833,6 +2833,40 @@ export interface TTSInstanceCreate {
   default_format?: string
 }
 
+// v0.6.0-patch.7: SearXNG per-tenant auto-provisioning (Hub management panel)
+export interface SearxngInstance {
+  id: number
+  tenant_id: string
+  vendor: string  // 'searxng'
+  instance_name: string
+  description?: string | null
+  base_url?: string | null
+  health_status: string
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  is_active: boolean
+  is_auto_provisioned: boolean
+  container_status?: string | null
+  container_name?: string | null
+  container_port?: number | null
+  container_image?: string | null
+  volume_name?: string | null
+  mem_limit?: string | null
+  cpu_quota?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface SearxngInstanceCreate {
+  instance_name?: string
+  description?: string
+  base_url?: string
+  auto_provision?: boolean
+  mem_limit?: string
+  cpu_quota?: number
+  assign_to_agent_id?: number
+}
+
 // Generic container status payload (shared by TTS + Ollama + Vector Stores)
 export interface ContainerStatusResponse {
   status?: string  // none | creating | provisioning | running | stopped | error
@@ -7465,6 +7499,47 @@ export const api = {
       body: JSON.stringify(data),
     })
     if (!res.ok) await handleApiError(res, 'Failed to assign TTS instance to agent')
+    return res.json()
+  },
+
+  // ==================== SearXNG Instances (v0.6.0-patch.7 per-tenant) ====================
+
+  async listSearxngInstances(): Promise<SearxngInstance[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/searxng/instances`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch SearXNG instances')
+    return res.json()
+  },
+
+  async createSearxngInstance(data: SearxngInstanceCreate): Promise<SearxngInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/searxng/instances`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok && res.status !== 202) await handleApiError(res, 'Failed to create SearXNG instance')
+    return res.json()
+  },
+
+  async deleteSearxngInstance(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/searxng/instances/${id}`, { method: 'DELETE' })
+    if (!res.ok) await handleApiError(res, 'Failed to delete SearXNG instance')
+  },
+
+  async searxngContainerAction(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/searxng/instances/${id}/container/${action}`, { method: 'POST' })
+    if (!res.ok) await handleApiError(res, `Failed to ${action} SearXNG container`)
+    return res.json()
+  },
+
+  async getSearxngContainerStatus(id: number): Promise<ContainerStatusResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/searxng/instances/${id}/container/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to get SearXNG container status')
+    return res.json()
+  },
+
+  async getSearxngContainerLogs(id: number, tail: number = 100): Promise<{ logs: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/searxng/instances/${id}/container/logs?tail=${tail}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get SearXNG container logs')
     return res.json()
   },
 

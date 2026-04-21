@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Hub panel cosmetic consistency — Ollama / Kokoro / SearXNG (2026-04-20)
+
+Tenant-reported cosmetic drift between the three auto-provisionable service panels (Ollama in AI Providers → Local Services, Kokoro in the same block, SearXNG in Tool APIs). Flagged issues: Kokoro empty-state duplicated the "Setup with Wizard" CTA (header + body), Ollama showed the `ToggleSwitch` even before activation so users had two setup entry points competing, SearXNG auto-hid its management panel when empty and had no header "Setup with Wizard" shortcut (tenants had to go to Tool APIs → Add Integration → Web Search → SearXNG). Delete/Logs action divergence across panels.
+
+- **Kokoro** (`frontend/app/hub/page.tsx`): removed the body `Setup with Wizard` in the empty state; the panel header already has `+ Setup with Wizard` and that's now the single entry point. Empty-state message points at it.
+- **Ollama** (`frontend/app/hub/page.tsx`): `ToggleSwitch` is hidden until the tenant has opted in. When disabled, the big `+ Setup with Wizard` CTA is the only action. When enabled, the toggle + Mode selector + advanced controls are shown and the wizard CTA is hidden — one primary action per state. Status copy changed from `Healthy/Offline` to `1 instance / pending / disabled` to align with Kokoro/SearXNG.
+- **SearXNG** (`frontend/app/hub/page.tsx`): panel always renders (auto-hide dropped), with an empty-state message mirroring Kokoro's. Added `+ Setup with Wizard` header button that opens `AddIntegrationWizard` pre-selected on SearXNG. Added `Logs` action on the instance card (new `getSearxngContainerLogs` client helper). Replaced the native `confirm()` delete with a proper modal matching the Kokoro pattern. Header gained a globe icon + "Per-tenant metasearch containers" subtitle so the panel structure matches the Kokoro card.
+- **Tool APIs grid card for SearXNG**: was hard-coded to `Not configured` because the badge only checked `api_keys` rows. Now also counts `SearxngInstance` rows via a new `hasSearxngInstance` closure in `renderIntegrationCard`. Card shows `Active` + `Configured via instance:` helper when instances exist, `Not configured` otherwise.
+- **Client** (`frontend/lib/client.ts`): new `getSearxngContainerLogs(id, tail)` helper backing the SearXNG Logs drawer.
+
+No backend changes. UI verified end-to-end for both populated and empty states; auto-provision E2E regression re-run afterwards (SearXNG port 6500, Kokoro port 6600, Ollama port 6700 — all healthy).
+
+### BUG-670 — Ollama re-provision after delete fails with UniqueViolation (2026-04-20)
+
+Surfaced by the `delete all → auto-provision all` regression run after BUG-669 landed: `POST /api/provider-instances/ensure-ollama` returned 500 when the tenant previously had a soft-deleted `Ollama (Local)` row. The unique constraint `uq_provider_instance_tenant_name` covers both active and soft-deleted rows, so `create_instance()` hit `psycopg2.errors.UniqueViolation` on re-create. Same bug class as BUG-669 but for the provider-instance create path.
+
+- `backend/services/provider_instance_service.py create_instance()` now purges any soft-deleted rows matching `(tenant_id, instance_name)` before insert. Matches the SearXNG pattern in `routes_searxng_instances.py` and preserves the soft-delete audit trail for deleted rows with different names.
+
+### BUG-669 — SearXNG wizard `default already exists` unblock + Hub management panel (2026-04-20)
+
+Tenants who hit a partial/failed SearXNG auto-provision (or simply re-opened the wizard) were stuck: the Add-Integration wizard hardcoded `instance_name='default'` and the backend rejected the duplicate with a bare 409 `"SearXNG instance 'default' already exists"` — no recovery UI, no way to rename, no way to delete from the frontend. Mirrors the same pattern Ollama and Kokoro avoided by (a) letting users name instances and (b) exposing a Hub management panel.
+
+- **Backend auto-recovery.** `backend/api/routes_searxng_instances.py create_searxng_instance()` now inspects the conflicting active row and auto-purges it if it's a stale failed provision (`container_status ∈ {error, failed, none, null}` and `container_name` is null). Only genuinely-healthy conflicts keep the 409 — and the response body is now a structured `{code: 'searxng_instance_exists', existing_instance_id, existing_instance_name, existing_container_status, message}` so the UI can link to recovery actions.
+- **Frontend wizard.** `frontend/components/integrations/AddIntegrationWizard.tsx` no longer hardcodes the name. Step 3 fetches `GET /api/hub/searxng/instances`, lists any existing rows with an inline delete action, and auto-suggests a unique name (`SearXNG`, `SearXNG (2)`, …). The 409 structured-detail is parsed and surfaces a recovery hint rather than a raw error.
+- **Frontend Hub management panel.** `frontend/app/hub/page.tsx` Tool APIs tab now renders a SearXNG instances card (auto-hidden when empty) with list, start/stop/restart, delete, and provisioning-status polling — same pattern as the Kokoro/Ollama panels that already exist.
+- **Client helpers.** `frontend/lib/client.ts` gains `SearxngInstance` + `SearxngInstanceCreate` types and `listSearxngInstances`, `createSearxngInstance`, `deleteSearxngInstance`, `searxngContainerAction`, `getSearxngContainerStatus`.
+
+Container-manager failure path already marks `container_status='error'` and clears `container_name` (`backend/services/searxng_container_manager.py`), so the auto-purge guard catches the common stuck-state without further service-layer changes.
+
 ### AddIntegrationWizard fetches providers from live registry (2026-04-20)
 
 Continuation of the wizard-drift-prevention work. `AddIntegrationWizard` (Hub > Tool APIs > Add Integration) no longer treats its hardcoded `PROVIDERS` array as canonical — the wizard now fetches the live catalog at mount and falls back to a renamed static `FALLBACK_PROVIDERS` array only when the API is unreachable.
