@@ -6,8 +6,8 @@
  * Manages all integrations organized by category:
  * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI, ElevenLabs
  * - Communication: WhatsApp, Telegram, Discord, Slack, Email (coming soon)
- * - Productivity: Asana, Google Calendar, Notion (coming soon)
- * - Developer Tools: Shell, Sandboxed Tools, GitHub (coming soon)
+ * - Productivity: Asana, Google Calendar
+ * - Developer Tools: Shell, Sandboxed Tools
  * - Tool APIs: Brave Search, Tavily, Amadeus
  */
 
@@ -67,9 +67,7 @@ import {
   BriefcaseIcon,
   CheckCircleIcon,
   CalendarIcon,
-  DocumentIcon,
   TerminalIcon as TerminalIconSvg,
-  GitHubIcon,
   SearchIcon,
   BotIcon as BotIconSvg,
   BrainIcon,
@@ -258,12 +256,10 @@ const COMMUNICATION_CHANNELS: { value: string; label: string; Icon: React.FC<Ico
 const PRODUCTIVITY_APPS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
   { value: 'asana', label: 'Asana', Icon: CheckCircleIcon, description: 'Task & project management', status: 'available' },
   { value: 'google_calendar', label: 'Google Calendar', Icon: CalendarIcon, description: 'Calendar & scheduling', status: 'available' },
-  { value: 'notion', label: 'Notion', Icon: DocumentIcon, description: 'Knowledge base & docs', status: 'coming_soon' },
 ]
 
 const DEVELOPER_TOOLS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
   { value: 'shell', label: 'Shell Command Center', Icon: TerminalIconSvg, description: 'Remote shell execution & beacon management', status: 'available' },
-  { value: 'github', label: 'GitHub', Icon: GitHubIcon, description: 'Issues, PRs, repositories', status: 'coming_soon' },
 ]
 
 const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
@@ -486,6 +482,7 @@ export default function HubPage() {
   const [ollamaLogsOpen, setOllamaLogsOpen] = useState(false)
   const [ollamaLogsContent, setOllamaLogsContent] = useState<string>('')
   const [ollamaLogsLoading, setOllamaLogsLoading] = useState(false)
+  const [ollamaConfirmDelete, setOllamaConfirmDelete] = useState<{ id: number; removeVolume: boolean } | null>(null)
 
   // MCP Servers state (Phase 26)
   const [mcpServers, setMcpServers] = useState<any[]>([])
@@ -1476,6 +1473,34 @@ export default function HubPage() {
       await fetchProviderInstances()
     } catch (err: any) {
       toast.error(err.message || 'Failed to deprovision Ollama container')
+    }
+  }
+
+  // Unified Ollama instance delete — mirrors handleKokoroInstanceDelete so
+  // the ManagedContainerPanel `onDelete` action behaves identically across
+  // Ollama and Kokoro (soft-delete the provider instance; backend tears down
+  // the container for auto-provisioned rows, see routes_provider_instances).
+  const handleOllamaInstanceDelete = async () => {
+    if (!ollamaConfirmDelete) return
+    const { id, removeVolume } = ollamaConfirmDelete
+    try {
+      const inst = providerInstances.find(i => i.id === id)
+      if (inst?.is_auto_provisioned) {
+        try {
+          await api.deprovisionOllamaContainer(id, removeVolume)
+        } catch {
+          // Deprovision is best-effort; the delete below is the source of truth.
+        }
+      }
+      await api.deleteProviderInstance(id)
+      toast.success('Ollama instance deleted')
+      setOllamaConfirmDelete(null)
+      setOllamaContainerStatus(null)
+      setOllamaPulledModels([])
+      await fetchProviderInstances()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete instance')
+      setOllamaConfirmDelete(null)
     }
   }
 
@@ -2733,7 +2758,12 @@ export default function HubPage() {
     if (tool.value === 'searxng') return searxngInstances.some(i => i.is_active)
     return Boolean(getApiKeyForService(tool.value))
   })
-  const showLocalServices = ollamaEnabled || kokoroInstances.length > 0
+  // v0.7.x: align Ollama visibility with Kokoro — show panel only when an
+  // active provider_instance exists. `ollamaEnabled` (tenant setting) remains
+  // the gate for background health polling, but the Hub card itself is driven
+  // by the instance list so unused providers never take visual space.
+  const ollamaInstance = providerInstances.find(i => i.vendor === 'ollama' && i.is_active) ?? null
+  const showLocalServices = !!ollamaInstance || kokoroInstances.length > 0
 
   return (
     <div className="min-h-screen animate-fade-in">
@@ -3104,110 +3134,149 @@ export default function HubPage() {
                 <div className="pt-2">
                   <h3 className="text-sm font-semibold text-tsushin-fog mb-3">Local Services</h3>
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {/* Ollama Card (Enhanced - Local LLM) */}
-                    {ollamaEnabled && (
-                    <div className="card p-5 hover-glow group">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
-                            <BotIconSvg size={20} className="text-purple-400" />
-                          </div>
-                          <h3 className="font-semibold text-white">Ollama (Local)</h3>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          {/* Status indicator — aligned with Kokoro/SearXNG pattern */}
-                          <div className="flex items-center gap-1.5">
-                            <div className={`w-2 h-2 rounded-full ${
-                              ollamaHealth?.available
-                                ? 'bg-tsushin-success animate-pulse'
-                                : ollamaEnabled ? 'bg-yellow-400' : 'bg-tsushin-slate'
-                            }`} />
-                            <span className="text-[11px] text-tsushin-slate">
-                              {ollamaEnabled ? (ollamaHealth?.available ? '1 instance' : 'pending') : 'disabled'}
-                            </span>
-                          </div>
-                          {/* (v0.7.x) Panel-level Enable/Disable toggle removed —
-                              the per-instance controls rendered by
-                              <ManagedContainerPanel /> below are the single
-                              source of truth for Ollama lifecycle, matching
-                              Kokoro and SearXNG. */}
-                        </div>
-                      </div>
-                      <p className="text-xs text-tsushin-slate mb-3">Run LLMs locally - no API key needed</p>
-
-                      {/* Setup wizard CTA — visible only when not yet activated. Once
-                          enabled, the header toggle + mode/container controls below
-                          replace this button so there's a single primary action per state. */}
-                      {canEditSettings && !ollamaEnabled && (
-                        <button
-                          onClick={() => setShowOllamaSetupWizard(true)}
-                          className="w-full mb-3 bg-purple-500 hover:bg-purple-400 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors"
-                        >
-                          + Setup with Wizard
-                        </button>
-                      )}
-
-                      {/* v0.6.x: Mode selector (host vs auto-provision) */}
-                      {ollamaEnabled && canEditSettings && (
-                        <div className="mb-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
-                          <p className="text-xs font-medium text-tsushin-accent mb-1.5">Mode</p>
-                          <label className="flex items-start gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="ollama-mode"
-                              value="host"
-                              checked={ollamaMode === 'host'}
-                              onChange={() => setOllamaMode('host')}
-                              className="mt-0.5 accent-tsushin-success"
-                            />
-                            <div className="flex-1">
-                              <span className="text-xs text-white">Use host Ollama (URL)</span>
-                              <p className="text-[11px] text-tsushin-muted">Point at an Ollama server you manage.</p>
+                    {/* Ollama Card (Local LLM) — aligned with Kokoro pattern:
+                        renders only when an Ollama provider_instance exists,
+                        mode (host vs. auto) is derived from the instance, and
+                        lifecycle controls go through the shared
+                        `ManagedContainerPanel` so Ollama ↔ Kokoro ↔ SearXNG
+                        expose the same affordances (toggle, restart, logs,
+                        test, delete). The legacy Mode radio + separate
+                        Deprovision/Test/Refresh/Manage buttons were removed. */}
+                    {ollamaInstance && (() => {
+                      const isAuto = !!ollamaInstance.is_auto_provisioned
+                      const raw = (ollamaContainerStatus?.status || 'none').toLowerCase()
+                      // Docker reports 'exited' for a cleanly-stopped container that still exists.
+                      const state = raw === 'exited' ? 'stopped' : raw
+                      const isProvisioning = state === 'creating' || state === 'provisioning'
+                      const isRunning = isAuto ? state === 'running' : !!ollamaHealth?.available
+                      const isNoneOrError = state === 'none' || state === 'error' || !state
+                      return (
+                        <div className="card p-5 hover-glow group border-purple-700/30">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                <BotIconSvg size={20} className="text-purple-400" />
+                              </div>
+                              <div>
+                                <h3 className="font-semibold text-white">Ollama (Local)</h3>
+                                <p className="text-[11px] text-tsushin-slate">Run LLMs locally — host URL or auto-provisioned container</p>
+                              </div>
                             </div>
-                          </label>
-                          <label className="flex items-start gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="ollama-mode"
-                              value="auto"
-                              checked={ollamaMode === 'auto'}
-                              onChange={() => setOllamaMode('auto')}
-                              className="mt-0.5 accent-tsushin-success"
-                            />
-                            <div className="flex-1">
-                              <span className="text-xs text-white">Auto-provision container</span>
-                              <p className="text-[11px] text-tsushin-muted">Tsushin manages a dedicated Ollama container for this tenant.</p>
+                            <div className="flex items-center gap-1.5">
+                              <div className={`w-2 h-2 rounded-full ${
+                                isRunning
+                                  ? 'bg-tsushin-success animate-pulse'
+                                  : isProvisioning ? 'bg-yellow-400' : 'bg-tsushin-slate'
+                              }`} />
+                              <span className="text-[11px] text-tsushin-slate">1 instance</span>
                             </div>
-                          </label>
-                        </div>
-                      )}
+                          </div>
 
-                      {/* v0.6.x: Auto-provision panel */}
-                      {ollamaMode === 'auto' && ollamaEnabled && (() => {
-                        const raw = (ollamaContainerStatus?.status || 'none').toLowerCase()
-                        // Docker reports 'exited' for a cleanly-stopped container that still exists;
-                        // treat it as 'stopped' so the ManagedContainerPanel branch actually renders.
-                        const state = raw === 'exited' ? 'stopped' : raw
-                        const isProvisioning = state === 'creating' || state === 'provisioning'
-                        const isRunning = state === 'running'
-                        const isStopped = state === 'stopped'
-                        const isNoneOrError = state === 'none' || state === 'error' || !state
-                        return (
-                          <div className="mb-3 p-3 bg-tsushin-ink/40 border border-white/10 rounded-lg space-y-3">
-                            <div className="flex items-center justify-between">
-                              <p className="text-xs font-medium text-tsushin-accent">Container Management</p>
-                              <span className={`text-[11px] px-2 py-0.5 rounded ${
+                          {/* Per-instance row — mirrors Kokoro's per-instance card */}
+                          <div className="p-3 bg-tsushin-ink/40 border border-white/5 rounded-lg space-y-3">
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <div className="flex items-start gap-2 min-w-0">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-sm text-white font-medium truncate">{ollamaInstance.instance_name}</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">ollama</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">{isAuto ? 'Auto' : 'Host'}</span>
+                                    {ollamaInstance.is_default && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-tsushin-success/20 text-tsushin-success">Default</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${
                                 isRunning ? 'bg-tsushin-success/20 text-tsushin-success' :
                                 isProvisioning ? 'bg-yellow-500/20 text-yellow-400' :
-                                isStopped ? 'bg-gray-500/20 text-gray-400' :
                                 state === 'error' ? 'bg-tsushin-vermilion/20 text-tsushin-vermilion' :
                                 'bg-gray-500/20 text-gray-400'
                               }`}>
-                                {isProvisioning ? 'Provisioning...' : state || 'not created'}
+                                {isProvisioning
+                                  ? 'Provisioning…'
+                                  : isAuto
+                                    ? (state || 'n/a')
+                                    : (ollamaHealth?.available ? 'running' : 'offline')}
                               </span>
                             </div>
 
-                            {isNoneOrError && canEditSettings && (
+                            {/* Host mode: URL editor + Docker networking note + health summary */}
+                            {!isAuto && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[11px] text-tsushin-muted shrink-0">URL:</span>
+                                  {ollamaUrlEditing ? (
+                                    <>
+                                      <input
+                                        type="text"
+                                        value={ollamaUrlValue}
+                                        onChange={(e) => setOllamaUrlValue(e.target.value)}
+                                        className="bg-tsushin-ink border border-white/10 rounded-lg px-2.5 py-1 text-white text-xs font-mono flex-1 min-w-0"
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') handleOllamaUrlSave()
+                                          if (e.key === 'Escape') setOllamaUrlEditing(false)
+                                        }}
+                                      />
+                                      <button
+                                        onClick={handleOllamaUrlSave}
+                                        disabled={ollamaUrlSaving}
+                                        className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-1 shrink-0"
+                                      >
+                                        {ollamaUrlSaving ? '…' : 'Save'}
+                                      </button>
+                                      <button
+                                        onClick={() => setOllamaUrlEditing(false)}
+                                        className="text-[11px] text-tsushin-slate hover:text-white px-1.5 py-1 shrink-0"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <p
+                                      className="text-[11px] font-mono text-tsushin-accent cursor-pointer hover:text-white transition-colors flex-1 truncate"
+                                      onClick={() => canEditSettings && setOllamaUrlEditing(true)}
+                                      title={canEditSettings ? 'Click to edit URL' : ''}
+                                    >
+                                      {ollamaHealth?.base_url || ollamaInstance.base_url || '(not set)'}
+                                    </p>
+                                  )}
+                                </div>
+
+                                {ollamaHealth?.available ? (
+                                  <p className="text-[11px] text-tsushin-slate">
+                                    {ollamaHealth.models_count || 0} model{(ollamaHealth.models_count || 0) !== 1 ? 's' : ''} available
+                                  </p>
+                                ) : (
+                                  <>
+                                    <p className="text-[11px] text-tsushin-vermilion">{ollamaHealth?.error || 'Not running'}</p>
+                                    <p className="text-[11px] text-tsushin-slate">
+                                      Start with: <code className="bg-tsushin-deep px-1 py-0.5 rounded font-mono text-tsushin-accent">ollama serve</code>
+                                    </p>
+                                  </>
+                                )}
+
+                                {/* BUG-331: Docker networking guidance (host mode only) */}
+                                <div className="p-2 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1">
+                                  <p className="text-[11px] font-medium text-tsushin-accent">Docker Networking Note</p>
+                                  <p className="text-[11px] text-tsushin-slate">
+                                    Tsushin runs inside Docker. Use <code className="bg-tsushin-ink px-1 rounded font-mono text-tsushin-accent">http://172.18.0.1:11434</code> instead of <code className="bg-tsushin-ink px-1 rounded font-mono">localhost</code> so the backend container can reach Ollama on the host.
+                                  </p>
+                                  <code className="block text-[11px] bg-tsushin-ink px-2 py-1 rounded font-mono text-tsushin-success overflow-x-auto">
+                                    Environment=&quot;OLLAMA_HOST=0.0.0.0:11434&quot;
+                                  </code>
+                                </div>
+
+                                {ollamaTestResult && (
+                                  <p className={`text-[11px] ${ollamaTestResult.success ? 'text-tsushin-success' : 'text-tsushin-vermilion'}`}>
+                                    {ollamaTestResult.success ? 'Connection successful' : ollamaTestResult.message}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Auto mode — provision config when no container */}
+                            {isAuto && isNoneOrError && canEditSettings && (
                               <div className="space-y-2">
                                 <label className="flex items-center gap-2 text-xs text-tsushin-slate">
                                   <input
@@ -3236,29 +3305,28 @@ export default function HubPage() {
                                   disabled={ollamaProvisionLoading}
                                   className="w-full bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded-lg px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
                                 >
-                                  {ollamaProvisionLoading ? 'Starting...' : 'Provision Container'}
+                                  {ollamaProvisionLoading ? 'Starting…' : 'Provision Container'}
                                 </button>
                               </div>
                             )}
 
-                            {isProvisioning && (
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-2 text-xs text-yellow-400">
-                                  <span className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-yellow-400" />
-                                  Setting up Ollama container (may take 1-2 minutes to pull image)...
-                                </div>
+                            {/* Auto mode — provisioning spinner */}
+                            {isAuto && isProvisioning && (
+                              <div className="flex items-center gap-2 text-xs text-yellow-400">
+                                <span className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-yellow-400" />
+                                Setting up Ollama container (may take 1–2 minutes)…
                                 <button
                                   onClick={refreshOllamaContainerStatus}
-                                  className="text-[11px] text-tsushin-accent hover:text-white"
+                                  className="ml-auto text-[11px] text-tsushin-accent hover:text-white"
                                 >
-                                  Refresh status
+                                  Refresh
                                 </button>
                               </div>
                             )}
 
-                            {isRunning && (
+                            {/* Auto mode — pulled models + pull a new model (when running) */}
+                            {isAuto && isRunning && (
                               <div className="space-y-3">
-                                {/* Pulled models */}
                                 <div>
                                   <p className="text-[11px] text-tsushin-muted mb-1.5">Pulled models</p>
                                   {ollamaPulledModels.length === 0 ? (
@@ -3282,8 +3350,6 @@ export default function HubPage() {
                                     </div>
                                   )}
                                 </div>
-
-                                {/* Pull model */}
                                 {canEditSettings && (
                                   <div className="space-y-2 pt-2 border-t border-white/5">
                                     <p className="text-[11px] text-tsushin-muted">Pull a new model</p>
@@ -3303,7 +3369,7 @@ export default function HubPage() {
                                         disabled={ollamaPullLoading || (ollamaSelectedModel === 'custom' && !ollamaCustomModel.trim())}
                                         className="bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded-lg px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
                                       >
-                                        {ollamaPullLoading ? 'Pulling...' : 'Pull'}
+                                        {ollamaPullLoading ? 'Pulling…' : 'Pull'}
                                       </button>
                                     </div>
                                     {ollamaSelectedModel === 'custom' && (
@@ -3320,7 +3386,7 @@ export default function HubPage() {
                                       <div className="space-y-1">
                                         <div className="flex items-center justify-between text-[11px] text-tsushin-slate">
                                           <span>Pulling {ollamaPullProgress.model || ollamaSelectedModel}</span>
-                                          <span>{ollamaPullProgress.percent != null ? `${Math.round(ollamaPullProgress.percent)}%` : '...'}</span>
+                                          <span>{ollamaPullProgress.percent != null ? `${Math.round(ollamaPullProgress.percent)}%` : '…'}</span>
                                         </div>
                                         <div className="h-1.5 w-full bg-tsushin-ink rounded-full overflow-hidden">
                                           <div
@@ -3332,222 +3398,90 @@ export default function HubPage() {
                                     )}
                                   </div>
                                 )}
-
-                                {/* Container controls */}
-                                {canEditSettings && (
-                                  <ManagedContainerPanel
-                                    status={state}
-                                    isBusy={ollamaContainerActionLoading}
-                                    onToggle={() => handleOllamaContainerAction('stop')}
-                                    onRestart={() => handleOllamaContainerAction('restart')}
-                                    onLogs={handleOllamaViewLogs}
-                                    logsOpen={ollamaLogsOpen}
-                                  />
-                                )}
-                                {ollamaLogsOpen && (
-                                  <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
-                                    <div className="flex items-center justify-between mb-1">
-                                      <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
-                                      <button
-                                        onClick={async () => {
-                                          const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
-                                          if (!inst) return
-                                          setOllamaLogsLoading(true)
-                                          try {
-                                            const { logs } = await api.getOllamaContainerLogs(inst.id, 100)
-                                            setOllamaLogsContent(logs || '(no logs)')
-                                          } catch (e: any) {
-                                            setOllamaLogsContent(`Error: ${e?.message || 'unknown'}`)
-                                          } finally {
-                                            setOllamaLogsLoading(false)
-                                          }
-                                        }}
-                                        disabled={ollamaLogsLoading}
-                                        className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
-                                      >
-                                        {ollamaLogsLoading ? 'Loading...' : 'Refresh'}
-                                      </button>
-                                    </div>
-                                    <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
-                                      {ollamaLogsContent || (ollamaLogsLoading ? 'Loading logs...' : '(no logs loaded)')}
-                                    </pre>
-                                  </div>
-                                )}
                               </div>
                             )}
 
-                            {isStopped && canEditSettings && (
-                              <div className="space-y-2">
-                                <ManagedContainerPanel
-                                  status={state}
-                                  isBusy={ollamaContainerActionLoading}
-                                  onToggle={() => handleOllamaContainerAction('start')}
-                                  onRestart={() => handleOllamaContainerAction('restart')}
-                                  onLogs={handleOllamaViewLogs}
-                                  logsOpen={ollamaLogsOpen}
-                                />
-                                {ollamaLogsOpen && (
-                                  <div className="p-2 bg-black/50 border border-white/5 rounded">
-                                    <div className="flex items-center justify-between mb-1">
-                                      <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
-                                      <button
-                                        onClick={async () => {
-                                          const inst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
-                                          if (!inst) return
-                                          setOllamaLogsLoading(true)
-                                          try {
-                                            const { logs } = await api.getOllamaContainerLogs(inst.id, 100)
-                                            setOllamaLogsContent(logs || '(no logs)')
-                                          } catch (e: any) {
-                                            setOllamaLogsContent(`Error: ${e?.message || 'unknown'}`)
-                                          } finally {
-                                            setOllamaLogsLoading(false)
-                                          }
-                                        }}
-                                        disabled={ollamaLogsLoading}
-                                        className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
-                                      >
-                                        {ollamaLogsLoading ? 'Loading...' : 'Refresh'}
-                                      </button>
-                                    </div>
-                                    <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
-                                      {ollamaLogsContent || (ollamaLogsLoading ? 'Loading logs...' : '(no logs loaded)')}
-                                    </pre>
-                                  </div>
-                                )}
+                            {/* Unified lifecycle controls — ManagedContainerPanel for
+                                auto-provisioned instances (matches Kokoro), a compact
+                                Test+Refresh+Delete strip for host-mode where there's
+                                no container to toggle. */}
+                            {canEditSettings && isAuto && (
+                              <ManagedContainerPanel
+                                status={state}
+                                isBusy={ollamaContainerActionLoading || ollamaTestLoading}
+                                onToggle={() => handleOllamaContainerAction(isRunning ? 'stop' : 'start')}
+                                onRestart={() => handleOllamaContainerAction('restart')}
+                                onLogs={handleOllamaViewLogs}
+                                logsOpen={ollamaLogsOpen}
+                                onTest={handleOllamaTest}
+                                testLabel={ollamaTestLoading ? 'Testing…' : 'Test'}
+                                onDelete={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: false })}
+                              />
+                            )}
+
+                            {canEditSettings && !isAuto && (
+                              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
                                 <button
-                                  onClick={() => handleOllamaDeprovision(true)}
-                                  className="w-full bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded-lg px-2.5 py-1.5 text-xs transition-colors"
+                                  onClick={handleOllamaTest}
+                                  disabled={ollamaTestLoading}
+                                  className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-1 disabled:opacity-50"
                                 >
-                                  Deprovision
+                                  {ollamaTestLoading ? 'Testing…' : 'Test'}
                                 </button>
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })()}
-
-                      <div className="text-sm text-tsushin-slate space-y-2">
-                        {ollamaMode === 'host' && ollamaHealth?.available ? (
-                          <>
-                            <p className="text-xs">{ollamaHealth.models_count || 0} models available</p>
-                            {/* Inline URL editor */}
-                            {ollamaUrlEditing ? (
-                              <div className="flex items-center gap-1.5">
-                                <input
-                                  type="text"
-                                  value={ollamaUrlValue}
-                                  onChange={(e) => setOllamaUrlValue(e.target.value)}
-                                  className="bg-tsushin-ink border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm font-mono flex-1 min-w-0"
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleOllamaUrlSave()
-                                    if (e.key === 'Escape') setOllamaUrlEditing(false)
+                                <button
+                                  onClick={async () => {
+                                    await fetchOllamaHealth()
+                                    try {
+                                      const models = await api.discoverProviderModels(ollamaInstance.id)
+                                      toast.success(`Discovered ${models.length} model${models.length !== 1 ? 's' : ''}`)
+                                      await fetchProviderInstances()
+                                    } catch { /* ignore */ }
                                   }}
-                                />
-                                <button
-                                  onClick={handleOllamaUrlSave}
-                                  disabled={ollamaUrlSaving}
-                                  className="bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-2.5 py-1.5 text-xs shrink-0"
+                                  className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-1"
                                 >
-                                  {ollamaUrlSaving ? '...' : 'Save'}
+                                  Refresh Models
                                 </button>
                                 <button
-                                  onClick={() => setOllamaUrlEditing(false)}
-                                  className="text-tsushin-slate hover:text-white px-1.5 py-1.5 text-xs shrink-0"
+                                  onClick={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: false })}
+                                  className="ml-auto text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-1"
                                 >
-                                  Cancel
+                                  Delete
                                 </button>
                               </div>
-                            ) : (
-                              <p
-                                className="text-xs font-mono text-tsushin-accent cursor-pointer hover:text-white transition-colors"
-                                onClick={() => canEditSettings && setOllamaUrlEditing(true)}
-                                title={canEditSettings ? 'Click to edit URL' : ''}
-                              >
-                                {ollamaHealth.base_url}
-                                {canEditSettings && (
-                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="inline ml-1.5 opacity-50">
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                                    <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                                  </svg>
-                                )}
-                              </p>
                             )}
-                            {ollamaHealth.models?.slice(0, 3).map((m, i) => (
-                              <p key={i} className="text-xs text-tsushin-muted">- {m.name}</p>
-                            ))}
-                            {(ollamaHealth.models_count || 0) > 3 && (
-                              <p className="text-xs text-tsushin-slate">... and {(ollamaHealth.models_count || 0) - 3} more</p>
+
+                            {/* Logs drawer — auto mode only (host mode has no container logs) */}
+                            {isAuto && ollamaLogsOpen && (
+                              <div className="p-2 bg-black/50 border border-white/5 rounded">
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
+                                  <button
+                                    onClick={async () => {
+                                      setOllamaLogsLoading(true)
+                                      try {
+                                        const { logs } = await api.getOllamaContainerLogs(ollamaInstance.id, 100)
+                                        setOllamaLogsContent(logs || '(no logs)')
+                                      } catch (e: any) {
+                                        setOllamaLogsContent(`Error: ${e?.message || 'unknown'}`)
+                                      } finally {
+                                        setOllamaLogsLoading(false)
+                                      }
+                                    }}
+                                    disabled={ollamaLogsLoading}
+                                    className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
+                                  >
+                                    {ollamaLogsLoading ? 'Loading…' : 'Refresh'}
+                                  </button>
+                                </div>
+                                <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
+                                  {ollamaLogsContent || (ollamaLogsLoading ? 'Loading logs…' : '(no logs loaded)')}
+                                </pre>
+                              </div>
                             )}
-                          </>
-                        ) : ollamaMode === 'host' ? (
-                          <>
-                            <p className="text-xs text-tsushin-vermilion">{ollamaHealth?.error || 'Not running'}</p>
-                            <p className="text-xs">Start with: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono text-tsushin-accent">ollama serve</code></p>
-                          </>
-                        ) : null}
-                        {/* BUG-331: Docker networking guidance — visible only in host mode */}
-                        {ollamaMode === 'host' && (
-                          <div className="mt-3 p-2.5 bg-tsushin-deep/60 border border-white/10 rounded-lg space-y-1.5">
-                            <p className="text-xs font-medium text-tsushin-accent">Docker Networking Note</p>
-                            <p className="text-xs text-tsushin-slate">
-                              Tsushin runs inside Docker. Use <code className="bg-tsushin-ink px-1 rounded font-mono text-tsushin-accent">http://172.18.0.1:11434</code> instead of <code className="bg-tsushin-ink px-1 rounded font-mono">localhost</code> so the backend container can reach Ollama on the host.
-                            </p>
-                            <p className="text-xs text-tsushin-slate">
-                              Also ensure Ollama listens on all interfaces — add to its systemd override:
-                            </p>
-                            <code className="block text-xs bg-tsushin-ink px-2 py-1.5 rounded font-mono text-tsushin-success whitespace-nowrap overflow-x-auto">
-                              Environment=&quot;OLLAMA_HOST=0.0.0.0:11434&quot;
-                            </code>
                           </div>
-                        )}
-                        {/* Test result display */}
-                        {ollamaTestResult && (
-                          <p className={`text-xs ${ollamaTestResult.success ? 'text-tsushin-success' : 'text-tsushin-vermilion'}`}>
-                            {ollamaTestResult.success ? 'Connection successful' : ollamaTestResult.message}
-                          </p>
-                        )}
-                      </div>
-                      {/* Action buttons */}
-                      <div className="flex gap-2 mt-4">
-                        <button
-                          onClick={handleOllamaTest}
-                          disabled={ollamaTestLoading}
-                          className="flex-1 bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded-lg px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
-                        >
-                          {ollamaTestLoading ? 'Testing...' : 'Test Connection'}
-                        </button>
-                        <button
-                          onClick={async () => {
-                            await fetchOllamaHealth()
-                            const ollamaInst = providerInstances.find(i => i.vendor === 'ollama' && i.is_active)
-                            if (ollamaInst) {
-                              try {
-                                const models = await api.discoverProviderModels(ollamaInst.id)
-                                toast.success(`Discovered ${models.length} model${models.length !== 1 ? 's' : ''}`)
-                                await fetchProviderInstances()
-                              } catch { /* ignore */ }
-                            }
-                          }}
-                          className="flex-1 btn-secondary py-1.5 text-sm"
-                        >
-                          Refresh Models
-                        </button>
-                      </div>
-                      {/* Manage instance link */}
-                      {canEditSettings && (() => {
-                        const ollamaInst = providerInstances.find(i => i.vendor === 'ollama')
-                        return ollamaInst ? (
-                          <button
-                            onClick={() => { setEditingInstance(ollamaInst); setInstanceModalOpen(true) }}
-                            className="w-full mt-2 text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 hover:text-white rounded px-2 py-1 transition-colors"
-                          >
-                            Manage Instance
-                          </button>
-                        ) : null
-                      })()}
-                    </div>
-                    )}
+                        </div>
+                      )
+                    })()}
 
                     {/* Kokoro TTS Card (v0.7.0 consolidated — per-tenant instances + legacy) */}
                     {kokoroInstances.length > 0 && (
@@ -6257,6 +6191,48 @@ export default function HubPage() {
                 </button>
                 <button
                   onClick={handleKokoroInstanceDelete}
+                  className="px-4 py-2 rounded-lg bg-tsushin-vermilion text-white text-sm font-medium hover:bg-red-400"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ollama delete confirmation — mirrors the Kokoro modal so the Delete
+          action offered by <ManagedContainerPanel /> (and the host-mode
+          action strip) feels identical across both services. */}
+      {ollamaConfirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+          <div className="bg-[#12121a] border border-white/10 rounded-xl w-full max-w-md">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">Delete Ollama instance?</h3>
+              <p className="text-sm text-tsushin-slate mb-4">
+                This will soft-delete the instance and (if auto-provisioned) stop the container.
+              </p>
+              <label className="flex items-start gap-2 p-3 rounded-lg bg-tsushin-vermilion/5 border border-tsushin-vermilion/20 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={ollamaConfirmDelete.removeVolume}
+                  onChange={e => setOllamaConfirmDelete({ ...ollamaConfirmDelete, removeVolume: e.target.checked })}
+                  className="mt-0.5 accent-tsushin-vermilion"
+                />
+                <div>
+                  <div className="text-sm text-white">Also remove container volume</div>
+                  <div className="text-xs text-tsushin-vermilion mt-0.5">Permanent data loss — pulled models will be deleted and must be re-downloaded.</div>
+                </div>
+              </label>
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setOllamaConfirmDelete(null)}
+                  className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-tsushin-slate text-sm hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleOllamaInstanceDelete}
                   className="px-4 py-2 rounded-lg bg-tsushin-vermilion text-white text-sm font-medium hover:bg-red-400"
                 >
                   Delete

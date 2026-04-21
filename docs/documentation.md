@@ -2372,12 +2372,14 @@ All three auto-provisioned services (Ollama, Kokoro, SearXNG) render through the
 
 Props are documented in the component itself. Call sites in `hub/page.tsx`:
 
-- Ollama (running state) — container actions: stop / restart / logs.
-- Ollama (stopped state) — container actions: start / restart / logs.
+- Ollama (auto-provisioned, per-instance) — start↔stop / restart / logs / test / delete.
+- Ollama (host mode, per-instance) — inline `Test` / `Refresh Models` / `Delete` strip (no container lifecycle — the URL points at an external daemon).
 - Kokoro instance row — start↔stop / restart / logs / delete.
 - SearXNG instance row — start↔stop / restart / logs / delete.
 
 The legacy Ollama panel-level **Enable Ollama** `ToggleSwitch` at the card header was removed in favor of the per-instance panel; this eliminates the drift where Ollama had two lifecycle toggles (panel + instance) while Kokoro and SearXNG only had one.
+
+**v0.7.x follow-up — full Ollama/Kokoro parity.** The Ollama panel also no longer renders when the tenant has no `ollama` provider instance, matching Kokoro (`kokoroInstances.length > 0`) and SearXNG (`searxngInstances.length > 0`). Mode (host vs. auto-provision) is derived from `instance.is_auto_provisioned` rather than a live radio on the card — it's a creation-time choice made in the wizard. The separate **Deprovision** / **Test Connection** / **Refresh Models** / **Manage Instance** buttons that used to live at the bottom of the Ollama card were removed; `ManagedContainerPanel.onTest` + `onDelete` + the inline host-mode action strip cover those affordances. A new `ollamaConfirmDelete` modal (mirroring the Kokoro modal) handles the Delete action, including the optional "remove container volume" checkbox for pulled-model cleanup.
 
 ### 19.10 Service API Keys disclosure (v0.7.x)
 
