@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Third Sweep — UI-first validation of remaining bugs (2026-04-21)
+
+User asked to validate each remaining open bug against the live stack, fix real ones, and run UI-first browser regression.
+
+- **BUG-540 (Medium) — OKG Qdrant auto-connect (`backend/agent/skills/okg_term_memory_skill.py`).** `_get_service` now falls back to the tenant's default (or any healthy active) `VectorStoreInstance` when the agent has no explicit `vector_store_instance_id`. On fresh installs, OKG Term Memory recall now returns results instead of "no vector store provider available". Verified: `OKG service initialized, provider=True` on an agent with no explicit VS assignment.
+- **BUG-681 (High) — Readonly UI mutation controls (`frontend/app/hub/page.tsx`, `frontend/app/flows/page.tsx`, `frontend/components/playground/ExpertMode.tsx`).** Hub `+ New Instance` and per-vendor `Add Instance` buttons now render only when `canWriteHub`. Flows `Enabled`/`Disabled` status toggles (list + detail) now `disabled={!canWriteFlows}` with `cursor: not-allowed` and an explanatory tooltip. Playground composer + Send button gated on `agents.execute`; placeholder changes to "Read-only — requires agents.execute permission" for read-only users. Verified end-to-end via Playwright against a seeded readonly user — all three surfaces went from clickable to non-interactive, owner experience unchanged.
+- **BUG-684 (Critical) — Gmail/Calendar httpx timeout tightened (`backend/hub/google/gmail_service.py`, `backend/hub/google/calendar_service.py`).** `_make_request` timeout cut from 30s → 10s on both services. Each failing external-API call now holds a DB session for ≤10s instead of 30s, tripling the effective `QueuePool` saturation threshold under Google-API outages. The deeper architectural fix (releasing the DB session before awaiting the external httpx call across `routes_hub.py`'s health-refresh path) is deferred to a dedicated refactor.
+- **BUG-539 (High) — Sentinel `DetachedInstanceError` — closed as FP.** `POST /api/sentinel/test detection_type=shell_malicious` returns 200 with correct threat detection on the current stack; no detach error reproduces.
+- **BUG-682 (High) — Qdrant host-port collision on side-by-side installs — deferred.** Requires disposable installer + multi-stack environment to reproduce. Tracked for the next installer-hardening pass.
+
+**Validation:** `output/playwright/full-regression-20260421/preflight/final-regression-sweep3.txt` → **PASS 32 / FAIL 0**. Plus live browser validation against readonly + owner sessions — see BUGS.md "Third Sweep" for per-surface before/after evidence.
+
+Open bugs remaining: 2 (BUG-684 deeper architectural refactor, BUG-682 installer multi-stack port allocation). Down from 5.
+
 ### Second Sweep — 8 more bugs fixed on develop (2026-04-21)
 
 User asked to "fix all remaining bugs with comprehensive validation for perfection." This pass landed:

@@ -512,6 +512,44 @@ class OKGTermMemorySkill(BaseSkill):
                 from agent.memory.embedding_service import get_shared_embedding_service
 
                 instance_id = agent.vector_store_instance_id if agent else None
+                # BUG-540: when the agent has no explicit VS instance, fall back
+                # to the tenant's default vector store (e.g., auto-provisioned
+                # Qdrant). Without this fallback, OKG recall silently returns
+                # "no vector store provider available" on fresh installs even
+                # though a healthy default instance exists.
+                if not instance_id and tenant_id:
+                    try:
+                        from models import VectorStoreInstance as _VSI
+                        default_vsi = (
+                            self._db.query(_VSI)
+                            .filter(
+                                _VSI.tenant_id == tenant_id,
+                                _VSI.is_active == True,  # noqa: E712
+                                _VSI.is_default == True,  # noqa: E712
+                            )
+                            .first()
+                        )
+                        if default_vsi is None:
+                            # Looser fallback: any healthy active instance.
+                            default_vsi = (
+                                self._db.query(_VSI)
+                                .filter(
+                                    _VSI.tenant_id == tenant_id,
+                                    _VSI.is_active == True,  # noqa: E712
+                                    _VSI.health_status == "healthy",
+                                )
+                                .order_by(_VSI.id.asc())
+                                .first()
+                            )
+                        if default_vsi:
+                            instance_id = default_vsi.id
+                            logger.info(
+                                f"OKG: agent {self._agent_id} has no vector_store_instance_id, "
+                                f"using tenant default instance {instance_id} ({default_vsi.vendor})"
+                            )
+                    except Exception as fb_err:
+                        logger.warning(f"OKG: tenant-default VS fallback failed: {fb_err}")
+
                 if instance_id:
                     registry = VectorStoreRegistry()
                     resolver = VectorStoreResolver(registry)
