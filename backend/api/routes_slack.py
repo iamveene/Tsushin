@@ -432,3 +432,103 @@ async def delete_slack_integration(
 
     logger.info(f"Deleted Slack integration {integration_id} (tenant={current_user.tenant_id})")
     return {"status": "deleted", "id": integration_id}
+
+
+# ============================================================================
+# BUG-675: Test Connection + Channels list endpoints
+# The Hub frontend has buttons that hit these paths; previously they 404'd.
+# ============================================================================
+
+@router.post("/{integration_id}/test")
+async def test_slack_connection(
+    integration_id: int,
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("integrations.slack.read")),
+    db: Session = Depends(get_db),
+):
+    """Verify the Slack bot token via `auth.test`."""
+    integration = db.query(SlackIntegration).filter(
+        SlackIntegration.id == integration_id,
+        SlackIntegration.tenant_id == current_user.tenant_id,
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Slack integration not found")
+
+    encryption_key = get_slack_encryption_key(db)
+    if not encryption_key:
+        raise HTTPException(status_code=500, detail="Slack encryption key not available")
+    enc = TokenEncryption(encryption_key.encode())
+    try:
+        bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+    except Exception as e:
+        logger.warning(f"Slack test: decrypt failed for integration {integration_id}: {e}")
+        return {"success": False, "message": "Stored bot token could not be decrypted."}
+
+    try:
+        import asyncio
+        from slack_sdk import WebClient
+
+        client = WebClient(token=bot_token)
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(None, client.auth_test)
+        if resp.get("ok"):
+            return {
+                "success": True,
+                "message": f"Bot @{resp.get('user', '?')} in {resp.get('team', '?')}",
+                "details": {
+                    "bot_user": resp.get("user"),
+                    "team": resp.get("team"),
+                    "team_id": resp.get("team_id"),
+                    "bot_id": resp.get("bot_id"),
+                },
+            }
+        return {"success": False, "message": resp.get("error", "Slack rejected auth.test")}
+    except Exception as e:
+        logger.warning(f"Slack test for integration {integration_id} failed: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.get("/{integration_id}/channels")
+async def list_slack_channels(
+    integration_id: int,
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("integrations.slack.read")),
+    db: Session = Depends(get_db),
+):
+    """List the bot's visible Slack conversations (public + private channels, DMs excluded)."""
+    integration = db.query(SlackIntegration).filter(
+        SlackIntegration.id == integration_id,
+        SlackIntegration.tenant_id == current_user.tenant_id,
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Slack integration not found")
+
+    encryption_key = get_slack_encryption_key(db)
+    if not encryption_key:
+        raise HTTPException(status_code=500, detail="Slack encryption key not available")
+    enc = TokenEncryption(encryption_key.encode())
+    try:
+        bot_token = enc.decrypt(integration.bot_token_encrypted, integration.tenant_id)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not decrypt stored bot token")
+
+    try:
+        import asyncio
+        from slack_sdk import WebClient
+
+        client = WebClient(token=bot_token)
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(
+            None, lambda: client.conversations_list(types="public_channel,private_channel", limit=200)
+        )
+        if not resp.get("ok"):
+            return {"channels": [], "error": resp.get("error", "unknown")}
+        return {
+            "channels": [
+                {"id": c.get("id"), "name": c.get("name"), "is_private": bool(c.get("is_private"))}
+                for c in resp.get("channels", [])
+            ]
+        }
+    except Exception as e:
+        logger.warning(f"Slack channels list for integration {integration_id} failed: {e}")
+        return {"channels": [], "error": str(e)}

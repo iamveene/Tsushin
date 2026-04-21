@@ -52,11 +52,20 @@ async def list_agents_protected(
 
     agents = query.all()
 
+    # BUG-592: Agent has no `.contact` relationship attribute, only `contact_id`.
+    # Resolve contact names in a single IN query rather than chasing a missing
+    # lazy relationship that previously raised AttributeError → HTTP 500.
+    contact_ids = [a.contact_id for a in agents if a.contact_id is not None]
+    contact_map: Dict[int, str] = {}
+    if contact_ids:
+        contact_rows = ctx.db.query(Contact).filter(Contact.id.in_(contact_ids)).all()
+        contact_map = {c.id: c.friendly_name for c in contact_rows}
+
     return {
         "agents": [
             {
                 "id": agent.id,
-                "contact_name": agent.contact.friendly_name if agent.contact else "Unknown",
+                "contact_name": contact_map.get(agent.contact_id, "Unknown"),
                 "keywords": agent.keywords,
                 "is_active": agent.is_active,
                 "tenant_id": agent.tenant_id,
