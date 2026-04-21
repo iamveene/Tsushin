@@ -2872,12 +2872,14 @@ export default function HubPage() {
                     <h2 className="text-lg font-display font-semibold text-white">AI Model Providers</h2>
                     <p className="text-sm text-tsushin-slate">Manage provider instances and API keys for AI models</p>
                   </div>
-                  <button
-                    onClick={() => openProviderSetupWizard()}
-                    className="btn-primary w-full sm:w-auto justify-center"
-                  >
-                    + New Instance
-                  </button>
+                  {canWriteHub && (
+                    <button
+                      onClick={() => openProviderSetupWizard()}
+                      className="btn-primary w-full sm:w-auto justify-center"
+                    >
+                      + New Instance
+                    </button>
+                  )}
                 </div>
 
                 {/* Provider Instances grouped by vendor */}
@@ -2976,13 +2978,15 @@ export default function HubPage() {
                                   {instances.length} instance{instances.length !== 1 ? 's' : ''}
                                 </span>
                               </div>
-                              <button
-                                onClick={() => openProviderSetupWizard(vendor)}
-                                className="inline-flex w-fit items-center gap-1 rounded-md border border-tsushin-accent/25 bg-tsushin-accent/10 px-2.5 py-1 text-xs text-tsushin-accent hover:text-white hover:bg-tsushin-accent/15 transition-colors"
-                              >
-                                <PlusIconSvg size={14} />
-                                Add Instance
-                              </button>
+                              {canWriteHub && (
+                                <button
+                                  onClick={() => openProviderSetupWizard(vendor)}
+                                  className="inline-flex w-fit items-center gap-1 rounded-md border border-tsushin-accent/25 bg-tsushin-accent/10 px-2.5 py-1 text-xs text-tsushin-accent hover:text-white hover:bg-tsushin-accent/15 transition-colors"
+                                >
+                                  <PlusIconSvg size={14} />
+                                  Add Instance
+                                </button>
+                              )}
                             </div>
 
                             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">

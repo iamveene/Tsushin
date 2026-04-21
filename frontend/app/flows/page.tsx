@@ -816,11 +816,13 @@ export default function FlowsPage() {
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => handleToggleActive(flow)}
+                              onClick={() => canWriteFlows && handleToggleActive(flow)}
+                              disabled={!canWriteFlows}
+                              title={canWriteFlows ? (flow.is_active ? 'Click to disable' : 'Click to enable') : 'Requires flows.write permission'}
                               className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full transition-all ${flow.is_active
                                   ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25'
                                   : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
-                                }`}
+                                } ${!canWriteFlows ? 'opacity-60 cursor-not-allowed' : ''}`}
                             >
                               <span className={`w-1.5 h-1.5 rounded-full ${flow.is_active ? 'bg-emerald-400' : 'bg-slate-500'}`} />
                               {flow.is_active ? 'Enabled' : 'Disabled'}
@@ -4556,11 +4558,13 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Status</label>
                 <button
-                  onClick={() => setFlow(prev => prev ? { ...prev, is_active: !prev.is_active } : null)}
+                  onClick={() => canWriteFlows && setFlow(prev => prev ? { ...prev, is_active: !prev.is_active } : null)}
+                  disabled={!canWriteFlows}
+                  title={canWriteFlows ? undefined : 'Requires flows.write permission'}
                   className={`px-4 py-2.5 rounded-lg font-medium transition-colors ${flow.is_active
                       ? 'bg-green-500/20 text-green-400 border border-green-500/30'
                       : 'bg-slate-700/50 text-slate-400 border border-slate-600'
-                    }`}
+                    } ${!canWriteFlows ? 'opacity-60 cursor-not-allowed' : ''}`}
                 >
                   {flow.is_active ? 'Enabled' : 'Disabled'}
                 </button>
