@@ -225,6 +225,16 @@ async def create_slack_integration(
     failures the moment anything tried to use the tokens.
     """
     try:
+        # BUG-678: Slack integrations are tenant-scoped. A global admin with
+        # no tenant context would otherwise reach the encryption + insert path
+        # with an empty workspace identifier, bubbling a generic 500. Fail
+        # closed with a clear 400 up front.
+        if not getattr(current_user, "tenant_id", None):
+            raise HTTPException(
+                status_code=400,
+                detail="Slack integrations are tenant-scoped. Select a tenant before creating.",
+            )
+
         encryption_key = get_slack_encryption_key(db)
         if not encryption_key:
             raise HTTPException(status_code=500, detail="Slack encryption key not available")
@@ -343,6 +353,22 @@ async def update_slack_integration(
 
         if data.app_level_token is not None and enc:
             integration.app_token_encrypted = enc.encrypt(data.app_level_token, tenant_key)
+
+        # BUG-676: re-validate mode-specific requirements on update. The create
+        # path enforces app_level_token for socket mode; the update path must
+        # too, otherwise an HTTP-mode row can flip to active Socket Mode
+        # without tokens and silently fail to start the worker.
+        proposed_mode = data.mode if data.mode is not None else integration.mode
+        if proposed_mode == "socket":
+            has_app_token = bool(
+                getattr(integration, "app_token_encrypted", None)
+                or (data.app_level_token is not None and data.app_level_token.strip())
+            )
+            if not has_app_token:
+                raise HTTPException(
+                    status_code=400,
+                    detail="app_level_token is required when mode='socket'.",
+                )
 
         if data.mode is not None:
             integration.mode = data.mode

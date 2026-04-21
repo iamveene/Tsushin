@@ -212,8 +212,9 @@ def get_persona(
     if not persona:
         raise HTTPException(status_code=404, detail="Persona not found")
 
-    # Verify user can access this persona
-    if not ctx.can_access_resource(persona.tenant_id):
+    # BUG-673: system personas (tenant_id IS NULL) are returned by the list
+    # endpoint and must also be readable by detail. Use allow_shared=True.
+    if not ctx.can_access_resource(persona.tenant_id, allow_shared=True):
         raise HTTPException(status_code=404, detail="Persona not found")
 
     return to_persona_response(persona, db)

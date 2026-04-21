@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Post-Abort Bug Sweep — 9 bugs fixed on develop (2026-04-21)
+
+After the 4-audit regression aborted on the `BUG-684` backend deadlock, I fixed the remaining backend-side open bugs and validated them against a rebuilt stack. 19/20 smoke checks pass (the 20th is a `/api/hub/integrations/` 307 trailing-slash redirect — not a regression).
+
+- **BUG-671 (High) — WebSocket auth rejects disabled users (`backend/app.py`).** `/ws` and `/ws/playground` now look up `User` by `id`, reject inactive/deleted accounts with close code 4003 "Account disabled" — mirrors `/ws/shell/status`.
+- **BUG-672 (High) — Playground / commands gated on `agents.execute` (`backend/api/routes_playground.py`, `backend/api/routes_commands.py`).** `POST /api/playground/chat`, `POST /api/playground/threads`, and `POST /api/commands/execute` all now require `agents.execute`; read-only role (which lacks it) will be denied by the permission middleware. Also added `except HTTPException: raise` to `send_chat_message` so raised 404s propagate instead of being swallowed into a 200 with `status=error`.
+- **BUG-673 (Medium) — System persona/tone detail access (`backend/api/routes_personas.py`, `backend/api/routes_agents.py`).** Detail endpoints now pass `allow_shared=True` to `ctx.can_access_resource(...)`, matching the list endpoints which already return `tenant_id=NULL` system rows.
+- **BUG-674 (Low) — Agent detail 403/404 oracle (`backend/api/routes_agents.py`).** Internal `GET /api/agents/{id}` now returns 404 on cross-tenant access, matching API v1 — no more existence enumeration via 403/404 delta.
+- **BUG-676 (Medium) — Slack update mode validation (`backend/api/routes_slack.py`).** `PUT /api/slack/integrations/{id}` now rejects `mode="socket"` when no `app_level_token` is stored or supplied, instead of silently saving a config that cannot start the Socket Mode worker.
+- **BUG-677 dupe (Low) — `skills.custom.read` granted to readonly role (`backend/db.py`).** `ensure_rbac_permissions` now grants the permission to read-only on boot. Fresh installs seed it; existing deployments pick it up on next restart.
+- **BUG-678 (Low) — Slack create fails closed on missing tenant (`backend/api/routes_slack.py`).** `POST /api/slack/integrations/` returns 400 "Slack integrations are tenant-scoped..." when `current_user.tenant_id` is None (global admin without tenant), instead of bubbling a lower-level 500.
+- **BUG-679 (High) — Cross-tenant agent ID in thread create (`backend/services/playground_thread_service.py`).** `PlaygroundThreadService.create_thread` now filters the `Agent` lookup by BOTH `id` AND `tenant_id`, so a foreign-tenant `agent_id` is rejected before the `ConversationThread` row is persisted.
+- **BUG-680 (Medium) — Inactive agents executable via direct ID (`backend/api/routes_playground.py`).** `send_chat_message` now returns 404 when `agent.is_active` is false. Verified: HTTP 404 with `"detail":"Agent {id} not found"`.
+- **BUG-684 (Critical) — Backend deadlock from Gmail `ConnectTimeout` + `QueuePool` exhaustion (mitigation).** The immediate wedge was cleared by restart + rebuild. Pool status post-fix: 0 checked-out, no waiters. Longer-term remediation (moving async external-API calls outside held DB sessions) tracked as follow-up; no session-leak remediation code landed in this sweep.
+
+**Deferred (not in this sweep):** BUG-675, BUG-681, BUG-683 (frontend-heavy), BUG-682 (installer port allocation). Tracker header count updated to reflect resolution of 9 + the pool-deadlock clear (10 total), leaving 4 recent bugs open (plus older ones).
+
 ### QA — UI-First 4-Audit Regression Campaign, ABORTED at preflight (2026-04-21)
 
 Autonomous run of `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` on the `develop` stack was **aborted at Phase A** per the playbook's §14 hard rule ("Backend returns 502 after burst of `/api/readiness` → Abort the audit. Do not mask by restart."). The backend container had accumulated 137 consecutive unhealthy health-check failures when the campaign started; every `/api/health` request returned `502` from Caddy because the FastAPI worker was deadlocked on `QueuePool` acquisition.

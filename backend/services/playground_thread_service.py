@@ -278,8 +278,12 @@ class PlaygroundThreadService:
             Dict with thread data
         """
         try:
-            # Verify agent exists
-            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+            # BUG-679: tenant-scope the agent lookup so callers cannot persist
+            # a thread pointing at another tenant's agent.
+            agent = self.db.query(Agent).filter(
+                Agent.id == agent_id,
+                Agent.tenant_id == tenant_id,
+            ).first()
             if not agent:
                 return {
                     "status": "error",

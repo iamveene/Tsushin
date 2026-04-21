@@ -319,8 +319,10 @@ def get_tone_preset(
     if not tone:
         raise HTTPException(status_code=404, detail="Tone preset not found")
 
-    if not ctx.can_access_resource(tone.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
+    # BUG-673: system tone presets (tenant_id IS NULL) are returned by the list
+    # endpoint and must also be readable by detail. Use allow_shared=True.
+    if not ctx.can_access_resource(tone.tenant_id, allow_shared=True):
+        raise HTTPException(status_code=404, detail="Tone preset not found")
 
     return tone
 
@@ -585,9 +587,10 @@ def get_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Verify tenant access
+    # BUG-674: normalize cross-tenant responses to 404 to match API v1 behavior
+    # and avoid leaking resource existence to other tenants.
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     # Enrich with contact, tone preset, and persona names
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
