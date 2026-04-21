@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ProviderWizard — consolidate Ollama model selection (2026-04-21)
+
+The guided ProviderWizard was asking for Ollama models twice: Step 5 "Pull starter models?" (to feed the provisioner) then Step 6 "Test & choose models" (to expose to agents). The second step was redundant for the Ollama local path — users had to pick the same models again, and typing a model in Step 6 that wasn't pulled in Step 5 produced a broken instance.
+
+- **`frontend/lib/provider-wizard/reducer.ts`** — `getStepOrder` no longer emits `testAndModels` for `vendor='ollama' && hosting='local'`. Ollama local flow goes `modality → hosting → vendor → container → pullModels → review → progress`.
+- **`frontend/components/provider-wizard/steps/StepOllamaPullModels.tsx`** — Rewritten as the single "Pick models" step. Curated suggestions still rendered as toggle cards; a new custom-tag input lets users add any Ollama tag (`llama3.2:8b-instruct-q4_K_M`, etc.), with chips to remove them. Whatever the user picks is mirrored into BOTH `pull_models` (so the provisioner downloads it) AND `available_models` (so agents can select it). At least one model is required — Next is gated on selection since `ProviderInstanceCreate` requires `available_models.length >= 1`.
+
+No backend change. Cloud/Image paths still use the standard `testAndModels` step.
+
 ### Hub provider setup UX — Ollama parity, wizard drift fixes, card cleanup (2026-04-21)
 
 Follow-up pass on the Hub provider setup work. Ollama's panel was still a tangle of radio buttons, inline Test/Refresh/Manage buttons, and a separate Deprovision button, while Kokoro and SearXNG had already moved to a single `ManagedContainerPanel`. That drift was user-visible — cards felt different depending on the service. At the same time, a dedicated wizard-drift audit surfaced three BUG-582-class silent field losses.

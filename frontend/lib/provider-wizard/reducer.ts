@@ -110,7 +110,12 @@ export const INITIAL_STATE: WizardState = {
  * Compute the ordered list of visible steps given the current draft.
  * Branches:
  *   - hosting='local' → container step instead of credentials
- *   - vendor='ollama' AND hosting='local' → add pullModels step after container
+ *   - vendor='ollama' AND hosting='local' → single pullModels step (picks
+ *     BOTH what to pull into the container AND what to expose to agents;
+ *     testAndModels is skipped because the duplicate "Test & choose models"
+ *     step used to ask for the same model list twice — once to pull, once
+ *     to expose. With one consolidated step the user picks their models
+ *     once and the wizard pulls + exposes the same set.)
  *   - modality='image' → hosting auto-picked cloud so the hosting step is skipped
  */
 export function getStepOrder(draft: WizardDraft): StepKey[] {
@@ -127,15 +132,15 @@ export function getStepOrder(draft: WizardDraft): StepKey[] {
     draft.hosting === 'local' ? 'container' : 'credentials'
   const configSteps: StepKey[] = [configStep]
 
-  // Pull-models sub-step — Ollama only, after container provisioning.
-  const pullSteps: StepKey[] =
-    draft.vendor === 'ollama' && draft.hosting === 'local'
-      ? ['pullModels']
-      : []
+  const isOllamaLocal = draft.vendor === 'ollama' && draft.hosting === 'local'
 
-  const tail: StepKey[] = ['testAndModels', 'review', 'progress']
+  // Ollama local: one consolidated pullModels step.
+  // Cloud/Image: the usual testAndModels step (connection test + expose list).
+  const modelsSteps: StepKey[] = isOllamaLocal ? ['pullModels'] : ['testAndModels']
 
-  return [...base, ...hostingSteps, ...mid, ...configSteps, ...pullSteps, ...tail]
+  const tail: StepKey[] = ['review', 'progress']
+
+  return [...base, ...hostingSteps, ...mid, ...configSteps, ...modelsSteps, ...tail]
 }
 
 export function getStepIndex(state: WizardState): number {

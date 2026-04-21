@@ -62,24 +62,22 @@ export default function StepReview() {
     rows.push({ label: 'Memory limit', value: draft.mem_limit || '—', editStep: 'container' })
     if (draft.vendor === 'ollama') {
       rows.push({ label: 'GPU', value: draft.gpu_enabled ? 'Enabled' : 'Disabled', editStep: 'container' })
-      rows.push({
-        label: 'Starter models',
-        value: (draft.pull_models || []).length > 0
-          ? <span className="font-mono text-xs">{(draft.pull_models || []).join(', ')}</span>
-          : '(none — skipped)',
-        editStep: 'pullModels',
-      })
     }
   }
 
+  // Single Models row — for Ollama local the model list is captured on the
+  // consolidated `pullModels` step (pull = expose); for cloud/image it lives
+  // on `testAndModels`. Point the row's editStep at whichever step is in
+  // the current flow so "click any row to jump back" works.
+  const modelsEditStep = draft.vendor === 'ollama' && draft.hosting === 'local' ? 'pullModels' : 'testAndModels'
   rows.push({
     label: 'Models',
     value: draft.available_models.length > 0
       ? <span className="font-mono text-xs">{draft.available_models.join(', ')}</span>
       : <span className="text-tsushin-vermilion">Missing — go back and add at least one.</span>,
-    editStep: 'testAndModels',
+    editStep: modelsEditStep,
   })
-  rows.push({ label: 'Default instance', value: draft.is_default ? 'Yes' : 'No', editStep: 'testAndModels' })
+  rows.push({ label: 'Default instance', value: draft.is_default ? 'Yes' : 'No', editStep: modelsEditStep })
 
   return (
     <div className="space-y-4">
