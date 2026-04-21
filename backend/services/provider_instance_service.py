@@ -315,6 +315,17 @@ class ProviderInstanceService:
             ).update({"is_default": False}, synchronize_session="fetch")
             db.flush()
 
+        # 5. BUG-670: purge soft-deleted rows with the same
+        #    (tenant_id, instance_name) so a prior DELETE → re-create cycle
+        #    doesn't hit the UniqueConstraint uq_provider_instance_tenant_name.
+        #    Matches the SearXNG pattern in routes_searxng_instances.py.
+        db.query(ProviderInstance).filter(
+            ProviderInstance.tenant_id == tenant_id,
+            ProviderInstance.instance_name == instance_name,
+            ProviderInstance.is_active == False,
+        ).delete(synchronize_session="fetch")
+        db.flush()
+
         instance = ProviderInstance(
             tenant_id=tenant_id,
             vendor=vendor,

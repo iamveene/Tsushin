@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### BUG-670 — Ollama re-provision after delete fails with UniqueViolation (2026-04-20)
+
+Surfaced by the `delete all → auto-provision all` regression run after BUG-669 landed: `POST /api/provider-instances/ensure-ollama` returned 500 when the tenant previously had a soft-deleted `Ollama (Local)` row. The unique constraint `uq_provider_instance_tenant_name` covers both active and soft-deleted rows, so `create_instance()` hit `psycopg2.errors.UniqueViolation` on re-create. Same bug class as BUG-669 but for the provider-instance create path.
+
+- `backend/services/provider_instance_service.py create_instance()` now purges any soft-deleted rows matching `(tenant_id, instance_name)` before insert. Matches the SearXNG pattern in `routes_searxng_instances.py` and preserves the soft-delete audit trail for deleted rows with different names.
+
 ### BUG-669 — SearXNG wizard `default already exists` unblock + Hub management panel (2026-04-20)
 
 Tenants who hit a partial/failed SearXNG auto-provision (or simply re-opened the wizard) were stuck: the Add-Integration wizard hardcoded `instance_name='default'` and the backend rejected the duplicate with a bare 409 `"SearXNG instance 'default' already exists"` — no recovery UI, no way to rename, no way to delete from the frontend. Mirrors the same pattern Ollama and Kokoro avoided by (a) letting users name instances and (b) exposing a Hub management panel.
