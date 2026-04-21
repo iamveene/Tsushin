@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### QA — UI-First 4-Audit Regression Campaign, ABORTED at preflight (2026-04-21)
+
+Autonomous run of `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` on the `develop` stack was **aborted at Phase A** per the playbook's §14 hard rule ("Backend returns 502 after burst of `/api/readiness` → Abort the audit. Do not mask by restart."). The backend container had accumulated 137 consecutive unhealthy health-check failures when the campaign started; every `/api/health` request returned `502` from Caddy because the FastAPI worker was deadlocked on `QueuePool` acquisition.
+
+Root cause (documented as `BUG-677`, Critical): the Gmail poll loop in `backend/hub/google/gmail_service.py` leaks a DB session on every `httpx.ConnectTimeout` against `*.googleapis.com`. The `channel_health_service` async loop re-runs each cycle, leaking one session per failure. After ~50 cycles the pool exhausts (`QueuePool limit of size 20 overflow 30 reached, connection timed out, timeout 30.00`) and every downstream request — including `/api/health` — deadlocks.
+
+Phases B (Playground), C (Sentinel), D (Flows), E (Full-Stack Multi-Tenant), F (VM fresh install) were **not executed** — any evidence collected against a wedged backend would have been meaningless. Cleanup (Phase H) is a no-op because no fixtures were created.
+
+- **Severity counts:** Critical × 1 (`BUG-677`). Opened 1 new bug, closed 0.
+- **Evidence:** `output/playwright/full-regression-20260421/preflight/{preflight-summary.md,backend-logs.txt,backend-health.json,docker-ps.txt}` and draft at `tmp/regression-20260421/bugs-drafts/audit-0-preflight.md`.
+- **Follow-up:** rerun the 4-audit matrix after `BUG-677` is resolved. Until then, merging `develop` → `main` (PR #32) is flagged as risky — the deadlock reproduces on the current `develop` tip.
+
 ### ProviderWizard — Link-to-agents post-create step + delete-volume default on (2026-04-21)
 
 Two follow-ups after the Ollama parity pass.
