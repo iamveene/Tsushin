@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fourth Sweep — Zero open bugs (2026-04-21)
+
+User wanted no open bugs. Closed the final 2 architectural items with fixes + live verification.
+
+- **BUG-682 (High) — Docker-aware port allocation (`backend/services/vector_store_container_manager.py`).** `_allocate_port` now enumerates every host port published by any running container via `client.containers.list()` + `NetworkSettings.Ports`, in addition to the in-app DB check and the socket-bind probe. Side-by-side Tsushin stacks on the same host no longer each allocate the same port from their isolated DBs and collide on `docker run`. Live: on this stack, enumerator returns 16 published ports including 6300; `_allocate_port()` correctly returns 6302.
+- **BUG-684 (Critical) — Per-integration health-check timeout on Hub list route (`backend/api/routes_hub.py`).** Every inline `check_health` call in `GET /api/hub/integrations?refresh_health=true` (Asana, Calendar, Gmail) is now wrapped in `asyncio.wait_for(..., timeout=8.0)`. Failing external APIs can no longer hold the FastAPI `get_db` session for 30s+ per integration. Combined with the earlier 10s httpx timeout in Gmail/Calendar services, the effective QueuePool saturation window is 2-3x larger than before. Live: refresh_health completes in 0.76s vs the original 30s-per-failing-integration pattern that triggered the original deadlock.
+
+**Validation:** `output/playwright/full-regression-20260421/preflight/final-regression-sweep4.txt` — **PASS 34 / FAIL 0**. Zero open bugs. Zero open PRs.
+
 ### Third Sweep — UI-first validation of remaining bugs (2026-04-21)
 
 User asked to validate each remaining open bug against the live stack, fix real ones, and run UI-first browser regression.
