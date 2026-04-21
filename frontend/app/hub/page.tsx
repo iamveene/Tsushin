@@ -3415,7 +3415,7 @@ export default function HubPage() {
                                 logsOpen={ollamaLogsOpen}
                                 onTest={handleOllamaTest}
                                 testLabel={ollamaTestLoading ? 'Testing…' : 'Test'}
-                                onDelete={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: false })}
+                                onDelete={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: true })}
                               />
                             )}
 
@@ -3442,7 +3442,7 @@ export default function HubPage() {
                                   Refresh Models
                                 </button>
                                 <button
-                                  onClick={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: false })}
+                                  onClick={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: true })}
                                   className="ml-auto text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-1"
                                 >
                                   Delete
@@ -3588,7 +3588,7 @@ export default function HubPage() {
                                       onRestart={() => handleKokoroInstanceRestart(inst.id)}
                                       onLogs={() => handleKokoroViewLogs(inst.id)}
                                       logsOpen={kokoroLogsOpenFor === inst.id}
-                                      onDelete={() => setKokoroConfirmDelete({ id: inst.id, removeVolume: false })}
+                                      onDelete={() => setKokoroConfirmDelete({ id: inst.id, removeVolume: true })}
                                     />
                                   )}
 

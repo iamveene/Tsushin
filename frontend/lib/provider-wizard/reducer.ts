@@ -20,6 +20,7 @@ export type StepKey =
   | 'testAndModels'
   | 'review'
   | 'progress'
+  | 'assignAgents'
 
 /**
  * The user's wizard draft. Secrets (api_key, private_key) are never persisted
@@ -87,6 +88,7 @@ const ALL_STEP_KEYS: StepKey[] = [
   'testAndModels',
   'review',
   'progress',
+  'assignAgents',
 ]
 
 export function makeEmptyStepsCompleted(): Record<StepKey, boolean> {
@@ -138,9 +140,14 @@ export function getStepOrder(draft: WizardDraft): StepKey[] {
   // Cloud/Image: the usual testAndModels step (connection test + expose list).
   const modelsSteps: StepKey[] = isOllamaLocal ? ['pullModels'] : ['testAndModels']
 
+  // Post-create assign step — LLM only (TTS has its own assign-to-agent flow;
+  // Image doesn't bind to a specific agent LLM the same way). Only visible
+  // after the instance has been created, so it sits AFTER `progress` in the
+  // flow but isn't surfaced in the step pills counter.
   const tail: StepKey[] = ['review', 'progress']
+  const assign: StepKey[] = draft.modality === 'llm' ? ['assignAgents'] : []
 
-  return [...base, ...hostingSteps, ...mid, ...configSteps, ...modelsSteps, ...tail]
+  return [...base, ...hostingSteps, ...mid, ...configSteps, ...modelsSteps, ...tail, ...assign]
 }
 
 export function getStepIndex(state: WizardState): number {
@@ -149,8 +156,11 @@ export function getStepIndex(state: WizardState): number {
 }
 
 export function getTotalSteps(state: WizardState): number {
-  // Visible count excludes the terminal `progress` step.
-  return getStepOrder(state.draft).length - 1
+  // Visible count excludes terminal / post-create steps: `progress` and
+  // `assignAgents`. Those are reached via the post-create footer, not via
+  // Next from the Review step, so they shouldn't bump the pill counter.
+  const order = getStepOrder(state.draft)
+  return order.filter(k => k !== 'progress' && k !== 'assignAgents').length
 }
 
 export function canAccessStep(state: WizardState, target: StepKey): boolean {

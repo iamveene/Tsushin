@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ProviderWizard — Link-to-agents post-create step + delete-volume default on (2026-04-21)
+
+Two follow-ups after the Ollama parity pass.
+
+- **Default `Also remove container volume` → checked (`frontend/app/hub/page.tsx`)** — when a tenant clicks Delete on a managed container row, the volume checkbox opens checked. Leaving volumes behind after a delete was almost never what users wanted (stale cached models + reprovision-blocked name collisions per BUG-670). They can still uncheck to preserve the volume.
+- **New `assignAgents` wizard step (`frontend/lib/provider-wizard/reducer.ts`, `frontend/components/provider-wizard/ProviderWizard.tsx`, new `frontend/components/provider-wizard/steps/StepAssignAgents.tsx`)** — after creating an LLM provider instance the Progress "Ready" screen now surfaces a `Link to agents →` button that takes the user to an optional post-create step. That step lists the tenant's agents with their current LLM (`vendor/model_name`), lets the user pick a model from the newly-created instance's `available_models`, and hits `POST /api/provider-instances/{id}/assign-to-agent` per selected agent — the same endpoint the Ollama setup wizard already uses. Each row shows an inline per-agent result (Linked / Linking… / Failed). Skip is first-class: a `Done` footer button closes without applying. TTS and Image modalities skip the step entirely because they have their own assign flows. This closes the gap identified during BUG-582 triage where creating a provider via the wizard meant a second trip to Agent Studio just to point an agent at it.
+
 ### ProviderWizard — consolidate Ollama model selection (2026-04-21)
 
 The guided ProviderWizard was asking for Ollama models twice: Step 5 "Pull starter models?" (to feed the provisioner) then Step 6 "Test & choose models" (to expose to agents). The second step was redundant for the Ollama local path — users had to pick the same models again, and typing a model in Step 6 that wasn't pulled in Step 5 produced a broken instance.

@@ -13,6 +13,7 @@ import StepOllamaPullModels from './steps/StepOllamaPullModels'
 import StepTestAndModels from './steps/StepTestAndModels'
 import StepReview from './steps/StepReview'
 import StepProgress from './steps/StepProgress'
+import StepAssignAgents from './steps/StepAssignAgents'
 
 const STEP_LABELS: Record<StepKey, string> = {
   modality: 'Type',
@@ -24,6 +25,7 @@ const STEP_LABELS: Record<StepKey, string> = {
   testAndModels: 'Test',
   review: 'Review',
   progress: 'Progress',
+  assignAgents: 'Link Agents',
 }
 
 /**
@@ -59,8 +61,13 @@ export default function ProviderWizard() {
       closeWizard()
       return
     }
-    // Silent close after a successful create.
-    if (state.currentStep === 'progress' && state.progressStatus === 'done') {
+    // Silent close after a successful create — whether on the Progress
+    // "Ready" screen or on the post-create Link-agents screen, the
+    // instance has already been persisted so there's nothing to warn about.
+    if (
+      (state.currentStep === 'progress' && state.progressStatus === 'done') ||
+      state.currentStep === 'assignAgents'
+    ) {
       closeWizard()
       return
     }
@@ -87,7 +94,12 @@ export default function ProviderWizard() {
   }
 
   const isProgress = state.currentStep === 'progress'
-  const showCloseButton = !isProgress || state.progressStatus === 'done' || state.progressStatus === 'error'
+  const isAssignAgents = state.currentStep === 'assignAgents'
+  // The "assign to agents" step is reached AFTER the instance has been
+  // persisted, so the modal close is always safe at that point.
+  const showCloseButton = (!isProgress && !isAssignAgents) || state.progressStatus === 'done' || state.progressStatus === 'error'
+  // Post-create path is LLM-only — TTS/image skip Link-agents entirely.
+  const canLinkAgents = state.draft.modality === 'llm' && !!state.draft.created_instance_id
 
   const stepIndicator = (
     <div className="flex items-center justify-center gap-1 mb-5 flex-wrap">
@@ -130,6 +142,7 @@ export default function ProviderWizard() {
       case 'testAndModels': return <StepTestAndModels />
       case 'review': return <StepReview />
       case 'progress': return <StepProgress />
+      case 'assignAgents': return <StepAssignAgents />
       default: return null
     }
   }
@@ -143,8 +156,26 @@ export default function ProviderWizard() {
         </>
       )}
       {state.progressStatus === 'done' && (
-        <button onClick={confirmClose} className="px-4 py-2 text-sm bg-teal-500 hover:bg-teal-400 text-white rounded-lg transition-colors">Done</button>
+        <>
+          {canLinkAgents && (
+            <button
+              onClick={() => wiz.goToStep('assignAgents')}
+              className="px-4 py-2 text-sm text-teal-300 hover:text-teal-200 border border-teal-500/30 hover:border-teal-500/50 rounded-lg transition-colors"
+            >
+              Link to agents →
+            </button>
+          )}
+          <button onClick={confirmClose} className="px-4 py-2 text-sm bg-teal-500 hover:bg-teal-400 text-white rounded-lg transition-colors">Done</button>
+        </>
       )}
+    </div>
+  ) : isAssignAgents ? (
+    <div className="flex items-center justify-between w-full">
+      <button onClick={() => wiz.goToStep('progress')} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">← Back</button>
+      {/* The Apply button lives inside the step body (it mutates inline).
+          This footer button just exits the wizard — the instance is already
+          persisted at this point. */}
+      <button onClick={confirmClose} className="px-4 py-2 text-sm bg-teal-500 hover:bg-teal-400 text-white rounded-lg transition-colors">Done</button>
     </div>
   ) : (
     <div className="flex items-center justify-between w-full">
