@@ -429,6 +429,10 @@ export default function HubPage() {
   const [searxngInstances, setSearxngInstances] = useState<SearxngInstance[]>([])
   const [searxngLoading, setSearxngLoading] = useState(false)
   const [searxngActionLoading, setSearxngActionLoading] = useState<number | null>(null)
+  const [searxngConfirmDelete, setSearxngConfirmDelete] = useState<{ id: number; instance_name: string } | null>(null)
+  const [searxngLogsOpenFor, setSearxngLogsOpenFor] = useState<number | null>(null)
+  const [searxngLogsContent, setSearxngLogsContent] = useState<string>('')
+  const [searxngLogsLoading, setSearxngLogsLoading] = useState(false)
   const [ollamaEnabled, setOllamaEnabled] = useState(false)
   const [ollamaToggleLoading, setOllamaToggleLoading] = useState(false)
   const [ollamaUrlEditing, setOllamaUrlEditing] = useState(false)
@@ -1139,17 +1143,38 @@ export default function HubPage() {
     }
   }
 
-  const handleSearxngDelete = async (id: number, name: string) => {
-    if (!confirm(`Delete SearXNG instance '${name}'? Its container will be stopped and removed.`)) return
+  const handleSearxngDelete = async () => {
+    if (!searxngConfirmDelete) return
+    const { id } = searxngConfirmDelete
     setSearxngActionLoading(id)
     try {
       await api.deleteSearxngInstance(id)
       toast.success('SearXNG instance deleted')
+      setSearxngConfirmDelete(null)
       await refreshSearxngInstances()
     } catch (e: any) {
       toast.error(e?.message || 'Failed to delete instance')
+      setSearxngConfirmDelete(null)
     } finally {
       setSearxngActionLoading(null)
+    }
+  }
+
+  const handleSearxngViewLogs = async (id: number) => {
+    if (searxngLogsOpenFor === id) {
+      setSearxngLogsOpenFor(null)
+      setSearxngLogsContent('')
+      return
+    }
+    setSearxngLogsOpenFor(id)
+    setSearxngLogsLoading(true)
+    try {
+      const { logs } = await api.getSearxngContainerLogs(id, 100)
+      setSearxngLogsContent(logs || '(no logs)')
+    } catch (e: any) {
+      setSearxngLogsContent(`Error loading logs: ${e?.message || 'unknown'}`)
+    } finally {
+      setSearxngLogsLoading(false)
     }
   }
 
@@ -2480,8 +2505,11 @@ export default function HubPage() {
         || providerInstances.find(i => i.vendor === item.value && i.is_active && i.api_key_configured)
       )
       : null
+    // Tool APIs — SearXNG has no API key; its configured state is driven by
+    // SearxngInstance rows, not the `api_keys` table.
+    const hasSearxngInstance = type === 'tool' && item.value === 'searxng' && searxngInstances.some(i => i.is_active)
     const hasInstanceKey = Boolean(configuredInstance)
-    const configuredViaInstance = !apiKey && hasInstanceKey
+    const configuredViaInstance = !apiKey && (hasInstanceKey || hasSearxngInstance)
     const ItemIcon = item.Icon
 
     return (
@@ -2513,7 +2541,11 @@ export default function HubPage() {
             </span>
           ) : (
             <span className={(apiKey?.is_active || configuredViaInstance) ? 'badge badge-success' : 'badge badge-neutral'}>
-              {apiKey ? (apiKey.is_active ? 'Active' : 'Inactive') : (configuredViaInstance ? 'Instance configured' : 'Not configured')}
+              {apiKey
+                ? (apiKey.is_active ? 'Active' : 'Inactive')
+                : hasSearxngInstance
+                  ? 'Active'
+                  : (configuredViaInstance ? 'Instance configured' : 'Not configured')}
             </span>
           )}
         </div>
@@ -2983,18 +3015,25 @@ export default function HubPage() {
                           <h3 className="font-semibold text-white">Ollama (Local)</h3>
                         </div>
                         <div className="flex items-center gap-3">
-                          {/* Status indicator */}
+                          {/* Status indicator — aligned with Kokoro/SearXNG pattern */}
                           <div className="flex items-center gap-1.5">
-                            <div className={`w-2 h-2 rounded-full ${ollamaHealth?.available ? 'bg-tsushin-success animate-pulse' : 'bg-tsushin-slate'}`} />
-                            <span className="text-[11px] text-tsushin-slate">{ollamaHealth?.available ? 'Healthy' : 'Offline'}</span>
+                            <div className={`w-2 h-2 rounded-full ${
+                              ollamaHealth?.available
+                                ? 'bg-tsushin-success animate-pulse'
+                                : ollamaEnabled ? 'bg-yellow-400' : 'bg-tsushin-slate'
+                            }`} />
+                            <span className="text-[11px] text-tsushin-slate">
+                              {ollamaEnabled ? (ollamaHealth?.available ? '1 instance' : 'pending') : 'disabled'}
+                            </span>
                           </div>
-                          {/* Enable/Disable Toggle */}
-                          {canEditSettings && (
+                          {/* Enable/Disable Toggle — only once the tenant has opted in;
+                              the initial "Setup with Wizard" CTA below handles activation. */}
+                          {canEditSettings && ollamaEnabled && (
                             <ToggleSwitch
                               checked={ollamaEnabled}
                               onChange={() => handleOllamaToggle()}
                               disabled={ollamaToggleLoading}
-                              title={ollamaEnabled ? 'Disable Ollama' : 'Enable Ollama'}
+                              title="Disable Ollama"
                               activeColor="bg-tsushin-success"
                             />
                           )}
@@ -3002,13 +3041,15 @@ export default function HubPage() {
                       </div>
                       <p className="text-xs text-tsushin-slate mb-3">Run LLMs locally - no API key needed</p>
 
-                      {/* Setup wizard CTA — guides users through provision + model pull + agent wiring */}
-                      {canEditSettings && (
+                      {/* Setup wizard CTA — visible only when not yet activated. Once
+                          enabled, the header toggle + mode/container controls below
+                          replace this button so there's a single primary action per state. */}
+                      {canEditSettings && !ollamaEnabled && (
                         <button
                           onClick={() => setShowOllamaSetupWizard(true)}
                           className="w-full mb-3 bg-purple-500 hover:bg-purple-400 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors"
                         >
-                          Setup with Wizard
+                          + Setup with Wizard
                         </button>
                       )}
 
@@ -3396,15 +3437,11 @@ export default function HubPage() {
 
                         {kokoroInstances.length === 0 ? (
                           <div className="p-4 bg-tsushin-ink/40 border border-white/5 rounded-lg text-center">
-                            <p className="text-xs text-tsushin-slate mb-2">No Kokoro instances yet.</p>
-                            {canEditSettings && (
-                              <button
-                                onClick={() => setKokoroWizardOpen(true)}
-                                className="text-xs bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg px-3 py-1.5 transition-colors"
-                              >
-                                Setup with Wizard
-                              </button>
-                            )}
+                            <p className="text-xs text-tsushin-slate">
+                              {canEditSettings
+                                ? 'No Kokoro instances yet — use the wizard above to set one up.'
+                                : 'No Kokoro instances yet.'}
+                            </p>
                           </div>
                         ) : (
                           <div className="space-y-2">
@@ -4823,27 +4860,53 @@ export default function HubPage() {
                   {TOOL_APIS.map(tool => renderIntegrationCard(tool, 'tool'))}
                 </div>
 
-                {/* SearXNG Per-Tenant Instances (v0.6.0-patch.7) */}
-                {(searxngInstances.length > 0 || searxngLoading) && (
-                  <div className="card p-5 border-teal-700/30">
-                    <div className="flex items-center justify-between mb-3">
-                      <div>
-                        <h3 className="font-semibold text-white">SearXNG Instances</h3>
-                        <p className="text-[11px] text-tsushin-slate">Per-tenant self-hosted metasearch containers</p>
+                {/* SearXNG Per-Tenant Instances (v0.6.0-patch.7) — structure mirrors Kokoro panel */}
+                <div className="card p-5 hover-glow group border-teal-700/30">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-teal-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <GlobeIcon size={20} className="text-teal-400" />
                       </div>
-                      <div className="flex items-center gap-1.5">
-                        <div className={`w-2 h-2 rounded-full ${
-                          searxngInstances.some(i => (i.container_status || '').toLowerCase() === 'running')
-                            ? 'bg-tsushin-success animate-pulse'
-                            : searxngInstances.length > 0 ? 'bg-yellow-400' : 'bg-tsushin-slate'
-                        }`} />
-                        <span className="text-[11px] text-tsushin-slate">
-                          {searxngInstances.length} instance{searxngInstances.length !== 1 ? 's' : ''}
-                        </span>
+                      <div>
+                        <h3 className="font-semibold text-white">SearXNG (Self-hosted)</h3>
+                        <p className="text-[11px] text-tsushin-slate">Per-tenant metasearch containers</p>
                       </div>
                     </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-2 h-2 rounded-full ${
+                        searxngInstances.some(i => (i.container_status || '').toLowerCase() === 'running')
+                          ? 'bg-tsushin-success animate-pulse'
+                          : searxngInstances.length > 0 ? 'bg-yellow-400' : 'bg-tsushin-slate'
+                      }`} />
+                      <span className="text-[11px] text-tsushin-slate">
+                        {searxngInstances.length} instance{searxngInstances.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-tsushin-accent uppercase tracking-wider">Per-Tenant Instances</p>
+                      {canEditSettings && (
+                        <button
+                          onClick={() => { setAddIntegrationInitialProvider('searxng'); setShowSearchWizard(true) }}
+                          className="text-[11px] bg-teal-500/20 text-teal-400 hover:bg-teal-500/30 rounded-lg px-2.5 py-1 transition-colors"
+                        >
+                          + Setup with Wizard
+                        </button>
+                      )}
+                    </div>
+
                     {searxngLoading ? (
-                      <div className="text-xs text-tsushin-slate py-2">Loading…</div>
+                      <div className="p-4 bg-tsushin-ink/40 border border-white/5 rounded-lg text-center text-xs text-tsushin-slate">Loading…</div>
+                    ) : searxngInstances.length === 0 ? (
+                      <div className="p-4 bg-tsushin-ink/40 border border-white/5 rounded-lg text-center">
+                        <p className="text-xs text-tsushin-slate">
+                          {canEditSettings
+                            ? 'No SearXNG instances yet — use the wizard above to set one up.'
+                            : 'No SearXNG instances yet.'}
+                        </p>
+                      </div>
                     ) : (
                       <div className="space-y-2">
                         {searxngInstances.map(inst => {
@@ -4874,7 +4937,7 @@ export default function HubPage() {
                                   status === 'error' ? 'bg-tsushin-vermilion/20 text-tsushin-vermilion' :
                                   'bg-gray-500/20 text-gray-400'
                                 }`}>
-                                  {isProvisioning ? 'Provisioning…' : status || 'n/a'}
+                                  {isProvisioning ? 'Provisioning...' : status || 'n/a'}
                                 </span>
                               </div>
                               {canEditSettings && inst.is_auto_provisioned && (
@@ -4885,7 +4948,7 @@ export default function HubPage() {
                                       disabled={isBusy}
                                       className="text-[11px] bg-tsushin-success/20 text-tsushin-success hover:bg-tsushin-success/30 rounded px-2 py-0.5 disabled:opacity-50"
                                     >
-                                      {isBusy ? '…' : 'Start'}
+                                      {isBusy ? '...' : 'Start'}
                                     </button>
                                   )}
                                   {isRunning && (
@@ -4894,7 +4957,7 @@ export default function HubPage() {
                                       disabled={isBusy}
                                       className="text-[11px] bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded px-2 py-0.5 disabled:opacity-50"
                                     >
-                                      {isBusy ? '…' : 'Stop'}
+                                      {isBusy ? '...' : 'Stop'}
                                     </button>
                                   )}
                                   {(isRunning || isStopped) && (
@@ -4906,13 +4969,48 @@ export default function HubPage() {
                                       Restart
                                     </button>
                                   )}
+                                  {isRunning && (
+                                    <button
+                                      onClick={() => handleSearxngViewLogs(inst.id)}
+                                      className="text-[11px] bg-white/5 border border-white/10 text-tsushin-slate hover:bg-white/10 rounded px-2 py-0.5"
+                                    >
+                                      {searxngLogsOpenFor === inst.id ? 'Hide Logs' : 'Logs'}
+                                    </button>
+                                  )}
                                   <button
-                                    onClick={() => handleSearxngDelete(inst.id, inst.instance_name)}
+                                    onClick={() => setSearxngConfirmDelete({ id: inst.id, instance_name: inst.instance_name })}
                                     disabled={isBusy}
                                     className="text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-0.5 ml-auto disabled:opacity-50"
                                   >
                                     Delete
                                   </button>
+                                </div>
+                              )}
+                              {searxngLogsOpenFor === inst.id && (
+                                <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
+                                    <button
+                                      onClick={async () => {
+                                        setSearxngLogsLoading(true)
+                                        try {
+                                          const { logs } = await api.getSearxngContainerLogs(inst.id, 100)
+                                          setSearxngLogsContent(logs || '(no logs)')
+                                        } catch (e: any) {
+                                          setSearxngLogsContent(`Error: ${e?.message || 'unknown'}`)
+                                        } finally {
+                                          setSearxngLogsLoading(false)
+                                        }
+                                      }}
+                                      disabled={searxngLogsLoading}
+                                      className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
+                                    >
+                                      {searxngLogsLoading ? 'Loading...' : 'Refresh'}
+                                    </button>
+                                  </div>
+                                  <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
+                                    {searxngLogsContent || (searxngLogsLoading ? 'Loading logs...' : '(no logs loaded)')}
+                                  </pre>
                                 </div>
                               )}
                             </div>
@@ -4921,7 +5019,7 @@ export default function HubPage() {
                       </div>
                     )}
                   </div>
-                )}
+                </div>
 
                 {/* Built-in Tools Info */}
                 <div className="bg-teal-500/5 border border-teal-500/20 rounded-xl p-5">
@@ -6048,6 +6146,34 @@ export default function HubPage() {
           onClose={() => handleKokoroWizardClose(false)}
           onComplete={() => handleKokoroWizardClose(true)}
         />
+      )}
+
+      {/* SearXNG delete confirmation */}
+      {searxngConfirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+          <div className="bg-[#12121a] border border-white/10 rounded-xl w-full max-w-md">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">Delete SearXNG instance?</h3>
+              <p className="text-sm text-tsushin-slate mb-4">
+                This will soft-delete the instance <span className="font-mono text-white">{searxngConfirmDelete.instance_name}</span> and (if auto-provisioned) stop the container.
+              </p>
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setSearxngConfirmDelete(null)}
+                  className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-tsushin-slate text-sm hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSearxngDelete}
+                  className="px-4 py-2 rounded-lg bg-tsushin-vermilion text-white text-sm font-medium hover:bg-red-400"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Kokoro delete confirmation */}

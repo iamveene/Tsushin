@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Hub panel cosmetic consistency — Ollama / Kokoro / SearXNG (2026-04-20)
+
+Tenant-reported cosmetic drift between the three auto-provisionable service panels (Ollama in AI Providers → Local Services, Kokoro in the same block, SearXNG in Tool APIs). Flagged issues: Kokoro empty-state duplicated the "Setup with Wizard" CTA (header + body), Ollama showed the `ToggleSwitch` even before activation so users had two setup entry points competing, SearXNG auto-hid its management panel when empty and had no header "Setup with Wizard" shortcut (tenants had to go to Tool APIs → Add Integration → Web Search → SearXNG). Delete/Logs action divergence across panels.
+
+- **Kokoro** (`frontend/app/hub/page.tsx`): removed the body `Setup with Wizard` in the empty state; the panel header already has `+ Setup with Wizard` and that's now the single entry point. Empty-state message points at it.
+- **Ollama** (`frontend/app/hub/page.tsx`): `ToggleSwitch` is hidden until the tenant has opted in. When disabled, the big `+ Setup with Wizard` CTA is the only action. When enabled, the toggle + Mode selector + advanced controls are shown and the wizard CTA is hidden — one primary action per state. Status copy changed from `Healthy/Offline` to `1 instance / pending / disabled` to align with Kokoro/SearXNG.
+- **SearXNG** (`frontend/app/hub/page.tsx`): panel always renders (auto-hide dropped), with an empty-state message mirroring Kokoro's. Added `+ Setup with Wizard` header button that opens `AddIntegrationWizard` pre-selected on SearXNG. Added `Logs` action on the instance card (new `getSearxngContainerLogs` client helper). Replaced the native `confirm()` delete with a proper modal matching the Kokoro pattern. Header gained a globe icon + "Per-tenant metasearch containers" subtitle so the panel structure matches the Kokoro card.
+- **Tool APIs grid card for SearXNG**: was hard-coded to `Not configured` because the badge only checked `api_keys` rows. Now also counts `SearxngInstance` rows via a new `hasSearxngInstance` closure in `renderIntegrationCard`. Card shows `Active` + `Configured via instance:` helper when instances exist, `Not configured` otherwise.
+- **Client** (`frontend/lib/client.ts`): new `getSearxngContainerLogs(id, tail)` helper backing the SearXNG Logs drawer.
+
+No backend changes. UI verified end-to-end for both populated and empty states; auto-provision E2E regression re-run afterwards (SearXNG port 6500, Kokoro port 6600, Ollama port 6700 — all healthy).
+
 ### BUG-670 — Ollama re-provision after delete fails with UniqueViolation (2026-04-20)
 
 Surfaced by the `delete all → auto-provision all` regression run after BUG-669 landed: `POST /api/provider-instances/ensure-ollama` returned 500 when the tenant previously had a soft-deleted `Ollama (Local)` row. The unique constraint `uq_provider_instance_tenant_name` covers both active and soft-deleted rows, so `create_instance()` hit `psycopg2.errors.UniqueViolation` on re-create. Same bug class as BUG-669 but for the provider-instance create path.

@@ -7537,6 +7537,12 @@ export const api = {
     return res.json()
   },
 
+  async getSearxngContainerLogs(id: number, tail: number = 100): Promise<{ logs: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/searxng/instances/${id}/container/logs?tail=${tail}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get SearXNG container logs')
+    return res.json()
+  },
+
   // ==================== Ollama container management (extends provider instances) ====================
 
   async provisionOllamaContainer(id: number, gpu_enabled: boolean, mem_limit: string): Promise<{ status: string }> {
