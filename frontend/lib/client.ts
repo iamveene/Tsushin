@@ -2725,6 +2725,11 @@ export interface ProviderInstance {
   container_status?: string | null  // none | creating | provisioning | running | stopped | error
   container_name?: string | null
   container_port?: number | null
+  container_image?: string | null
+  volume_name?: string | null
+  mem_limit?: string | null
+  gpu_enabled?: boolean
+  pulled_models?: string[] | null
 }
 
 export interface ProviderInstanceCreate {

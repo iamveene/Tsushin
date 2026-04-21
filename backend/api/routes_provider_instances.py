@@ -90,6 +90,15 @@ class ProviderInstanceResponse(BaseModel):
     health_status: str
     health_status_reason: Optional[str] = None
     last_health_check: Optional[str] = None
+    is_auto_provisioned: bool = False
+    container_status: Optional[str] = None
+    container_name: Optional[str] = None
+    container_port: Optional[int] = None
+    container_image: Optional[str] = None
+    volume_name: Optional[str] = None
+    mem_limit: Optional[str] = None
+    gpu_enabled: bool = False
+    pulled_models: List[str] = []
 
 
 class TestConnectionResponse(BaseModel):
@@ -446,6 +455,15 @@ def _to_response(instance: ProviderInstance, db: Session) -> ProviderInstanceRes
         health_status=instance.health_status or "unknown",
         health_status_reason=instance.health_status_reason,
         last_health_check=instance.last_health_check.isoformat() if instance.last_health_check else None,
+        is_auto_provisioned=bool(getattr(instance, "is_auto_provisioned", False)),
+        container_status=getattr(instance, "container_status", None),
+        container_name=getattr(instance, "container_name", None),
+        container_port=getattr(instance, "container_port", None),
+        container_image=getattr(instance, "container_image", None),
+        volume_name=getattr(instance, "volume_name", None),
+        mem_limit=getattr(instance, "mem_limit", None),
+        gpu_enabled=bool(getattr(instance, "gpu_enabled", False)),
+        pulled_models=getattr(instance, "pulled_models", None) or [],
     )
 
 
@@ -927,6 +945,25 @@ def delete_provider_instance(
         raise HTTPException(status_code=404, detail="Provider instance not found")
     if not ctx.can_access_resource(instance.tenant_id):
         raise HTTPException(status_code=404, detail="Provider instance not found")
+
+    if instance.vendor == "ollama" and getattr(instance, "is_auto_provisioned", False):
+        try:
+            from services.ollama_container_manager import OllamaContainerManager
+            OllamaContainerManager().deprovision(
+                instance_id, instance.tenant_id, db, remove_volume=False
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            logger.error(
+                "Failed to deprovision auto-provisioned Ollama instance %s before delete: %s",
+                instance_id,
+                e,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to deprovision Ollama container before delete: {e}",
+            )
 
     instance.is_active = False
     instance.updated_at = datetime.utcnow()

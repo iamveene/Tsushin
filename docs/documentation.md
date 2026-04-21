@@ -2201,6 +2201,8 @@ Encryption uses the same pattern as `api_key_service.py` — `TokenEncryption` k
 
 During first-run setup, the `/setup` wizard can create multiple provider instances in one pass. Every supported provider key entered in the wizard is provisioned as its own tenant-scoped instance, and the selected primary provider is also written to the system-AI configuration.
 
+Hub provider setup now uses a guided **Add Provider** wizard by default. The wizard routes Cloud/API LLMs to the provider instance form, Local LLMs to the Ollama setup flow, Audio/TTS to Kokoro or API-key setup, and Web Search/Tool APIs to the Add Integration wizard. The previous provider instance form remains available through **Advanced Form**.
+
 ### 19.2 Provider Matrix
 
 From `backend/services/provider_instance_service.py:20-32`:
@@ -2225,6 +2227,8 @@ An Ollama default is auto-provisioned per tenant on demand via `ensure_ollama_in
 All agent creation and configuration UIs — the `/agents` Create Agent modal, the Studio `+` button (`StudioAgentSelector`), `AgentConfigurationManager`, and the Playground config panel — fetch the provider list **at runtime** from `GET /api/provider-instances`. The dropdown shows only vendors that have at least one active instance configured in Hub > AI Providers. Models shown for each vendor come from that instance's `available_models` list (set during hub configuration or model discovery).
 
 This means: adding a new provider in Hub automatically makes it available everywhere without any code change. The shared `VENDOR_LABELS` map (`frontend/lib/client.ts`) provides human-readable vendor names.
+
+The Hub AI Providers tab follows the same runtime shape: vendor sections render only when at least one active instance exists. Empty static provider panels, unused local-service panels, and unconfigured fallback-key cards are hidden until the user adds the corresponding provider through the guided setup flow.
 
 **Vendor catalog endpoint (`GET /api/providers/vendors`)** — returns every vendor from backend `VALID_VENDORS` + `VENDOR_DISPLAY_NAMES` with `{id, display_name, default_base_url, supports_discovery, tenant_has_configured}`. The **Add Provider Instance** modal (`ProviderInstanceModal.tsx`) fetches this list on open and falls back to a reduced static array only when the call fails, so a vendor added to `VALID_VENDORS` backend-side surfaces in the dropdown without any frontend edit. `tenant_has_configured` is resolved in one DB round-trip (distinct `ProviderInstance.vendor` rows for the tenant). `backend/tests/test_wizard_drift.py` Guard 6 keeps the fallback consistent with the backend set.
 
@@ -2340,12 +2344,10 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
   Instance names are tenant-scoped and must be unique; the wizard fetches the
   tenant's existing instances, auto-suggests a fresh name (`SearXNG`,
   `SearXNG (2)`, …), and offers inline delete for any listed row. The Hub
-  **Tool APIs** tab renders a management panel (list / start / stop / restart /
-  **Logs** / delete with provisioning-status polling) with the same structure,
-  action set, and delete-confirmation modal as the Kokoro and Ollama panels —
-  the panel always renders (empty state shows "No SearXNG instances yet") and
-  offers a `+ Setup with Wizard` header button that opens the
-  AddIntegrationWizard pre-selected on SearXNG. Stale failed provisions
+  **Tool APIs** tab only renders SearXNG cards/panels after the tenant has at
+  least one SearXNG instance. Configured rows use the shared managed-container
+  control pattern: an enable/disable toggle maps to container start/stop, while
+  Restart, Logs, and Delete stay separate actions. Stale failed provisions
   (`container_status ∈ {error, failed, none, null}` with no `container_name`)
   are auto-purged on the next create so tenants don't get stuck; genuinely-
   healthy conflicts still 409 but with a structured detail payload
@@ -2425,7 +2427,7 @@ The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate
 #### 20.6.1 Kokoro TTS Setup Wizard
 
 **Component:** `frontend/components/tts/KokoroSetupWizard.tsx`
-**Entry point:** `/hub` page → AI Providers tab → Kokoro TTS card → "Setup with Wizard" button. Per-tenant Kokoro instance management is consolidated inside the Hub Kokoro card (mirroring the Ollama auto-provisioning UX). The card renders the full instance list with per-instance Start / Stop / Restart / Logs / Delete controls and a default-selector radio. (The legacy `/settings/tts` page and the compose `tts` profile toggle were removed in v0.7.0.)
+**Entry point:** `/hub` page → AI Providers tab → `+ New Instance` → Add Provider → Audio/TTS → Kokoro. Per-tenant Kokoro instance management is consolidated inside the Hub Kokoro card after an instance exists. The card renders the full instance list with a per-instance enable/disable container toggle, Restart / Logs / Delete controls, and a default-selector radio. (The legacy `/settings/tts` page and the compose `tts` profile toggle were removed in v0.7.0.)
 
 Four-step guided flow for creating a per-tenant Kokoro TTS container and (optionally) wiring it to agents:
 
@@ -2465,7 +2467,7 @@ On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instance
 #### 20.6.2 Ollama Setup Wizard
 
 **Component:** `frontend/components/ollama/OllamaSetupWizard.tsx`
-**Entry point:** `/hub` page — "Setup with Wizard" button on the Ollama card (the inline auto-provision panel stays for power users).
+**Entry point:** `/hub` page → AI Providers tab → `+ New Instance` → Add Provider → Local LLM → Ollama. Once an Ollama instance exists, the Hub Local Services card appears; auto-provisioned containers use the same enable/disable toggle pattern as Kokoro and SearXNG, with Restart / Logs / deprovision kept as explicit secondary actions. Host-mode Ollama keeps host URL management semantics.
 
 Five-step guided flow for provisioning an Ollama container, pulling a model, and wiring agents:
 

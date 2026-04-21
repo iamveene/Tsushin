@@ -463,7 +463,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                     )}
                   </div>
                 </div>
-                <div className="relative" ref={helpMenuRef}>
+                <div className="relative hidden sm:block" ref={helpMenuRef}>
                   <button
                     onClick={() => setIsHelpMenuOpen(!isHelpMenuOpen)}
                     className="btn-ghost text-sm p-2 hover:bg-tsushin-hover rounded-lg transition-colors"
@@ -498,7 +498,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                 </div>
                 <button
                   onClick={logout}
-                  className="btn-ghost text-sm py-1.5 px-3"
+                  className="hidden sm:inline-flex btn-ghost text-sm py-1.5 px-3"
                 >
                   Logout
                 </button>
