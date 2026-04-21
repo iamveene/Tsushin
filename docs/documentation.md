@@ -2201,7 +2201,7 @@ Encryption uses the same pattern as `api_key_service.py` — `TokenEncryption` k
 
 During first-run setup, the `/setup` wizard can create multiple provider instances in one pass. Every supported provider key entered in the wizard is provisioned as its own tenant-scoped instance, and the selected primary provider is also written to the system-AI configuration.
 
-Hub provider setup now uses a guided **Add Provider** wizard by default. The wizard routes Cloud/API LLMs to the provider instance form, Local LLMs to the Ollama setup flow, Audio/TTS to Kokoro or API-key setup, and Web Search/Tool APIs to the Add Integration wizard. The previous provider instance form remains available through **Advanced Form**.
+Hub provider setup uses a guided multi-step **Add Provider** wizard (see §19.8). The wizard branches on modality (LLM / TTS / Image) and hosting (Cloud / Self-hosted) to show only the relevant vendors, collects credentials or container settings, runs a live connection test, and creates the instance via the same backend endpoints the legacy form used. The previous provider-instance form remains available as a one-click fallback via the wizard footer's **Switch to Advanced** button (`ProviderInstanceModal`).
 
 ### 19.2 Provider Matrix
 
@@ -2296,6 +2296,98 @@ Google's Gemini 3.x preview line is first-class across every picker and pricing 
 **Pricing placeholders.** Google has not yet published official pricing for the 3.x preview line. `backend/analytics/token_tracker.py` seeds rows based on the 2.5 Flash / 2.5 Flash-Lite analogues (`0.30/2.50` and `0.10/0.40` per 1M tokens respectively) and marks each with a `TODO confirm` comment. TTS pricing is stubbed `$0.00` until Google publishes.
 
 **Wizards covered.** Setup Wizard, Playground ConfigPanel, Agent Wizard → Step Audio, and Audio Agents Wizard all include the 3.x models. The Agent Wizard → Step Basics picker is API-fed from `ProviderInstance.available_models`, so 3.x preview models appear there automatically once model discovery hits Google's `/models` endpoint.
+
+### 19.8 ProviderWizard — guided multi-step setup (v0.7.x)
+
+**Sources:**
+- `frontend/components/provider-wizard/ProviderWizard.tsx` — Modal shell, step pills, Back/Next/Advanced/Cancel footer.
+- `frontend/components/provider-wizard/steps/*` — one component per step.
+- `frontend/contexts/ProviderWizardContext.tsx` — global provider mounted in `app/layout.tsx`. Exposes `openWizard(preset?)`, `closeWizard`, `patchDraft`, `registerOnComplete`.
+- `frontend/lib/provider-wizard/reducer.ts` — pure reducer + step-order branching.
+
+The guided wizard replaces the flat `ProviderSetupWizard` category picker (deleted) with a step-based flow that mirrors the Agent, WhatsApp, Gmail, and Audio wizards. Entry points in `app/hub/page.tsx`:
+
+- **`+ New Instance`** (tab header) → opens wizard at Step 1 (modality).
+- **Per-vendor `+ Add Instance`** (inside each vendor group) → opens wizard prefilled with that vendor so the user lands on the credentials/container step directly. Modality and hosting are inferred from the vendor.
+- **Empty-state `Add Provider`** → Step 1.
+
+**Step order (branching).** Computed in `reducer.getStepOrder(draft)`:
+
+| Step | When rendered | Component |
+|---|---|---|
+| Modality | Always | `StepModality` — LLM / TTS / Image |
+| Hosting | Skipped when `modality='image'` (auto-cloud today) | `StepHosting` — Cloud / Self-hosted |
+| Vendor | Always | `StepVendorSelect` — filtered by `(modality, hosting)` |
+| Credentials | `hosting='cloud'` | `StepCredentials` — api_key, base_url, Vertex AI fields |
+| Container | `hosting='local'` | `StepContainerProvision` — instance_name, mem_limit, GPU |
+| Pull models | `vendor='ollama' && hosting='local'` | `StepOllamaPullModels` — curated starter models, skippable |
+| Test & models | Always | `StepTestAndModels` — Test Connection, Auto-detect models, default toggle |
+| Review | Always | `StepReview` — summary with jump-to-edit rows |
+| Progress | Always (terminal) | `StepProgress` — fires the actual create call |
+
+**Vendor catalog per branch:**
+
+| Modality | Hosting | Vendors |
+|---|---|---|
+| LLM | Cloud | openai, anthropic, gemini, vertex_ai, groq, grok, deepseek, openrouter, custom |
+| LLM | Local | ollama |
+| TTS | Cloud | elevenlabs |
+| TTS | Local | kokoro |
+| Image | Cloud | gemini (pre-tagged "Uses Nano Banana / Nano Banana Pro") |
+
+**Backend endpoints used (no new endpoints introduced):**
+
+- `POST /api/provider-instances` — LLM cloud, LLM local (Ollama), Image (Gemini).
+- `POST /api/tts-instances` — TTS Kokoro (auto-provisions its own container).
+- `POST /api/api-keys` — TTS ElevenLabs (legacy api_keys surface).
+- `POST /api/settings/ollama/provision` — Ollama container lifecycle after `ProviderInstance` create.
+- `api.pullOllamaModel(id, model)` — each selected starter model.
+- `api.testProviderConnectionRaw({...})` — unsaved connection test on Step 5.
+- `api.discoverModelsRaw(vendor, apiKey, baseUrl)` — live model discovery on Step 5.
+
+**Advanced mode.** The wizard footer's **Switch to Advanced** button:
+
+1. Persists the current non-secret draft to `localStorage['tsushin:providerWizardDraft']`.
+2. Closes the wizard.
+3. Dispatches a `tsushin:open-provider-advanced-modal` `CustomEvent` with `detail.vendor`.
+4. `hub/page.tsx` listens for that event and opens the existing `ProviderInstanceModal` with the current vendor pre-selected.
+
+Mode preference persists to `localStorage['tsushin:providerWizardMode']` (`'guided' | 'advanced'`).
+
+**Security invariants.** Secrets (`api_key`, Vertex AI `private_key`) are stripped from the persisted draft before writing to localStorage — only non-sensitive fields survive a page refresh or a mode switch. The wizard never echoes a saved key back into the DOM.
+
+### 19.9 ManagedContainerPanel — unified local-service controls (v0.7.x)
+
+**Source:** `frontend/components/hub/ManagedContainerPanel.tsx`.
+
+All three auto-provisioned services (Ollama, Kokoro, SearXNG) render through the same `<ManagedContainerPanel />` component, giving tenants one consistent control strip instead of per-service variations.
+
+| Control | Behavior |
+|---|---|
+| **Enable/Disable toggle** | Single source of truth for start/stop. Hooked to the service-specific lifecycle endpoint (`/container/start\|stop`). |
+| **Restart** | Visible when container is `running` or `stopped` and an `onRestart` handler is passed. |
+| **Logs** | Visible when `running`. Toggles between "Logs" and "Hide Logs" based on `logsOpen` prop. |
+| **Test** | Optional — only rendered when `onTest` is passed. |
+| **Delete** | Optional — destructive; confirms in the host before calling the handler. |
+
+Props are documented in the component itself. Call sites in `hub/page.tsx`:
+
+- Ollama (running state) — container actions: stop / restart / logs.
+- Ollama (stopped state) — container actions: start / restart / logs.
+- Kokoro instance row — start↔stop / restart / logs / delete.
+- SearXNG instance row — start↔stop / restart / logs / delete.
+
+The legacy Ollama panel-level **Enable Ollama** `ToggleSwitch` at the card header was removed in favor of the per-instance panel; this eliminates the drift where Ollama had two lifecycle toggles (panel + instance) while Kokoro and SearXNG only had one.
+
+### 19.10 Service API Keys disclosure (v0.7.x)
+
+The **Hub → AI Providers** tab no longer renders the legacy Service API Keys block as an always-visible grid. Instead it's a collapsed `<details>` disclosure that:
+
+- Only renders when `visibleAiFallbackProviders.length > 0` (i.e., at least one vendor has a fallback api_key configured).
+- Filters out any vendor that already has a `ProviderInstance` row (`vendorsWithInstances` set at `hub/page.tsx`). This removes the duplicate-Gemini display by construction: a vendor with an instance is configured via the instance grid; a vendor with only a legacy `api_keys` row falls into this disclosure.
+- Stays collapsed by default so the Hub is clean for tenants who only use instances.
+
+The inline "Fallback — instance key takes priority" amber label has been removed — with the new filtering, the fallback card and the instance card can never appear on the same page simultaneously.
 
 ---
 
