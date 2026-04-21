@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from models_rbac import User
-from auth_dependencies import get_current_user_required
+from auth_dependencies import get_current_user_required, require_permission
 from services.slash_command_service import SlashCommandService
 
 router = APIRouter(tags=["Commands"])
@@ -133,12 +133,13 @@ async def detect_command(
 async def execute_command(
     data: CommandExecuteRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(require_permission("agents.execute"))
 ):
     """
     Phase 16: Execute a slash command.
 
     Handles built-in commands and routes to appropriate handlers.
+    BUG-672: gated on `agents.execute` so read-only roles cannot execute commands.
     """
     from models import Agent
     import logging
