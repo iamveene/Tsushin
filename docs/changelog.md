@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### QA - UI-first full regression campaign completed (2026-04-21)
+
+Ran the full UI-first regression campaign from `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` after the required health recovery gate, including local A/B/C/D audit tracks, isolated VM fresh-install validation, cleanup, and final health checks.
+
+- Playground API/WebSocket, Playground UI, Mini, and Graph tracks passed.
+- Flows API/schema checks passed; Flows UI builder coverage opened one Medium bug because browser create attempts reached configuration screens but did not complete flow creation.
+- Sentinel preflight, fixture setup, Gemini Flash LLM gate, and API matrix passed; Sentinel UI opened one Medium bug for the Test Analysis result being hidden until the User Guide state was dismissed.
+- Tenant admin, global admin, and SSO UI surfaces loaded cleanly; destructive multi-tenant stress/provisioning writes were skipped where the playbook required safety.
+- VM fresh-install HTTP pass succeeded; self-signed IP HTTPS pass opened one High installer/TLS bug.
+- Local HTTPS proxy coverage opened one Medium bug because `https://localhost` was unavailable while the proxy container was healthy.
+- Final cleanup verification found no leftover run-owned containers, VM workdirs, or active local QA resources; final local health and readiness were green.
+
+Bug count from this campaign: 4 new open bugs - High 1, Medium 3.
+
 ### Hub Productivity + Communication rework — guided wizards replace fixed cards (2026-04-21)
 
 User follow-up to the v0.7 Hub rework: apply the same judgement used for AI Providers and Tool APIs (single guided "+ Add …" launcher, no placeholder cards for unused services) to the Productivity and Communication tabs. Both tabs previously leaned on fixed/placeholder cards that took screen space for services the tenant had not chosen to use; they now collapse to configured-instance cards only, with a single wizard launcher per tab.
