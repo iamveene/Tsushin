@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### UI-first exact-tag v0.6.0 fresh-install audit (2026-04-20)
+
+Audit-only pass from a disposable clone at `.private/installations/fresh-install-v060-20260420-232626/tsushin`, with evidence under `.private/qa/fresh-install-v060-20260420-232626/`. The original local runtime was backed up, stopped without deleting persistent state, and restored after the disposable runtime was removed. Local restore verification passed for the original backend, readiness endpoint, Caddy proxy, and captured dynamic containers; the public `tsushin.archsec.io` hostname remained Cloudflare 1033 before and after the audit.
+
+- Tested exact tag `v0.6.0` (`ec6f3f9`) with unattended self-signed install and stack identity `freshinstall-v060-tsushin`.
+- Revalidated BUG-575 as a release-tag blocker: the backend fails Alembic startup because baseline migration `0001` creates `tenant.public_base_url` from ORM metadata and migration `0034_add_tenant_public_base_url.py` then unconditionally tries to add the same column. The backend enters a restart loop, so `/api/health`, `/api/readiness`, frontend `/setup`, provider setup, Remote Access, API v1, memory/vector-store, Sentinel/MemGuard, A2A, flows, MCP/custom skill/toolbox/shell, sandbox/slash-command, and WhatsApp sweep items were blocked on the unmodified tag.
+- No product code, schema, API, or runbook changes were made in this audit; `BUGS.md` was updated locally with the revalidation and evidence paths.
+
 ### Hub panel cosmetic consistency — Ollama / Kokoro / SearXNG (2026-04-20)
 
 Tenant-reported cosmetic drift between the three auto-provisionable service panels (Ollama in AI Providers → Local Services, Kokoro in the same block, SearXNG in Tool APIs). Flagged issues: Kokoro empty-state duplicated the "Setup with Wizard" CTA (header + body), Ollama showed the `ToggleSwitch` even before activation so users had two setup entry points competing, SearXNG auto-hid its management panel when empty and had no header "Setup with Wizard" shortcut (tenants had to go to Tool APIs → Add Integration → Web Search → SearXNG). Delete/Logs action divergence across panels.
