@@ -21,7 +21,7 @@ import { CheckCircleIcon, AlertTriangleIcon } from '@/components/ui/icons'
  * control back to the Hub so it can refetch the instance list.
  */
 export default function StepProgress() {
-  const { state, setProgress, fireComplete, patchDraft, goToStep } = useProviderWizard()
+  const { state, setProgress, fireComplete, patchDraft, goToStep, markStepComplete } = useProviderWizard()
   const { draft } = state
   const started = useRef(false)
 
@@ -130,6 +130,11 @@ export default function StepProgress() {
       }
 
       patchDraft({ created_instance_id: createdInstanceId })
+      // Mark progress complete so SET_STEP to the post-create `assignAgents`
+      // step passes canAccessStep (which requires every prior step in the
+      // flow to be complete). Without this the "Link to agents →" button
+      // from the Done footer would be a no-op.
+      markStepComplete('progress', true)
       setProgress({ status: 'done', message: 'All set — your provider is ready.' })
       fireComplete(createdInstanceId)
     } catch (err: any) {
