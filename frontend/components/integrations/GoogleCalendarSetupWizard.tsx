@@ -246,8 +246,8 @@ export default function GoogleCalendarSetupWizard({ isOpen, onClose, onComplete 
     for (let i = 0; i < selectedAgents.length; i += 1) {
       const agent = selectedAgents[i]
       try {
-        await api.updateAgentSkill(agent.id, 'scheduler', { is_enabled: true })
-        await api.updateSkillIntegration(agent.id, 'scheduler', {
+        await api.updateAgentSkill(agent.id, 'flows', { is_enabled: true })
+        await api.updateSkillIntegration(agent.id, 'flows', {
           integration_id: selectedIntegrationId,
           scheduler_provider: 'google_calendar',
           config: { permissions: { read: true, write: true } },
