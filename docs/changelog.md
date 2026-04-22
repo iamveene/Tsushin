@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Feat — Option X: second LLM reasoning call for skill-tool results (2026-04-22)
+
+**User symptom resolved:** on agent `movl` after listing emails, follow-up questions like "qual desses é o mais importante?" now return a reasoned analysis (e.g., "The most important is Maria Júlia's request from the accounting team — formal PDF statement request; Marcos's reply (item 1) is related as it forwards those statements; items 4 and 5 are automated delivery notifications") instead of re-dumping the same raw email list. Before this change, the LLM would correctly decide to call the Gmail tool (tool-mode was active after the earlier BUG-699 cleanup), but the tool's rendered output would **replace** the LLM's response via a single-shot text substitution at `backend/agent/agent_service.py:1071`, so the LLM never got a chance to compose a reasoned answer over the tool result. The raw `📧 N emails: ...` listing became the final reply, regardless of what the user actually asked.
+
+**Root cause:** Tsushin's tool-calling pipeline was never a true Anthropic-style `tool_use → tool_result → final_response` loop. It was a one-shot: (1) LLM emits a tool_call text block; (2) `agent_service` parses and executes the tool; (3) the tool's rendered `output` string replaces the entire `ai_response`. There was no second LLM call to let the model reason over the tool result. `SkillResult.metadata.skip_ai` (which already encoded the right intent: `skip_ai=False` means "LLM should reason", `skip_ai=True` means "raw output is the final answer") was read only in the router's legacy keyword-dispatch path, not in the agent_service tool-mode path.
+
+**Fix (Option X):** add a second LLM call in `backend/agent/agent_service.py` after text-returning skill tools execute, passing the original user message + the raw tool output + the agent's existing system prompt, so the model composes a natural-language final reply. The second call is gated on `SkillResult.metadata.skip_ai == False`, which encodes the correct intent per skill:
+
+- **Bucket A (reasoning fires):** `gmail` list/search, `flows` list, `flight_search`, `web_search`, `agent_communication.ask`, `agent_communication.list_agents`, `okg_term_memory.recall`, `browser_automation` when `skip_ai=False` per action. Data-fetch operations where the LLM should synthesize an answer.
+- **Bucket B/C-special (reasoning bypassed):** `generate_image` (media artifact is the reply), `agent_communication.delegate` (`skip_ai=True` — target's answer passes through verbatim by design), shell commands (`is_shell_tool` branch, structurally separate), sandboxed tools (`run_shell_command`, `/tool nmap`, `/tool dig`, etc. — raw technical output is expected).
+- **Bucket C (write confirmations):** `flows.create/update/delete`, `agent_switcher.set`, `automation.run/status` — all keep `skip_ai=True`, raw confirmation string is fine.
+
+**Changes:**
+
+- `backend/agent/agent_service.py`:
+  - Range 1013-1074 (the skill-tool execution block) now always passes `return_full_result=True` so we have access to `SkillResult.metadata` for every skill (previously only `generate_image` did this). Media paths handling is unchanged.
+  - New `_should_reason` local bool, set True only when `skill_result.success and not needs_media_output and not metadata.get('skip_ai', False)`. Defaults False (shell branch + legacy string-return fallbacks never reason).
+  - Range 1161-1186: after `ai_response = tool_execution_result`, invoke the new `_reason_over_tool_result` helper when `_should_reason` is True. Its return replaces `ai_response`; on any failure (exception, empty answer, AI error flag) the raw tool output is retained so the reply pipeline is never blocked.
+  - New private method `_reason_over_tool_result` (between `_prefer_tool_result_when_response_empty` and `process_message`). Truncates tool output to 4000 chars, builds a reasoning user-message with explicit "do not output tool call blocks" guard, calls `self.ai_client.generate()` with `operation_type="tool_reasoning"` (tracked separately in token analytics), strips reasoning tags / internal context / sensitive content from the returned answer (same sanitizers applied to the first-call output), returns `None` on any failure.
+  - Added `Any` to `typing` imports.
+
+- `backend/agent/skills/gmail_skill.py` (lines 428, 511): flipped `skip_ai: True` → `skip_ai: False` on the success paths of `_handle_list_emails` and `_handle_search_emails`. Empty-result and error paths keep `skip_ai: True` (those strings are self-explanatory). This aligns skills-as-tools semantics: list/search is "data for the LLM to reason over", not "final answer dump".
+
+- `backend/agent/skills/flows_skill.py` (line 1990): flipped `skip_ai: True` → `skip_ai: False` on the `_execute_tool_list` non-empty success path. Create/update/delete confirmations keep `skip_ai: True`.
+
+- `backend/agent/skills/flight_search_skill.py`: no change required — success path already had no `skip_ai` key, so `metadata.get('skip_ai', False)` defaults correctly to `False`.
+
+**Token/latency cost:** +1 LLM call per tool-invoking turn for bucket-A skills. Typical Gmail list (5 emails, ~1.5 KB tool output) adds ~1500 input + ~200 output tokens at ~$0.0001 per turn on Gemini Flash. Latency +1-3s per turn. No per-agent feature flag — the per-skill `skip_ai` flag already provides the right granularity; agents that want raw dumps can flip `skip_ai` on specific handlers.
+
+**Verified E2E:**
+- API v1 `POST /api/v1/agents/41/chat` (agent `movl`): Turn 1 `{"message": "quais meus ultimos emails?"}` → reasoned summary naming each sender + content hint, not raw markdown list. Turn 2 `{"message": "qual desses emails eh o mais importante?", "thread_id": 282}` → LLM identifies "Maria Júlia (item 3) – EXTRATOS BANCARIOS" as most important, explains the accounting context, groups the related emails (items 1, 2), dismisses the automated delivery updates (items 4, 5). `operation=tool_reasoning` visible in `AIClient.generate()` logs.
+- WhatsApp channel via tester MCP (+5527999616279 → +5527988290533, `/invoke movl`): same two-turn flow produced the same reasoned behavior end-to-end on the user's actual channel. Turn 2 response: "Vini, o e-mail mais importante parece ser o da **Maria Júlia**, do setor contábil. Ela está solicitando os extratos bancários em PDF, o que geralmente é uma tarefa prioritária..."
+- A2A regression: `ask movl qual eh seu ultimo email recebido` to agent `Tsushin` → Tsushin delegates via `agent_communication.ask`, movl replies, Tsushin composes a reasoned final answer for the user. Deep reasoning chain works.
+- Bucket-E regression: `/tool dig lookup domain=example.com` on agent `Tsushin` → raw dig output with execution time box preserved, `tool_used: custom:dig`, no `tool_reasoning` call (sandboxed branch structurally separate).
+- Bucket-A skills with legitimate `skip_ai=True` (e.g. write confirmations) still bypass reasoning.
+
+**Out of scope — reserved for v0.7.0:**
+
+Even with Option X, a follow-up question that still triggers a new tool call (e.g., the LLM re-calling `gmail_operation` in turn 2 because `conversation_history` only persists the rendered text, not the structured `emails[]` metadata) incurs the fetch again. The full fix — per-skill `auto_inject_results` toggle on `AgentSkillConfig` that persists `tool_result` structured data in `conversation_history` and re-injects it into the LLM prompt on subsequent turns, plus a referential-pronoun guard to suppress redundant tool dispatches — is scheduled for v0.7.0 under "Skill Tool-Result Reasoning & Cross-Turn Context Injection" in `.private/ROADMAP.md`. Option X closes the single-turn UX gap; v0.7.0 closes the cross-turn one.
+
 ### Fix — Gmail/Flight/Image/Web-Search skills silently ran in legacy keyword mode despite being declared tool-only (2026-04-22)
 
 Commit `b1b1bb9` (2026-03-29) deprecated legacy keyword triggering by flipping the class-level `execution_mode` attribute from `"hybrid"` to `"tool"` on 10 skills. The intent was that the LLM would be the only one deciding when to call these skills, via the MCP tool schema. However, for four of those skills (`gmail`, `flight_search`, `image`, `web_search`) the commit left the stale value `"hybrid"` inside `get_default_config()` (and inside the UI schema default in `get_config_schema()`). At runtime, `config.get('execution_mode', self.execution_mode)` returns the persisted value first — so every new agent whose skill row was seeded from that default ended up with `config.execution_mode == "hybrid"` stored in the DB, silently re-activating the keyword-routing path the commit was supposed to delete.

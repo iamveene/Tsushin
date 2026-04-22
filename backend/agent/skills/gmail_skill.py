@@ -425,7 +425,7 @@ class GmailSkill(BaseSkill):
             success=True,
             output="\n".join(lines),
             processed_content="\n".join(lines),
-            metadata={'skip_ai': True, 'count': len(email_summaries), 'emails': email_summaries}
+            metadata={'skip_ai': False, 'count': len(email_summaries), 'emails': email_summaries}
         )
 
     async def _handle_search_emails(
@@ -508,7 +508,7 @@ class GmailSkill(BaseSkill):
             success=True,
             output="\n".join(lines),
             processed_content="\n".join(lines),
-            metadata={'skip_ai': True, 'count': len(email_summaries), 'query': query, 'emails': email_summaries}
+            metadata={'skip_ai': False, 'count': len(email_summaries), 'query': query, 'emails': email_summaries}
         )
 
     def _extract_subject_filter(self, text: str) -> Optional[str]:
