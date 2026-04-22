@@ -71,6 +71,13 @@ class VoiceInfoResponse(BaseModel):
     provider: Optional[str] = None
 
 
+class TTSModelInfoResponse(BaseModel):
+    """TTS model option for providers that expose model selection (Gemini today)."""
+    model_id: str
+    label: str
+    is_default: bool = False
+
+
 class ProviderInfoResponse(BaseModel):
     """TTS provider information response"""
     id: str
@@ -108,6 +115,7 @@ class AgentTTSProviderResponse(BaseModel):
     language: Optional[str] = None
     response_format: Optional[str] = None
     speed: Optional[float] = None
+    model: Optional[str] = None
 
 
 class AgentTTSProviderUpdate(BaseModel):
@@ -117,6 +125,7 @@ class AgentTTSProviderUpdate(BaseModel):
     language: Optional[str] = None
     response_format: Optional[str] = None
     speed: Optional[float] = None
+    model: Optional[str] = None
 
 
 # ============================================================================
@@ -214,6 +223,48 @@ async def get_provider_status(
         )
 
 
+@router.get("/{provider_name}/models", response_model=List[TTSModelInfoResponse])
+def get_provider_models(
+    provider_name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("hub.read"))
+):
+    """
+    List models a provider supports for per-agent selection.
+
+    Providers that don't expose model selection (Kokoro, OpenAI, ElevenLabs today)
+    return [] (200) so frontend can hide the picker uniformly. Providers that do
+    (Gemini today) return their `SUPPORTED_MODELS` dict with `is_default=True`
+    on the entry that matches `DEFAULT_MODEL`.
+
+    Requires: hub.read permission
+    """
+    provider = TTSProviderRegistry.get_provider(provider_name, db)
+    if not provider:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Provider '{provider_name}' not found or not configured"
+        )
+
+    try:
+        models = getattr(provider, "SUPPORTED_MODELS", None) or {}
+        default_model = getattr(provider, "DEFAULT_MODEL", None)
+        return [
+            TTSModelInfoResponse(
+                model_id=model_id,
+                label=label,
+                is_default=(model_id == default_model),
+            )
+            for model_id, label in models.items()
+        ]
+    except Exception as e:
+        logger.exception(f"Failed to get provider models: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get models. Check server logs for details."
+        )
+
+
 @router.get("/{provider_name}/voices", response_model=List[VoiceInfoResponse])
 def get_provider_voices(
     provider_name: str,
@@ -291,7 +342,8 @@ def get_agent_tts_provider(
         voice=tts_config.get("voice"),
         language=tts_config.get("language"),
         response_format=tts_config.get("response_format"),
-        speed=tts_config.get("speed")
+        speed=tts_config.get("speed"),
+        model=tts_config.get("model")
     )
 
 
@@ -354,6 +406,8 @@ def update_agent_tts_provider(
         tts_config["response_format"] = update.response_format
     if update.speed is not None:
         tts_config["speed"] = update.speed
+    if update.model:
+        tts_config["model"] = update.model
 
     # Get or create AgentSkill for audio_tts
     skill = db.query(AgentSkill).filter(

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Feat — Gemini TTS multi-model support + image-generation catalog consolidation (2026-04-22)
+
+**TTS:** Tsushin's Gemini TTS provider previously hardcoded a single model id (`gemini-3.1-flash-tts-preview`). Tenants can now pick between three Gemini TTS preview models per agent — Fast (`gemini-2.5-flash-tts-preview`), Balanced (`gemini-3.1-flash-tts-preview`, default — preserves prior behavior), and Quality (`gemini-2.5-pro-tts-preview`). The selection is exposed in both the Audio Agents Wizard and the regular Agent Wizard's audio step, persists into `AgentSkill.config.model`, and is delivered into the SDK call without changing the existing voice / language / format surface.
+
+**Image generation:** the existing `ImageSkill` already supports `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, and `gemini-3-pro-image-preview` (from earlier in v0.6.0). No code change — this changelog entry consolidates the catalog in docs so tenants can see the full set explicitly.
+
+**Backend:**
+- `backend/hub/providers/gemini_tts_provider.py`: replaced module-level `_GEMINI_TTS_MODEL` constant with class-level `SUPPORTED_MODELS = {…}` dict + `DEFAULT_MODEL`. New `_resolve_model()` falls back to default with a warning on unknown ids (rather than silently using a wrong model). `_invoke_gemini()` accepts `model` and threads it into `client.models.generate_content(model=…)`. `synthesize()` reads `request.model`, propagates into the SDK call, `_track_usage(model_name=…)`, and the response `metadata["model"]`. `get_pricing_info()` and `health_check().details` now return the full model list.
+- `backend/hub/providers/tts_provider.py`: `TTSRequest` gained `model: Optional[str] = None`. Backward-compatible — Kokoro/OpenAI/ElevenLabs ignore it; only Gemini honors it today.
+- `backend/agent/skills/audio_tts_skill.py`: forwards `config.get("model")` into `TTSRequest`. New `"model"` property in `get_config_schema()`. No DB migration — `AgentSkill.config` is JSON.
+- `backend/api/routes_tts_providers.py`: new generic endpoint `GET /api/tts-providers/{provider}/models` — returns `[]` for providers without `SUPPORTED_MODELS` (frontend hides the picker uniformly), populated from the provider's `SUPPORTED_MODELS` dict for Gemini. `AgentTTSProviderResponse` and `AgentTTSProviderUpdate` Pydantic models gained `model: Optional[str]`; persisted into `tts_config["model"]` when set.
+
+**Frontend:**
+- `frontend/lib/client.ts`: new `TTSModelInfo` type, `AgentTTSConfig.model?` field, `getTTSProviderModels(provider)` API method.
+- `frontend/components/audio-wizard/defaults.ts`: new `GEMINI_TTS_MODELS` array and `GEMINI_TTS_DEFAULT_MODEL` constant — used as offline fallback when the live `/models` endpoint is unreachable. Drift-checked by `backend/tests/test_wizard_drift.py` (Guard 10).
+- `frontend/components/audio-wizard/AudioProviderFields.tsx`: `AudioVoiceFieldsValue.model?` field. Fetches `getTTSProviderModels(provider)` and reconciles state on provider change. Renders the Model dropdown only when the provider exposes a non-empty model list (uniformly hides for Kokoro / OpenAI / ElevenLabs today; will surface automatically when those providers expose `SUPPORTED_MODELS` in the future).
+- `frontend/components/audio-wizard/AudioAgentsWizard.tsx`: `WizardState.model`, defaults to `GEMINI_TTS_DEFAULT_MODEL` when provider preset is Gemini, included in the `audio_tts` skill config payload, displayed in Step 5 review.
+- `frontend/lib/agent-wizard/reducer.ts`: `AudioConfig.model?` field.
+- `frontend/components/agent-wizard/steps/StepAudio.tsx`: passes `audio.model` to `AudioVoiceFields`.
+- `frontend/components/agent-wizard/hooks/useCreateAgentChain.ts`: includes `model` in the `audio_tts` skill config when set.
+- `frontend/components/agent-wizard/steps/StepReview.tsx`: shows model id when present.
+
+**Wizards intentionally NOT touched:** the Provider Wizard (`frontend/components/provider-wizard/`) is the credential-and-LLM-discovery surface — TTS model selection happens at the per-agent level, not at the credential level. The single Gemini API key (`ApiKey.service="gemini"`) is shared across LLM + TTS + Image, so adding TTS models doesn't require a new credential surface.
+
+**Tests:**
+- `backend/tests/test_gemini_tts_provider.py` (new): unit tests for `_resolve_model` (default fallback, valid passthrough, invalid + warning), `_invoke_gemini` SDK plumb-through (parametrized over all 3 models), `synthesize()` end-to-end (model in metadata + tracker `model_name`), and unknown-model fallback path.
+- `backend/tests/test_wizard_drift.py` (Guard 10): asserts `GeminiTTSProvider.SUPPORTED_MODELS` matches frontend `GEMINI_TTS_MODELS` and that `DEFAULT_MODEL` matches `GEMINI_TTS_DEFAULT_MODEL`.
+
+**Known follow-ups (NOT in this commit):**
+- Pricing for the 3 Gemini TTS preview models is `$0.00` until Google publishes it. Pro tier is typically 5–10× Flash, so analytics will under-report Pro spend in the meantime — there's a TODO in `get_pricing_info()`.
+- The 30 voice presets are documented for the 3.1 model only. Smoke-testing the 2.5 Flash/Pro models against Google's docs may reveal a per-model voice catalog; if so, `SUPPORTED_MODELS` should be extended to carry per-model voice lists and the frontend voice dropdown should refilter on model change.
+
 ### Fix — DELETE /api/agents/{id} returned 500 on any agent with linked integrations (BUG-701 — 2026-04-22)
 
 Reported on the `wizard-test-gmail-20260422` agent (id 217) created during the BUG-700 investigation — clicking Delete in the UI returned `Internal Server Error`. Reproducing via API confirmed `HTTP 500 {"detail":"Internal server error"}`. Root cause in [routes_agents.py:1021](backend/api/routes_agents.py:1021): `db.delete(agent); db.commit()` runs without cleaning up child rows. Eight tables have `FK(agent.id)` with `delete_rule = NO ACTION` (the default — `agent_skill_integration`, `agent_project_access`, `message_queue`, `sentinel_agent_config`, `sentinel_exception`, `shell_command`, `user_agent_session`, `user_project_session`) — any row in any of them raises `ForeignKeyViolation` → FastAPI converts to 500. In agent 217's case, the blocker was the single `agent_skill_integration` row the Gmail wizard inserted after assigning the Gmail integration to the test agent. Additionally, **seventeen more tables** reference `agent_id` without any FK constraint at all (`agent_skill`, `agent_knowledge`, `agent_run`, `memory`, `conversation_thread`, `conversation_logs`, `semantic_knowledge`, `token_usage`, `playground_document`, etc.), so those rows would become silent orphans if we only deleted the agent.

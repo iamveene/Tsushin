@@ -162,6 +162,18 @@ export const GEMINI_VOICES: { id: string; label: string }[] = [
   { id: 'Sulafat', label: 'Sulafat — Warm' },
 ]
 
+// Google Gemini TTS preview models — kept in sync with the backend
+// `GeminiTTSProvider.SUPPORTED_MODELS` dict (guard: backend/tests/test_wizard_drift.py).
+// Live source of truth is `GET /api/tts-providers/gemini/models`; this list is
+// used as the offline fallback when the API call fails.
+export const GEMINI_TTS_MODELS: { id: string; label: string }[] = [
+  { id: 'gemini-3.1-flash-tts-preview', label: 'Gemini 3.1 Flash TTS — Balanced (default)' },
+  { id: 'gemini-2.5-flash-tts-preview', label: 'Gemini 2.5 Flash TTS — Fast' },
+  { id: 'gemini-2.5-pro-tts-preview',   label: 'Gemini 2.5 Pro TTS — Quality' },
+]
+
+export const GEMINI_TTS_DEFAULT_MODEL = 'gemini-3.1-flash-tts-preview'
+
 export const LANGUAGES = [
   { value: 'pt', label: 'Portuguese (pt)' },
   { value: 'en', label: 'English (en)' },

@@ -107,6 +107,7 @@ export default function StepAudio() {
             format: audio.format,
             memLimit: audio.memLimit,
             setAsDefaultTTS: audio.setAsDefaultTTS,
+            model: audio.model,
           }}
           onChange={patch => patchAudio(patch)}
           wantsTTS={wantsTTS}

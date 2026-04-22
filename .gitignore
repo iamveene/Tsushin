@@ -262,6 +262,7 @@ backend/tests/*
 !backend/tests/test_provider_instance_hardening.py
 !backend/tests/test_sentinel_unified_parse.py
 !backend/tests/test_wizard_drift.py
+!backend/tests/test_gemini_tts_provider.py
 !backend/tests/test_memory_tenant_scoping.py
 !backend/tests/test_installer_ssl.py
 !backend/tests/test_invitation_scope.py
