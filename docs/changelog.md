@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fix — A2A `context` leak between agents (BUG-693, partial — 2026-04-22)
+
+User investigating Google Calendar isolation found that when Tsushin asks movl for events via `agent_communication.ask`, then asks archsec the same question in the same thread, archsec "answered" with movl's events — even though archsec is bound to a different Calendar integration. Root cause is NOT a calendar/tenant leak (DB bindings and `SchedulerProviderFactory` are correctly scoped — verified by direct `GoogleCalendarProvider.list_events` calls). The leak lives in the A2A request path: the calling LLM populates a free-form `context` string that the target agent is shown as `"Additional Context: {context}"` with no untrust marker. Tsushin's LLM hoisted movl's tool output into that field; archsec's LLM paraphrased it verbatim, especially because the default `allow_target_skills=False` disables the target's own tools.
+
+**Defense-in-depth shipped in this commit:**
+- `backend/agent/skills/agent_communication_skill.py` — the MCP schema for `context` now explicitly tells the calling LLM not to paste tool output, emails, calendar events, or account-scoped data into the field.
+- `backend/services/agent_communication_service.py` (`_invoke_target_agent` prompt assembly) — source-supplied `context` is now framed as an UNTRUSTED hint with explicit instructions to the target agent: prefer own memory/tools, do not repeat specifics (names, dates, numbers, quoted content) unless independently verified, and when skills are disabled, say so instead of paraphrasing the hint as if verified.
+
+**Verified end-to-end:** re-ran the same scenario on the live instance. Tsushin's request to archsec still carried `"Known events include Apr 22 Dr Eliud at 09:30; Apr 23 Dr Grossi at 09:40; Apr 24 LATAM LA 3243; Apr 27 LATAM LA 3644"` in `context_transferred`. Archsec ignored the untrusted hint, called its own `manage_reminders` tool, and returned only the two real mv@archsec.io events (`xASM`, `Sync Kees Mv`) — none of the tainted context appeared in the response.
+
+**Structural follow-up (not in this commit):** ideally drop the free-form `context` parameter entirely and let target agents fetch their own data via their own tools; or restrict `context` to a typed schema that cannot be misread as authoritative data. A regression test (two calendar-bound agents + verify no cross-event leak) should be added to `backend/tests/`. Tracked in BUG-693.
+
 ### Fix — `scheduler` skill registry miss broke Google Calendar + flow-template execution (2026-04-21)
 
 User-reported toast after connecting Google Calendar: `Skill type 'scheduler' is not registered. Available: ['…', 'flows', '…']`. Root cause: v0.6.0 replaced `SchedulerSkill` with `FlowsSkill` and registered it under `skill_type='flows'`, but `'scheduler'` remained the canonical abstraction name used everywhere else — integration wizards (`GoogleCalendarSetupWizard`, `GmailSetupWizard`), seeded flow templates (Weekly Calendar Summary), the Flows page dropdown, and any DB rows created via those paths. At flow-execution time, `flow_engine.py` looked up `'scheduler'` in the skill registry, missed, and raised.
