@@ -1108,7 +1108,7 @@ class GmailSkill(BaseSkill):
     def get_default_config(cls) -> Dict[str, Any]:
         """Get default configuration."""
         return {
-            "execution_mode": "hybrid",
+            "execution_mode": "tool",
             "enabled": True,
             "keywords": [],
             "use_ai_fallback": True,
@@ -1144,7 +1144,7 @@ class GmailSkill(BaseSkill):
             "enum": ["tool", "legacy", "hybrid"],
             "title": "Execution Mode",
             "description": "Execution mode: tool (LLM decides), legacy (keywords), hybrid (both)",
-            "default": "hybrid"
+            "default": "tool"
         }
 
         base_schema["properties"]["integration_id"] = {
