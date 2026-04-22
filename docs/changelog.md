@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### QA - UI-first partial regression campaign (2026-04-22)
+
+Partial run of `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` (run ID `20260421b`) against the existing local Mac stack (E2 path). Campaign was interrupted by a user-reported login issue (root cause: Chrome HSTS redirect for `localhost` → `https://localhost` which is not published — de-duped against BUG-685). Login confirmed working at `http://127.0.0.1:3030`. Completed phases: Preflight (all healthy), Playground API/WS (PASS), Playground + Mini browser (PASS with 2 bugs), Flows API/schema (PASS), Sentinel programmatic tests (62/62 PASS, LLM gate PASS), Audit 5 local instance (PASS). Phases C2, B2, D1–D4 not reached. All QA fixtures (2 agents, 2 contacts, 1 vector store, 2 sentinel profiles, 2 threads) were deleted and the stack was fully reverted to pre-run state.
+
+Bug count from this campaign: 3 new open bugs — Medium 3 (BUG-690: onboarding modal buttons unresponsive, BUG-691: Playground wrong thread after refresh, BUG-692: Mini expand wrong thread handoff).
+
+### QA - UI-first regression rerun aborted on backend health timeout (2026-04-21)
+
+Started an autonomous subagent-first rerun of `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` with run id `20260421-204933`. The run selected the existing-local-instance Audit 5 track and initially passed direct backend HTTP health/readiness, compose health, disk, setup-status, and MCP log checks. E2 local-instance non-browser validation passed and de-duped the local HTTPS refusal to existing `BUG-685`.
+
+The campaign was then aborted per the playbook hard-stop rule after parallel A1/B1/C1 activity caused or exposed backend unresponsiveness: direct `/api/health` and `/api/readiness` timed out with HTTP `000`, and `docker compose ps` showed backend and proxy unhealthy. C1's preserved Sentinel benchmark log shows repeated Gemini/Sentinel unified-analysis timeouts before the abort. New tracker entry: `BUG-689` (Critical), covering backend health/readiness timeout during the Sentinel benchmark run. No product code was changed and no restart/rebuild was used to mask the failure.
+
 ### QA - UI-first full regression campaign completed (2026-04-21)
 
 Ran the full UI-first regression campaign from `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` after the required health recovery gate, including local A/B/C/D audit tracks, isolated VM fresh-install validation, cleanup, and final health checks.
